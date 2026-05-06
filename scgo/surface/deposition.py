@@ -156,8 +156,20 @@ def _place_cluster_above_slab(
     axis: int,
     rng: Generator,
     config: SurfaceSystemConfig,
+    cluster_atomic_numbers: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Rotate/translate centered cluster positions into a deposited position."""
+    """Rotate/translate centered cluster positions into a deposited position.
+
+    Args:
+        cluster_positions: Centered cluster positions (will be rotated/translated).
+        slab: The slab atoms.
+        slab_top: Maximum z-coordinate of slab atoms along surface normal axis.
+        axis: Surface normal axis index (0, 1, or 2).
+        rng: Random number generator.
+        config: Surface system configuration.
+        cluster_atomic_numbers: Atomic numbers of cluster atoms. If provided,
+            used to calculate covalent radii for connectivity-based placement.
+    """
     rotated_positions = cluster_positions @ _random_rotation_matrix(rng).T
 
     # Estimate cluster radius for biasing placement towards slab atoms
@@ -177,23 +189,39 @@ def _place_cluster_above_slab(
     # where cluster_extent is the distance from the cluster center to its bottom.
     # This ensures that even with some randomness in placement, connectivity is likely.
     from scgo.initialization.geometry_helpers import get_covalent_radius
-    from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
+
+    # Use connectivity factor from config, falling back to default
+    cf = config.structure_connectivity_factor
 
     # Get representative covalent radius for connectivity calculation
-    # Use the minimum of slab and cluster atom radii to be conservative
+    # For the slab, use the first atom's radius (typically all same element)
     slab_symbols = slab.get_chemical_symbols()
     slab_radius = (
         get_covalent_radius(slab_symbols[0]) if slab_symbols else 1.36
     )  # fallback for Pt
 
-    # For the cluster, we don't know the element yet, but we can estimate
-    # based on typical values. Use a conservative (smaller) radius to ensure
-    # connectivity even for smaller atoms.
-    cluster_radius_est = 1.0  # conservative estimate
+    # For the cluster, use actual atomic numbers if provided, otherwise estimate
+    if cluster_atomic_numbers is not None and len(cluster_atomic_numbers) > 0:
+        # Use the maximum covalent radius in the cluster to ensure connectivity
+        # for the largest atoms (which are most likely to be farthest from slab)
+        from ase.data import atomic_numbers as ase_atomic_numbers
 
-    # Use the smaller radius to be conservative (ensures connectivity for both)
-    rep_radius = min(slab_radius, cluster_radius_est)
-    connectivity_threshold = CONNECTIVITY_FACTOR * 2 * rep_radius
+        # Build reverse mapping from atomic number to symbol
+        number_to_symbol = {v: k for k, v in ase_atomic_numbers.items()}
+
+        unique_atomic_numbers = set(cluster_atomic_numbers)
+        cluster_radii = [
+            get_covalent_radius(number_to_symbol.get(int(z), str(int(z))))
+            for z in unique_atomic_numbers
+        ]
+        cluster_radius_est = max(cluster_radii) if cluster_radii else 1.36
+    else:
+        # Fallback to conservative estimate
+        cluster_radius_est = 1.36  # Use Pt radius as default (more realistic than 1.0)
+
+    # Use the sum of radii (not min) for the connectivity threshold
+    # This ensures we're using the actual bond distance for the pair
+    connectivity_threshold = cf * (slab_radius + cluster_radius_est)
 
     # Cluster extent below its center (cluster is centered at 0)
     cluster_min = float(np.min(rotated_positions[:, axis]))
@@ -292,6 +320,7 @@ def create_deposited_cluster(
             axis=axis,
             rng=rng,
             config=config,
+            cluster_atomic_numbers=atomic_numbers,
         )
 
         adsorbate = Atoms(
@@ -315,10 +344,15 @@ def create_deposited_cluster(
         if skip_supported_cluster_check:
             return combined
 
-        # Extract connectivity_factor from cluster_adsorbate_config if available
+        # Extract connectivity_factor: prefer cluster_adsorbate_config, then surface_config, then default
         connectivity_factor = CONNECTIVITY_FACTOR
         if cluster_adsorbate_config is not None:
             connectivity_factor = cluster_adsorbate_config.structure_connectivity_factor
+        elif (
+            hasattr(config, "structure_connectivity_factor")
+            and config.structure_connectivity_factor is not None
+        ):
+            connectivity_factor = config.structure_connectivity_factor
 
         ok, err = validate_supported_cluster_deposit(
             combined,

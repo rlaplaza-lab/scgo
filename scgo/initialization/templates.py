@@ -426,6 +426,7 @@ def remove_atoms_from_vertices(
             connectivity_factor,
             check_clashes=True,
             check_connectivity=_should_check_connectivity(new_cluster),
+            use_mic=False,
         )
         if not is_valid:
             return None
@@ -608,6 +609,7 @@ def grow_template_via_facets(
             connectivity_factor,
             check_clashes=True,
             check_connectivity=_should_check_connectivity(current),
+            use_mic=False,
         )
         if not is_valid:
             logger.debug(

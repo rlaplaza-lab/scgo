@@ -407,6 +407,7 @@ def _apply_template_rotation_and_validate(
         connectivity_factor,
         check_clashes=True,
         check_connectivity=_should_check_connectivity(selected),
+        use_mic=False,
     )
     if not is_valid:
         logger.warning(

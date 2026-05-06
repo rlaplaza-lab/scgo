@@ -424,11 +424,11 @@ def random_spherical(
             continue  # Try again with different random placement
 
         if len(final_atoms) > 2 and not is_cluster_connected(
-            final_atoms, connectivity_factor
+            final_atoms, connectivity_factor, use_mic=False
         ):
             if retry_attempt == max_connectivity_retries - 1:
                 diagnostics = get_structure_diagnostics(
-                    final_atoms, min_distance_factor, connectivity_factor
+                    final_atoms, min_distance_factor, connectivity_factor, use_mic=False
                 )
                 error_msg = format_placement_error_message(
                     context=f"create connected cluster after {max_connectivity_retries} attempts",
@@ -807,7 +807,7 @@ def _add_atoms_single_mode(
             remaining_counts = get_composition_counts(remaining_atoms)
 
             diagnostics = get_structure_diagnostics(
-                new_atoms, min_distance_factor, connectivity_factor
+                new_atoms, min_distance_factor, connectivity_factor, use_mic=False
             )
 
             additional_info = (
@@ -832,10 +832,10 @@ def _add_atoms_single_mode(
         new_atoms.append(Atom(atom_symbol, new_pos))
 
         if len(new_atoms) >= 2 and not is_cluster_connected(
-            new_atoms, connectivity_factor
+            new_atoms, connectivity_factor, use_mic=False
         ):
             disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(new_atoms, connectivity_factor)
+                analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
             )
             current_composition = new_atoms.get_chemical_symbols()
             current_counts = get_composition_counts(current_composition)
@@ -844,7 +844,7 @@ def _add_atoms_single_mode(
                 get_composition_counts(remaining_atoms) if remaining_atoms else {}
             )
             diagnostics = get_structure_diagnostics(
-                new_atoms, min_distance_factor, connectivity_factor
+                new_atoms, min_distance_factor, connectivity_factor, use_mic=False
             )
 
             additional_info = (
@@ -898,7 +898,7 @@ def _add_atoms_batch_mode(
             remaining_counts = get_composition_counts(atoms_to_add)
 
             diagnostics = get_structure_diagnostics(
-                new_atoms, min_distance_factor, connectivity_factor
+                new_atoms, min_distance_factor, connectivity_factor, use_mic=False
             )
 
             additional_info = (
@@ -1050,16 +1050,16 @@ def _add_atoms_batch_mode(
             new_atoms.append(Atom(atom_symbol, pos))
 
         if len(new_atoms) >= 2 and not is_cluster_connected(
-            new_atoms, connectivity_factor
+            new_atoms, connectivity_factor, use_mic=False
         ):
             disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(new_atoms, connectivity_factor)
+                analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
             )
             current_composition = new_atoms.get_chemical_symbols()
             current_counts = get_composition_counts(current_composition)
             remaining_counts = get_composition_counts(atoms_to_add)
             diagnostics = get_structure_diagnostics(
-                new_atoms, min_distance_factor, connectivity_factor
+                new_atoms, min_distance_factor, connectivity_factor, use_mic=False
             )
 
             additional_info = (

@@ -163,7 +163,8 @@ def validate_supported_cluster_deposit(
         combined: Full system with slab atoms first, then the supported mobile cluster.
         n_slab: Number of slab atoms (prefix length).
         surface_normal_axis: Cartesian axis index for the surface normal.
-        use_mic: Pass through to ``Atoms.get_distance`` for mobile–slab pairs.
+        use_mic: Pass through to ``Atoms.get_distance`` for mobile–slab pairs AND
+                 for internal adsorbate connectivity checks when True.
         min_distance_factor: Mobile cluster self clash scale (initialization default).
         connectivity_factor: Bonding connectivity scale (initialization default).
         penetration_tolerance: Allow mobile cluster atoms this far (Å) below the
@@ -188,6 +189,7 @@ def validate_supported_cluster_deposit(
         connectivity_factor,
         check_clashes=True,
         check_connectivity=check_connectivity,
+        use_mic=use_mic,
     )
     if not ok:
         return False, f"Adsorbate validation failed: {err}"

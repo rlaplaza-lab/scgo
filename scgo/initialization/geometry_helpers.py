@@ -972,13 +972,14 @@ def place_multi_atom_seed_on_facet(
 
 
 def _find_connected_components(
-    atoms: Atoms, connectivity_factor: float
+    atoms: Atoms, connectivity_factor: float, use_mic: bool = False
 ) -> tuple[dict[int, list[int]], list[int]]:
     """Find connected components using Union-Find algorithm.
 
     Args:
         atoms: The Atoms object to check
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
         Tuple of (components dict mapping root to atom indices, parent array for Union-Find)
@@ -1009,7 +1010,10 @@ def _find_connected_components(
     if n_atoms < 50:
         for i in range(n_atoms):
             for j in range(i + 1, n_atoms):
-                distance = np.linalg.norm(positions[i] - positions[j])
+                if use_mic:
+                    distance = float(atoms.get_distance(i, j, mic=True))
+                else:
+                    distance = np.linalg.norm(positions[i] - positions[j])
                 r_i = get_covalent_radius(symbols[i])
                 r_j = get_covalent_radius(symbols[j])
                 threshold = (r_i + r_j) * connectivity_factor
@@ -1029,7 +1033,10 @@ def _find_connected_components(
                 if j <= i:
                     continue
 
-                distance = np.linalg.norm(positions[i] - positions[j])
+                if use_mic:
+                    distance = float(atoms.get_distance(i, j, mic=True))
+                else:
+                    distance = np.linalg.norm(positions[i] - positions[j])
                 r_j = get_covalent_radius(symbols[j])
                 threshold = (r_i + r_j) * connectivity_factor
 
@@ -1047,7 +1054,9 @@ def _find_connected_components(
 
 
 def is_cluster_connected(
-    atoms: Atoms, connectivity_factor: float = CONNECTIVITY_FACTOR
+    atoms: Atoms,
+    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    use_mic: bool = False,
 ) -> bool:
     """Check if all atoms in a cluster are connected within the specified distance threshold.
 
@@ -1062,23 +1071,26 @@ def is_cluster_connected(
         atoms: The Atoms object to check
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold.
                            Defaults to CONNECTIVITY_FACTOR (1.4).
+        use_mic: If True, use minimum image convention for distance calculations.
 
     Returns:
         True if all atoms are in one connected component, False otherwise.
-
     """
-    components, _ = _find_connected_components(atoms, connectivity_factor)
+    components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
     return len(components) <= 1
 
 
 def analyze_disconnection(
-    atoms: Atoms, connectivity_factor: float = CONNECTIVITY_FACTOR
+    atoms: Atoms,
+    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    use_mic: bool = False,
 ) -> tuple[float, float, str]:
     """Analyze disconnection in a cluster and suggest appropriate connectivity factor.
 
     Args:
         atoms: The Atoms object to analyze
         connectivity_factor: Current connectivity factor used
+        use_mic: If True, use minimum image convention for distance calculations.
 
     Returns:
         Tuple of (max_disconnection_distance, suggested_connectivity_factor, analysis_message)
@@ -1086,7 +1098,7 @@ def analyze_disconnection(
     if len(atoms) <= 1:
         return 0.0, connectivity_factor, "Single atom or empty cluster"
 
-    components, _ = _find_connected_components(atoms, connectivity_factor)
+    components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
 
     if len(components) <= 1:
         return 0.0, connectivity_factor, "Cluster is connected"
@@ -1135,6 +1147,7 @@ def _identify_safe_removal_candidates(
     cluster: Atoms,
     candidate_indices: list[int],
     connectivity_factor: float,
+    use_mic: bool = False,
     max_to_check: int = 10,
 ) -> list[int]:
     """Identify which candidates can be safely removed without disconnecting.
@@ -1173,7 +1186,7 @@ def _identify_safe_removal_candidates(
 
         # Check if cluster remains connected after removal
         if len(test_cluster) > 1:
-            if is_cluster_connected(test_cluster, connectivity_factor):
+            if is_cluster_connected(test_cluster, connectivity_factor, use_mic):
                 safe_candidates.append(idx)
         else:
             # Single atom left - always connected
@@ -1221,6 +1234,7 @@ def get_structure_diagnostics(
     atoms: Atoms,
     min_distance_factor: float,
     connectivity_factor: float,
+    use_mic: bool = False,
 ) -> StructureDiagnostics:
     """Get comprehensive diagnostics for a cluster structure.
 
@@ -1276,7 +1290,7 @@ def get_structure_diagnostics(
     has_clashes = bool(clash_details)
 
     # Analyze connectivity
-    components, _ = _find_connected_components(atoms, connectivity_factor)
+    components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
     n_components = len(components)
     is_disconnected = n_components > 1
 
@@ -1345,6 +1359,7 @@ def validate_cluster_structure(
     connectivity_factor: float,
     check_clashes: bool = True,
     check_connectivity: bool = True,
+    use_mic: bool = False,
 ) -> tuple[bool, str]:
     """Validate a cluster structure for clashes and connectivity.
 
@@ -1370,7 +1385,7 @@ def validate_cluster_structure(
 
     # Use get_structure_diagnostics for the actual analysis
     diagnostics = get_structure_diagnostics(
-        atoms, min_distance_factor, connectivity_factor
+        atoms, min_distance_factor, connectivity_factor, use_mic
     )
 
     # Filter based on what checks are requested
@@ -1412,6 +1427,7 @@ def validate_cluster(
     sort_atoms: bool = True,
     raise_on_failure: bool = False,
     source: str = "",
+    use_mic: bool = False,
 ) -> tuple[Atoms, bool, str]:
     """Unified cluster validation with comprehensive checks.
 
@@ -1476,6 +1492,7 @@ def validate_cluster(
             connectivity_factor,
             check_clashes=check_clashes,
             check_connectivity=check_connectivity,
+            use_mic=use_mic,
         )
 
         if not is_valid:

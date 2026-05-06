@@ -77,7 +77,7 @@ def _is_valid_placement(
 
     temp_combined = combined_atoms.copy()
     temp_combined.extend(seed_to_add)
-    return is_cluster_connected(temp_combined, connectivity_factor)
+    return is_cluster_connected(temp_combined, connectivity_factor, use_mic=False)
 
 
 def combine_seeds(
@@ -158,9 +158,11 @@ def combine_seeds(
         combined_atoms.extend(seed_to_add)
         combined_atoms.center()
 
-        if not is_cluster_connected(combined_atoms, connectivity_factor):
+        if not is_cluster_connected(combined_atoms, connectivity_factor, use_mic=False):
             disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(combined_atoms, connectivity_factor)
+                analyze_disconnection(
+                    combined_atoms, connectivity_factor, use_mic=False
+                )
             )
             logger.warning(
                 f"Seed {i + 1} placement created disconnected cluster. "
