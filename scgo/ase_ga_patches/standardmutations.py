@@ -1379,11 +1379,11 @@ class BreathingMutation(OffspringCreator):
         tol = 1e-9
         allow_unit_scale = interval_width <= tol
 
-        def append_candidate(scale):
+        def append_candidate(scale, force=False):
             scale = float(scale)
             if scale < feasible_lower - tol or scale > self.scale_max + tol:
                 return
-            if not allow_unit_scale and abs(scale - 1.0) <= tol:
+            if not allow_unit_scale and abs(scale - 1.0) <= tol and not force:
                 return
             for existing in candidates:
                 if abs(scale - existing) <= 1e-6:
@@ -1420,10 +1420,35 @@ class BreathingMutation(OffspringCreator):
 
         if contraction_candidates and expansion_candidates:
             append_candidate(0.5 * (feasible_lower + self.scale_max))
-        elif allow_unit_scale:
-            append_candidate(1.0)
+        # Always include unit scale (1.0) as a candidate, regardless of interval width,
+        # as long as it's within the valid range. This is important for cases where
+        # the cluster is already in a good configuration and scaling would make it worse.
+        if feasible_lower <= 1.0 <= self.scale_max + tol or allow_unit_scale:
+            append_candidate(1.0, force=True)
 
-        return candidates[:max_candidates]
+        # Ensure unit scale (1.0) is included in the final candidates if it's valid,
+        # even if it means slightly exceeding max_candidates. This is important because
+        # scale=1.0 (no scaling) is often the safest option and should always be tried.
+        if feasible_lower <= 1.0 <= self.scale_max + tol and 1.0 not in candidates:
+            # Make room for scale=1.0 by removing the last candidate if necessary
+            if len(candidates) >= max_candidates:
+                candidates = candidates[:max_candidates - 1]
+            append_candidate(1.0, force=True)
+
+        # Ensure scale=1.0 is in the final candidates if it's valid
+        # (it might have been truncated off if it was added last)
+        if feasible_lower <= 1.0 <= self.scale_max + tol and 1.0 not in candidates[:max_candidates]:
+            # Replace the last candidate with scale=1.0
+            if len(candidates) >= max_candidates:
+                candidates = candidates[:max_candidates - 1]
+            else:
+                candidates = candidates[:]
+            append_candidate(1.0, force=True)
+            candidates = candidates[:max_candidates]
+        else:
+            candidates = candidates[:max_candidates]
+
+        return candidates
 
     def get_new_individual(self, parents):
         f = parents[0]
@@ -1449,11 +1474,19 @@ class BreathingMutation(OffspringCreator):
             self.last_attempt_count += 1
             s = scale
             new_pos = cm + s * (pos - cm)
+            # Check with proper PBC to avoid periodic image violations
             cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc)
             if atoms_too_close(cand, self.blmin):
                 continue
-            if self.test_dist_to_slab and len(slab) > 0 and atoms_too_close_two_sets(slab, cand, self.blmin):
+            if self.test_dist_to_slab and len(slab) > 0:
+                # Disable PBC for slab-candidate check to avoid periodic image artifacts
+                slab_np = slab.copy()
+                slab_np.pbc = [False, False, False]
+                cand_np = cand.copy()
+                cand_np.pbc = [False, False, False]
+                if atoms_too_close_two_sets(slab_np, cand_np, self.blmin):
                     continue
+            # Return with original PBC
             return slab + cand
         return None
 
