@@ -39,7 +39,12 @@ from scgo.algorithms.ga_common import (
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.database import HPC_DATABASE_EXCEPTIONS, close_data_connection, setup_database
-from scgo.database.metadata import add_metadata, filter_by_metadata
+from scgo.database.metadata import (
+    add_metadata,
+    filter_by_metadata,
+    get_metadata,
+    update_metadata,
+)
 from scgo.database.sync import retry_with_backoff
 from scgo.initialization import compute_cell_side
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
@@ -381,6 +386,8 @@ def ga_go(
             da.c.update(gaid, gaid=gaid)
             cand.info["confid"] = gaid
 
+        initial_discarded_count = 0
+        initial_ineligible_relaxed_count = 0
         t0 = perf_counter()
         for cand in starting_population:
             maybe_apply_mobile_core_ads_tags(
@@ -390,14 +397,22 @@ def ga_go(
                 adsorbate_definition,
                 resolved_system_type,
             )
-            validate_structure_for_system_type(
-                cand,
-                system_type=resolved_system_type,
-                surface_config=surface_config,
-                n_slab=n_slab,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-            )
+            try:
+                validate_structure_for_system_type(
+                    cand,
+                    system_type=resolved_system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                )
+            except ValueError as exc:
+                initial_discarded_count += 1
+                logger.warning(
+                    "Discarding disconnected initial candidate before DB insert: %s",
+                    exc,
+                )
+                continue
             retry_with_backoff(
                 lambda _cand=cand: _insert_unrelaxed(_cand),
                 max_retries=5,
@@ -436,19 +451,29 @@ def ga_go(
                 adsorbate_definition,
                 resolved_system_type,
             )
-            validate_structure_for_system_type(
-                cand,
-                system_type=resolved_system_type,
-                surface_config=surface_config,
-                n_slab=n_slab if surface_mode else None,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-            )
+            validation_error: str | None = None
+            try:
+                validate_structure_for_system_type(
+                    cand,
+                    system_type=resolved_system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab if surface_mode else None,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                )
+            except ValueError as exc:
+                validation_error = str(exc)
+                initial_ineligible_relaxed_count += 1
+                logger.warning(
+                    "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
+                    exc,
+                )
             t_relax += perf_counter() - t_start
             add_metadata(
                 cand,
                 generation=0,
                 run_id=run_id,
+                ga_eligible=(validation_error is None),
                 **ga_run_metadata_extras(
                     surface_config,
                     n_slab,
@@ -457,6 +482,14 @@ def ga_go(
                     adsorbate_definition=adsorbate_definition,
                 ),
             )
+            cand.info.setdefault("key_value_pairs", {})["ga_eligible"] = (
+                validation_error is None
+            )
+            if validation_error is not None:
+                update_metadata(cand, ga_ineligible_reason=validation_error)
+                cand.info.setdefault("key_value_pairs", {})["ga_ineligible_reason"] = (
+                    validation_error
+                )
 
             t_start = perf_counter()
             retry_with_backoff(
@@ -475,6 +508,16 @@ def ga_go(
             logger.debug(
                 "Tagged %s GA population members with generation=0",
                 initial_pop_count,
+            )
+        if initial_discarded_count > 0:
+            logger.info(
+                "Discarded %d disconnected initial candidates before DB insert",
+                initial_discarded_count,
+            )
+        if initial_ineligible_relaxed_count > 0:
+            logger.info(
+                "Stored %d initial relaxed candidates as GA-ineligible",
+                initial_ineligible_relaxed_count,
             )
 
         log_file = os.path.join(output_dir, "population.log")
@@ -542,6 +585,7 @@ def ga_go(
             # Produce `n_offspring` children this generation (min 1).
             n_offspring = max(1, math.ceil(population_size * offspring_fraction))
             created = 0
+            ineligible_persisted = 0
             attempts = 0
             max_attempts = max(10, n_offspring * 10)
 
@@ -579,6 +623,7 @@ def ga_go(
                     adsorbate_definition,
                     resolved_system_type,
                 )
+                validation_error: str | None = None
                 try:
                     validate_structure_for_system_type(
                         a3,
@@ -631,20 +676,29 @@ def ga_go(
                     adsorbate_definition,
                     resolved_system_type,
                 )
-                validate_structure_for_system_type(
-                    a3,
-                    system_type=resolved_system_type,
-                    surface_config=surface_config,
-                    n_slab=n_slab if surface_mode else None,
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                )
+                try:
+                    validate_structure_for_system_type(
+                        a3,
+                        system_type=resolved_system_type,
+                        surface_config=surface_config,
+                        n_slab=n_slab if surface_mode else None,
+                        adsorbate_definition=adsorbate_definition,
+                        connectivity_factor=connectivity_factor,
+                    )
+                except ValueError as exc:
+                    ineligible_persisted += 1
+                    validation_error = str(exc)
+                    logger.warning(
+                        "Offspring disconnected after relaxation; storing but excluding from GA population: %s",
+                        exc,
+                    )
                 t_relax_gen += perf_counter() - t_start
 
                 add_metadata(
                     a3,
                     generation=generation,
                     run_id=run_id,
+                    ga_eligible=(validation_error is None),
                     **ga_run_metadata_extras(
                         surface_config,
                         n_slab,
@@ -653,6 +707,14 @@ def ga_go(
                         adsorbate_definition=adsorbate_definition,
                     ),
                 )
+                a3.info.setdefault("key_value_pairs", {})["ga_eligible"] = (
+                    validation_error is None
+                )
+                if validation_error is not None:
+                    update_metadata(a3, ga_ineligible_reason=validation_error)
+                    a3.info.setdefault("key_value_pairs", {})[
+                        "ga_ineligible_reason"
+                    ] = validation_error
                 t_start = perf_counter()
                 retry_with_backoff(
                     lambda _a3=a3: da.add_relaxed_step(_a3),
@@ -663,7 +725,8 @@ def ga_go(
                 )
                 t_db_relaxed_gen += perf_counter() - t_start
 
-                created += 1
+                if validation_error is None:
+                    created += 1
             profile_counters["offspring_created"] += created
             profile_timings["offspring_mutation_queue_s"] = profile_timings.get(
                 "offspring_mutation_queue_s", 0.0
@@ -693,7 +756,10 @@ def ga_go(
             ) + (t_db_unrelaxed_gen + t_db_relaxed_gen)
 
             logger.debug(
-                f"Generation {generation}: created and tagged {created} offspring"
+                "Generation %s: created and tagged %d offspring, persisted %d as ineligible after relaxation",
+                generation,
+                created,
+                ineligible_persisted,
             )
 
             # Update population once per generation (reflects all created offspring)
@@ -710,6 +776,7 @@ def ga_go(
                         "generation": int(generation),
                         "n_offspring_target": int(n_offspring),
                         "offspring_created": int(created),
+                        "offspring_ineligible_persisted": int(ineligible_persisted),
                         "attempts": int(attempts),
                         "timings_s": {
                             "parent_select_s": t_parent_select_gen,
@@ -757,6 +824,11 @@ def ga_go(
         )
         if run_id is not None:
             all_candidates = filter_by_metadata(all_candidates, run_id=run_id)
+        all_candidates = [
+            cand
+            for cand in all_candidates
+            if bool(get_metadata(cand, "ga_eligible", default=True))
+        ]
         all_minima = extract_minima_from_database(all_candidates)
 
         if verbosity >= 1:

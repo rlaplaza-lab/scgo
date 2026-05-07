@@ -50,7 +50,12 @@ from scgo.database import (
     database_retry,
     setup_database,
 )
-from scgo.database.metadata import add_metadata, filter_by_metadata, update_metadata
+from scgo.database.metadata import (
+    add_metadata,
+    filter_by_metadata,
+    get_metadata,
+    update_metadata,
+)
 from scgo.initialization import compute_cell_side
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
@@ -178,11 +183,19 @@ def _relax_unrelaxed_candidates(
     if len(relaxed_results) != len(batch):
         raise RuntimeError("TorchSim relaxer returned mismatched batch size")
 
-    # Batch write results under a single database connection
+    # Batch write results under a single database connection.
+    # Disconnected structures are persisted but marked ineligible for GA evolution.
+    successful_count = 0
+    ineligible_count = 0
+    logger = get_logger(__name__)
+
     def _write_batch_under_connection():
         """Write relaxed results under a single connection."""
+        nonlocal ineligible_count, successful_count
         with da.c:
-            for original, (energy, relaxed) in zip(batch, relaxed_results, strict=True):
+            for idx, (original, (energy, relaxed)) in enumerate(
+                zip(batch, relaxed_results, strict=True)
+            ):
                 original.set_cell(relaxed.get_cell(), scale_atoms=True)
                 original.set_pbc(relaxed.get_pbc())
                 original.set_positions(relaxed.get_positions())
@@ -194,14 +207,25 @@ def _relax_unrelaxed_candidates(
                         adsorbate_definition,
                         system_type,
                     )
-                validate_structure_for_system_type(
-                    original,
-                    system_type=system_type,
-                    surface_config=surface_config,
-                    n_slab=n_slab if surface_mode else None,
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                )
+                validation_error: str | None = None
+                try:
+                    validate_structure_for_system_type(
+                        original,
+                        system_type=system_type,
+                        surface_config=surface_config,
+                        n_slab=n_slab if surface_mode else None,
+                        adsorbate_definition=adsorbate_definition,
+                        connectivity_factor=connectivity_factor,
+                    )
+                except ValueError as exc:
+                    ineligible_count += 1
+                    validation_error = str(exc)
+                    logger.warning(
+                        "Offspring %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
+                        idx + 1,
+                        len(batch),
+                        exc,
+                    )
 
                 # Copy forces if available (already converted to float64 by relaxer)
                 if "forces" in relaxed.arrays:
@@ -215,6 +239,21 @@ def _relax_unrelaxed_candidates(
                         {"potential_energy": energy, "raw_score": -energy},
                     ),
                 )
+                update_metadata(
+                    original,
+                    ga_eligible=(validation_error is None),
+                )
+                original.info.setdefault("key_value_pairs", {})["ga_eligible"] = (
+                    validation_error is None
+                )
+                if validation_error is not None:
+                    update_metadata(
+                        original,
+                        ga_ineligible_reason=validation_error,
+                    )
+                    original.info.setdefault("key_value_pairs", {})[
+                        "ga_ineligible_reason"
+                    ] = validation_error
                 comp_meta = list(composition) if composition is not None else []
                 extra = ga_run_metadata_extras(
                     surface_config,
@@ -235,6 +274,8 @@ def _relax_unrelaxed_candidates(
 
                 original.calc = SinglePointCalculator(original, energy=energy)
                 da.add_relaxed_step(original)
+                if validation_error is None:
+                    successful_count += 1
 
     t0 = perf_counter()
     database_retry(
@@ -242,6 +283,13 @@ def _relax_unrelaxed_candidates(
         config=RetryConfig(max_retries=5),
         operation_name="write_relaxed_batch",
     )
+    if ineligible_count > 0:
+        logger.info(
+            "Relaxation batch: %d/%d individuals are GA-eligible, %d persisted as ineligible",
+            len(batch) - ineligible_count,
+            len(batch),
+            ineligible_count,
+        )
     if profiling is not None:
         profiling["db_write_s"] = profiling.get("db_write_s", 0.0) + (
             perf_counter() - t0
@@ -255,7 +303,7 @@ def _relax_unrelaxed_candidates(
                 "population_update_s", 0.0
             ) + (perf_counter() - t0)
 
-    return len(batch)
+    return successful_count
 
 
 def ga_go_torchsim(
@@ -566,6 +614,8 @@ def ga_go_torchsim(
         )
 
         initial_pop_count = 0
+        initial_discarded_count = 0
+        initial_ineligible_relaxed_count = 0
 
         def _insert_unrelaxed(cand):
             cand.info.setdefault("key_value_pairs", {})
@@ -590,14 +640,22 @@ def ga_go_torchsim(
                 adsorbate_definition,
                 system_type,
             )
-            validate_structure_for_system_type(
-                cand,
-                system_type=system_type,
-                surface_config=surface_config,
-                n_slab=n_slab,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-            )
+            try:
+                validate_structure_for_system_type(
+                    cand,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                )
+            except ValueError as exc:
+                initial_discarded_count += 1
+                logger.warning(
+                    "Discarding disconnected initial candidate before DB insert: %s",
+                    exc,
+                )
+                continue
             database_retry(
                 lambda _cand=cand: _insert_unrelaxed(_cand),
                 config=RetryConfig(max_retries=5),
@@ -607,6 +665,7 @@ def ga_go_torchsim(
 
         # Helper to write a relaxed batch into the database under a single connection
         def _write_relaxed_batch(batch, relaxed_results):
+            nonlocal initial_ineligible_relaxed_count
             with da.c:
                 for original, (energy, relaxed) in zip(
                     batch, relaxed_results, strict=True
@@ -621,14 +680,23 @@ def ga_go_torchsim(
                         adsorbate_definition,
                         system_type,
                     )
-                    validate_structure_for_system_type(
-                        original,
-                        system_type=system_type,
-                        surface_config=surface_config,
-                        n_slab=n_slab if surface_mode else None,
-                        adsorbate_definition=adsorbate_definition,
-                        connectivity_factor=connectivity_factor,
-                    )
+                    validation_error: str | None = None
+                    try:
+                        validate_structure_for_system_type(
+                            original,
+                            system_type=system_type,
+                            surface_config=surface_config,
+                            n_slab=n_slab if surface_mode else None,
+                            adsorbate_definition=adsorbate_definition,
+                            connectivity_factor=connectivity_factor,
+                        )
+                    except ValueError as exc:
+                        validation_error = str(exc)
+                        initial_ineligible_relaxed_count += 1
+                        logger.warning(
+                            "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
+                            exc,
+                        )
 
                     # Copy forces if available
                     if "forces" in relaxed.arrays:
@@ -642,6 +710,21 @@ def ga_go_torchsim(
                             {"potential_energy": energy, "raw_score": -energy},
                         ),
                     )
+                    update_metadata(
+                        original,
+                        ga_eligible=(validation_error is None),
+                    )
+                    original.info.setdefault("key_value_pairs", {})["ga_eligible"] = (
+                        validation_error is None
+                    )
+                    if validation_error is not None:
+                        update_metadata(
+                            original,
+                            ga_ineligible_reason=validation_error,
+                        )
+                        original.info.setdefault("key_value_pairs", {})[
+                            "ga_ineligible_reason"
+                        ] = validation_error
                     add_metadata(
                         original,
                         generation=0,
@@ -697,6 +780,16 @@ def ga_go_torchsim(
             logger.debug(
                 "Tagged %s GA population members with generation=0",
                 initial_pop_count,
+            )
+        if initial_discarded_count > 0:
+            logger.info(
+                "Discarded %d disconnected initial candidates before DB insert",
+                initial_discarded_count,
+            )
+        if initial_ineligible_relaxed_count > 0:
+            logger.info(
+                "Stored %d initial relaxed candidates as GA-ineligible",
+                initial_ineligible_relaxed_count,
             )
 
         log_file = os.path.join(output_dir, "population.log")
@@ -1143,6 +1236,11 @@ def ga_go_torchsim(
         )
         if run_id is not None:
             all_candidates = filter_by_metadata(all_candidates, run_id=run_id)
+        all_candidates = [
+            cand
+            for cand in all_candidates
+            if bool(get_metadata(cand, "ga_eligible", default=True))
+        ]
         all_minima = extract_minima_from_database(all_candidates)
 
         if verbosity >= 1:

@@ -4,8 +4,11 @@ import numpy as np
 from ase import Atoms
 from ase.calculators.emt import EMT
 
+import scgo.algorithms.geneticalgorithm_go as ga_mod
 from scgo.algorithms.geneticalgorithm_go import ga_go
 from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
+from scgo.database import open_db
+from scgo.database.metadata import get_metadata
 
 
 class MockRelaxer:
@@ -50,6 +53,52 @@ def test_ga_go_torchsim_generational_smoke(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
+
+
+def test_ga_go_disconnected_rows_persist_but_are_ineligible(tmp_path, rng, monkeypatch):
+    calc = EMT()
+    relax_counter = {"n": 0}
+    original_relax = ga_mod.perform_local_relaxation
+    original_validate = ga_mod.validate_structure_for_system_type
+
+    def tagged_relaxation(*args, **kwargs):
+        atoms = args[0]
+        original_relax(*args, **kwargs)
+        relax_counter["n"] += 1
+        if relax_counter["n"] == 1:
+            atoms.info["_force_disconnect"] = True
+
+    def selective_validate(atoms, *args, **kwargs):
+        if atoms.info.get("_force_disconnect", False):
+            atoms.info["_force_disconnect"] = False
+            raise ValueError("synthetic disconnected structure")
+        return original_validate(atoms, *args, **kwargs)
+
+    monkeypatch.setattr(ga_mod, "perform_local_relaxation", tagged_relaxation)
+    monkeypatch.setattr(
+        ga_mod, "validate_structure_for_system_type", selective_validate
+    )
+
+    outdir = tmp_path / "ga_go_disconnected_ineligible"
+    minima = ga_go(
+        composition=["Pt", "Pt", "Pt"],
+        output_dir=str(outdir),
+        calculator=calc,
+        rng=rng,
+        niter=1,
+        population_size=4,
+        niter_local_relaxation=1,
+    )
+
+    assert isinstance(minima, list)
+    assert len(minima) >= 1
+    for _energy, atoms in minima:
+        assert bool(get_metadata(atoms, "ga_eligible", default=True))
+
+    with open_db(str(outdir / "ga_go.db")) as da:
+        rows = da.get_all_relaxed_candidates()
+    assert rows
+    assert any(not bool(get_metadata(row, "ga_eligible", default=True)) for row in rows)
 
 
 def test_ga_signatures_consistent():

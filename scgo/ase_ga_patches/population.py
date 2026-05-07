@@ -106,12 +106,21 @@ class Population:
             if get_metadata(cand, "run_id", default=None) == self.run_id
         ]
 
+    def _filter_candidates_by_ga_eligibility(self, candidates):
+        """Exclude candidates explicitly marked as ineligible for GA evolution."""
+        return [
+            cand
+            for cand in candidates
+            if bool(get_metadata(cand, "ga_eligible", default=True))
+        ]
+
     def _get_all_relaxed_candidates(self, *, only_new=False, use_extinct=False):
         candidates = self.dc.get_all_relaxed_candidates(
             only_new=only_new,
             use_extinct=use_extinct,
         )
-        return self._filter_candidates_by_run_id(candidates)
+        candidates = self._filter_candidates_by_run_id(candidates)
+        return self._filter_candidates_by_ga_eligibility(candidates)
 
     def __initialize_pop__(self):
         """Private method that initializes the population when
