@@ -370,7 +370,9 @@ def get_benchmark_params(
     if backend == "uma":
         mn = model_name or "uma-s-1p2"
         return get_uma_ga_benchmark_params(seed, model_name=mn, uma_task=uma_task)
-    params = get_torchsim_ga_params(seed=seed, model_name=model_name)
+    params = get_torchsim_ga_params(
+        system_type="gas_cluster", seed=seed, model_name=model_name
+    )
     params["calculator"] = "MACE"
     return params
 
@@ -390,7 +392,7 @@ def apply_ga_benchmark_overrides(
     ga_params["niter"] = niter
     ga_params["population_size"] = population_size
     if surface_config is not None:
-        ga_params["surface_config"] = surface_config
+        params_copy["surface_config"] = surface_config
     if n_jobs_population_init is not None:
         ga_params["n_jobs_population_init"] = n_jobs_population_init
     if batch_size is not None:

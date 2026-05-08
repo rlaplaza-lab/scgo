@@ -7,9 +7,11 @@
 ``system_type=...`` argument together with explicit ``surface_config=...`` and,
 for ``*_adsorbate`` modes, core-only ``composition`` plus ``adsorbates=...``
 (single or multiple ASE ``Atoms`` fragments).
-System-definition keys in ``go_params`` are rejected. For ``ts_params``,
-``system_type`` remains rejected while ``surface_config`` is allowed and
-validated against the run argument.
+System-definition keys in ``go_params`` are partly restricted:
+``system_type`` remains rejected, while top-level ``surface_config`` is allowed
+and fanned out into optimizer slots. For ``ts_params``, ``system_type`` remains
+rejected while ``surface_config`` is allowed and validated against the run
+argument.
 """
 
 from __future__ import annotations
@@ -178,6 +180,24 @@ def _validate_go_ts_param_coherence(
 ) -> None:
     """Validate GO/TS params coherence against run-level system definition."""
     policy = get_system_policy(system_type)
+    go_surface_config = go_prepared.get("surface_config")
+    if policy.uses_surface:
+        if not isinstance(go_surface_config, SurfaceSystemConfig):
+            raise ValueError(
+                "GO/TS coherence error: surface system types require "
+                "go_params['surface_config']."
+            )
+        if surface_config is not None and go_surface_config != surface_config:
+            raise ValueError(
+                "GO/TS coherence error: go_params['surface_config'] disagrees with "
+                "run surface_config."
+            )
+    elif go_surface_config is not None:
+        raise ValueError(
+            "GO/TS coherence error: go_params['surface_config'] is set but "
+            f"run system_type={system_type!r} is non-surface."
+        )
+
     optimizer_params = go_prepared.get("optimizer_params") or {}
     for algo in _ALGO_KEYS:
         slot = optimizer_params.get(algo)
@@ -462,6 +482,8 @@ def _reject_system_keys(
     params: dict[str, Any], *, context: str, kind: str = "go"
 ) -> None:
     forbidden = ("system_type", "surface_config")
+    if kind == "go":
+        forbidden = ("system_type",)
     if kind == "ts":
         forbidden = ("system_type",)
     for key in forbidden:

@@ -23,19 +23,17 @@ OUTPUT_STEM = "pt5_graphite"
 NITER = 6
 POPULATION_SIZE = 24
 MAX_PAIRS = 10
-GA_BATCH_SIZE = 4
 
 
 def _build_go_params(surface_config) -> dict:
     """Load GO preset, then apply surface-specific knobs for this run."""
-    go_params = get_torchsim_ga_params(SEED)
+    go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["calculator"] = "MACE"
     go_params["connectivity_factor"] = 1.8  # override default
+    go_params["surface_config"] = surface_config
     go_params["optimizer_params"]["ga"].update(
         niter=NITER,
         population_size=POPULATION_SIZE,
-        surface_config=surface_config,
-        batch_size=GA_BATCH_SIZE,
     )
     return go_params
 

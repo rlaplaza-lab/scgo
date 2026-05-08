@@ -25,7 +25,7 @@ MAX_PAIRS = 15
 
 def _build_go_params() -> dict:
     """Load GO preset, then tweak only the fields this run cares about."""
-    go_params = get_torchsim_ga_params(SEED)
+    go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["calculator"] = "MACE"
     go_params["connectivity_factor"] = 1.4  # default, but explicit
     go_params["optimizer_params"]["ga"].update(

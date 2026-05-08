@@ -316,10 +316,16 @@ def get_ts_search_params_uma(
 
 
 def get_torchsim_ga_params(
-    seed: int, *, model_name: str | None = None
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str | None = None,
 ) -> dict[str, Any]:
-    """Return GA params using TorchSim relaxer (requires ``scgo[mace]``).
+    """Return GO params using TorchSim relaxer (requires ``scgo[mace]``).
 
+    Mirrors :func:`get_ts_search_params` call style by requiring ``system_type``
+    and accepting ``surface_config`` / ``seed`` explicitly.
     When ``model_name`` is set, it is written to ``calculator_kwargs`` and the
     :class:`~scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer` uses the
     same MACE model name as the ASE calculator.
@@ -328,7 +334,17 @@ def get_torchsim_ga_params(
 
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
-    params = _get_base_ga_benchmark_params(seed)
+    policy = get_system_policy(system_type)
+    if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
+        raise ValueError(
+            f"system_type={system_type!r} requires surface_config to be provided "
+            "as a SurfaceSystemConfig when building go_params."
+        )
+
+    effective_seed = 0 if seed is None else int(seed)
+    params = _get_base_ga_benchmark_params(effective_seed)
+    if seed is None:
+        params["seed"] = None
     if model_name is not None:
         params["calculator_kwargs"]["model_name"] = model_name
 
@@ -350,6 +366,12 @@ def get_torchsim_ga_params(
             ),
         },
     )
+    for algo in ("simple", "bh", "ga"):
+        params["optimizer_params"][algo]["system_type"] = system_type
+    if policy.uses_surface:
+        params["surface_config"] = surface_config
+        for algo in ("simple", "bh", "ga"):
+            params["optimizer_params"][algo]["surface_config"] = surface_config
 
     return params
 

@@ -117,7 +117,7 @@ To create your own SCGO workflow:
 
       from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
 
-      go_params = get_torchsim_ga_params(seed=42)
+      go_params = get_torchsim_ga_params(system_type="gas_cluster", seed=42)
       ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
 
 3. **Customize parameters:**

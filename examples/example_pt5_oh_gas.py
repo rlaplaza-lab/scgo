@@ -33,7 +33,7 @@ CLUSTER_ADSORBATE_CONFIG = ClusterAdsorbateConfig(
 
 
 def main() -> None:
-    go_params = get_torchsim_ga_params(SEED)
+    go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["calculator"] = "MACE"
     go_params["connectivity_factor"] = 1.8  # override default
     go_params["optimizer_params"]["ga"].update(

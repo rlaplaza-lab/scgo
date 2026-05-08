@@ -656,6 +656,29 @@ def test_run_go_ts_wires_profile_toggle(monkeypatch):
     assert go_params["optimizer_params"]["ga"]["write_timing_json"] is False
 
 
+def test_run_go_ts_accepts_top_level_go_surface_config(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_pipeline(composition, system_type, **kwargs):
+        captured["go_params"] = kwargs["go_params"]
+        return {"ts_results": []}
+
+    monkeypatch.setattr("scgo.runner_api.run_scgo_go_ts_pipeline", _fake_pipeline)
+    cfg = _surface_cfg()
+    run_go_ts(
+        ["Pt", "Pt", "Pt", "Pt", "Pt"],
+        go_params={"surface_config": cfg, "optimizer_params": {"ga": {}}},
+        ts_params=_emt_ts_surf_ads(cfg),
+        verbosity=0,
+        surface_config=cfg,
+        system_type="surface_cluster_adsorbate",
+        adsorbates=_adsorbates_oh(n=2),
+    )
+    go_params = captured["go_params"]
+    assert go_params["surface_config"] == cfg
+    assert go_params["optimizer_params"]["ga"]["surface_config"] == cfg
+
+
 def test_run_go_ts_campaign_no_output_dir(
     monkeypatch,
 ):
