@@ -727,7 +727,15 @@ def run_trials(
         f"All trials complete. Found {len(all_raw_minima)} raw minima from current run."
     )
     logger.info("Filtering for unique structures across all runs...")
-    unique_candidates = filter_unique_minima(all_minima_for_filtering)
+    surface_cfg = global_optimizer_kwargs.get("surface_config")
+    dedupe_mic = (
+        bool(surface_cfg.comparator_use_mic) if surface_cfg is not None else False
+    )
+    unique_candidates = filter_unique_minima(
+        all_minima_for_filtering,
+        n_top=len(composition),
+        mic=dedupe_mic,
+    )
     logger.info(f"Found {len(unique_candidates)} unique candidates.")
 
     if not unique_candidates:

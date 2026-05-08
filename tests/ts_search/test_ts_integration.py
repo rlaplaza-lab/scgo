@@ -463,8 +463,10 @@ def test_run_transition_state_search_deduplicates_minima(tmp_path):
     # Raw minima should contain 4 entries (2 per run)
     assert len(raw_minima) == 4
 
-    # Deduplicate using the same helper used in run_minima.py / TS code
-    deduped = filter_unique_minima(raw_minima, DEFAULT_ENERGY_TOLERANCE)
+    # Deduplicate using the same helper used in run_minima.py / TS code (gas: n_top = n_cluster)
+    deduped = filter_unique_minima(
+        raw_minima, DEFAULT_ENERGY_TOLERANCE, n_top=2, mic=False
+    )
 
     # Energy tolerances may cause 1 or 2 unique minima depending on calculator
     # behavior — assert only that deduplication reduces the number of minima.

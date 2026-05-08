@@ -79,6 +79,38 @@ class TestFilterUniqueMinima:
         result = filter_unique_minima([(0.0, base), (0.001, slab_shifted)])
         assert len(result) == 1
 
+    def test_filter_unique_minima_n_top_trailing_only(self):
+        """When n_top=1, only the trailing atom is compared (GA-style surface tail)."""
+        tail = [0.6, 0.4, 1.8]
+        base = Atoms(
+            "Pt4",
+            positions=[
+                [0.0, 0.0, 0.0],
+                [1.2, 0.0, 0.0],
+                [0.6, 1.0, 0.0],
+                tail,
+            ],
+        )
+        shifted = Atoms(
+            "Pt4",
+            positions=[
+                [0.0, 0.0, 0.5],
+                [1.2, 0.0, 0.5],
+                [0.6, 1.0, 0.5],
+                tail,
+            ],
+        )
+        out = filter_unique_minima([(0.0, base), (0.001, shifted)], n_top=1, mic=False)
+        assert len(out) == 1
+
+    def test_filter_unique_minima_mic_keyword_smoke(self):
+        """mic=True is accepted and runs for a small gas-phase duplicate pair."""
+        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        atoms1.center(vacuum=5.0)
+        atoms2 = atoms1.copy()
+        out = filter_unique_minima([(1.0, atoms1), (1.0001, atoms2)], n_top=2, mic=True)
+        assert len(out) == 1
+
 
 class TestAutoNiter:
     """Tests for auto_niter function."""

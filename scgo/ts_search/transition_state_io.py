@@ -15,7 +15,7 @@ from scgo.database import (
     extract_minima_from_database_file,
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run_trial
-from scgo.database.metadata import add_metadata, get_metadata
+from scgo.database.metadata import add_metadata
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
     validate_stored_slab_adsorbate_metadata,
@@ -50,9 +50,8 @@ def load_minima_by_composition(
     Extracts minima from all databases and groups by chemical formula.
 
     By default only ``final_unique_minimum`` rows are loaded (canonical GO
-    output). When ``prefer_final_unique`` is True, results are also
-    deduplicated by ``final_id`` > ``final_written`` > ``final_rank`` when
-    those keys exist.
+    output). Structural deduplication across runs is left to callers (e.g.
+    :func:`scgo.utils.helpers.filter_unique_minima` in TS search).
 
     Args:
         base_dir: Root directory containing run_*/ subdirectories.
@@ -137,49 +136,6 @@ def load_minima_by_composition(
         minima_by_formula[formula] = sorted(
             minima_by_formula[formula], key=lambda x: x[0]
         )
-
-    # Prefer and deduplicate final-tagged minima by canonical keys.
-    if prefer_final_unique:
-
-        def _final_key(atoms: Atoms) -> tuple[str, str] | None:
-            md = atoms.info.get("metadata", {}) or {}
-            fid = md.get("final_id")
-            if fid:
-                return ("final_id", str(fid))
-            fw = md.get("final_written")
-            if fw:
-                return ("final_written", str(fw))
-            fr = md.get("final_rank")
-            if fr is not None:
-                return ("final_rank", str(fr))
-            return None
-
-        for formula, entries in list(minima_by_formula.items()):
-            # Find entries explicitly tagged as final_unique_minimum
-            final_entries = [
-                e for e in entries if get_metadata(e[1], "final_unique_minimum", False)
-            ]
-            if not final_entries:
-                # No final-tagged minima for this formula; keep original list
-                continue
-
-            # Group by canonical final key; unkeyed entries remain as-is.
-            grouped: dict[tuple[str, str] | None, list[tuple[float, Atoms]]] = {}
-            for energy, atoms in final_entries:
-                k = _final_key(atoms)
-                grouped.setdefault(k, []).append((energy, atoms))
-
-            deduped: list[tuple[float, Atoms]] = []
-            for key, group in grouped.items():
-                group.sort(key=lambda x: x[0])
-                if key is None:
-                    deduped.extend(group)
-                else:
-                    deduped.append(group[0])
-            deduped.sort(key=lambda x: x[0])
-
-            # Replace minima list for this formula with deduplicated finals
-            minima_by_formula[formula] = deduped
 
     return minima_by_formula
 

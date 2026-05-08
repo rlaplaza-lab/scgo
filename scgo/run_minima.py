@@ -505,25 +505,37 @@ def run_scgo_go_ts_pipeline(
     ts_kwargs_local.pop("system_type", None)
     write_ts_json = bool(ts_kwargs_local.pop("write_timing_json", False))
 
-    # Extract connectivity_factor from cluster_adsorbate_config in go_params
+    # Extract connectivity_factor from ts_kwargs, go_params, or config objects
     from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+    from scgo.surface.config import SurfaceSystemConfig
 
-    connectivity_factor: float | None = None
-    go_cluster_adsorbate_config = (
-        go_params.get("optimizer_params", {})
-        .get("ga", {})
-        .get("cluster_adsorbate_config")
-    )
-    if go_cluster_adsorbate_config is not None and isinstance(
-        go_cluster_adsorbate_config, ClusterAdsorbateConfig
-    ):
-        connectivity_factor = go_cluster_adsorbate_config.structure_connectivity_factor
-    elif go_params.get("cluster_adsorbate_config") is not None and isinstance(
-        go_params.get("cluster_adsorbate_config"), ClusterAdsorbateConfig
-    ):
-        connectivity_factor = go_params[
-            "cluster_adsorbate_config"
-        ].structure_connectivity_factor
+    connectivity_factor: float | None = ts_kwargs_local.pop("connectivity_factor", None)
+    if connectivity_factor is None:
+        # Try to get from surface_config in ts_kwargs
+        surface_config_ts = ts_kwargs_local.get("surface_config")
+        if surface_config_ts is not None and isinstance(
+            surface_config_ts, SurfaceSystemConfig
+        ):
+            connectivity_factor = surface_config_ts.structure_connectivity_factor
+    if connectivity_factor is None:
+        # Try cluster_adsorbate_config in go_params
+        go_cluster_adsorbate_config = (
+            go_params.get("optimizer_params", {})
+            .get("ga", {})
+            .get("cluster_adsorbate_config")
+        )
+        if go_cluster_adsorbate_config is not None and isinstance(
+            go_cluster_adsorbate_config, ClusterAdsorbateConfig
+        ):
+            connectivity_factor = (
+                go_cluster_adsorbate_config.structure_connectivity_factor
+            )
+        elif go_params.get("cluster_adsorbate_config") is not None and isinstance(
+            go_params.get("cluster_adsorbate_config"), ClusterAdsorbateConfig
+        ):
+            connectivity_factor = go_params[
+                "cluster_adsorbate_config"
+            ].structure_connectivity_factor
 
     from scgo.ts_search import run_transition_state_search
 

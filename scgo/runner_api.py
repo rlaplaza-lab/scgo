@@ -7,7 +7,9 @@
 ``system_type=...`` argument together with explicit ``surface_config=...`` and,
 for ``*_adsorbate`` modes, core-only ``composition`` plus ``adsorbates=...``
 (single or multiple ASE ``Atoms`` fragments).
-System-definition keys in ``go_params`` / ``ts_params`` are rejected.
+System-definition keys in ``go_params`` are rejected. For ``ts_params``,
+``system_type`` remains rejected while ``surface_config`` is allowed and
+validated against the run argument.
 """
 
 from __future__ import annotations
@@ -167,6 +169,66 @@ def _validate_go_ts_surface_config(
         )
 
 
+def _validate_go_ts_param_coherence(
+    *,
+    go_prepared: dict[str, Any],
+    ts_params: dict[str, Any],
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
+) -> None:
+    """Validate GO/TS params coherence against run-level system definition."""
+    policy = get_system_policy(system_type)
+    optimizer_params = go_prepared.get("optimizer_params") or {}
+    for algo in _ALGO_KEYS:
+        slot = optimizer_params.get(algo)
+        if slot is None:
+            continue
+        if not isinstance(slot, dict):
+            raise ValueError(f"go_params['optimizer_params']['{algo}'] must be a dict.")
+        slot_system_type = slot.get("system_type")
+        if slot_system_type is not None and slot_system_type != system_type:
+            raise ValueError(
+                "GO/TS coherence error: "
+                f"go_params['optimizer_params']['{algo}']['system_type']="
+                f"{slot_system_type!r} disagrees with run system_type={system_type!r}."
+            )
+        slot_surface_config = slot.get("surface_config")
+        if policy.uses_surface:
+            if (
+                slot_surface_config is not None
+                and surface_config is not None
+                and slot_surface_config != surface_config
+            ):
+                raise ValueError(
+                    "GO/TS coherence error: "
+                    f"go_params['optimizer_params']['{algo}']['surface_config'] "
+                    "disagrees with run surface_config."
+                )
+        elif slot_surface_config is not None:
+            raise ValueError(
+                "GO/TS coherence error: go_params surface_config is set but "
+                f"run system_type={system_type!r} is non-surface."
+            )
+
+    ts_surface_config = ts_params.get("surface_config")
+    if policy.uses_surface:
+        if not isinstance(ts_surface_config, SurfaceSystemConfig):
+            raise ValueError(
+                "GO/TS coherence error: surface system types require "
+                "ts_params['surface_config']."
+            )
+        if surface_config is not None and ts_surface_config != surface_config:
+            raise ValueError(
+                "GO/TS coherence error: ts_params['surface_config'] disagrees with "
+                "run surface_config."
+            )
+    elif ts_surface_config is not None:
+        raise ValueError(
+            "GO/TS coherence error: ts_params['surface_config'] is set but "
+            f"run system_type={system_type!r} is non-surface."
+        )
+
+
 def _merge_adsorbate_context_into_params(
     base: dict[str, Any] | None,
     **kwargs: Any,
@@ -219,6 +281,7 @@ def _coerce_ts_for_runner(
 def _default_ts_params_from_go(
     *,
     system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
     go_params: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build TS defaults from preset helpers, aligned with GO calculator settings."""
@@ -227,19 +290,25 @@ def _default_ts_params_from_go(
         calculator=str(p.get("calculator", "MACE")),
         calculator_kwargs=dict(p.get("calculator_kwargs") or {}),
         system_type=system_type,
+        surface_config=surface_config,
     )
 
 
 def _materialize_go_ts_params(
     *,
     system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
     go_params: dict[str, Any] | None,
     ts_params: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return concrete GO/TS params dicts using canonical preset defaults."""
     effective_go = get_default_params() if go_params is None else go_params
     effective_ts = (
-        _default_ts_params_from_go(system_type=system_type, go_params=effective_go)
+        _default_ts_params_from_go(
+            system_type=system_type,
+            surface_config=surface_config,
+            go_params=effective_go,
+        )
         if ts_params is None
         else ts_params
     )
@@ -249,11 +318,12 @@ def _materialize_go_ts_params(
 def _materialize_ts_params(
     *,
     system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
     ts_params: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Return concrete TS params dict using canonical TS preset defaults."""
     return (
-        get_ts_search_params(system_type=system_type)
+        get_ts_search_params(system_type=system_type, surface_config=surface_config)
         if ts_params is None
         else ts_params
     )
@@ -391,11 +461,19 @@ def _with_adsorbate_in_optimizers(
 def _reject_system_keys(
     params: dict[str, Any], *, context: str, kind: str = "go"
 ) -> None:
-    for key in ("system_type", "surface_config"):
+    forbidden = ("system_type", "surface_config")
+    if kind == "ts":
+        forbidden = ("system_type",)
+    for key in forbidden:
         if params.get(key) is not None:
+            guidance = "Use the run function argument instead."
+            if kind == "ts" and key == "system_type":
+                guidance = (
+                    "Use the run function system_type argument; "
+                    "ts_params['surface_config'] is allowed."
+                )
             raise ValueError(
-                f"{context} does not allow top-level {kind}_params['{key}']. "
-                "Use the run function argument instead."
+                f"{context} does not allow top-level {kind}_params['{key}']. {guidance}"
             )
 
 
@@ -556,7 +634,10 @@ def run_go_ts(
     st = _require_system_type(system_type, "run_go_ts")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     go_mat, ts_mat = _materialize_go_ts_params(
-        system_type=st, go_params=go_params, ts_params=ts_params
+        system_type=st,
+        surface_config=surface_config,
+        go_params=go_params,
+        ts_params=ts_params,
     )
     _reject_system_keys(go_mat, context="run_go_ts")
     _reject_system_keys(ts_mat, context="run_go_ts", kind="ts")
@@ -574,6 +655,12 @@ def run_go_ts(
         composition=comp,
         adsorbate_definition=ads_def,
         context="run_go_ts",
+    )
+    _validate_go_ts_param_coherence(
+        go_prepared=go_prep,
+        ts_params=ts_mat,
+        system_type=st,
+        surface_config=surface_config,
     )
     _validate_go_ts_surface_config(
         go_prep,
@@ -636,12 +723,21 @@ def run_go_ts_campaign(
     st = _require_system_type(system_type, "run_go_ts_campaign")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     go_mat, ts_mat = _materialize_go_ts_params(
-        system_type=st, go_params=go_params, ts_params=ts_params
+        system_type=st,
+        surface_config=surface_config,
+        go_params=go_params,
+        ts_params=ts_params,
     )
     _reject_system_keys(go_mat, context="run_go_ts_campaign")
     _reject_system_keys(ts_mat, context="run_go_ts_campaign", kind="ts")
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
     go_prep = _with_surface_in_optimizers(go_mat, surface_config=surface_config)
+    _validate_go_ts_param_coherence(
+        go_prepared=go_prep,
+        ts_params=ts_mat,
+        system_type=st,
+        surface_config=surface_config,
+    )
 
     full_compositions: list[list[str]] = []
     ads_def, ads_temp = None, None
@@ -735,7 +831,9 @@ def run_ts_search(
         adsorbates=adsorbates,
         context="run_ts_search",
     )
-    ts_mat = _materialize_ts_params(system_type=st, ts_params=ts_params)
+    ts_mat = _materialize_ts_params(
+        system_type=st, surface_config=surface_config, ts_params=ts_params
+    )
     _reject_system_keys(ts_mat, context="run_ts_search", kind="ts")
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     merged = _coerce_ts_for_runner(
@@ -780,7 +878,9 @@ def run_ts_campaign(
 ) -> dict[str, list[dict[str, Any]]]:
     st = _require_system_type(system_type, "run_ts_campaign")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
-    ts_mat = _materialize_ts_params(system_type=st, ts_params=ts_params)
+    ts_mat = _materialize_ts_params(
+        system_type=st, surface_config=surface_config, ts_params=ts_params
+    )
     _reject_system_keys(ts_mat, context="run_ts_campaign", kind="ts")
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     ts_kwargs = _coerce_ts_for_runner(

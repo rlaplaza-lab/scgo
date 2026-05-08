@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_NEB_TANGENT_METHOD
-from scgo.system_types import SystemType
+from scgo.surface.config import SurfaceSystemConfig
+from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
 
 
@@ -32,6 +33,23 @@ def coerce_ts_params_to_runner_kwargs(
         ts_params.get("use_torchsim"),
         ts_params.get("use_parallel_neb"),
     )
+    ts_surface_config = ts_params.get("surface_config")
+    if (
+        surface_config is not None
+        and ts_surface_config is not None
+        and surface_config != ts_surface_config
+    ):
+        raise ValueError("run surface_config and ts_params['surface_config'] disagree.")
+    resolved_surface_config = (
+        surface_config if surface_config is not None else ts_surface_config
+    )
+    if get_system_policy(system_type).uses_surface and not isinstance(
+        resolved_surface_config, SurfaceSystemConfig
+    ):
+        raise ValueError(
+            f"system_type={system_type!r} requires surface_config in ts_params "
+            "or as the run surface_config argument."
+        )
 
     kwargs: dict[str, Any] = {
         "params": {
@@ -69,10 +87,11 @@ def coerce_ts_params_to_runner_kwargs(
         "neb_align_endpoints",
         "neb_perturb_sigma",
         "surface_config",
+        "connectivity_factor",
     ]
     for key in direct_keys:
         if key == "surface_config":
-            kwargs[key] = surface_config
+            kwargs[key] = resolved_surface_config
         else:
             kwargs[key] = ts_params.get(key)
 

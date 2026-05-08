@@ -40,10 +40,11 @@ def _build_go_params(surface_config) -> dict:
     return go_params
 
 
-def _build_ts_params() -> dict:
+def _build_ts_params(surface_config) -> dict:
     """Load TS preset, then tweak max pair budget."""
     ts_params = get_ts_search_params(
         system_type=SYSTEM_TYPE,
+        surface_config=surface_config,
         seed=SEED,
     )
     ts_params["max_pairs"] = MAX_PAIRS
@@ -56,7 +57,7 @@ def main() -> None:
         structure_connectivity_factor=1.8,
     )
     go_params = _build_go_params(surface_config)
-    ts_params = _build_ts_params()
+    ts_params = _build_ts_params(surface_config)
     run_go_ts(
         [ELEMENT] * N_ATOMS,
         go_params=go_params,

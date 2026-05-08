@@ -136,22 +136,35 @@ def _run_serial_neb_search(
         if surface_config is not None:
             attach_slab_constraints_from_surface_config(react_ep, surface_config)
             attach_slab_constraints_from_surface_config(prod_ep, surface_config)
-        validate_structure_for_system_type(
-            react_ep,
-            system_type=system_type,
-            surface_config=surface_config,
-            n_slab=n_slab,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-        )
-        validate_structure_for_system_type(
-            prod_ep,
-            system_type=system_type,
-            surface_config=surface_config,
-            n_slab=n_slab,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-        )
+        try:
+            validate_structure_for_system_type(
+                react_ep,
+                system_type=system_type,
+                surface_config=surface_config,
+                n_slab=n_slab,
+                adsorbate_definition=adsorbate_definition,
+                connectivity_factor=connectivity_factor,
+            )
+            validate_structure_for_system_type(
+                prod_ep,
+                system_type=system_type,
+                surface_config=surface_config,
+                n_slab=n_slab,
+                adsorbate_definition=adsorbate_definition,
+                connectivity_factor=connectivity_factor,
+            )
+        except ValueError as e:
+            logger.warning(
+                "Skipping pair %s due to structure validation error: %s", pair_id, e
+            )
+            ts_results.append(
+                {
+                    "status": "skipped",
+                    "pair_id": pair_id,
+                    "error": str(e),
+                }
+            )
+            continue
 
         calculator: Any = None
         if not use_torchsim:
@@ -519,7 +532,17 @@ def run_transition_state_search(
 
     if dedupe_minima:
         original_count = len(minima)
-        minima = filter_unique_minima(minima, minima_energy_tolerance)
+        ts_dedupe_mic = (
+            bool(surface_config.comparator_use_mic)
+            if surface_config is not None
+            else False
+        )
+        minima = filter_unique_minima(
+            minima,
+            minima_energy_tolerance,
+            n_top=len(adsorbate_composition),
+            mic=ts_dedupe_mic,
+        )
         if verbosity >= 1 and len(minima) != original_count:
             logger.info(
                 f"Deduplicated minima for {formula}: {original_count} -> {len(minima)} unique entries"

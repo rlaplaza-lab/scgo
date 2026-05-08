@@ -537,6 +537,9 @@ def _find_unique_minima_with_binning(
 def filter_unique_minima(
     minima_list: list[tuple[float, Atoms]],
     energy_tolerance: float = DEFAULT_ENERGY_TOLERANCE,
+    *,
+    n_top: int | None = None,
+    mic: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Filters a list of (energy, Atoms) tuples to identify unique structures.
 
@@ -546,6 +549,10 @@ def filter_unique_minima(
         energy_tolerance: The energy difference (in eV) below which two
                           structures are considered potential duplicates (if their
                           geometries also match). Defaults to `DEFAULT_ENERGY_TOLERANCE`.
+        n_top: Number of trailing atoms to compare (same as GA ``n_to_optimize``).
+               If ``None``, compares all atoms (legacy gas / full-system behavior).
+        mic: If True, use minimum-image convention for pairwise distances (slab PBC),
+             matching :func:`scgo.algorithms.ga_common.create_structure_comparator`.
 
     Returns:
         A new list of (energy, Atoms) tuples containing only the unique
@@ -565,12 +572,15 @@ def filter_unique_minima(
         kvp = atoms.info.setdefault("key_value_pairs", {})
         kvp.setdefault("raw_score", -float(energy))
 
-    n_atoms: int = len(valid_minima[0][1])
+    n_atoms_full: int = len(valid_minima[0][1])
+    comparer_n_top: int = n_atoms_full if n_top is None else n_top
     # Import here to avoid circular dependency
     from scgo.algorithms.ga_common import create_structure_comparator
 
     comparer: SequentialComparator = create_structure_comparator(
-        n_atoms, energy_tolerance
+        comparer_n_top,
+        energy_tolerance,
+        mic=mic,
     )
 
     sorted_minima: list[tuple[float, Atoms]] = sorted(

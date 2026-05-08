@@ -408,15 +408,21 @@ def get_ts_search_params(
 
     For EMT or other non-TorchSim calculators, set ``use_torchsim=False`` on the
     returned dict before running.
-    System-definition inputs (`system_type`, `surface_config`) are used only to
-    shape technical defaults and are intentionally not stored in the output
-    dictionary; high-level run APIs own those arguments.
+    `system_type` is used to shape technical defaults.
+    For surface system types, `surface_config` is required and stored in the
+    returned dictionary so TS loading/validation always receives explicit slab
+    context (no guessing).
     If ``seed`` is set, it is stored in the returned dict; :func:`run_go_ts` / ``run_ts_*``
     require it to be consistent with ``go_params['seed']`` and the ``seed=`` run argument.
     The ``connectivity_factor`` key sets the global connectivity threshold for cluster
     validation (default 1.4).
     """
     policy = get_system_policy(system_type)
+    if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
+        raise ValueError(
+            f"system_type={system_type!r} requires surface_config to be provided "
+            "as a SurfaceSystemConfig when building ts_params."
+        )
 
     if calculator_kwargs is None:
         calc_u = str(calculator).strip().upper()
@@ -452,6 +458,7 @@ def get_ts_search_params(
     if policy.uses_surface:
         params.update(
             {
+                "surface_config": surface_config,
                 "neb_interpolation_mic": True,
                 "neb_n_images": 5,
                 "neb_spring_constant": 0.1,

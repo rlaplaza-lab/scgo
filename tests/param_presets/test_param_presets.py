@@ -46,15 +46,13 @@ def test_ts_search_params_allow_overrides():
     assert kwargs["minima_energy_tolerance"] == pytest.approx(0.05)
 
 
-def test_ts_search_params_do_not_embed_surface_config():
+def test_ts_search_params_embed_surface_config_for_surface_systems():
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
     slab.pbc = [True, True, True]
     cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
     ts = get_ts_search_params(system_type="surface_cluster", surface_config=cfg)
-    assert "surface_config" not in ts
-    kwargs = coerce_ts_params_to_runner_kwargs(
-        ts, system_type="surface_cluster", surface_config=cfg
-    )
+    assert ts["surface_config"] is cfg
+    kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="surface_cluster")
     assert kwargs.get("surface_config") is cfg
 
 
@@ -71,7 +69,10 @@ def test_coerce_ts_requires_valid_system_type():
 
 
 def test_ts_search_surface_regime_mic_and_fmax():
-    ts = get_ts_search_params(system_type="surface_cluster")
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, True]
+    cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+    ts = get_ts_search_params(system_type="surface_cluster", surface_config=cfg)
     assert ts["neb_interpolation_mic"] is True
     assert ts["neb_n_images"] == 5
     assert ts["neb_fmax"] == pytest.approx(0.1)
@@ -211,11 +212,11 @@ def test_production_style_mace_go_ts_surface_has_surface_config(monkeypatch):
         "ga",
     )
     assert prepared["niter_local_relaxation"] >= 400
-    assert "surface_config" not in ts_params
+    assert ts_params["surface_config"] is cfg
     assert (
-        coerce_ts_params_to_runner_kwargs(
-            ts_params, system_type="surface_cluster", surface_config=cfg
-        ).get("surface_config")
+        coerce_ts_params_to_runner_kwargs(ts_params, system_type="surface_cluster").get(
+            "surface_config"
+        )
         is cfg
     )
 

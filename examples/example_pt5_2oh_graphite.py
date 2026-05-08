@@ -50,8 +50,10 @@ def _build_go_params(surface_config) -> dict:
     return go_params
 
 
-def _build_ts_params() -> dict:
-    ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
+def _build_ts_params(surface_config) -> dict:
+    ts_params = get_ts_search_params(
+        system_type=SYSTEM_TYPE, surface_config=surface_config, seed=SEED
+    )
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["energy_gap_threshold"] = 1.0
     ts_params["neb_n_images"] = 7
@@ -63,7 +65,7 @@ def _build_ts_params() -> dict:
 def main() -> None:
     surface_config = make_graphite_surface_config()
     go_params = _build_go_params(surface_config)
-    ts_params = _build_ts_params()
+    ts_params = _build_ts_params(surface_config)
     run_go_ts(
         COMPOSITION,
         go_params=go_params,

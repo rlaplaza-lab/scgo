@@ -44,10 +44,11 @@ def _emt_ts_gasc() -> dict:
     }
 
 
-def _emt_ts_surf_ads() -> dict:
+def _emt_ts_surf_ads(surface_config: SurfaceSystemConfig) -> dict:
     return {
         **get_ts_search_params(
             system_type="surface_cluster_adsorbate",
+            surface_config=surface_config,
             calculator="EMT",
             calculator_kwargs={},
         ),
@@ -505,12 +506,13 @@ def test_run_ts_search_passes_system_type(monkeypatch):
         return []
 
     monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
+    cfg = _surface_cfg()
     run_ts_search(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],
         params={"calculator": "EMT"},
-        ts_params=_emt_ts_surf_ads(),
+        ts_params=_emt_ts_surf_ads(cfg),
         verbosity=0,
-        surface_config=_surface_cfg(),
+        surface_config=cfg,
         system_type="surface_cluster_adsorbate",
         adsorbates=_adsorbates_oh(n=2),
     )
@@ -808,10 +810,47 @@ def test_run_ts_search_rejects_ts_system_type_mismatch():
         run_ts_search(
             "Pt2",
             params={"calculator": "EMT"},
-            ts_params={**_emt_ts_gasc(), "system_type": "surface_cluster_adsorbate"},
+            ts_params={
+                **_emt_ts_gasc(),
+                "system_type": "surface_cluster_adsorbate",
+                "surface_config": _surface_cfg(),
+            },
             verbosity=0,
             system_type="gas_cluster",
         )
+
+
+def test_run_go_ts_rejects_go_optimizer_system_type_mismatch():
+    with pytest.raises(ValueError, match="coherence error"):
+        run_go_ts(
+            "Pt2",
+            go_params={
+                "optimizer_params": {
+                    "ga": {"system_type": "surface_cluster"},
+                    "bh": {},
+                    "simple": {},
+                }
+            },
+            ts_params=_emt_ts_gasc(),
+            verbosity=0,
+            system_type="gas_cluster",
+        )
+
+
+def test_run_go_ts_rejects_ts_surface_config_for_gas_system():
+    with pytest.raises(ValueError, match="coherence error"):
+        run_go_ts(
+            "Pt2",
+            go_params={"optimizer_params": {"ga": {}}},
+            ts_params={**_emt_ts_gasc(), "surface_config": _surface_cfg()},
+            verbosity=0,
+            system_type="gas_cluster",
+        )
+
+
+def test_get_ts_search_params_requires_surface_config_for_surface_systems():
+    with pytest.raises(ValueError, match="requires surface_config"):
+        get_ts_search_params(system_type="surface_cluster", calculator="EMT")
 
 
 def test_resolve_workflow_seed_unifies():
