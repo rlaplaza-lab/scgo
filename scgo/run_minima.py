@@ -136,6 +136,7 @@ def run_scgo_trials(
         "validate_with_hessian",
         "calculator",
         "calculator_kwargs",
+        "surface_config",
         "fmax_threshold",
         "check_hessian",
         "imag_freq_threshold",

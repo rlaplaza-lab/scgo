@@ -1,10 +1,14 @@
 """Tests for template structure generation."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+
 import numpy as np
 import pytest
 from ase import Atoms
 
 from scgo.initialization import is_cluster_connected
+from scgo.initialization import templates as templates_module
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.initialization.templates import (
     _find_valid_template_types,
@@ -341,6 +345,36 @@ class TestFindValidTemplateTypes:
         types1 = _find_valid_template_types(13, rng1)
         types2 = _find_valid_template_types(13, rng2)
         assert set(types1) == set(types2)
+
+    def test_find_valid_types_singleflight_by_n_atoms(self, monkeypatch):
+        """Concurrent same-size requests share one probe computation."""
+        call_count = 0
+        call_lock = Lock()
+
+        def _fake_generator(
+            composition: list[str],
+            n_atoms: int,
+            rng: np.random.Generator | None = None,
+            connectivity_factor: float = CONNECTIVITY_FACTOR,
+        ) -> Atoms:
+            _ = (composition, rng, connectivity_factor)
+            nonlocal call_count
+            with call_lock:
+                call_count += 1
+            return Atoms(symbols=["Pt"] * n_atoms, positions=np.zeros((n_atoms, 3)))
+
+        monkeypatch.setattr(
+            templates_module, "_TEMPLATE_GENERATORS", {"fake": _fake_generator}
+        )
+        monkeypatch.setattr(templates_module, "_VALID_TEMPLATE_TYPES_CACHE", {})
+        monkeypatch.setattr(templates_module, "_VALID_TEMPLATE_TYPES_INFLIGHT", {})
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = [ex.submit(_find_valid_template_types, 13) for _ in range(24)]
+            results = [f.result() for f in futures]
+
+        assert all(r == ["fake"] for r in results)
+        assert call_count == 1
 
 
 class TestTemplateConnectivity:

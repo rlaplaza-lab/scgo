@@ -50,7 +50,9 @@ class SurfaceSystemConfig:
 
     Attributes:
         slab: Frozen substrate (positions copied at use sites). Should use a
-            cell and ``pbc`` appropriate for the slab (often periodic in-plane).
+            cell and ``pbc`` appropriate for the slab (often periodic in-plane,
+            non-periodic along the vacuum axis). Those flags are kept as given
+            (not upgraded to 3D periodicity).
         adsorption_height_min: Minimum distance (Å) from the slab extreme along
             the surface normal to the adsorbate's closest atom along that axis.
         adsorption_height_max: Maximum such distance (Å).
@@ -119,9 +121,11 @@ class SurfaceSystemConfig:
         if not any(slab.pbc):
             raise ValueError("Slab must have at least one periodic dimension.")
 
-        if not all(slab.pbc):
-            logger.warning("Extending slab periodicity to 3D for VASP compatibility.")
-            slab.pbc = [True, True, True]
+        # Preserve the slab's PBC (e.g. in-plane periodic, non-periodic along vacuum).
+        # Do not force 3D periodicity here: many calculators (MLIPs, etc.) should
+        # use true slab boundary conditions. For VASP export or codes that expect a
+        # fully periodic ASE cell, set ``slab.pbc`` accordingly before building this
+        # config.
 
         vacuum_length = slab.cell.lengths()[self.surface_normal_axis]
         if vacuum_length < 10.0:

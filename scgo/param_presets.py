@@ -12,7 +12,7 @@ from scgo.constants import (
     DEFAULT_PAIR_COR_MAX,
 )
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SYSTEM_TYPE_POLICIES, SystemType, get_system_policy
 
 # Available MACE model names for use in calculator_kwargs["model_name"]
 AVAILABLE_MACE_MODELS = [
@@ -32,17 +32,127 @@ AVAILABLE_UMA_MODELS = [
 __all__ = [
     "AVAILABLE_MACE_MODELS",
     "AVAILABLE_UMA_MODELS",
+    "TS_DEFAULTS_BY_SYSTEM_TYPE",
     "get_default_params",
     "get_minimal_ga_params",
     "get_testing_params",
     "get_torchsim_ga_params",
     "get_diversity_params",
     "get_high_energy_params",
+    "get_ts_defaults",
     "get_ts_search_params",
     "get_default_uma_params",
     "get_ts_search_params_uma",
     "get_uma_ga_benchmark_params",
 ]
+
+
+# Per-system-type NEB defaults consumed by `get_ts_search_params` and
+# `coerce_ts_params_to_runner_kwargs`. Keep `neb_align_endpoints` and
+# `neb_interpolation_mic` coherent with `SystemPolicy.neb_disable_alignment` /
+# `neb_force_mic` (an import-time assertion below guards against drift). Other
+# knobs (n_images, fmax, steps, ...) are independent and benchmarked per type.
+TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
+    "gas_cluster": {
+        "neb_align_endpoints": True,
+        "neb_interpolation_mic": False,
+        "neb_n_images": 5,
+        "neb_spring_constant": 0.1,
+        "neb_fmax": 0.05,
+        "neb_steps": "auto",
+        "neb_climb": False,
+        "neb_perturb_sigma": 0.0,
+        "neb_interpolation_method": "idpp",
+        "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
+        "torchsim_fmax": 0.05,
+        "torchsim_max_steps": "auto",
+    },
+    "gas_cluster_adsorbate": {
+        "neb_align_endpoints": True,
+        "neb_interpolation_mic": False,
+        "neb_n_images": 5,
+        "neb_spring_constant": 0.1,
+        "neb_fmax": 0.05,
+        "neb_steps": "auto",
+        "neb_climb": False,
+        "neb_perturb_sigma": 0.0,
+        "neb_interpolation_method": "idpp",
+        "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
+        "torchsim_fmax": 0.05,
+        "torchsim_max_steps": "auto",
+    },
+    "surface_cluster": {
+        "neb_align_endpoints": False,
+        "neb_interpolation_mic": True,
+        "neb_n_images": 5,
+        "neb_spring_constant": 0.1,
+        "neb_fmax": 0.1,
+        "neb_steps": 500,
+        "neb_climb": False,
+        "neb_perturb_sigma": 0.0,
+        "neb_interpolation_method": "idpp",
+        "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
+        "torchsim_fmax": 0.1,
+        "torchsim_max_steps": 500,
+    },
+    "surface_cluster_adsorbate": {
+        "neb_align_endpoints": False,
+        "neb_interpolation_mic": True,
+        "neb_n_images": 5,
+        "neb_spring_constant": 0.1,
+        "neb_fmax": 0.1,
+        "neb_steps": 500,
+        "neb_climb": False,
+        "neb_perturb_sigma": 0.0,
+        "neb_interpolation_method": "idpp",
+        "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
+        "torchsim_fmax": 0.1,
+        "torchsim_max_steps": 500,
+    },
+}
+
+
+def _assert_ts_defaults_match_system_policies() -> None:
+    """Guard against drift between TS defaults and ``SystemPolicy`` flags."""
+    missing = set(SYSTEM_TYPE_POLICIES) - set(TS_DEFAULTS_BY_SYSTEM_TYPE)
+    extra = set(TS_DEFAULTS_BY_SYSTEM_TYPE) - set(SYSTEM_TYPE_POLICIES)
+    if missing or extra:
+        raise RuntimeError(
+            "TS_DEFAULTS_BY_SYSTEM_TYPE keys must match SYSTEM_TYPE_POLICIES "
+            f"(missing={sorted(missing)!r}, extra={sorted(extra)!r})."
+        )
+    for st, defaults in TS_DEFAULTS_BY_SYSTEM_TYPE.items():
+        policy = SYSTEM_TYPE_POLICIES[st]
+        expected_align = not policy.neb_disable_alignment
+        if defaults["neb_align_endpoints"] is not expected_align:
+            raise RuntimeError(
+                f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]['neb_align_endpoints']="
+                f"{defaults['neb_align_endpoints']!r} disagrees with "
+                f"SystemPolicy.neb_disable_alignment={policy.neb_disable_alignment!r}."
+            )
+        if defaults["neb_interpolation_mic"] != policy.neb_force_mic:
+            raise RuntimeError(
+                f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]['neb_interpolation_mic']="
+                f"{defaults['neb_interpolation_mic']!r} disagrees with "
+                f"SystemPolicy.neb_force_mic={policy.neb_force_mic!r}."
+            )
+
+
+_assert_ts_defaults_match_system_policies()
+
+
+def get_ts_defaults(system_type: SystemType) -> dict[str, Any]:
+    """Return a fresh copy of NEB knob defaults for one system type.
+
+    Single source of truth read by :func:`get_ts_search_params` and
+    :func:`scgo.utils.ts_runner_kwargs.coerce_ts_params_to_runner_kwargs`.
+    """
+    if system_type not in TS_DEFAULTS_BY_SYSTEM_TYPE:
+        raise ValueError(
+            f"Unsupported system_type={system_type!r}; expected one of "
+            f"{sorted(TS_DEFAULTS_BY_SYSTEM_TYPE)!r}."
+        )
+    return dict(TS_DEFAULTS_BY_SYSTEM_TYPE[system_type])
 
 
 def get_default_params() -> dict[str, Any]:
@@ -458,41 +568,16 @@ def get_ts_search_params(
         "energy_gap_threshold": 2.0,
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,
         "similarity_pair_cor_max": 0.1,
-        "neb_n_images": 5,
-        "neb_spring_constant": 0.1,
-        "neb_fmax": 0.05,
-        "neb_steps": "auto",
-        "neb_align_endpoints": True,
-        "neb_perturb_sigma": 0.0,
-        "neb_interpolation_mic": False,
         "use_torchsim": True,
         "torchsim_batch_size": 5,
-        "torchsim_fmax": 0.05,
-        "torchsim_max_steps": "auto",
         "use_parallel_neb": False,
-        "neb_climb": False,
-        "neb_interpolation_method": "idpp",
-        "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }
+    params.update(get_ts_defaults(system_type))
 
     if policy.uses_surface:
-        params.update(
-            {
-                "surface_config": surface_config,
-                "neb_interpolation_mic": True,
-                "neb_n_images": 5,
-                "neb_spring_constant": 0.1,
-                "neb_fmax": 0.1,
-                "torchsim_fmax": 0.1,
-                "neb_steps": 500,
-                "torchsim_max_steps": 500,
-                "neb_climb": False,
-                "neb_interpolation_method": "idpp",
-                "neb_align_endpoints": False,
-            }
-        )
+        params["surface_config"] = surface_config
 
     if seed is not None:
         params["seed"] = int(seed)

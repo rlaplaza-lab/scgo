@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -10,9 +12,11 @@ from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_ga_pairing
+from scgo.surface import deposition as deposition_module
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.surface.deposition import (
+    _warmup_ase_spacegroup_cache,
     create_deposited_cluster,
     create_deposited_cluster_batch,
     slab_surface_extreme,
@@ -172,6 +176,26 @@ def test_create_deposited_cluster_batch_threaded_is_seed_deterministic(
     marks1 = [atoms.info["task_marker"] for atoms in batch1]
     marks2 = [atoms.info["task_marker"] for atoms in batch2]
     assert marks1 == marks2
+
+
+def test_warmup_ase_spacegroup_cache_singleflight_is_threadsafe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    def _fake_spacegroup(_: int) -> object:
+        calls.append(1)
+        return object()
+
+    monkeypatch.setattr(deposition_module, "Spacegroup", _fake_spacegroup)
+    monkeypatch.setattr(deposition_module, "_ASE_SPACEGROUP_WARMED", False)
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = [ex.submit(_warmup_ase_spacegroup_cache) for _ in range(20)]
+        for f in futures:
+            f.result()
+
+    assert len(calls) == 1
 
 
 def test_create_deposited_cluster_preserves_adsorbate_symbol_order_with_two_oh(

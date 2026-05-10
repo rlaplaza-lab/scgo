@@ -37,10 +37,12 @@ CLUSTER_ADSORBATE_CONFIG = ClusterAdsorbateConfig(
 
 
 def _build_go_params(surface_config) -> dict:
-    go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
-    go_params["calculator"] = "MACE"
+    go_params = get_torchsim_ga_params(
+        system_type=SYSTEM_TYPE,
+        surface_config=surface_config,
+        seed=SEED,
+    )
     go_params["connectivity_factor"] = 1.8  # override default
-    go_params["surface_config"] = surface_config
     go_params["optimizer_params"]["ga"].update(
         niter=NITER,
         population_size=POPULATION_SIZE,
@@ -50,7 +52,9 @@ def _build_go_params(surface_config) -> dict:
 
 def _build_ts_params(surface_config) -> dict:
     ts_params = get_ts_search_params(
-        system_type=SYSTEM_TYPE, surface_config=surface_config, seed=SEED
+        system_type=SYSTEM_TYPE,
+        surface_config=surface_config,
+        seed=SEED,
     )
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["energy_gap_threshold"] = 1.0

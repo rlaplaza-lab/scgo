@@ -6,13 +6,80 @@ from ase.build import fcc111
 import scgo.param_presets as param_presets_module
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_NEB_TANGENT_METHOD
 from scgo.param_presets import (
+    TS_DEFAULTS_BY_SYSTEM_TYPE,
     get_default_params,
     get_torchsim_ga_params,
+    get_ts_defaults,
     get_ts_search_params,
 )
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
 from scgo.utils.run_helpers import prepare_algorithm_kwargs
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
+
+
+def _surface_config_for_test() -> SurfaceSystemConfig:
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, True]
+    return SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+
+
+def _ts_search_params_for(system_type: str) -> dict:
+    if get_system_policy(system_type).uses_surface:
+        return get_ts_search_params(
+            system_type=system_type, surface_config=_surface_config_for_test()
+        )
+    return get_ts_search_params(system_type=system_type)
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_ts_defaults_match_system_policy_align_and_mic(system_type):
+    """`TS_DEFAULTS_BY_SYSTEM_TYPE` must agree with `SystemPolicy` flags."""
+    defaults = get_ts_defaults(system_type)
+    policy = SYSTEM_TYPE_POLICIES[system_type]
+    assert defaults["neb_align_endpoints"] is (not policy.neb_disable_alignment)
+    assert defaults["neb_interpolation_mic"] is policy.neb_force_mic
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_get_ts_search_params_seeds_from_per_system_defaults(system_type):
+    """Each system type's preset reflects its `get_ts_defaults` block."""
+    ts = _ts_search_params_for(system_type)
+    defaults = get_ts_defaults(system_type)
+    for key, expected in defaults.items():
+        assert ts[key] == expected, (
+            f"{system_type}: ts_params[{key!r}]={ts[key]!r} != defaults[{key!r}]={expected!r}"
+        )
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_coerce_sparse_ts_params_falls_back_to_per_system_defaults(system_type):
+    """A sparse `ts_params` flows through with policy-coherent NEB defaults."""
+    sparse: dict = {"calculator": "MACE"}
+    if get_system_policy(system_type).uses_surface:
+        sparse["surface_config"] = _surface_config_for_test()
+    kwargs = coerce_ts_params_to_runner_kwargs(sparse, system_type=system_type)
+    defaults = get_ts_defaults(system_type)
+    for key in (
+        "neb_align_endpoints",
+        "neb_interpolation_mic",
+        "neb_n_images",
+        "neb_spring_constant",
+        "neb_fmax",
+        "neb_steps",
+        "neb_climb",
+        "neb_perturb_sigma",
+        "neb_interpolation_method",
+        "neb_tangent_method",
+    ):
+        expected = defaults[key]
+        assert kwargs[key] == expected, (
+            f"{system_type}: kwargs[{key!r}]={kwargs[key]!r} != defaults[{key!r}]={expected!r}"
+        )
+    assert kwargs["torchsim_params"]["force_tol"] == defaults["torchsim_fmax"]
+    assert kwargs["torchsim_params"]["max_steps"] == defaults["torchsim_max_steps"]
+    assert "torchsim_fmax" not in kwargs
+    assert "torchsim_max_steps" not in kwargs
 
 
 def test_ts_search_params_accepts_seed():
@@ -117,6 +184,8 @@ def test_default_go_and_default_ts_presets_share_mace_model():
 
 def test_loaders_default_to_final_unique_minima():
     """Public loaders should default to final_unique_minimum rows only."""
+    import inspect
+
     from scgo.database.helpers import (
         extract_minima_from_database_file,
         extract_transition_states_from_database_file,
@@ -124,13 +193,30 @@ def test_loaders_default_to_final_unique_minima():
     )
     from scgo.ts_search.transition_state_io import load_minima_by_composition
 
-    # require_final
-    assert extract_minima_from_database_file.__defaults__[1] is True
-    # prefer_final_unique
-    assert load_previous_run_results.__defaults__[3] is True
-    assert load_minima_by_composition.__defaults__[1] is True
-    # require_final_unique_ts
-    assert extract_transition_states_from_database_file.__defaults__[1] is True
+    assert (
+        inspect.signature(extract_minima_from_database_file)
+        .parameters["require_final"]
+        .default
+        is True
+    )
+    assert (
+        inspect.signature(load_previous_run_results)
+        .parameters["prefer_final_unique"]
+        .default
+        is True
+    )
+    assert (
+        inspect.signature(load_minima_by_composition)
+        .parameters["prefer_final_unique"]
+        .default
+        is True
+    )
+    assert (
+        inspect.signature(extract_transition_states_from_database_file)
+        .parameters["require_final_unique_ts"]
+        .default
+        is True
+    )
 
 
 def _fake_torchsim_go(

@@ -144,7 +144,7 @@ def _validate_go_ts_surface_config(
     surface_config: SurfaceSystemConfig | None,
     adsorbate_composition: list[str],
 ) -> None:
-    """For surface system types, require explicit config and active GO consistency."""
+    """For surface system types, ensure active GO slot does not conflict."""
     if not get_system_policy(system_type).uses_surface:
         return
     if not isinstance(surface_config, SurfaceSystemConfig):
@@ -158,13 +158,7 @@ def _validate_go_ts_surface_config(
     if not isinstance(go_slot, dict):
         go_slot = {}
     go_sc = go_slot.get("surface_config")
-    if not isinstance(go_sc, SurfaceSystemConfig):
-        raise ValueError(
-            f"system_type={system_type!r} requires go_params['optimizer_params']['{chosen}']"
-            "['surface_config'] (active minima algorithm is "
-            f"{chosen!r} for this adsorbate). Set top-level go_params['surface_config'] to fan out."
-        )
-    if go_sc != surface_config:
+    if go_sc is not None and go_sc != surface_config:
         raise ValueError(
             "run surface_config and go_params['optimizer_params']["
             f"'{chosen}']['surface_config'] disagree."

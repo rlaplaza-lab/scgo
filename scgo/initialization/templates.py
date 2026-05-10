@@ -35,6 +35,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from logging import Logger
+from threading import Event, Lock
 from typing import Any, cast
 
 import numpy as np
@@ -85,6 +86,9 @@ logger: Logger = get_logger(__name__)
 ICOSAHEDRON_SHELL_TO_ATOMS: dict[int, int] = {1: 1, 2: 13, 3: 55, 4: 147, 5: 309}
 
 _TEMPLATE_REGISTRY = {}
+_VALID_TEMPLATE_TYPES_CACHE: dict[int, tuple[str, ...]] = {}
+_VALID_TEMPLATE_TYPES_INFLIGHT: dict[int, Event] = {}
+_VALID_TEMPLATE_TYPES_LOCK = Lock()
 
 # =============================================================================
 # CORE HELPERS
@@ -1464,27 +1468,60 @@ def _find_valid_template_types(
 
     Args:
         n_atoms: Target number of atoms
-        rng: Optional random number generator
+        rng: Unused compatibility parameter. Validity probing is intentionally
+            deterministic and keyed only by ``n_atoms`` so cached and concurrent
+            calls produce stable results independent of caller RNG state.
 
     Returns:
         List of template type names that can generate this size
     """
-    rng = ensure_rng_or_create(rng)
+    if n_atoms <= 0:
+        return []
+    _ = rng
 
-    valid_types = []
+    leader = False
+    with _VALID_TEMPLATE_TYPES_LOCK:
+        cached = _VALID_TEMPLATE_TYPES_CACHE.get(n_atoms)
+        if cached is not None:
+            return list(cached)
+        event = _VALID_TEMPLATE_TYPES_INFLIGHT.get(n_atoms)
+        if event is None:
+            event = Event()
+            _VALID_TEMPLATE_TYPES_INFLIGHT[n_atoms] = event
+            leader = True
+
+    if not leader:
+        event.wait()
+        with _VALID_TEMPLATE_TYPES_LOCK:
+            return list(_VALID_TEMPLATE_TYPES_CACHE.get(n_atoms, ()))
+
+    deterministic_rng = np.random.default_rng(n_atoms)
+    valid_types: list[str] = []
     test_composition: list[str] = ["Pt"] * n_atoms
     sorted_template_types: list[str] = sorted(_TEMPLATE_GENERATORS.keys())
 
-    for template_type in sorted_template_types:
-        gen_func: Callable[..., Atoms | None] = _TEMPLATE_GENERATORS[template_type]
-        try:
-            result: Atoms | None = gen_func(test_composition, n_atoms, rng)
-            if result is not None and len(result) == n_atoms:
-                valid_types.append(template_type)
-        except (ValueError, RuntimeError, TypeError):
-            continue
+    computed: tuple[str, ...] | None = None
+    try:
+        for template_type in sorted_template_types:
+            gen_func: Callable[..., Atoms | None] = _TEMPLATE_GENERATORS[template_type]
+            try:
+                result: Atoms | None = gen_func(
+                    test_composition, n_atoms, deterministic_rng
+                )
+                if result is not None and len(result) == n_atoms:
+                    valid_types.append(template_type)
+            except (ValueError, RuntimeError, TypeError):
+                continue
+        computed = tuple(sorted(valid_types))
+    finally:
+        with _VALID_TEMPLATE_TYPES_LOCK:
+            inflight_event = _VALID_TEMPLATE_TYPES_INFLIGHT.pop(n_atoms, None)
+            if computed is not None:
+                _VALID_TEMPLATE_TYPES_CACHE[n_atoms] = computed
+            if inflight_event is not None:
+                inflight_event.set()
 
-    return sorted(valid_types)
+    return list(computed) if computed is not None else []
 
 
 def _generate_template_with_atom_adjustment(
