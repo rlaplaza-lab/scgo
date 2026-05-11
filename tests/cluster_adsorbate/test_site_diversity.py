@@ -75,5 +75,7 @@ def test_fragment_placement_spans_vertex_edge_and_facet_sites() -> None:
             batch_counts[site_type] += 1
             observed.add(site_type)
     assert observed == {"vertex", "edge", "facet"}
-    arr = np.array([batch_counts["vertex"], batch_counts["edge"], batch_counts["facet"]])
+    arr = np.array(
+        [batch_counts["vertex"], batch_counts["edge"], batch_counts["facet"]]
+    )
     assert int(arr.max() - arr.min()) <= 8

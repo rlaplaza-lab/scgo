@@ -43,7 +43,9 @@ def _safe_normalize(v: np.ndarray) -> np.ndarray:
     return v / vn
 
 
-def _compute_surface_site_candidates(core: Atoms) -> dict[SiteType, list[SurfaceSiteCandidate]]:
+def _compute_surface_site_candidates(
+    core: Atoms,
+) -> dict[SiteType, list[SurfaceSiteCandidate]]:
     """Build explicit vertex/edge/facet adsorption sites from a convex hull."""
     out: dict[SiteType, list[SurfaceSiteCandidate]] = {
         "vertex": [],
@@ -105,8 +107,10 @@ def _select_site_type(
         return available_types[0]
     weights: list[float] = []
     for st in available_types:
-        local = 0 if within_structure_site_counts is None else int(
-            within_structure_site_counts.get(st, 0)
+        local = (
+            0
+            if within_structure_site_counts is None
+            else int(within_structure_site_counts.get(st, 0))
         )
         batch = 0 if batch_site_counts is None else int(batch_site_counts.get(st, 0))
         weights.append(1.0 / (1.0 + local + batch))
@@ -187,9 +191,7 @@ def place_fragment_on_cluster(
     symbols = fragment_template.get_chemical_symbols()
     site_candidates = _compute_surface_site_candidates(core)
     flat_candidates = [
-        candidate
-        for entries in site_candidates.values()
-        for candidate in entries
+        candidate for entries in site_candidates.values() for candidate in entries
     ]
 
     # Precompute base geometry relative to anchor
@@ -217,7 +219,9 @@ def place_fragment_on_cluster(
             chosen_site_type = selected_type
         else:
             n_dir = random_unit_vector(rng)
-            anchor_surf = outermost_point_along_normal(core_pos, relative_core_pos, n_dir)
+            anchor_surf = outermost_point_along_normal(
+                core_pos, relative_core_pos, n_dir
+            )
         h_off = float(rng.uniform(config.height_min, config.height_max))
         target = anchor_surf + h_off * n_dir
 

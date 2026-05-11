@@ -404,7 +404,10 @@ class ClusterStartGenerator(StartGenerator):
                         "increase max_hierarchical_attempts or relax ClusterAdsorbateConfig."
                     )
                 site_type = atoms.info.get("adsorbate_site_type")
-                if isinstance(site_type, str) and site_type in self._batch_site_type_counts:
+                if (
+                    isinstance(site_type, str)
+                    and site_type in self._batch_site_type_counts
+                ):
                     self._batch_site_type_counts[site_type] += 1
             else:
                 from scgo.initialization import create_initial_cluster
