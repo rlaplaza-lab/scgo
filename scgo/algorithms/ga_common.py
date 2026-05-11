@@ -309,6 +309,11 @@ class ClusterStartGenerator(StartGenerator):
         self.cluster_adsorbate_config = cluster_adsorbate_config
         self.max_hierarchical_attempts: int = max_hierarchical_attempts
         self._hierarchical: bool = bool(adsorbate_definition is not None)
+        self._batch_site_type_counts: dict[str, int] = {
+            "vertex": 0,
+            "edge": 0,
+            "facet": 0,
+        }
         if st_pol.has_adsorbate and self.adsorbate_fragment_template is None:
             raise ValueError(
                 "adsorbate_fragment_template is required for hierarchical "
@@ -325,6 +330,7 @@ class ClusterStartGenerator(StartGenerator):
 
                 self._candidate_batch = []
                 for _i in range(population_size):
+                    placement_metadata: dict[str, str] = {}
                     a = build_hierarchical_core_fragment_cluster(
                         self.composition,
                         adsorbate_definition,
@@ -335,6 +341,8 @@ class ClusterStartGenerator(StartGenerator):
                         cluster_init_vacuum=self.vacuum,
                         init_mode=self.mode,
                         max_placement_attempts=self.max_hierarchical_attempts,
+                        batch_site_counts=self._batch_site_type_counts,
+                        placement_metadata=placement_metadata,
                     )
                     if a is None:
                         raise RuntimeError(
@@ -342,6 +350,9 @@ class ClusterStartGenerator(StartGenerator):
                             "placed; increase max_hierarchical_attempts or relax "
                             "ClusterAdsorbateConfig."
                         )
+                    site_type = placement_metadata.get("site_type")
+                    if site_type in self._batch_site_type_counts:
+                        self._batch_site_type_counts[site_type] += 1
                     self._candidate_batch.append(a)
             else:
                 from scgo.initialization import create_initial_cluster_batch
@@ -385,12 +396,16 @@ class ClusterStartGenerator(StartGenerator):
                     cluster_init_vacuum=self.vacuum,
                     init_mode=self.mode,
                     max_placement_attempts=self.max_hierarchical_attempts,
+                    batch_site_counts=self._batch_site_type_counts,
                 )
                 if atoms is None:
                     raise RuntimeError(
                         "ClusterStartGenerator: hierarchical gas seed could not be placed; "
                         "increase max_hierarchical_attempts or relax ClusterAdsorbateConfig."
                     )
+                site_type = atoms.info.get("adsorbate_site_type")
+                if isinstance(site_type, str) and site_type in self._batch_site_type_counts:
+                    self._batch_site_type_counts[site_type] += 1
             else:
                 from scgo.initialization import create_initial_cluster
 

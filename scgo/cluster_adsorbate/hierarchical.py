@@ -47,6 +47,8 @@ def build_hierarchical_core_fragment_cluster(
     cluster_init_vacuum: float = 8.0,
     init_mode: str = "smart",
     max_placement_attempts: int = 200,
+    batch_site_counts: dict[str, int] | None = None,
+    placement_metadata: dict[str, str] | None = None,
 ) -> Atoms | None:
     """Build core cluster, place fragment, return gas-phase core+fragment (no slab).
 
@@ -96,6 +98,7 @@ def build_hierarchical_core_fragment_cluster(
     bond_axis: tuple[int, int] | None = None
     if fba is not None:
         bond_axis = (int(fba[0]), int(fba[1]))
+    within_structure_site_counts: dict[str, int] = {}
     for _ in range(max_placement_attempts):
         core = create_initial_cluster(
             list(core_list),
@@ -105,10 +108,25 @@ def build_hierarchical_core_fragment_cluster(
             mode=init_mode,
         )
         core = reorder_cluster_to_composition(core, core_list)
+        trial_metadata: dict[str, str] = {}
         frag = place_fragment_on_cluster(
-            core, tmpl, rng, ca, anchor_index=anchor, bond_axis=bond_axis
+            core,
+            tmpl,
+            rng,
+            ca,
+            anchor_index=anchor,
+            bond_axis=bond_axis,
+            within_structure_site_counts=within_structure_site_counts,
+            batch_site_counts=batch_site_counts,
+            placement_metadata=trial_metadata,
         )
         if frag is None:
             continue
-        return combine_core_adsorbate(core, frag)
+        combined = combine_core_adsorbate(core, frag)
+        site_type = trial_metadata.get("site_type")
+        if site_type is not None:
+            combined.info["adsorbate_site_type"] = site_type
+            if placement_metadata is not None:
+                placement_metadata["site_type"] = site_type
+        return combined
     return None
