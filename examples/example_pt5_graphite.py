@@ -23,6 +23,7 @@ OUTPUT_STEM = "pt5_graphite"
 NITER = 6
 POPULATION_SIZE = 24
 MAX_PAIRS = 10
+SLAB_LAYERS = 3
 
 
 def _build_go_params(surface_config) -> dict:
@@ -54,6 +55,7 @@ def _build_ts_params(surface_config) -> dict:
 
 def main() -> None:
     surface_config = make_graphite_surface_config(
+        slab_layers=SLAB_LAYERS,
         structure_connectivity_factor=1.8,
     )
     go_params = _build_go_params(surface_config)

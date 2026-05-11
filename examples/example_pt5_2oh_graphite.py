@@ -25,6 +25,7 @@ OUTPUT_STEM = "pt5_2oh_graphite"
 NITER = 6
 POPULATION_SIZE = 24
 MAX_PAIRS = 10
+SLAB_LAYERS = 3
 ADSORBATES = [
     Atoms(symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]),
     Atoms(symbols=["O", "H"], positions=[[2.2, 0.0, 0.0], [2.2, 0.0, 0.96]]),
@@ -65,7 +66,7 @@ def _build_ts_params(surface_config) -> dict:
 
 
 def main() -> None:
-    surface_config = make_graphite_surface_config()
+    surface_config = make_graphite_surface_config(slab_layers=SLAB_LAYERS)
     go_params = _build_go_params(surface_config)
     ts_params = _build_ts_params(surface_config)
     run_go_ts(
