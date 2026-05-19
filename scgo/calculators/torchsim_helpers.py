@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 import time
 import warnings
 from collections.abc import Sequence
@@ -209,7 +208,9 @@ def _load_default_mace_model(
     compute_stress: bool = False,
 ):
     """Create a TorchSim MACE model given a canonical model identifier."""
-    os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
+    from scgo.utils.mlip_extras import clear_torch_force_no_weights_only_load_env
+
+    clear_torch_force_no_weights_only_load_env()
     # Lazy imports: only required for the MACE TorchSim path.
     from mace.calculators.foundations_models import mace_mp  # type: ignore
     from torch_sim.models.mace import MaceModel  # type: ignore

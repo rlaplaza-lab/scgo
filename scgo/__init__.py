@@ -1,4 +1,4 @@
-"""SCGO: cluster global optimization tools. See README.md and runners/ for usage."""
+"""SCGO: cluster global optimization tools. See README.md and examples/ for usage."""
 
 from __future__ import annotations
 

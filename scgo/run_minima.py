@@ -35,22 +35,6 @@ from scgo.utils.timing_report import log_timing_summary, sum_neb_seconds_from_ts
 from scgo.utils.validation import validate_composition
 
 
-def _select_algorithm(n_atoms: int, system_type: SystemType, logger: Any) -> str:
-    """Choose algorithm 'simple', 'bh' or 'ga' based on atom count."""
-    chosen = select_scgo_minima_algorithm(n_atoms, system_type)
-    if chosen == "simple":
-        logger.info(
-            f"Selected simple optimization for {n_atoms}-atom cluster (trivial structure)"
-        )
-    elif chosen == "bh":
-        logger.info(
-            f"Selected Basin Hopping for {n_atoms}-atom cluster (small cluster)"
-        )
-    else:
-        logger.info(f"Selected Genetic Algorithm for {n_atoms}-atom cluster")
-    return chosen
-
-
 def run_scgo_trials(
     composition: list[str],
     system_type: SystemType,
@@ -103,7 +87,17 @@ def run_scgo_trials(
     )
 
     # Algorithm selection: Use simple optimization for 1-2 atoms, BH for 3, GA for larger
-    chosen_go = _select_algorithm(n_atoms, system_type, logger)
+    chosen_go = select_scgo_minima_algorithm(n_atoms, system_type)
+    if chosen_go == "simple":
+        logger.info(
+            f"Selected simple optimization for {n_atoms}-atom cluster (trivial structure)"
+        )
+    elif chosen_go == "bh":
+        logger.info(
+            f"Selected Basin Hopping for {n_atoms}-atom cluster (small cluster)"
+        )
+    else:
+        logger.info(f"Selected Genetic Algorithm for {n_atoms}-atom cluster")
 
     # Extract algorithm-specific parameters without mutation
     algo_params = params["optimizer_params"].get(chosen_go, {})
@@ -148,6 +142,7 @@ def run_scgo_trials(
         "diversity_update_interval",
         "tag_final_minima",
         "connectivity_factor",
+        "allow_dissociative_adsorption",
         "adsorbate_definition",
         "adsorbate_fragment_template",
         "cluster_adsorbate_config",

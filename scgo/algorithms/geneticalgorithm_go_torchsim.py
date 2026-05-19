@@ -124,6 +124,7 @@ def _relax_unrelaxed_candidates(
     composition: list[str] | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> int:
     """Relax unrelaxed candidates in batches and commit them to the database."""
     available = database_retry(
@@ -216,6 +217,7 @@ def _relax_unrelaxed_candidates(
                         n_slab=n_slab if surface_mode else None,
                         adsorbate_definition=adsorbate_definition,
                         connectivity_factor=connectivity_factor,
+                        allow_dissociative_adsorption=allow_dissociative_adsorption,
                     )
                 except ValueError as exc:
                     ineligible_count += 1
@@ -349,6 +351,7 @@ def ga_go_torchsim(
     adsorbate_fragment_template: Atoms | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Run the GA using TorchSim for batched relaxations.
 
@@ -648,6 +651,7 @@ def ga_go_torchsim(
                     n_slab=n_slab,
                     adsorbate_definition=adsorbate_definition,
                     connectivity_factor=connectivity_factor,
+                    allow_dissociative_adsorption=allow_dissociative_adsorption,
                 )
             except ValueError as exc:
                 initial_discarded_count += 1
@@ -689,6 +693,7 @@ def ga_go_torchsim(
                             n_slab=n_slab if surface_mode else None,
                             adsorbate_definition=adsorbate_definition,
                             connectivity_factor=connectivity_factor,
+                            allow_dissociative_adsorption=allow_dissociative_adsorption,
                         )
                     except ValueError as exc:
                         validation_error = str(exc)
@@ -974,6 +979,7 @@ def ga_go_torchsim(
                             n_slab=n_slab,
                             adsorbate_definition=adsorbate_definition,
                             connectivity_factor=connectivity_factor,
+                            allow_dissociative_adsorption=allow_dissociative_adsorption,
                         )
                     except ValueError as exc:
                         # Invalid geometry after crossover/mutation: same as ``child is None`` —
@@ -1123,6 +1129,7 @@ def ga_go_torchsim(
                 composition=composition,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
+                allow_dissociative_adsorption=allow_dissociative_adsorption,
             )
             relax_call_wall_s = perf_counter() - t0_relax_call
             post_db_read = float(profile_timings.get("db_read_s", 0.0))
@@ -1227,6 +1234,7 @@ def ga_go_torchsim(
             composition=composition,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
+            allow_dissociative_adsorption=allow_dissociative_adsorption,
         )
 
         all_candidates = database_retry(

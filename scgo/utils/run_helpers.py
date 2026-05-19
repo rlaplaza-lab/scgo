@@ -421,6 +421,7 @@ def prepare_algorithm_kwargs(
         "adsorbate_fragment_template",
         "cluster_adsorbate_config",
         "connectivity_factor",
+        "allow_dissociative_adsorption",
     ):
         v = params.get(key)
         if v is not None:

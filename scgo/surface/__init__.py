@@ -17,6 +17,7 @@ from scgo.surface.deposition import (
 )
 from scgo.surface.fragment_templates import build_default_fragment_template
 from scgo.surface.objectives import adsorption_energy
+from scgo.surface.pbc import normalize_slab_pbc
 from scgo.surface.presets import (
     DEFAULT_GRAPHITE_SLAB_LAYERS,
     DEFAULT_GRAPHITE_SLAB_REPEAT_XY,
@@ -53,4 +54,5 @@ __all__ = [
     "DEFAULT_GRAPHITE_SLAB_VACUUM",
     "build_graphite_slab",
     "make_graphite_surface_config",
+    "normalize_slab_pbc",
 ]

@@ -89,7 +89,7 @@ def main() -> None:
         params=params,
         verbose=True,
         backend=args.backend,
-        uma_task_name=args.uma_task,
+        uma_task=args.uma_task,
     )
     elapsed = time.perf_counter() - t0
     print(f"\nBenchmark wall time: {elapsed:.1f} s ({args.backend})")

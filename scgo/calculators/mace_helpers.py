@@ -7,7 +7,6 @@ global optimization workflows.
 
 from __future__ import annotations
 
-import os
 from enum import StrEnum
 from typing import Any
 
@@ -17,12 +16,14 @@ from ase.calculators.calculator import Calculator, all_changes
 from mace.calculators import mace_mp
 
 from scgo.utils.logging import get_logger
-from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+from scgo.utils.mlip_extras import (
+    clear_torch_force_no_weights_only_load_env,
+    ensure_mace_uma_not_both_installed,
+)
 
 _torch_load_patched = False
 
-# Remove env-level override so third-party imports don't emit warnings about it.
-os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
+clear_torch_force_no_weights_only_load_env()
 
 
 def _ensure_torch_load_mace_checkpoints() -> None:

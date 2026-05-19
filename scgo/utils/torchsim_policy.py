@@ -48,7 +48,7 @@ def _require_torchsim_fairchem() -> None:
 
 
 def is_uma_like_calculator(calculator: Calculator | None) -> bool:
-    """True for UMA / FAIRChem ASE calculators (never use TorchSim batched path)."""
+    """True for UMA / FAIRChem ASE calculator instances (by class name)."""
     if calculator is None:
         return False
     cls_name = calculator.__class__.__name__

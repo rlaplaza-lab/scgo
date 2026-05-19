@@ -9,6 +9,7 @@ from ase.build import fcc111
 from ase.calculators.emt import EMT
 from ase.constraints import FixAtoms
 
+from scgo.system_types import get_system_policy
 from scgo.ts_search.transition_state import find_transition_state, interpolate_path
 
 
@@ -131,3 +132,81 @@ def test_interpolate_path_mic_alignment_anchors_fixed_slab_atoms():
     disp = images[-1].get_positions() - images[0].get_positions()
     slab_disp = np.linalg.norm(disp[fixed_idx], axis=1)
     assert float(np.max(slab_disp)) < 1e-2
+
+
+def test_surface_system_policy_enables_alignment_and_mic():
+    """Surface types force MIC and allow endpoint alignment by default."""
+    for st in ("surface_cluster", "surface_cluster_adsorbate"):
+        policy = get_system_policy(st)
+        assert policy.neb_force_mic is True
+        assert policy.neb_disable_alignment is False
+
+
+def test_interpolate_path_mic_with_n_slab_anchors_slab_prefix():
+    """Slab prefix stays registered when ``n_slab`` is passed without FixAtoms."""
+    from ase.build import fcc111
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = slab.get_positions()[:, 2].max() + 1.5
+
+    a = slab.copy() + Atoms("Pt", positions=[[0.2, 0.2, z0]])
+    b = slab.copy() + Atoms("Pt", positions=[[slab.cell[0, 0] - 0.2, 0.2, z0]])
+
+    images = interpolate_path(
+        a,
+        b,
+        n_images=2,
+        method="linear",
+        mic=True,
+        align_endpoints=True,
+        n_slab=n_slab,
+    )
+
+    disp = images[-1].get_positions() - images[0].get_positions()
+    slab_disp = np.linalg.norm(disp[:n_slab], axis=1)
+    assert float(np.max(slab_disp)) < 1e-2
+    assert abs(float(disp[-1, 0])) < 0.5
+
+
+def test_interpolate_path_mic_inplane_rotates_mobile_cluster():
+    """In-plane Kabsch on mobile atoms aligns rotated adsorbate to reactant."""
+    from ase.build import fcc111
+
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = slab.get_positions()[:, 2].max() + 1.8
+
+    mobile = np.array(
+        [
+            [0.0, 0.0, z0],
+            [1.2, 0.0, z0],
+            [0.6, 1.0, z0 + 0.3],
+        ]
+    )
+    theta = np.deg2rad(35.0)
+    rot2 = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    mobile_rot = mobile.copy()
+    mobile_rot[:, :2] = (mobile[:, :2] - mobile[:, :2].mean(axis=0)) @ rot2.T
+    mobile_rot[:, :2] += mobile[:, :2].mean(axis=0)
+    mobile_rot[:, 0] += slab.cell[0, 0]
+
+    a = slab.copy() + Atoms("Pt3", positions=mobile)
+    b = slab.copy() + Atoms("Pt3", positions=mobile_rot)
+
+    images = interpolate_path(
+        a,
+        b,
+        n_images=2,
+        method="linear",
+        mic=True,
+        align_endpoints=True,
+        n_slab=n_slab,
+    )
+
+    aligned_mobile = images[-1].get_positions()[n_slab:]
+    ref_mobile = images[0].get_positions()[n_slab:]
+    rms = float(np.sqrt(np.mean((aligned_mobile - ref_mobile) ** 2)))
+    assert rms < 0.15

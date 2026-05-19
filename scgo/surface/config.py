@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from ase import Atoms
 
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
+from scgo.surface.pbc import normalize_slab_pbc
 from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_positive
 
@@ -121,11 +122,7 @@ class SurfaceSystemConfig:
         if not any(slab.pbc):
             raise ValueError("Slab must have at least one periodic dimension.")
 
-        # Preserve the slab's PBC (e.g. in-plane periodic, non-periodic along vacuum).
-        # Do not force 3D periodicity here: many calculators (MLIPs, etc.) should
-        # use true slab boundary conditions. For VASP export or codes that expect a
-        # fully periodic ASE cell, set ``slab.pbc`` accordingly before building this
-        # config.
+        normalize_slab_pbc(slab, surface_normal_axis=self.surface_normal_axis)
 
         vacuum_length = slab.cell.lengths()[self.surface_normal_axis]
         if vacuum_length < 10.0:

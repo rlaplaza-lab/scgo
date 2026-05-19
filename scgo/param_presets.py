@@ -82,7 +82,7 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
         "torchsim_max_steps": "auto",
     },
     "surface_cluster": {
-        "neb_align_endpoints": False,
+        "neb_align_endpoints": True,
         "neb_interpolation_mic": True,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
@@ -96,7 +96,7 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
         "torchsim_max_steps": 500,
     },
     "surface_cluster_adsorbate": {
-        "neb_align_endpoints": False,
+        "neb_align_endpoints": True,
         "neb_interpolation_mic": True,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
@@ -564,6 +564,7 @@ def get_ts_search_params(
         "calculator": calculator,
         "calculator_kwargs": dict(calculator_kwargs),
         "connectivity_factor": 1.4,
+        "allow_dissociative_adsorption": False,
         "max_pairs": None,
         "energy_gap_threshold": 2.0,
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,

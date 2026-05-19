@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
+from ase.build import fcc111
 
 from scgo.ts_search.transition_state import (
     _align_endpoints_blockwise,
@@ -51,3 +52,41 @@ def test_interpolate_path_accepts_block_dims_for_gas_adsorbate() -> None:
     )
     assert len(out) == 2 + 2
     assert len(out[0]) == 3 and len(out[-1]) == 3
+
+
+def test_interpolate_path_blockwise_mic_on_periodic_surface() -> None:
+    """Blockwise matching + MIC on slab/core/adsorbate under in-plane PBC."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = slab.get_positions()[:, 2].max() + 1.5
+
+    core_pos = np.array([[0.5, 0.5, z0], [1.5, 0.6, z0]])
+    ads_pos = np.array([[1.0, 1.2, z0 + 0.2], [1.1, 1.3, z0 + 0.9]])
+    react = slab.copy() + Atoms(
+        symbols=["Pt", "Pt", "O", "H"], positions=np.vstack([core_pos, ads_pos])
+    )
+    prod_ads = ads_pos[[1, 0]]
+    prod_core = core_pos + np.array([slab.cell[0, 0] - 0.1, 0.0, 0.0])
+    prod = slab.copy() + Atoms(
+        symbols=["Pt", "Pt", "H", "O"],
+        positions=np.vstack([prod_core, prod_ads]),
+    )
+
+    images = interpolate_path(
+        react,
+        prod,
+        n_images=2,
+        method="linear",
+        mic=True,
+        align_endpoints=True,
+        system_type="surface_cluster_adsorbate",
+        n_slab=n_slab,
+        n_core_mobile=2,
+        n_adsorbate_mobile=2,
+    )
+
+    disp = images[-1].get_positions() - images[0].get_positions()
+    assert float(np.max(np.linalg.norm(disp[:n_slab], axis=1))) < 1e-2
+    mobile_disp = np.linalg.norm(disp[n_slab:], axis=1)
+    assert float(np.max(mobile_disp)) < 2.5

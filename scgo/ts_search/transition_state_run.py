@@ -106,6 +106,7 @@ def _run_serial_neb_search(
     n_adsorbate_mobile: int | None = None,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> list[dict[str, Any]]:
     """Run NEBs sequentially via :func:`find_transition_state` (one calc per pair)."""
     logger = get_logger(__name__)
@@ -144,6 +145,7 @@ def _run_serial_neb_search(
                 n_slab=n_slab,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
+                allow_dissociative_adsorption=allow_dissociative_adsorption,
             )
             validate_structure_for_system_type(
                 prod_ep,
@@ -152,6 +154,7 @@ def _run_serial_neb_search(
                 n_slab=n_slab,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
+                allow_dissociative_adsorption=allow_dissociative_adsorption,
             )
         except ValueError as e:
             logger.warning(
@@ -289,12 +292,13 @@ def _apply_surface_ts_geometry_gate(
     surface_config: SurfaceSystemConfig | None,
     system_type: SystemType,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> None:
     """Reject successful TS results that violate supported-deposit geometry."""
     if surface_config is None:
         return
     policy = get_system_policy(system_type)
-    if not (policy.uses_surface and policy.has_adsorbate):
+    if not (policy.uses_surface and policy.needs_supported_deposit_validation):
         return
 
     n_slab = len(surface_config.slab)
@@ -323,6 +327,7 @@ def _apply_surface_ts_geometry_gate(
                 surface_normal_axis=axis,
                 use_mic=use_mic,
                 connectivity_factor=cf,
+                allow_dissociative_adsorption=allow_dissociative_adsorption,
             )
             if not ok:
                 result["status"] = "failed"
@@ -365,6 +370,7 @@ def run_transition_state_search(
     write_timing_json: bool = False,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> list[dict[str, Any]]:
     """Run transition state search for clusters of given composition.
 
@@ -603,6 +609,7 @@ def run_transition_state_search(
             n_adsorbate_mobile=neb_n_ads_m,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
+            allow_dissociative_adsorption=allow_dissociative_adsorption,
         )
         cleanup_torch_cuda(logger=logger)
     else:
@@ -634,6 +641,7 @@ def run_transition_state_search(
             n_adsorbate_mobile=neb_n_ads_m,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
+            allow_dissociative_adsorption=allow_dissociative_adsorption,
         )
 
     ts_phase_wall = perf_counter() - t_ts0
@@ -672,6 +680,7 @@ def run_transition_state_search(
         surface_config=surface_config,
         system_type=system_type,
         connectivity_factor=connectivity_factor,
+        allow_dissociative_adsorption=allow_dissociative_adsorption,
     )
 
     save_transition_state_results(

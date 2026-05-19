@@ -9,6 +9,7 @@ from ase import Atoms
 
 from scgo.database.metadata import get_metadata
 from scgo.initialization.geometry_helpers import (
+    _find_connected_components,
     get_covalent_radius,
     validate_cluster_structure,
 )
@@ -136,6 +137,47 @@ def _slab_top_coordinate(slab: Atoms, axis: int) -> float:
     return float(np.max(pos[:, axis]))
 
 
+def _mobile_atom_touches_slab(
+    combined: Atoms,
+    mobile_global_idx: int,
+    n_slab: int,
+    *,
+    connectivity_factor: float,
+    use_mic: bool,
+) -> bool:
+    """True when ``mobile_global_idx`` has a slab neighbor within the bonding threshold."""
+    symbols = combined.get_chemical_symbols()
+    r_i = get_covalent_radius(symbols[mobile_global_idx])
+    for j in range(n_slab):
+        r_j = get_covalent_radius(symbols[j])
+        threshold = (r_i + r_j) * connectivity_factor
+        d = float(combined.get_distance(mobile_global_idx, j, mic=use_mic))
+        if d <= threshold:
+            return True
+    return False
+
+
+def _adsorbate_subgroup_touches_slab(
+    combined: Atoms,
+    n_slab: int,
+    subgroup_local_indices: list[int],
+    *,
+    connectivity_factor: float,
+    use_mic: bool,
+) -> bool:
+    """True when any atom in a mobile subgroup is slab-connected."""
+    return any(
+        _mobile_atom_touches_slab(
+            combined,
+            n_slab + int(local_i),
+            n_slab,
+            connectivity_factor=connectivity_factor,
+            use_mic=use_mic,
+        )
+        for local_i in subgroup_local_indices
+    )
+
+
 def validate_supported_cluster_deposit(
     combined: Atoms,
     n_slab: int,
@@ -145,30 +187,36 @@ def validate_supported_cluster_deposit(
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     penetration_tolerance: float = _BINDING_PENETRATION_TOLERANCE_A,
+    allow_dissociative_adsorption: bool = False,
 ) -> tuple[bool, str]:
     """Validate a combined slab + supported mobile cluster (full cluster, not the fragment only).
 
-    The slice ``combined[n_slab:]`` is the **entire** supported cluster: nanoparticle
-    core plus any chemisorbed species in **one** contiguous block. (This is not the
-    same as ``adsorbate_definition['adsorbate_symbols']`` alone.)
+    The slice ``combined[n_slab:]`` is the **entire** supported mobile region: nanoparticle
+    core plus any chemisorbed species. (This is not the same as
+    ``adsorbate_definition['adsorbate_symbols']`` alone.)
 
-    Uses the same clash/connectivity semantics as gas-phase
-    :func:`~scgo.initialization.geometry_helpers.validate_cluster_structure` on
-    that mobile slice, and requires at least one mobile–slab pair within
-    the covalent-radius connectivity threshold (aligned with
-    ``connectivity_factor``). Optionally uses MIC for cross-set distances when
-    ``use_mic`` is True (match :attr:`SurfaceSystemConfig.comparator_use_mic`).
+    Default (``allow_dissociative_adsorption=False``): the mobile region must form one
+    connected component (when ``len(ads) > 2``) and touch the slab.
+
+    Dissociative (``allow_dissociative_adsorption=True``): the mobile region may split into
+    multiple connected subgroups, but every subgroup must touch the slab.
+
+    Clash screening always uses
+    :func:`~scgo.initialization.geometry_helpers.validate_cluster_structure` on the mobile
+    slice. Optionally uses MIC for distances when ``use_mic`` is True (match
+    :attr:`SurfaceSystemConfig.comparator_use_mic`).
 
     Args:
         combined: Full system with slab atoms first, then the supported mobile cluster.
         n_slab: Number of slab atoms (prefix length).
         surface_normal_axis: Cartesian axis index for the surface normal.
-        use_mic: Pass through to ``Atoms.get_distance`` for mobile–slab pairs AND
-                 for internal adsorbate connectivity checks when True.
+        use_mic: Pass through to distance and connectivity checks when True.
         min_distance_factor: Mobile cluster self clash scale (initialization default).
         connectivity_factor: Bonding connectivity scale (initialization default).
         penetration_tolerance: Allow mobile cluster atoms this far (Å) below the
             nominal slab top along ``surface_normal_axis``.
+        allow_dissociative_adsorption: If True, allow multiple mobile subgroups that are
+            each slab-connected; if False, require a single connected mobile cluster.
 
     Returns:
         ``(True, "")`` if valid, else ``(False, message)``.
@@ -180,15 +228,15 @@ def validate_supported_cluster_deposit(
         return False, "No adsorbate atoms in combined structure"
 
     ads = combined[n_slab:]
-    # Only check connectivity for clusters with more than 2 atoms
-    # (connectivity is not meaningful for 1- or 2-atom clusters)
-    check_connectivity = len(ads) > 2
+    n_ads = len(ads)
+    # Internal connectivity is only enforced for 3+ mobile atoms (same as gas-phase init).
+    require_single_mobile_component = n_ads > 2 and not allow_dissociative_adsorption
     ok, err = validate_cluster_structure(
         ads,
         min_distance_factor,
         connectivity_factor,
         check_clashes=True,
-        check_connectivity=check_connectivity,
+        check_connectivity=require_single_mobile_component,
         use_mic=use_mic,
     )
     if not ok:
@@ -206,6 +254,27 @@ def validate_supported_cluster_deposit(
             "Adsorbate penetrates below nominal slab top along surface normal "
             f"(min coord={min_c:.3f} Å, slab_top={slab_top:.3f} Å)",
         )
+
+    if allow_dissociative_adsorption and n_ads >= 2:
+        components, _ = _find_connected_components(
+            ads, connectivity_factor, use_mic=use_mic
+        )
+        subgroups = list(components.values())
+        for subgroup in subgroups:
+            if not _adsorbate_subgroup_touches_slab(
+                combined,
+                n_slab,
+                subgroup,
+                connectivity_factor=connectivity_factor,
+                use_mic=use_mic,
+            ):
+                return (
+                    False,
+                    "Dissociative adsorption requires every mobile subgroup to touch "
+                    f"the slab (subgroup size {len(subgroup)} has no slab contact within "
+                    f"connectivity_factor={connectivity_factor})",
+                )
+        return True, ""
 
     symbols = combined.get_chemical_symbols()
     touches = False

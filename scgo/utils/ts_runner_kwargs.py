@@ -94,6 +94,7 @@ def coerce_ts_params_to_runner_kwargs(
         "similarity_tolerance",
         "similarity_pair_cor_max",
         "connectivity_factor",
+        "allow_dissociative_adsorption",
     )
     for key in passthrough_keys:
         kwargs[key] = ts_params.get(key)

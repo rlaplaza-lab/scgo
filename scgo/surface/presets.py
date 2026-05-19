@@ -8,6 +8,7 @@ from ase.build import graphene
 
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.surface.pbc import normalize_slab_pbc
 
 DEFAULT_GRAPHITE_SLAB_LAYERS = 5
 DEFAULT_GRAPHITE_SLAB_REPEAT_XY = 4
@@ -40,7 +41,7 @@ def build_graphite_slab(
     if layers == 1:
         # Single layer: add vacuum below and center
         single_layer.center(vacuum=vacuum, axis=2)
-        single_layer.pbc = (True, True, False)
+        normalize_slab_pbc(single_layer)
         return single_layer
 
     # For multiple layers, stack them with correct interlayer spacing
@@ -71,7 +72,7 @@ def build_graphite_slab(
     positions[:, 2] += vacuum / 2
     slab.set_positions(positions)
 
-    slab.pbc = (True, True, False)
+    normalize_slab_pbc(slab)
     return slab
 
 

@@ -240,6 +240,16 @@ def _reorder_block_positions_to_match(a1_block: Atoms, a2_block: Atoms) -> np.nd
     return pos2[m]
 
 
+def _permute_atoms_block_to_match(
+    a1_block: Atoms, a2_block: Atoms
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (positions, atomic_numbers) for a2_block permuted to match a1_block."""
+    mapping = _match_atoms_by_fingerprint(a1_block, a2_block)
+    pos2 = a2_block.get_positions()
+    nums2 = a2_block.numbers
+    return pos2[mapping], nums2[mapping]
+
+
 def _align_endpoints_blockwise(
     a1: Atoms,
     a2: Atoms,
@@ -256,21 +266,53 @@ def _align_endpoints_blockwise(
             f"align blockwise: n_slab+n_core+n_ads={n_slab + n_core + n_ads} != len={n}"
         )
     p2 = a2.get_positions().copy()
+    n2 = a2.numbers.copy()
     if n_core > 0:
         s1, s2 = n_slab, n_slab + n_core
-        p2[s1:s2] = _reorder_block_positions_to_match(a1[s1:s2], a2[s1:s2])
+        p_blk, n_blk = _permute_atoms_block_to_match(a1[s1:s2], a2[s1:s2])
+        p2[s1:s2] = p_blk
+        n2[s1:s2] = n_blk
     if n_ads > 0:
         t1 = n_slab + n_core
         t2 = t1 + n_ads
-        p2[t1:t2] = _reorder_block_positions_to_match(a1[t1:t2], a2[t1:t2])
+        p_blk, n_blk = _permute_atoms_block_to_match(a1[t1:t2], a2[t1:t2])
+        p2[t1:t2] = p_blk
+        n2[t1:t2] = n_blk
     a2.set_positions(p2)
+    a2.numbers = n2
 
 
 def _kabsch_rotation(P: np.ndarray, Q: np.ndarray) -> np.ndarray:
     """Return rotation matrix R that minimizes ||P - Q @ R|| (P and Q are centered)."""
+    dim = int(P.shape[1])
     U, _, Vt = np.linalg.svd(P.T @ Q)
-    D = np.diag([1.0, 1.0, np.sign(np.linalg.det(U @ Vt)) or 1.0])
-    return U @ D @ Vt
+    d = np.ones(dim, dtype=float)
+    d[-1] = float(np.sign(np.linalg.det(U @ Vt)) or 1.0)
+    return U @ np.diag(d) @ Vt
+
+
+def _kabsch_rotation_in_plane(
+    P: np.ndarray, Q: np.ndarray, *, surface_normal_axis: int = 2
+) -> np.ndarray:
+    """Return 3x3 rotation that aligns Q to P using only in-plane degrees of freedom."""
+    if surface_normal_axis not in (0, 1, 2):
+        raise ValueError("surface_normal_axis must be 0, 1, or 2")
+    plane_axes = [i for i in range(3) if i != surface_normal_axis]
+    r2 = _kabsch_rotation(P[:, plane_axes], Q[:, plane_axes])
+    rot = np.eye(3)
+    for i, ia in enumerate(plane_axes):
+        for j, ja in enumerate(plane_axes):
+            rot[ia, ja] = r2[i, j]
+    return rot
+
+
+def _infer_surface_normal_axis(pbc: np.ndarray | list[bool]) -> int:
+    """Guess vacuum/normal axis as the sole non-periodic direction, else z."""
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    open_axes = [i for i in range(3) if not pbc_arr[i]]
+    if len(open_axes) == 1:
+        return int(open_axes[0])
+    return 2
 
 
 def _fixed_atom_mask(atoms: Atoms) -> np.ndarray:
@@ -281,6 +323,180 @@ def _fixed_atom_mask(atoms: Atoms) -> np.ndarray:
             idx = np.asarray(constraint.get_indices(), dtype=int)
             mask[idx] = True
     return mask
+
+
+def _anchor_mask(
+    atoms: Atoms,
+    *,
+    n_slab: int,
+    fixed_mask: np.ndarray,
+) -> np.ndarray:
+    """Mask of atoms used to anchor periodic endpoint alignment (slab frame)."""
+    n = len(atoms)
+    if np.any(fixed_mask):
+        return fixed_mask
+    if n_slab > 0:
+        anchor = np.zeros(n, dtype=bool)
+        anchor[: min(n_slab, n)] = True
+        return anchor
+    return np.zeros(n, dtype=bool)
+
+
+def _mobile_alignment_mask(
+    anchor_mask: np.ndarray,
+    *,
+    n_slab: int,
+    n_atoms: int,
+) -> np.ndarray:
+    """Atoms that may receive rigid alignment (not slab prefix, not anchored)."""
+    mobile = np.ones(n_atoms, dtype=bool)
+    if n_slab > 0:
+        mobile[: min(n_slab, n_atoms)] = False
+    mobile &= ~anchor_mask
+    return mobile
+
+
+def _apply_inplane_mobile_kabsch(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    mobile_mask: np.ndarray,
+    *,
+    surface_normal_axis: int,
+) -> np.ndarray:
+    """Rotate mobile atoms in-plane so product geometry matches reactant."""
+    idx = np.where(mobile_mask)[0]
+    if idx.size < 2 or idx.size == mobile_mask.size:
+        return prod_pos
+    p_ref = ref_pos[idx]
+    p_prod = prod_pos[idx]
+    center = p_ref.mean(axis=0)
+    p_ref_c = p_ref - center
+    p_prod_c = p_prod - center
+    rot = _kabsch_rotation_in_plane(
+        p_ref_c, p_prod_c, surface_normal_axis=surface_normal_axis
+    )
+    out = prod_pos.copy()
+    out[idx] = (p_prod_c @ rot.T) + center
+    return out
+
+
+def _align_product_mic_to_reactant(
+    reactant: Atoms,
+    product_positions: np.ndarray,
+    *,
+    n_slab: int = 0,
+) -> np.ndarray:
+    """Wrap product to MIC images, anchor slab frame, in-plane-fit mobile atoms."""
+    ref_pos = reactant.get_positions()
+    disp = product_positions - ref_pos
+    disp_mic, _ = find_mic(disp, cell=reactant.cell, pbc=reactant.pbc)
+
+    fixed_mask = _fixed_atom_mask(reactant)
+    anchor_mask = _anchor_mask(reactant, n_slab=n_slab, fixed_mask=fixed_mask)
+    if np.any(anchor_mask):
+        disp_mic = disp_mic - np.mean(disp_mic[anchor_mask], axis=0)
+
+    prod_pos = ref_pos + disp_mic
+    normal_axis = _infer_surface_normal_axis(reactant.pbc)
+    mobile_mask = _mobile_alignment_mask(
+        anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
+    )
+    return _apply_inplane_mobile_kabsch(
+        ref_pos,
+        prod_pos,
+        mobile_mask,
+        surface_normal_axis=normal_axis,
+    )
+
+
+def _align_product_kabsch_to_reactant(
+    reactant: Atoms,
+    product_positions: np.ndarray,
+    *,
+    n_slab: int = 0,
+    in_plane_only: bool = False,
+) -> np.ndarray:
+    """Rigidly align product to reactant; mobile-only when slab prefix is known."""
+    ref_pos = reactant.get_positions()
+    fixed_mask = _fixed_atom_mask(reactant)
+    anchor_mask = _anchor_mask(reactant, n_slab=n_slab, fixed_mask=fixed_mask)
+    mobile_mask = _mobile_alignment_mask(
+        anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
+    )
+
+    if np.any(mobile_mask) and mobile_mask.size < len(reactant):
+        out = product_positions.copy()
+        p_ref = ref_pos[mobile_mask]
+        p_prod = product_positions[mobile_mask]
+        center = p_ref.mean(axis=0)
+        p_ref_c = p_ref - center
+        p_prod_c = p_prod - center
+        if in_plane_only:
+            rot = _kabsch_rotation_in_plane(
+                p_ref_c,
+                p_prod_c,
+                surface_normal_axis=_infer_surface_normal_axis(reactant.pbc),
+            )
+        else:
+            rot = _kabsch_rotation(p_ref_c, p_prod_c)
+        out[mobile_mask] = (p_prod_c @ rot.T) + center
+        if np.any(anchor_mask):
+            out[anchor_mask] = ref_pos[anchor_mask]
+        return out
+
+    p_ref = ref_pos
+    p_prod = product_positions
+    center = p_ref.mean(axis=0)
+    p_ref_c = p_ref - center
+    p_prod_c = p_prod - center
+    if in_plane_only:
+        rot = _kabsch_rotation_in_plane(
+            p_ref_c,
+            p_prod_c,
+            surface_normal_axis=_infer_surface_normal_axis(reactant.pbc),
+        )
+    else:
+        rot = _kabsch_rotation(p_ref_c, p_prod_c)
+    return (p_prod_c @ rot.T) + center
+
+
+def _reorder_product_to_match_reactant(
+    reactant: Atoms,
+    product: Atoms,
+    *,
+    n_slab: int,
+    n_core_mobile: int | None,
+    n_adsorbate_mobile: int | None,
+) -> np.ndarray:
+    """Reorder product atoms (positions and species) to match reactant ordering."""
+    n_atom = len(reactant)
+    use_blocks = (
+        n_core_mobile is not None
+        and n_adsorbate_mobile is not None
+        and n_slab + int(n_core_mobile) + int(n_adsorbate_mobile) == n_atom
+    )
+    if use_blocks:
+        _align_endpoints_blockwise(
+            reactant,
+            product,
+            n_slab,
+            int(n_core_mobile),
+            int(n_adsorbate_mobile),
+        )
+        return product.get_positions()
+    if 0 < n_slab < n_atom:
+        p_m, n_m = _permute_atoms_block_to_match(reactant[n_slab:], product[n_slab:])
+        pos = product.get_positions().copy()
+        nums = product.numbers.copy()
+        pos[n_slab:] = p_m
+        nums[n_slab:] = n_m
+        product.set_positions(pos)
+        product.numbers = nums
+        return pos
+    mapping = _match_atoms_by_fingerprint(reactant, product)
+    product.set_positions(product.get_positions()[mapping])
+    product.numbers = product.numbers[mapping]
+    return product.get_positions()
 
 
 def interpolate_path(
@@ -301,8 +517,10 @@ def interpolate_path(
     """Interpolate between two structures and return images including endpoints.
 
     ``align_endpoints`` (default True): reorder endpoint atoms to match reactant.
-    For periodic MIC workflows (``mic=True`` + periodic cell), alignment uses
-    MIC displacements instead of Cartesian Kabsch rotation.
+    For periodic MIC workflows (``mic=True`` + periodic cell), alignment wraps
+    product atoms to nearest images, anchors the slab frame, then applies an
+    in-plane Kabsch fit on mobile atoms. Non-periodic paths use Kabsch on the
+    mobile region when ``n_slab`` is set, else on all atoms.
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
 
@@ -328,44 +546,27 @@ def interpolate_path(
             )
 
     if align_endpoints:
-        n_atom = len(a1_copy)
-        use_blocks = (
-            n_core_mobile is not None
-            and n_adsorbate_mobile is not None
-            and n_slab + int(n_core_mobile) + int(n_adsorbate_mobile) == n_atom
+        new_pos = _reorder_product_to_match_reactant(
+            a1_copy,
+            a2_copy,
+            n_slab=n_slab,
+            n_core_mobile=n_core_mobile,
+            n_adsorbate_mobile=n_adsorbate_mobile,
         )
-        if use_blocks:
-            _align_endpoints_blockwise(
-                a1_copy,
-                a2_copy,
-                n_slab,
-                int(n_core_mobile),
-                int(n_adsorbate_mobile),
-            )
-            new_pos = a2_copy.get_positions()
-        else:
-            mapping = _match_atoms_by_fingerprint(a1_copy, a2_copy)
-            new_pos = a2_copy.get_positions()[mapping]
+        # Keep species order consistent with reactant for downstream NEB.
+        a2_copy.numbers = a1_copy.numbers.copy()
         pbc_active = bool(np.any(a1_copy.pbc))
+        surface_like = n_slab > 0 or pbc_active
         if mic and pbc_active:
-            # Pull product atoms to nearest MIC images relative to reactant.
-            ref_pos = a1_copy.get_positions().copy()
-            disp = new_pos - ref_pos
-            disp_mic, _ = find_mic(disp, cell=a1_copy.cell, pbc=a1_copy.pbc)
-            # Anchor displacement to fixed atoms to keep slab frame stable.
-            fixed_mask = _fixed_atom_mask(a1_copy)
-            if np.any(fixed_mask):
-                fixed_shift = np.mean(disp_mic[fixed_mask], axis=0)
-                disp_mic = disp_mic - fixed_shift
-            a2_copy.set_positions(ref_pos + disp_mic)
+            aligned = _align_product_mic_to_reactant(a1_copy, new_pos, n_slab=n_slab)
         else:
-            P = a1_copy.get_positions().copy()
-            Q = new_pos.copy()
-            Pc = P - P.mean(axis=0)
-            Qc = Q - Q.mean(axis=0)
-            R = _kabsch_rotation(Pc, Qc)
-            Qrot = (Qc @ R.T) + P.mean(axis=0)
-            a2_copy.set_positions(Qrot)
+            aligned = _align_product_kabsch_to_reactant(
+                a1_copy,
+                new_pos,
+                n_slab=n_slab,
+                in_plane_only=surface_like and pbc_active,
+            )
+        a2_copy.set_positions(aligned)
 
     images = [a1_copy] + [a1_copy.copy() for _ in range(n_images)] + [a2_copy]
     neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)

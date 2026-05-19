@@ -148,7 +148,7 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert ts["torchsim_max_steps"] == 500
     assert ts["neb_climb"] is False
     assert ts["neb_interpolation_method"] == "idpp"
-    assert ts["neb_align_endpoints"] is False
+    assert ts["neb_align_endpoints"] is True
     kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="surface_cluster")
     assert kwargs["neb_interpolation_mic"] is True
     assert kwargs["neb_n_images"] == 5
@@ -158,7 +158,7 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert kwargs["neb_interpolation_method"] == "idpp"
     assert kwargs["torchsim_params"]["force_tol"] == pytest.approx(0.1)
     assert kwargs["torchsim_params"]["max_steps"] == 500
-    assert kwargs["neb_align_endpoints"] is False
+    assert kwargs["neb_align_endpoints"] is True
 
 
 def test_ts_search_step_defaults_can_be_auto():

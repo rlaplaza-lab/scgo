@@ -96,7 +96,7 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
         neb_force_mic=True,
-        neb_disable_alignment=True,
+        neb_disable_alignment=False,
         constrain_adsorbate_moves=False,
         adsorbate_move_scale=1.0,
         allow_composition_permutations=True,
@@ -120,7 +120,7 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
         neb_force_mic=True,
-        neb_disable_alignment=True,
+        neb_disable_alignment=False,
         constrain_adsorbate_moves=True,
         adsorbate_move_scale=0.6,
         allow_composition_permutations=False,
@@ -203,6 +203,7 @@ def validate_structure_for_system_type(
     n_slab: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> None:
     """Apply system-type-specific structural validation.
 
@@ -218,6 +219,9 @@ def validate_structure_for_system_type(
         adsorbate_definition: Adsorbate definition (for adsorbate systems)
         connectivity_factor: Connectivity factor to use for cluster connectivity
             validation. If None, defaults to CONNECTIVITY_FACTOR from config.
+        allow_dissociative_adsorption: For surface systems, allow multiple mobile
+            subgroups if each subgroup is slab-connected (default: single connected
+            mobile cluster bound to the slab).
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface:
@@ -229,12 +233,18 @@ def validate_structure_for_system_type(
             validate_surface_config_slab_prefix(atoms, surface_config)
         if policy.needs_supported_deposit_validation:
             n_slab_eff = int(n_slab if n_slab is not None else len(surface_config.slab))
+            cf = (
+                connectivity_factor
+                if connectivity_factor is not None
+                else CONNECTIVITY_FACTOR
+            )
             ok, msg = validate_supported_cluster_deposit(
                 atoms,
                 n_slab_eff,
                 surface_normal_axis=surface_config.surface_normal_axis,
                 use_mic=bool(surface_config.comparator_use_mic),
-                connectivity_factor=connectivity_factor,
+                connectivity_factor=cf,
+                allow_dissociative_adsorption=allow_dissociative_adsorption,
             )
             if not ok:
                 raise ValueError(msg)

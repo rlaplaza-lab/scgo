@@ -7,21 +7,10 @@ these helpers — no surface-specific module required.
 
 from __future__ import annotations
 
-from typing import Any
-
 from ase import Atoms
 
 from scgo.surface.config import SurfaceSystemConfig
-
-
-def surface_config_ts_kwargs(surface_config: SurfaceSystemConfig) -> dict[str, Any]:
-    """Kwargs fragment for :func:`scgo.ts_search.run_transition_state_search`.
-
-    Pass the **same** ``SurfaceSystemConfig`` instance used under
-    ``optimizer_params`` (``ga`` / ``bh`` / ``simple``) so NEB slab fixing matches
-    global optimization (frozen vs partially relaxed slab).
-    """
-    return {"surface_config": surface_config}
+from scgo.surface.pbc import normalize_slab_pbc
 
 
 def make_surface_config(
@@ -38,7 +27,9 @@ def make_surface_config(
     Parameters
     ----------
     slab:
-        Any periodic (or non-periodic) ASE ``Atoms`` representing the substrate.
+        ASE ``Atoms`` for the substrate. In-plane periodicity is preserved;
+        periodicity along the vacuum axis (default ``z``) is turned off when
+        present so the slab is suitable for MLIP/ASE relaxations.
     adsorption_height_min:
         Minimum adsorbate height above the slab surface (Angstrom).
     adsorption_height_max:
@@ -53,12 +44,12 @@ def make_surface_config(
 
     See Also
     --------
-    surface_config_ts_kwargs :
-        Forward this config to transition-state search so constraints stay aligned.
     attach_slab_constraints_from_surface_config :
         Lower-level helper applied automatically when ``surface_config`` is passed
         to ``run_transition_state_search``.
     """
+    slab = slab.copy()
+    normalize_slab_pbc(slab)
     return SurfaceSystemConfig(
         slab=slab,
         adsorption_height_min=adsorption_height_min,

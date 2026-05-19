@@ -109,6 +109,7 @@ def ga_go(
     adsorbate_fragment_template: Atoms | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     connectivity_factor: float | None = None,
+    allow_dissociative_adsorption: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Genetic Algorithm global optimization with adaptive mutations.
 
@@ -405,6 +406,7 @@ def ga_go(
                     n_slab=n_slab,
                     adsorbate_definition=adsorbate_definition,
                     connectivity_factor=connectivity_factor,
+                    allow_dissociative_adsorption=allow_dissociative_adsorption,
                 )
             except ValueError as exc:
                 initial_discarded_count += 1
@@ -460,6 +462,7 @@ def ga_go(
                     n_slab=n_slab if surface_mode else None,
                     adsorbate_definition=adsorbate_definition,
                     connectivity_factor=connectivity_factor,
+                    allow_dissociative_adsorption=allow_dissociative_adsorption,
                 )
             except ValueError as exc:
                 validation_error = str(exc)
@@ -632,6 +635,7 @@ def ga_go(
                         n_slab=n_slab,
                         adsorbate_definition=adsorbate_definition,
                         connectivity_factor=connectivity_factor,
+                        allow_dissociative_adsorption=allow_dissociative_adsorption,
                     )
                 except ValueError as exc:
                     logger.debug(
@@ -684,6 +688,7 @@ def ga_go(
                         n_slab=n_slab if surface_mode else None,
                         adsorbate_definition=adsorbate_definition,
                         connectivity_factor=connectivity_factor,
+                        allow_dissociative_adsorption=allow_dissociative_adsorption,
                     )
                 except ValueError as exc:
                     ineligible_persisted += 1

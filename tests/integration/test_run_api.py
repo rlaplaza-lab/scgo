@@ -391,7 +391,7 @@ def test_system_policy_surface_neb_defaults():
     assert gas.neb_force_mic is False
     assert gas.neb_disable_alignment is False
     assert surf.neb_force_mic is True
-    assert surf.neb_disable_alignment is True
+    assert surf.neb_disable_alignment is False
 
 
 def test_run_go_requires_system_type():

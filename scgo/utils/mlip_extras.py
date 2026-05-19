@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def clear_torch_force_no_weights_only_load_env() -> None:
+    """Remove env override that triggers e3nn import warnings on MACE load."""
+    os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
 
 
 def installed_mace_and_uma() -> tuple[bool, bool]:

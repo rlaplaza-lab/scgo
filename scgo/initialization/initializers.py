@@ -29,7 +29,6 @@ from scgo.utils.validation import validate_composition
 
 from .candidate_discovery import (
     _find_smaller_candidates,
-    deduplicate_seed_candidates,
     get_structure_signature,
     is_composition_subset,
 )
@@ -63,13 +62,7 @@ from .seed_combiners import combine_and_grow
 from .strategy_allocation import _allocate_strategies_metropolis
 from .templates import generate_template_matches
 
-# Re-export internal names for test compatibility
-_get_structure_signature = get_structure_signature
-_deduplicate_seed_candidates = deduplicate_seed_candidates
-
-# Re-export cache namespaces for tests
-_TEMPLATE_ROTATIONS_CACHE_NS = "template_rotations"
-_DB_CANDIDATES_CACHE_NS = "db_candidates"
+TEMPLATE_ROTATIONS_CACHE_NS = "template_rotations"
 
 logger = get_logger(__name__)
 
@@ -310,7 +303,7 @@ def _deduplicate_template_structures(
     # Group templates by structure signature
     signature_groups: dict[tuple, list[tuple[str, Atoms]]] = {}
     for atoms in template_candidates:
-        signature = _get_structure_signature(atoms)
+        signature = get_structure_signature(atoms)
         template_type = _get_template_type(atoms)
         if signature not in signature_groups:
             signature_groups[signature] = []
@@ -369,10 +362,10 @@ def _apply_template_rotation_and_validate(
     center = selected.get_center_of_mass()
 
     # Check if we have pre-computed rotations for this template signature
-    template_signature = _get_structure_signature(selected)
+    template_signature = get_structure_signature(selected)
     rotation_cache_key = (template_signature, cell_side)
     rotation_candidates = get_global_cache().get(
-        _TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key
+        TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key
     )
 
     if rotation_candidates is None:
@@ -396,7 +389,7 @@ def _apply_template_rotation_and_validate(
 
         # Store in cache for future use
         get_global_cache().set(
-            _TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key, rotation_candidates
+            TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key, rotation_candidates
         )
 
     selected = rotation_candidates[rng.integers(0, len(rotation_candidates))].copy()

@@ -130,9 +130,7 @@ def pt2_atoms():
 @pytest.fixture
 def pt_slab_small():
     """Small Pt(111) slab for adsorbate-on-surface tests."""
-    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
-    slab.pbc = True
-    return slab
+    return fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
 
 
 @pytest.fixture
@@ -319,12 +317,12 @@ def clear_initialization_caches():
     from scgo.database.cache import get_global_cache
     from scgo.initialization import geometry_helpers, initializers
 
-    get_global_cache().clear_namespace(initializers._TEMPLATE_ROTATIONS_CACHE_NS)
+    get_global_cache().clear_namespace(initializers.TEMPLATE_ROTATIONS_CACHE_NS)
     geometry_helpers.clear_convex_hull_cache()
 
     yield
 
-    get_global_cache().clear_namespace(initializers._TEMPLATE_ROTATIONS_CACHE_NS)
+    get_global_cache().clear_namespace(initializers.TEMPLATE_ROTATIONS_CACHE_NS)
 
 
 @pytest.fixture(autouse=True)

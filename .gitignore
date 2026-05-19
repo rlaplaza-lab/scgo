@@ -21,8 +21,8 @@ examples/results/
 
 # Search result directories
 *_searches/
-runners/results/
-runners/logs/
+examples/results/
+examples/logs/
 orca_calcs/
 out_dir/
 results_summary.json
@@ -87,8 +87,8 @@ test_run.log
 
 .pip-tools-cache/
 
-# Runner output files (generated during checks)
-runners/*.out
+# Example script output files (generated during checks)
+examples/*.out
 *.out
 *.out
 

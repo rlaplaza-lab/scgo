@@ -328,7 +328,7 @@ ts_results = run_ts_search(
 
 ### GO then TS
 
-`run_go_ts` / `run_go_ts_campaign` use **`go_params=`** (merged like other GO runs) and **`ts_params=`** (same flat shape as above; **not** deep-merged with `get_default_params()`). For **slab + adsorbate**, pass a `SurfaceSystemConfig` directly to `run_go_ts(..., surface_config=...)` / `run_go_ts_campaign(..., surface_config=...)`; the `composition` argument is **adsorbate symbols only** (the full system for loading minima is built as slab + adsorbate, matching GA). For MACE + TorchSim GA, start from [`get_torchsim_ga_params`](scgo/param_presets.py) with `system_type=...` and `seed` (optional `surface_config=` / `model_name=`), set `go_params["calculator"] = "MACE"` and `optimizer_params["ga"]` as needed; pair with `get_ts_search_params(...)` and set `ts_params["max_pairs"]`, etc. For UMA NEB defaults, you can use `get_ts_search_params_uma`. See `runners/example_pt5_gas.py` for a minimal end-to-end example. Default output if `output_dir` is omitted is under `scgo_runs/<stem>_<mace|uma>/` (set `output_root` / `output_stem` to change).
+`run_go_ts` / `run_go_ts_campaign` use **`go_params=`** (merged like other GO runs) and **`ts_params=`** (same flat shape as above; **not** deep-merged with `get_default_params()`). For **slab + adsorbate**, pass a `SurfaceSystemConfig` directly to `run_go_ts(..., surface_config=...)` / `run_go_ts_campaign(..., surface_config=...)`; the `composition` argument is **adsorbate symbols only** (the full system for loading minima is built as slab + adsorbate, matching GA). For MACE + TorchSim GA, start from [`get_torchsim_ga_params`](scgo/param_presets.py) with `system_type=...` and `seed` (optional `surface_config=` / `model_name=`), set `go_params["calculator"] = "MACE"` and `optimizer_params["ga"]` as needed; pair with `get_ts_search_params(...)` and set `ts_params["max_pairs"]`, etc. For UMA NEB defaults, you can use `get_ts_search_params_uma`. See `examples/example_pt5_gas.py` for a minimal end-to-end example. Default output if `output_dir` is omitted is under `scgo_runs/<stem>_<mace|uma>/` (set `output_root` / `output_stem` to change).
 
 Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_benchmark_params`](scgo/param_presets.py) (re-exported from `scgo`). See `benchmark/` for long-running MLIP regression sweeps.
 
@@ -343,14 +343,14 @@ Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_b
 
 - TorchSim is an optional tool that provides GPU-accelerated batched optimization when available; SCGO works with EMT (CPU) out of the box for quick tests.
 - For reproducible results, pass `seed=` to the workflow functions above.
-- Optional scripts in [`runners/`](runners/) are minimal, no-CLI examples that call [`run_go_ts`](scgo/runner_api.py). Each is tuned for MACE + TorchSim (edit calculator in the script if needed):
+- Optional scripts in [`examples/`](examples/) are minimal, no-CLI examples that call [`run_go_ts`](scgo/runner_api.py). Each is tuned for MACE + TorchSim (edit calculator in the script if needed):
 
 | Script | `system_type` | Notes |
 |--------|----------------|-------|
-| [`runners/example_pt5_gas.py`](runners/example_pt5_gas.py) | `gas_cluster` | Gas-phase `Pt5` only |
-| [`runners/example_pt5_graphite.py`](runners/example_pt5_graphite.py) | `surface_cluster` | `Pt5` on preset graphite |
-| [`runners/example_pt5_oh_gas.py`](runners/example_pt5_oh_gas.py) | `gas_cluster_adsorbate` | core-only `Pt5` composition + one `adsorbates` OH fragment |
-| [`runners/example_pt5_2oh_graphite.py`](runners/example_pt5_2oh_graphite.py) | `surface_cluster_adsorbate` | core-only `Pt5` composition + two `adsorbates` OH fragments |
+| [`examples/example_pt5_gas.py`](examples/example_pt5_gas.py) | `gas_cluster` | Gas-phase `Pt5` only |
+| [`examples/example_pt5_graphite.py`](examples/example_pt5_graphite.py) | `surface_cluster` | `Pt5` on preset graphite |
+| [`examples/example_pt5_oh_gas.py`](examples/example_pt5_oh_gas.py) | `gas_cluster_adsorbate` | core-only `Pt5` composition + one `adsorbates` OH fragment |
+| [`examples/example_pt5_2oh_graphite.py`](examples/example_pt5_2oh_graphite.py) | `surface_cluster_adsorbate` | core-only `Pt5` composition + two `adsorbates` OH fragments |
 
 For multi-size MLIP sweeps, see [`benchmark/`](benchmark/) (e.g. [`benchmark/benchmark_Pt.py`](benchmark/benchmark_Pt.py), [`benchmark/benchmark_Pt_surface_graphite.py`](benchmark/benchmark_Pt_surface_graphite.py)), not `tests/benchmarks/`. - See `tests/` for concrete usage patterns.
 

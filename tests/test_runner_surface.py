@@ -15,9 +15,7 @@ from scgo.utils.helpers import get_cluster_formula
 
 
 def _graphene_slab() -> Atoms:
-    slab = graphene(size=(3, 3, 1), vacuum=12.0)
-    slab.pbc = True
-    return slab
+    return graphene(size=(3, 3, 1), vacuum=12.0)
 
 
 def _pt_slab() -> Atoms:
@@ -62,6 +60,13 @@ class TestMakeSurfaceConfig:
         cfg = make_surface_config(_pt_slab())
         assert isinstance(cfg, SurfaceSystemConfig)
         assert "Pt" in cfg.slab.get_chemical_symbols()
+        assert list(cfg.slab.pbc) == [True, True, False]
+
+    def test_normalizes_accidental_3d_pbc(self) -> None:
+        slab = _pt_slab()
+        slab.pbc = True
+        cfg = make_surface_config(slab)
+        assert list(cfg.slab.pbc) == [True, True, False]
 
 
 # ---------------------------------------------------------------------------
