@@ -20,7 +20,7 @@ Conda Installation (Recommended)
    conda env create -f environment.yml
    conda activate scgo
 
-The conda environment installs SCGO in editable mode with MACE/TorchSim support and development tools. Note that ``vesin`` and ``vesin-torch`` conflict with the TorchSim stack used by SCGO and should not be installed.
+The conda environment installs SCGO in editable mode with ``[mace,dev]`` (MACE/TorchSim plus test and lint tooling). For a runtime-only editable install, use ``pip install -e .`` instead. Note that ``vesin`` and ``vesin-torch`` conflict with the TorchSim stack used by SCGO and should not be installed.
 
 Pip Installation
 ----------------

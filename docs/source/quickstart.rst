@@ -39,8 +39,8 @@ This example demonstrates global optimization and transition state search for a 
    python example_pt5_gas.py
 
 **Output:**
-- Results saved in ``examples/results/pt5_gas_*/``
-- Contains GO minima and TS search results
+- Results under ``examples/results/pt5_gas_mace/`` (calculator slug appended to ``output_stem``)
+- Contains ``Pt5_searches/`` with GO minima and ``ts_results_Pt5/`` for TS results
 
 Surface-Supported Cluster (example_pt5_graphite.py)
 ---------------------------------------------------
@@ -48,10 +48,10 @@ Surface-Supported Cluster (example_pt5_graphite.py)
 This example shows how to optimize a Pt5 cluster supported on a graphite surface.
 
 **Key Features:**
-- ``system_type="surface_cluster"`` — supported cluster with slab
-- Uses ``make_graphite_surface_config()`` for surface setup
-- Includes surface-specific GA parameters (batch_size)
-- Demonstrates surface-adsorbate interaction
+- ``system_type="surface_cluster"`` — supported cluster with slab (no separate adsorbate fragment)
+- Uses ``make_graphite_surface_config(slab_layers=...)`` for surface setup
+- Passes the same ``surface_config`` into presets and ``run_go_ts``
+- Includes surface-specific GA parameters (niter, population_size)
 
 **Code:**
 
@@ -60,9 +60,9 @@ This example shows how to optimize a Pt5 cluster supported on a graphite surface
    :linenos:
 
 **Key Differences from Gas-Phase:**
-- Requires ``surface_config`` parameter
-- GA uses ``batch_size`` for surface calculations
-- Different output structure due to slab presence
+- Requires ``surface_config`` in ``get_torchsim_ga_params`` / ``get_ts_search_params`` and on ``run_go_ts``
+- Periodic slab in all relaxed structures
+- Output layout matches gas-phase but under a surface-specific output directory
 
 Gas-Phase Cluster with Adsorbate (example_pt5_oh_gas.py)
 ---------------------------------------------------------
@@ -72,8 +72,8 @@ This example demonstrates a gas-phase Pt5 cluster with OH adsorbate.
 **Key Features:**
 - ``system_type="gas_cluster_adsorbate"`` — gas-phase with adsorbates
 - Uses ASE Atoms object to define adsorbate fragment
+- Passes core-only ``composition`` plus ``adsorbates`` to ``run_go_ts``
 - Shows hierarchical adsorbate placement
-- Demonstrates adsorbate-cluster interaction
 
 **Adsorbate Setup:**
 
@@ -87,10 +87,9 @@ Surface-Supported Cluster with Multiple Adsorbates (example_pt5_2oh_graphite.py)
 This advanced example shows a surface-supported Pt5 cluster with two OH adsorbates.
 
 **Key Features:**
-- ``system_type="surface_cluster_adsorbate"`` — most complex system type
-- Combines surface support with multiple adsorbates
+- ``system_type="surface_cluster_adsorbate"`` — surface + adsorbate policies
+- Combines ``make_graphite_surface_config`` with multiple ``adsorbates`` fragments
 - Demonstrates advanced TS search parameter customization
-- Shows how to handle complex chemical environments
 
 **Advanced TS Parameters:**
 
@@ -120,6 +119,9 @@ To create your own SCGO workflow:
       go_params = get_torchsim_ga_params(system_type="gas_cluster", seed=42)
       ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
 
+   For surface system types, pass ``surface_config`` to both preset builders and to
+   ``run_go_ts`` (values must match).
+
 3. **Customize parameters:**
 
    .. code-block:: python
@@ -131,7 +133,7 @@ To create your own SCGO workflow:
 
    .. code-block:: python
 
-      from scgo.runner_api import run_go_ts
+      from scgo import run_go_ts
 
       results = run_go_ts(
           ["Pt"] * 5,
@@ -141,14 +143,17 @@ To create your own SCGO workflow:
           system_type="gas_cluster",
       )
 
+   For adsorbate modes, pass ``adsorbates=...`` (one ``Atoms`` or a list of fragments)
+   with core-only ``composition``.
+
 Parameter Customization Guide
 -----------------------------
 
 **Global Optimization Parameters:**
 - ``niter`` — Number of GA iterations
 - ``population_size`` — GA population size
-- ``batch_size`` — Batch size for surface calculations (surface systems only)
-- ``calculator`` — "MACE" or other supported calculators
+- ``batch_size`` — Batch size for TorchSim GA relaxations
+- ``calculator`` — ``"MACE"``, ``"UMA"``, or ``"EMT"`` (testing)
 
 **Transition State Search Parameters:**
 - ``max_pairs`` — Maximum number of minima pairs to search
@@ -158,7 +163,7 @@ Parameter Customization Guide
 
 **Output Control:**
 - ``output_root`` — Base output directory
-- ``output_stem`` — Output directory name stem
+- ``output_stem`` — Output directory name stem (calculator slug appended for ``run_go_ts``)
 - ``seed`` — Random seed for reproducibility
 
 Best Practices
@@ -173,26 +178,23 @@ Best Practices
 Understanding Output Structure
 ------------------------------
 
-SCGO creates a structured output directory:
+For ``run_go_ts`` with default layout (see also the project README):
 
 .. code-block:: text
 
-   {output_stem}_*/
-   ├── go_results/
-   │   ├── trial_*/
-   │   │   ├── minima.db
-   │   │   └── params.json
-   │   └── results_summary.json
-   └── ts_results/
-       ├── ts_*/
-       │   ├── neb_metadata.json
-       │   └── trajectory_files/
-       └── ts_search_summary.json
+   {output_root}/{output_stem}_{mace|uma}/
+   └── {formula}_searches/
+       ├── run_<timestamp>/trial_<N>/
+       │   └── ga_go.db
+       ├── results_summary.json
+       ├── final_unique_minima/
+       └── ts_results_{formula}/
+           ├── ts_<pair_id>.xyz
+           ├── neb_<pair_id>_metadata.json
+           └── ts_search_summary_{formula}.json
 
-- ``minima.db`` — SQLite database of optimized structures
-- ``params.json`` — Run parameters and metadata
-- ``results_summary.json`` — Summary of GO results
-- ``ts_search_summary.json`` — Summary of TS search results
+For ``run_go`` alone, the tree is the same ``{formula}_searches/`` folder without
+``ts_results_*``.
 
 Next Steps
 ----------

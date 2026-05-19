@@ -71,14 +71,14 @@ Comprehensive documentation is available in the `docs/` directory:
   - `docs/source/api/runner_api.rst` - High-level API entry points
   - `docs/source/api/param_presets.rst` - Parameter presets
   - `docs/source/api/system_types.rst` - System type definitions
-- **Advanced Topics**: `docs/source/advanced/` - Adsorbates, surface systems, customization
+- **Quick Start**: surface, adsorbate, and example workflows in `docs/source/quickstart.rst`
 
-To build the documentation:
+To build the documentation locally:
 
 ```bash
-cd docs
-pip install -r requirements.txt
-make html
+pip install -e .
+pip install -r docs/source/requirements.txt
+cd docs && make html
 ```
 
 The built documentation will be available in `docs/build/html/index.html`.
@@ -110,7 +110,7 @@ SCGO supports exactly four explicit `system_type` values:
 - `gas_cluster_adsorbate`: gas-phase cluster that includes adsorbate-like species (no slab)
 - `surface_cluster_adsorbate`: supported cluster + adsorbate species (`surface_config` required)
 
-`system_type` must be passed to each `run_*` API call. System-definition keys are intentionally rejected from preset dicts (`go_params` / `ts_params`) to keep one canonical source of truth at the API boundary.
+`system_type` must be passed to each `run_*` API call. Top-level `system_type` is rejected inside preset dicts (`go_params` / `ts_params`); use the run function argument instead. For surface workflows, `surface_config` may appear in presets (e.g. `get_torchsim_ga_params`, `get_ts_search_params`) and on the `run_*` call—values must agree when both are set.
 For adsorbate system types (`gas_cluster_adsorbate`, `surface_cluster_adsorbate`),
 high-level runners require core-only `composition` and `adsorbates` (one ASE `Atoms`
 fragment or a list of fragments). SCGO flattens adsorbate symbols in provided fragment
@@ -166,7 +166,8 @@ Preset-vs-runtime split in `runner_api`:
 
 - Put scientific/tuning knobs in preset dicts (`go_params`/`ts_params`): calculator choice, optimizer settings, NEB settings, pairing thresholds, etc.
 - Keep run-control knobs on the `run_*` call itself: `verbosity`, `output_dir`, `output_root`, `output_stem`, `seed`, `log_summary`, `write_timing_json`, `profile_ga`.
-- Keep system-definition inputs on the `run_*` call itself: `system_type`, and when required by system type, `surface_config`, core-only `composition`, and `adsorbates`.
+- Keep system-definition inputs on the `run_*` call itself: `system_type`, core-only `composition`, and `adsorbates` when applicable.
+- For surface system types, pass `surface_config` on the `run_*` call and in preset builders (`get_torchsim_ga_params`, `get_ts_search_params`); SCGO validates coherence across GO/TS presets and run arguments.
 
 Inspect -> edit -> run pattern:
 
@@ -219,14 +220,25 @@ surface_config = make_surface_config(slab)
 
 For the **graphite preset** used in example runners, use [`scgo.surface.make_graphite_surface_config`](scgo/surface/presets.py) (or `from scgo import make_graphite_surface_config`) instead of building a slab by hand.
 
-Then wire `surface_config` into the GO parameters:
+Then build GO/TS presets and pass the same `surface_config` to the runner:
 
 ```python
-from scgo.param_presets import get_minimal_ga_params
+from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
+from scgo import run_go_ts
 
-params = get_minimal_ga_params(seed=42)
-params["surface_config"] = surface_config
+go_params = get_torchsim_ga_params(
+    system_type="surface_cluster",
+    surface_config=surface_config,
+    seed=42,
+)
+ts_params = get_ts_search_params(
+    system_type="surface_cluster",
+    surface_config=surface_config,
+    seed=42,
+)
 ```
+
+For the bundled graphite preset, `make_graphite_surface_config(slab_layers=3)` controls slab thickness (see `examples/example_pt5_graphite.py`).
 
 - **Direct API** (any adsorbate size): `from scgo import ga_go, SurfaceSystemConfig` and pass `surface_config=...`.
 - **`run_go`**: pass `surface_config=...` directly to `run_go(...)`; it is copied into each **present** `optimizer_params` entry among `simple` / `bh` / `ga` so the active algorithm sees the slab. The high-level runner only selects GA when `len(composition) >= 4`, so use **at least four adsorbate atoms** if you rely on automatic algorithm choice; for dimers/trimers, call `ga_go` directly.
@@ -313,13 +325,12 @@ For element or binary scans, build compositions explicitly and pass them to `run
 from scgo import run_ts_search
 from scgo.param_presets import get_ts_search_params
 
-ts_params = get_ts_search_params(system_type="gas_cluster")
+ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
 ts_results = run_ts_search(
     ["Pt", "Pt", "Pt"],
     output_dir="Pt3_searches",
-    params={"calculator": "MACE"},
-    seed=42,
     ts_params=ts_params,
+    seed=42,
     system_type="gas_cluster",
 )
 ```

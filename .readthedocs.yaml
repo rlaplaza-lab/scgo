@@ -9,7 +9,7 @@ build:
     python: "3.12"
   jobs:
     post_install:
-      - pip install -e .[mace]
+      - pip install -e .
 
 sphinx:
   configuration: docs/source/conf.py

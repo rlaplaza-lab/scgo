@@ -7,20 +7,24 @@ This directory contains the Sphinx documentation source for SCGO (Simple Cluster
 ### Prerequisites
 
 - Python 3.12+
-- Documentation dependencies: `pip install -r requirements.txt`
+- SCGO installed editable (`pip install -e .` from the repository root)
+- Documentation dependencies: `pip install -r source/requirements.txt` (from this `docs/` directory)
 
 ### Building HTML
 
 ```bash
-make html
+# From repository root
+pip install -e .
+pip install -r docs/source/requirements.txt
+cd docs && make html
 ```
 
-The built documentation will be available in `build/html/index.html`.
+The built documentation will be available in `docs/build/html/index.html`.
 
 ### Building PDF
 
 ```bash
-make latexpdf
+cd docs && make latexpdf
 ```
 
 The PDF will be available in `build/latex/scgo.pdf`.
@@ -32,9 +36,11 @@ The PDF will be available in `build/latex/scgo.pdf`.
   - `index.rst` — Main documentation index
   - `installation.rst` — Installation instructions
   - `quickstart.rst` — Quick start guide with working examples
-- `conf.py` — Sphinx configuration
-- `requirements.txt` — Documentation build requirements
-- `Makefile` — Build automation
+  - `conf.py` — Sphinx configuration
+  - `requirements.txt` — Documentation build requirements
+  - `Makefile` — Sphinx build automation (invoked via `docs/Makefile`)
+- `_static/` — Shared static assets (logo; copied into `source/_static` for HTML builds)
+- `Makefile` — Delegates to `source/Makefile`
 
 ## Online Documentation
 
@@ -52,7 +58,7 @@ This documentation is automatically built and published on [ReadTheDocs](https:/
 The API documentation is automatically generated from docstrings in the Python code. To update:
 
 1. Add/improve docstrings in the source code
-2. Run `make html` to rebuild
+2. Run `make html` from `docs/` to rebuild
 3. Commit both code and documentation changes
 
 ## Style Guide

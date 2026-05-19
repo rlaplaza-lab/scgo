@@ -1,12 +1,31 @@
 """Sphinx configuration for SCGO documentation."""
 
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+# -- Path setup --------------------------------------------------------------
+# Allow autodoc to import scgo when the package is installed editable.
+
+_repo_root = Path(__file__).resolve().parents[2]
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = "SCGO"
 copyright = "2026, R. Laplaza"
 author = "R. Laplaza"
-release = "0.1.0"
+
+try:
+    from importlib.metadata import version as _pkg_version
+
+    release = _pkg_version("scgo")
+except Exception:
+    release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -18,8 +37,8 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.todo",
     "sphinx.ext.mathjax",
-    "sphinx.ext.autosummary",
     "sphinx_copybutton",
+    "sphinx_autodoc_typehints",
 ]
 
 # Napoleon settings for Google-style docstrings
@@ -33,7 +52,6 @@ templates_path = ["_templates"]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- Options for HTML output -------------------------------------------------
@@ -42,8 +60,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 html_theme = "furo"
 html_title = "SCGO"
 html_static_path = ["_static"]
-html_favicon = "../_static/scgo_logo.svg"
-html_logo = "../_static/scgo_logo.svg"
+html_favicon = "_static/scgo_logo.svg"
+html_logo = "_static/scgo_logo.svg"
 
 # Furo theme specific settings
 html_theme_options = {
@@ -56,6 +74,20 @@ html_theme_options = {
 
 # -- Options for autodoc -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/autodoc.html
+
+autodoc_mock_imports = [
+    "torch",
+    "torch_sim",
+    "torch_sim_atomistic",
+    "mace",
+    "mace_torch",
+    "mace.calculators",
+    "mace.calculators.mace",
+    "fairchem",
+    "fairchem.core",
+    "e3nn",
+    "nvalchemi_toolkit_ops",
+]
 
 autodoc_default_options = {
     "members": True,
@@ -70,10 +102,15 @@ autodoc_default_options = {
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "ase": ("https://wiki.fysik.dtu.dk/ase", None),
+    "ase": ("https://ase-lib.org", None),
 }
 
 # -- Options for todo extension -----------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/todo.html
 
 todo_include_todos = True
+
+# Fail CI/docs jobs on warnings when SPHINX_STRICT=1
+if os.environ.get("SPHINX_STRICT") == "1":
+    suppress_warnings = []
+    nitpicky = True
