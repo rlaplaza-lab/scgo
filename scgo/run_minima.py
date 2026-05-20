@@ -18,7 +18,7 @@ from ase import Atoms
 
 from scgo.minima_search import run_trials
 from scgo.optimization.algorithm_select import select_scgo_minima_algorithm
-from scgo.system_types import SystemType
+from scgo.system_types import AdsorbateDefinition, SystemType
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.rng_helpers import ensure_rng
@@ -444,6 +444,7 @@ def run_scgo_go_ts_pipeline(
     *,
     go_params: dict[str, Any],
     ts_kwargs: dict[str, Any],
+    adsorbate_definition: AdsorbateDefinition | None = None,
     seed: int | None = None,
     verbosity: int = 1,
     output_dir: str | Path | None = None,
@@ -453,7 +454,9 @@ def run_scgo_go_ts_pipeline(
     ``go_params`` is the same global-optimization dict as ``run_go`` / ``run_go_ts``'s
     ``go_params=``. Minima are written under ``output_path / f"{formula}_searches"`` so
     :func:`~scgo.ts_search.transition_state_run.run_transition_state_search` can
-    load them. For high-level entry points see :mod:`scgo.runner_api`.
+    load them. ``adsorbate_definition`` (when provided) is forwarded to TS search
+    so endpoint alignment can use explicit core/adsorbate block sizes.
+    For high-level entry points see :mod:`scgo.runner_api`.
     """
     configure_logging(verbosity)
     logger = get_logger(__name__)
@@ -542,6 +545,7 @@ def run_scgo_go_ts_pipeline(
         verbosity=verbosity,
         write_timing_json=write_ts_json,
         connectivity_factor=connectivity_factor,
+        adsorbate_definition=adsorbate_definition,
         system_type=system_type,
         **ts_kwargs_local,
     )

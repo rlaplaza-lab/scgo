@@ -14,6 +14,7 @@ from scgo.run_minima import (
     run_scgo_campaign_arbitrary_compositions,
     run_scgo_campaign_one_element,
     run_scgo_campaign_two_elements,
+    run_scgo_go_ts_pipeline,
     run_scgo_one_element_go_ts_pipeline,
     run_scgo_trials,
 )
@@ -390,8 +391,12 @@ def test_system_policy_surface_neb_defaults():
     surf = get_system_policy("surface_cluster_adsorbate")
     assert gas.neb_force_mic is False
     assert gas.neb_disable_alignment is False
+    assert gas.neb_surface_cell_remap is False
+    assert gas.neb_surface_lattice_rotation is False
     assert surf.neb_force_mic is True
     assert surf.neb_disable_alignment is False
+    assert surf.neb_surface_cell_remap is True
+    assert surf.neb_surface_lattice_rotation is True
 
 
 def test_run_go_requires_system_type():
@@ -654,6 +659,70 @@ def test_run_go_ts_wires_profile_toggle(monkeypatch):
     )
     go_params = captured["go_params"]
     assert go_params["optimizer_params"]["ga"]["write_timing_json"] is False
+
+
+def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_pipeline(composition, system_type, **kwargs):
+        captured["composition"] = composition
+        captured["system_type"] = system_type
+        captured["adsorbate_definition"] = kwargs.get("adsorbate_definition")
+        return {"ts_results": []}
+
+    monkeypatch.setattr("scgo.runner_api.run_scgo_go_ts_pipeline", _fake_pipeline)
+    run_go_ts(
+        ["Pt", "Pt", "Pt", "Pt", "Pt"],
+        go_params={"optimizer_params": {"ga": {}}},
+        ts_params=_emt_ts_gasc(),
+        verbosity=0,
+        system_type="gas_cluster_adsorbate",
+        adsorbates=_adsorbates_oh(n=1),
+    )
+    ads_def = captured["adsorbate_definition"]
+    assert captured["system_type"] == "gas_cluster_adsorbate"
+    assert ads_def is not None
+    assert ads_def["core_symbols"] == ["Pt", "Pt", "Pt", "Pt", "Pt"]
+    assert ads_def["adsorbate_symbols"] == ["O", "H"]
+    assert ads_def["deposition_layout"] == "core_then_fragment"
+
+
+def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_path):
+    import scgo.run_minima as run_minima_module
+    import scgo.ts_search as ts_search_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_trials(*args, **kwargs):
+        return []
+
+    def _fake_ts(*args, **kwargs):
+        captured["adsorbate_definition"] = kwargs.get("adsorbate_definition")
+        captured["system_type"] = kwargs.get("system_type")
+        return []
+
+    monkeypatch.setattr(run_minima_module, "run_scgo_trials", _fake_trials)
+    monkeypatch.setattr(ts_search_module, "run_transition_state_search", _fake_ts)
+
+    ads_def = {
+        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
+        "adsorbate_symbols": ["O", "H"],
+        "deposition_layout": "core_then_fragment",
+    }
+    run_scgo_go_ts_pipeline(
+        ["Pt", "Pt", "Pt", "Pt", "Pt", "O", "H"],
+        "gas_cluster_adsorbate",
+        go_params=get_testing_params(),
+        ts_kwargs=coerce_ts_params_to_runner_kwargs(
+            _emt_ts_gasc(), system_type="gas_cluster_adsorbate"
+        ),
+        adsorbate_definition=ads_def,
+        seed=42,
+        verbosity=0,
+        output_dir=tmp_path / "pt5oh_gas",
+    )
+    assert captured["system_type"] == "gas_cluster_adsorbate"
+    assert captured["adsorbate_definition"] == ads_def
 
 
 def test_run_go_ts_accepts_top_level_go_surface_config(monkeypatch):

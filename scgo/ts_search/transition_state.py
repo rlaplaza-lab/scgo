@@ -363,7 +363,11 @@ def _apply_inplane_mobile_kabsch(
     *,
     surface_normal_axis: int,
 ) -> np.ndarray:
-    """Rotate mobile atoms in-plane so product geometry matches reactant."""
+    """Rotate mobile atoms in-plane so product geometry matches reactant.
+
+    Deprecated for surface NEB: use :func:`_align_product_surface_pbc` instead,
+    which applies a global lattice-compatible rotation.
+    """
     idx = np.where(mobile_mask)[0]
     if idx.size < 2 or idx.size == mobile_mask.size:
         return prod_pos
@@ -380,33 +384,270 @@ def _apply_inplane_mobile_kabsch(
     return out
 
 
+def _cell_array(cell: Any) -> np.ndarray:
+    """Return a 3x3 cell matrix from ASE ``Cell`` or ndarray."""
+    if hasattr(cell, "array"):
+        return np.asarray(cell.array, dtype=float)
+    return np.asarray(cell, dtype=float)
+
+
+def _pbc_for_mic_alignment(pbc: np.ndarray | list[bool]) -> np.ndarray:
+    """PBC mask for MIC: in-plane periodic, vacuum axis open (slab convention)."""
+    pbc_arr = np.asarray(pbc, dtype=bool).copy()
+    normal_axis = _infer_surface_normal_axis(pbc_arr)
+    pbc_arr[normal_axis] = False
+    return pbc_arr
+
+
+def _inplane_periodic_axes(pbc: np.ndarray | list[bool]) -> tuple[int, int]:
+    """Return the two in-plane periodic axis indices for a slab-like cell."""
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    periodic = [i for i in range(3) if pbc_arr[i]]
+    if len(periodic) == 2:
+        return int(periodic[0]), int(periodic[1])
+    return 0, 1
+
+
+def _validate_lattice_compatible_rotation(
+    rot: np.ndarray,
+    normal_axis: int,
+    *,
+    tol: float = 1e-6,
+) -> None:
+    """Fail-fast when a rotation would alter the vacuum axis or handedness."""
+    if normal_axis not in (0, 1, 2):
+        raise ValueError("normal_axis must be 0, 1, or 2")
+    if abs(float(rot[normal_axis, normal_axis]) - 1.0) > tol:
+        raise ValueError(
+            "Rotation must preserve the surface normal axis (energy-equivalent)."
+        )
+    for i in range(3):
+        if i != normal_axis and abs(float(rot[normal_axis, i])) > tol:
+            raise ValueError(
+                "Rotation must not mix the surface normal with in-plane axes."
+            )
+    if abs(float(np.linalg.det(rot)) - 1.0) > tol:
+        raise ValueError("Rotation determinant must be +1 for rigid alignment.")
+
+
+def _inplane_rotation_matrix_3d(angle: float, normal_axis: int) -> np.ndarray:
+    """Build a 3x3 rotation about the surface normal (right-handed, det=+1)."""
+    plane_axes = [i for i in range(3) if i != normal_axis]
+    c, s = float(np.cos(angle)), float(np.sin(angle))
+    rot2 = np.array([[c, -s], [s, c]], dtype=float)
+    rot = np.eye(3, dtype=float)
+    for i, ia in enumerate(plane_axes):
+        for j, ja in enumerate(plane_axes):
+            rot[ia, ja] = rot2[i, j]
+    _validate_lattice_compatible_rotation(rot, normal_axis)
+    return rot
+
+
+def _lattice_translation_candidates(
+    cell: np.ndarray,
+    axis_a: int,
+    axis_b: int,
+    *,
+    max_shift: int = 1,
+) -> list[np.ndarray]:
+    """Integer in-plane lattice translations (Cartesian vectors)."""
+    if max_shift < 0:
+        raise ValueError("max_shift must be non-negative")
+    candidates: list[np.ndarray] = []
+    for nx in range(-max_shift, max_shift + 1):
+        for ny in range(-max_shift, max_shift + 1):
+            delta = nx * cell[axis_a] + ny * cell[axis_b]
+            candidates.append(np.asarray(delta, dtype=float))
+    return candidates
+
+
+def _mic_displacements(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+) -> np.ndarray:
+    """Minimum-image displacements from reactant to product positions."""
+    disp = prod_pos - ref_pos
+    disp_mic, _ = find_mic(disp, cell=cell, pbc=pbc)
+    return disp_mic
+
+
+def _snap_to_reactant_mic_frame(
+    ref_pos: np.ndarray,
+    pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+    anchor_mask: np.ndarray,
+) -> np.ndarray:
+    """Express ``pos`` in the reactant periodic image (Cartesian, MIC-short)."""
+    disp_mic = _mic_displacements(ref_pos, pos, cell, pbc)
+    if np.any(anchor_mask):
+        disp_mic = disp_mic - np.mean(disp_mic[anchor_mask], axis=0)
+    snapped = ref_pos + disp_mic
+    if np.any(anchor_mask):
+        snapped[anchor_mask] = ref_pos[anchor_mask]
+    return snapped
+
+
+def _score_mobile_endpoint_displacement(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    mobile_mask: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+) -> tuple[float, float]:
+    """Return (max, rms) mobile-atom displacement norms in the reactant MIC frame."""
+    if not np.any(mobile_mask):
+        return 0.0, 0.0
+    disp = prod_pos[mobile_mask] - ref_pos[mobile_mask]
+    norms = np.linalg.norm(disp, axis=1)
+    return float(np.max(norms)), float(np.sqrt(np.mean(norms**2)))
+
+
+def _apply_global_inplane_kabsch(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    mobile_mask: np.ndarray,
+    *,
+    normal_axis: int,
+    anchor_mask: np.ndarray,
+) -> np.ndarray:
+    """Apply one global in-plane rotation derived from mobile-atom Kabsch."""
+    idx = np.where(mobile_mask)[0]
+    if idx.size < 2:
+        return prod_pos
+    center = ref_pos[idx].mean(axis=0)
+    p_ref_c = ref_pos[idx] - center
+    p_prod_c = prod_pos[idx] - center
+    rot = _kabsch_rotation_in_plane(p_ref_c, p_prod_c, surface_normal_axis=normal_axis)
+    _validate_lattice_compatible_rotation(rot, normal_axis)
+    out = (prod_pos - center) @ rot.T + center
+    if np.any(anchor_mask):
+        out[anchor_mask] = ref_pos[anchor_mask]
+    return out
+
+
+def _align_product_surface_pbc(
+    reactant: Atoms,
+    product_positions: np.ndarray,
+    *,
+    n_slab: int = 0,
+    enable_cell_remap: bool = True,
+    enable_lattice_rotation: bool = True,
+    max_lattice_shift: int = 1,
+) -> np.ndarray:
+    """Align product to reactant using MIC, lattice shifts, and global in-plane rotation.
+
+    **Single surface NEB alignment entry point.** Serial (:func:`find_transition_state`),
+    parallel (:func:`run_parallel_neb_search`), and :func:`interpolate_path` all route
+    slab/periodic endpoint prep through this helper (not mobile-only Kabsch).
+
+    Only energy-equivalent transforms are considered:
+    - integer in-plane lattice translations (cell-boundary remapping),
+    - minimum-image wrapping,
+    - global in-plane rigid rotation (same ``R`` for all atoms; anchors reset
+      to reactant afterward so fixed slab atoms stay registered).
+
+    Does **not** rotate mobile atoms independently of the lattice frame.
+    """
+    ref_pos = reactant.get_positions()
+    cell = _cell_array(reactant.cell)
+    pbc_mic = _pbc_for_mic_alignment(reactant.pbc)
+    normal_axis = _infer_surface_normal_axis(reactant.pbc)
+    axis_a, axis_b = _inplane_periodic_axes(pbc_mic)
+
+    fixed_mask = _fixed_atom_mask(reactant)
+    anchor_mask = _anchor_mask(reactant, n_slab=n_slab, fixed_mask=fixed_mask)
+    mobile_mask = _mobile_alignment_mask(
+        anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
+    )
+
+    prod = _snap_to_reactant_mic_frame(
+        ref_pos, product_positions, cell, pbc_mic, anchor_mask
+    )
+
+    best_pos = prod.copy()
+    best_score, _ = _score_mobile_endpoint_displacement(
+        ref_pos, best_pos, mobile_mask, cell, pbc_mic
+    )
+
+    shifts = _lattice_translation_candidates(
+        cell, axis_a, axis_b, max_shift=max_lattice_shift
+    )
+    if not enable_cell_remap:
+        shifts = [np.zeros(3, dtype=float)]
+
+    for shift in shifts:
+        prod_shifted = prod + shift
+        prod_final = _snap_to_reactant_mic_frame(
+            ref_pos, prod_shifted, cell, pbc_mic, anchor_mask
+        )
+        score, _ = _score_mobile_endpoint_displacement(
+            ref_pos, prod_final, mobile_mask, cell, pbc_mic
+        )
+        if score < best_score:
+            best_score = score
+            best_pos = prod_final
+
+    if enable_lattice_rotation:
+        prod_rot = _apply_global_inplane_kabsch(
+            ref_pos,
+            best_pos,
+            mobile_mask,
+            normal_axis=normal_axis,
+            anchor_mask=anchor_mask,
+        )
+        prod_final = _snap_to_reactant_mic_frame(
+            ref_pos, prod_rot, cell, pbc_mic, anchor_mask
+        )
+        score, _ = _score_mobile_endpoint_displacement(
+            ref_pos, prod_final, mobile_mask, cell, pbc_mic
+        )
+        if score < best_score:
+            best_pos = prod_final
+
+    return _snap_to_reactant_mic_frame(ref_pos, best_pos, cell, pbc_mic, anchor_mask)
+
+
+def _requires_surface_pbc_alignment(reactant: Atoms, *, n_slab: int) -> bool:
+    """True when endpoint alignment must use lattice-compatible surface PBC logic."""
+    return n_slab > 0 or bool(np.any(reactant.pbc))
+
+
+def _align_product_for_neb(
+    reactant: Atoms,
+    product_positions: np.ndarray,
+    *,
+    n_slab: int = 0,
+    surface_cell_remap: bool = True,
+    surface_lattice_rotation: bool = True,
+) -> np.ndarray:
+    """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC)."""
+    if _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
+        return _align_product_surface_pbc(
+            reactant,
+            product_positions,
+            n_slab=n_slab,
+            enable_cell_remap=surface_cell_remap,
+            enable_lattice_rotation=surface_lattice_rotation,
+        )
+    return _align_product_kabsch_to_reactant(
+        reactant,
+        product_positions,
+        n_slab=n_slab,
+        in_plane_only=False,
+    )
+
+
 def _align_product_mic_to_reactant(
     reactant: Atoms,
     product_positions: np.ndarray,
     *,
     n_slab: int = 0,
 ) -> np.ndarray:
-    """Wrap product to MIC images, anchor slab frame, in-plane-fit mobile atoms."""
-    ref_pos = reactant.get_positions()
-    disp = product_positions - ref_pos
-    disp_mic, _ = find_mic(disp, cell=reactant.cell, pbc=reactant.pbc)
-
-    fixed_mask = _fixed_atom_mask(reactant)
-    anchor_mask = _anchor_mask(reactant, n_slab=n_slab, fixed_mask=fixed_mask)
-    if np.any(anchor_mask):
-        disp_mic = disp_mic - np.mean(disp_mic[anchor_mask], axis=0)
-
-    prod_pos = ref_pos + disp_mic
-    normal_axis = _infer_surface_normal_axis(reactant.pbc)
-    mobile_mask = _mobile_alignment_mask(
-        anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
-    )
-    return _apply_inplane_mobile_kabsch(
-        ref_pos,
-        prod_pos,
-        mobile_mask,
-        surface_normal_axis=normal_axis,
-    )
+    """Deprecated alias; routes to :func:`_align_product_for_neb` (no mobile-only rotation)."""
+    return _align_product_for_neb(reactant, product_positions, n_slab=n_slab)
 
 
 def _align_product_kabsch_to_reactant(
@@ -416,7 +657,11 @@ def _align_product_kabsch_to_reactant(
     n_slab: int = 0,
     in_plane_only: bool = False,
 ) -> np.ndarray:
-    """Rigidly align product to reactant; mobile-only when slab prefix is known."""
+    """Rigidly align product to reactant (gas-phase clusters without periodic endpoints)."""
+    if n_slab > 0:
+        raise RuntimeError(
+            "Slab NEB endpoints must use _align_product_surface_pbc, not Kabsch-only alignment."
+        )
     ref_pos = reactant.get_positions()
     fixed_mask = _fixed_atom_mask(reactant)
     anchor_mask = _anchor_mask(reactant, n_slab=n_slab, fixed_mask=fixed_mask)
@@ -513,14 +758,17 @@ def interpolate_path(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    neb_surface_cell_remap: bool = True,
+    neb_surface_lattice_rotation: bool = True,
 ) -> list[Atoms]:
     """Interpolate between two structures and return images including endpoints.
 
     ``align_endpoints`` (default True): reorder endpoint atoms to match reactant.
-    For periodic MIC workflows (``mic=True`` + periodic cell), alignment wraps
-    product atoms to nearest images, anchors the slab frame, then applies an
-    in-plane Kabsch fit on mobile atoms. Non-periodic paths use Kabsch on the
-    mobile region when ``n_slab`` is set, else on all atoms.
+    For slab/surface workflows (``n_slab > 0`` or periodic cell), alignment uses
+    :func:`_align_product_surface_pbc`: MIC wrapping, optional integer in-plane
+    lattice shifts, and global in-plane rotation with anchors reset to the
+    reactant slab frame (no independent mobile-only rotation). Gas-phase clusters
+    without a slab prefix use Kabsch (3D or in-plane when ``mic`` is active).
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
 
@@ -538,12 +786,20 @@ def interpolate_path(
     a1_copy = atoms1.copy()
     a2_copy = atoms2.copy()
 
+    surface_cell_remap = neb_surface_cell_remap
+    surface_lattice_rotation = neb_surface_lattice_rotation
     if align_endpoints and system_type is not None:
         system_policy = get_system_policy(system_type)
         if system_policy.neb_disable_alignment:
             raise ValueError(
                 f"Endpoint alignment is not allowed for {system_type!r}; set align_endpoints=False."
             )
+        surface_cell_remap = (
+            system_policy.neb_surface_cell_remap and neb_surface_cell_remap
+        )
+        surface_lattice_rotation = (
+            system_policy.neb_surface_lattice_rotation and neb_surface_lattice_rotation
+        )
 
     if align_endpoints:
         new_pos = _reorder_product_to_match_reactant(
@@ -555,19 +811,19 @@ def interpolate_path(
         )
         # Keep species order consistent with reactant for downstream NEB.
         a2_copy.numbers = a1_copy.numbers.copy()
-        pbc_active = bool(np.any(a1_copy.pbc))
-        surface_like = n_slab > 0 or pbc_active
-        if mic and pbc_active:
-            aligned = _align_product_mic_to_reactant(a1_copy, new_pos, n_slab=n_slab)
-        else:
-            aligned = _align_product_kabsch_to_reactant(
-                a1_copy,
-                new_pos,
-                n_slab=n_slab,
-                in_plane_only=surface_like and pbc_active,
-            )
+        aligned = _align_product_for_neb(
+            a1_copy,
+            new_pos,
+            n_slab=n_slab,
+            surface_cell_remap=surface_cell_remap,
+            surface_lattice_rotation=surface_lattice_rotation,
+        )
         a2_copy.set_positions(aligned)
+        if _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab):
+            a2_copy.set_cell(a1_copy.cell)
+            a2_copy.pbc = a1_copy.pbc
 
+    # Build the band from aligned endpoints; ASE interpolation only fills interiors.
     images = [a1_copy] + [a1_copy.copy() for _ in range(n_images)] + [a2_copy]
     neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
     # Interpolate unconstrained positions first; endpoint/image constraints
@@ -783,6 +1039,8 @@ def find_transition_state(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    neb_surface_cell_remap: bool = True,
+    neb_surface_lattice_rotation: bool = True,
 ) -> dict[str, Any]:
     """Run NEB to locate a transition state between two structures.
 
@@ -888,6 +1146,8 @@ def find_transition_state(
             n_slab=n_slab,
             n_core_mobile=n_core_mobile,
             n_adsorbate_mobile=n_adsorbate_mobile,
+            neb_surface_cell_remap=neb_surface_cell_remap,
+            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
         )
 
         if np.allclose(

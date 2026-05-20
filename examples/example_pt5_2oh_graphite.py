@@ -52,6 +52,7 @@ def _build_go_params(surface_config) -> dict:
 
 
 def _build_ts_params(surface_config) -> dict:
+    """TS preset: aligned endpoints on by default (blockwise + surface PBC when adsorbates set)."""
     ts_params = get_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
@@ -78,6 +79,7 @@ def main() -> None:
         output_stem=OUTPUT_STEM,
         surface_config=surface_config,
         system_type=SYSTEM_TYPE,
+        # Passing adsorbates lets TS use explicit core/adsorbate block alignment.
         adsorbates=ADSORBATES,
         cluster_adsorbate_config=CLUSTER_ADSORBATE_CONFIG,
     )

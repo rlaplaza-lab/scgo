@@ -39,6 +39,10 @@ def test_ts_defaults_match_system_policy_align_and_mic(system_type):
     policy = SYSTEM_TYPE_POLICIES[system_type]
     assert defaults["neb_align_endpoints"] is (not policy.neb_disable_alignment)
     assert defaults["neb_interpolation_mic"] is policy.neb_force_mic
+    assert defaults["neb_surface_cell_remap"] is policy.neb_surface_cell_remap
+    assert (
+        defaults["neb_surface_lattice_rotation"] is policy.neb_surface_lattice_rotation
+    )
 
 
 @pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
@@ -71,6 +75,8 @@ def test_coerce_sparse_ts_params_falls_back_to_per_system_defaults(system_type):
         "neb_perturb_sigma",
         "neb_interpolation_method",
         "neb_tangent_method",
+        "neb_surface_cell_remap",
+        "neb_surface_lattice_rotation",
     ):
         expected = defaults[key]
         assert kwargs[key] == expected, (
@@ -159,6 +165,8 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert kwargs["torchsim_params"]["force_tol"] == pytest.approx(0.1)
     assert kwargs["torchsim_params"]["max_steps"] == 500
     assert kwargs["neb_align_endpoints"] is True
+    assert kwargs["neb_surface_cell_remap"] is True
+    assert kwargs["neb_surface_lattice_rotation"] is True
 
 
 def test_ts_search_step_defaults_can_be_auto():

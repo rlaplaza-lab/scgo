@@ -35,7 +35,10 @@ def _build_go_params() -> dict:
 
 
 def _build_ts_params() -> dict:
-    """Load TS preset, then tweak only pairing/search budget fields."""
+    """Load TS preset, then tweak only pairing/search budget fields.
+
+    Preset leaves ``neb_align_endpoints=True`` so NEB bands start from aligned endpoints.
+    """
     ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["connectivity_factor"] = 1.4  # default, but explicit

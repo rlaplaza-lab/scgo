@@ -71,6 +71,8 @@ class SystemPolicy:
     needs_supported_deposit_validation: bool
     neb_force_mic: bool
     neb_disable_alignment: bool
+    neb_surface_cell_remap: bool
+    neb_surface_lattice_rotation: bool
     constrain_adsorbate_moves: bool
     adsorbate_move_scale: float
     allow_composition_permutations: bool
@@ -85,6 +87,8 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         needs_supported_deposit_validation=False,
         neb_force_mic=False,
         neb_disable_alignment=False,
+        neb_surface_cell_remap=False,
+        neb_surface_lattice_rotation=False,
         constrain_adsorbate_moves=False,
         adsorbate_move_scale=1.0,
         allow_composition_permutations=True,
@@ -97,6 +101,8 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         needs_supported_deposit_validation=True,
         neb_force_mic=True,
         neb_disable_alignment=False,
+        neb_surface_cell_remap=True,
+        neb_surface_lattice_rotation=True,
         constrain_adsorbate_moves=False,
         adsorbate_move_scale=1.0,
         allow_composition_permutations=True,
@@ -109,6 +115,8 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         needs_supported_deposit_validation=False,
         neb_force_mic=False,
         neb_disable_alignment=False,
+        neb_surface_cell_remap=False,
+        neb_surface_lattice_rotation=False,
         constrain_adsorbate_moves=True,
         adsorbate_move_scale=0.6,
         allow_composition_permutations=False,
@@ -121,6 +129,8 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         needs_supported_deposit_validation=True,
         neb_force_mic=True,
         neb_disable_alignment=False,
+        neb_surface_cell_remap=True,
+        neb_surface_lattice_rotation=True,
         constrain_adsorbate_moves=True,
         adsorbate_move_scale=0.6,
         allow_composition_permutations=False,

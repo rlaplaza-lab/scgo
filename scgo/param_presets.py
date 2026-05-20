@@ -56,6 +56,8 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "gas_cluster": {
         "neb_align_endpoints": True,
         "neb_interpolation_mic": False,
+        "neb_surface_cell_remap": False,
+        "neb_surface_lattice_rotation": False,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.05,
@@ -70,6 +72,8 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "gas_cluster_adsorbate": {
         "neb_align_endpoints": True,
         "neb_interpolation_mic": False,
+        "neb_surface_cell_remap": False,
+        "neb_surface_lattice_rotation": False,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.05,
@@ -84,6 +88,8 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "surface_cluster": {
         "neb_align_endpoints": True,
         "neb_interpolation_mic": True,
+        "neb_surface_cell_remap": True,
+        "neb_surface_lattice_rotation": True,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.1,
@@ -98,6 +104,8 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "surface_cluster_adsorbate": {
         "neb_align_endpoints": True,
         "neb_interpolation_mic": True,
+        "neb_surface_cell_remap": True,
+        "neb_surface_lattice_rotation": True,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.1,
@@ -136,6 +144,13 @@ def _assert_ts_defaults_match_system_policies() -> None:
                 f"{defaults['neb_interpolation_mic']!r} disagrees with "
                 f"SystemPolicy.neb_force_mic={policy.neb_force_mic!r}."
             )
+        for key in ("neb_surface_cell_remap", "neb_surface_lattice_rotation"):
+            if defaults.get(key, False) != getattr(policy, key):
+                raise RuntimeError(
+                    f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}][{key!r}]="
+                    f"{defaults.get(key)!r} disagrees with "
+                    f"SystemPolicy.{key}={getattr(policy, key)!r}."
+                )
 
 
 _assert_ts_defaults_match_system_policies()
@@ -548,6 +563,11 @@ def get_ts_search_params(
     require it to be consistent with ``go_params['seed']`` and the ``seed=`` run argument.
     The ``connectivity_factor`` key sets the global connectivity threshold for cluster
     validation (default 1.4).
+
+    NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
+    system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,
+    and ``neb_surface_lattice_rotation`` so path interpolation starts from
+    lattice-compatible aligned endpoints.
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):

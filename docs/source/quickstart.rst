@@ -22,6 +22,7 @@ This example demonstrates global optimization and transition state search for a 
 **Key Features:**
 - ``system_type="gas_cluster"`` — no slab, no adsorbates
 - Uses ``run_go_ts`` for combined GO + TS pipeline
+- TS preset keeps ``neb_align_endpoints=True`` (3D Kabsch alignment before NEB interpolation)
 - Customizes GA parameters (niter, population_size)
 - Limits TS search with max_pairs
 
@@ -62,6 +63,7 @@ This example shows how to optimize a Pt5 cluster supported on a graphite surface
 **Key Differences from Gas-Phase:**
 - Requires ``surface_config`` in ``get_torchsim_ga_params`` / ``get_ts_search_params`` and on ``run_go_ts``
 - Periodic slab in all relaxed structures
+- TS presets enable MIC path interpolation and surface PBC endpoint alignment by default (see below)
 - Output layout matches gas-phase but under a surface-specific output directory
 
 Gas-Phase Cluster with Adsorbate (example_pt5_oh_gas.py)
@@ -98,6 +100,40 @@ This advanced example shows a surface-supported Pt5 cluster with two OH adsorbat
    ts_params["energy_gap_threshold"] = 1.0
    ts_params["neb_n_images"] = 7
    ts_params["neb_steps"] = 800
+
+NEB endpoint alignment
+----------------------
+
+All examples use ``get_ts_search_params(...)``, which leaves **endpoint alignment on by default**
+(``neb_align_endpoints=True``). SCGO aligns product to reactant **before** building the initial NEB
+band; ASE ``NEB.interpolate`` then fills only the interior images.
+
+**Gas-phase** (``gas_cluster``, ``gas_cluster_adsorbate``):
+
+- Atom reordering (fingerprint matching; blockwise when ``adsorbates`` are passed).
+- 3D Kabsch rigid fit on the mobile region.
+
+**Surface / slab** (``surface_cluster``, ``surface_cluster_adsorbate``):
+
+- Same reordering, plus slab-aware matching when ``adsorbates`` define core/adsorbate blocks.
+- ``neb_interpolation_mic=True`` (enforced for surface system types).
+- ``neb_surface_cell_remap`` and ``neb_surface_lattice_rotation`` (default ``True``): MIC wrapping,
+  integer in-plane lattice translations, and **global** in-plane rotation with compatible cell
+  handling. Fixed slab atoms remain anchored to the reactant frame.
+
+Do not disable alignment unless you deliberately want raw GO minima as NEB endpoints:
+
+.. code-block:: python
+
+   # Rare: skip alignment (not recommended for production surface NEB)
+   ts_params["neb_align_endpoints"] = False
+
+Optional surface-only toggles (defaults are usually correct):
+
+.. code-block:: python
+
+   ts_params["neb_surface_cell_remap"] = True       # in-plane lattice-image search
+   ts_params["neb_surface_lattice_rotation"] = True  # global in-plane Kabsch + MIC snap
 
 Creating Your Own Examples
 --------------------------
@@ -160,6 +196,12 @@ Parameter Customization Guide
 - ``energy_gap_threshold`` — Energy threshold for pair selection
 - ``neb_n_images`` — Number of NEB images
 - ``neb_steps`` — Maximum NEB optimization steps
+- ``neb_align_endpoints`` — Align endpoints before interpolation (default ``True``)
+- ``neb_interpolation_mic`` — MIC during path interpolation (default ``True`` on surfaces)
+- ``neb_surface_cell_remap`` — In-plane lattice-boundary remapping for slab endpoints (surface default ``True``)
+- ``neb_surface_lattice_rotation`` — Lattice-compatible global in-plane rotation (surface default ``True``)
+- ``neb_interpolation_method`` — ``"idpp"`` (default) or ``"linear"``
+- ``neb_perturb_sigma`` — Optional Gaussian noise on interior images only (Å)
 
 **Output Control:**
 - ``output_root`` — Base output directory
@@ -173,7 +215,8 @@ Best Practices
 2. **Use presets:** Always start with parameter presets, then customize
 3. **Set seeds:** Use fixed seeds (``seed=42``) for reproducible results
 4. **Monitor resources:** Surface systems and TS searches can be resource-intensive
-5. **Check outputs:** Examine the output directories to understand results structure
+5. **Keep alignment on:** Leave ``neb_align_endpoints=True`` unless debugging; surface runs rely on PBC-aware alignment for reasonable initial NEB paths
+6. **Check outputs:** Examine the output directories to understand results structure; ``reactant_*.xyz`` / ``product_*.xyz`` reflect aligned endpoints used for the band
 
 Understanding Output Structure
 ------------------------------

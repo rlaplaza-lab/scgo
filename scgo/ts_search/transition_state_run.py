@@ -104,6 +104,8 @@ def _run_serial_neb_search(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    neb_surface_cell_remap: bool = True,
+    neb_surface_lattice_rotation: bool = True,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
     allow_dissociative_adsorption: bool = False,
@@ -201,6 +203,8 @@ def _run_serial_neb_search(
                 n_slab=n_slab,
                 n_core_mobile=n_core_mobile,
                 n_adsorbate_mobile=n_adsorbate_mobile,
+                neb_surface_cell_remap=neb_surface_cell_remap,
+                neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             )
         except (RuntimeError, ValueError) as e:
             logger.error(
@@ -356,6 +360,8 @@ def run_transition_state_search(
     neb_align_endpoints: bool = True,
     neb_perturb_sigma: float = 0.0,
     neb_interpolation_mic: bool = False,
+    neb_surface_cell_remap: bool = True,
+    neb_surface_lattice_rotation: bool = True,
     neb_tangent_method: str = DEFAULT_NEB_TANGENT_METHOD,
     use_torchsim: bool = False,
     use_parallel_neb: bool = False,
@@ -439,6 +445,16 @@ def run_transition_state_search(
         neb_interpolation_mic = True
     if system_policy.neb_disable_alignment:
         neb_align_endpoints = False
+    if not system_policy.uses_surface:
+        neb_surface_cell_remap = False
+        neb_surface_lattice_rotation = False
+    else:
+        neb_surface_cell_remap = (
+            system_policy.neb_surface_cell_remap and neb_surface_cell_remap
+        )
+        neb_surface_lattice_rotation = (
+            system_policy.neb_surface_lattice_rotation and neb_surface_lattice_rotation
+        )
     neb_n_slab = (
         len(surface_config.slab)
         if surface_config is not None and system_policy.uses_surface
@@ -522,6 +538,8 @@ def run_transition_state_search(
         "neb_align_endpoints": neb_align_endpoints,
         "neb_perturb_sigma": neb_perturb_sigma,
         "neb_interpolation_mic": neb_interpolation_mic,
+        "neb_surface_cell_remap": neb_surface_cell_remap,
+        "neb_surface_lattice_rotation": neb_surface_lattice_rotation,
         "neb_tangent_method": neb_tangent_method,
     }
     if surface_config is not None:
@@ -561,6 +579,15 @@ def run_transition_state_search(
 
     if verbosity >= 1:
         logger.info(f"Found {len(minima)} minima for {formula}")
+    if verbosity >= 2 and neb_align_endpoints:
+        logger.info(
+            "NEB endpoint alignment enabled (align=%s, mic=%s, cell_remap=%s, "
+            "lattice_rotation=%s)",
+            neb_align_endpoints,
+            neb_interpolation_mic,
+            neb_surface_cell_remap,
+            neb_surface_lattice_rotation,
+        )
     _warn_on_surface_mobile_indices(minima, system_type=system_type)
 
     pairs = select_structure_pairs(
@@ -602,6 +629,8 @@ def run_transition_state_search(
             neb_perturb_sigma=neb_perturb_sigma,
             neb_interpolation_mic=neb_interpolation_mic,
             neb_tangent_method=neb_tangent_method,
+            neb_surface_cell_remap=neb_surface_cell_remap,
+            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             torchsim_params=torchsim_params,
             system_type=system_type,
             n_slab=neb_n_slab,
@@ -633,6 +662,8 @@ def run_transition_state_search(
             neb_perturb_sigma=neb_perturb_sigma,
             neb_interpolation_mic=neb_interpolation_mic,
             neb_tangent_method=neb_tangent_method,
+            neb_surface_cell_remap=neb_surface_cell_remap,
+            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             verbosity=verbosity,
             system_type=system_type,
             write_timing_json=write_timing_json,

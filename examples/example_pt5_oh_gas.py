@@ -39,6 +39,7 @@ def main() -> None:
     go_params["optimizer_params"]["ga"].update(
         niter=NITER, population_size=POPULATION_SIZE
     )
+    # Preset: neb_align_endpoints=True; blockwise alignment when adsorbates are passed below.
     ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["connectivity_factor"] = 1.8  # override default
@@ -50,6 +51,7 @@ def main() -> None:
         output_root=DEFAULT_OUTPUT_ROOT,
         output_stem=OUTPUT_STEM,
         system_type=SYSTEM_TYPE,
+        # Passing adsorbates lets TS use explicit core/adsorbate block alignment.
         adsorbates=ADSORBATES,
         cluster_adsorbate_config=CLUSTER_ADSORBATE_CONFIG,
     )

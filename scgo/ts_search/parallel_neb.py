@@ -251,6 +251,8 @@ def run_parallel_neb_search(
     neb_perturb_sigma: float,
     neb_interpolation_mic: bool,
     neb_tangent_method: str,
+    neb_surface_cell_remap: bool = True,
+    neb_surface_lattice_rotation: bool = True,
     torchsim_params: dict[str, Any],
     system_type: SystemType,
     n_slab: int = 0,
@@ -315,6 +317,8 @@ def run_parallel_neb_search(
             n_slab=n_slab,
             n_core_mobile=n_core_mobile,
             n_adsorbate_mobile=n_adsorbate_mobile,
+            neb_surface_cell_remap=neb_surface_cell_remap,
+            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
         )
         neb_instances.append(
             TorchSimNEB(
