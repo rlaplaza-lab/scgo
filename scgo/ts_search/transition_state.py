@@ -203,18 +203,62 @@ def _local_distance_fingerprints(atoms: Atoms) -> np.ndarray:
     return fp
 
 
-def _match_atoms_by_fingerprint(a1: Atoms, a2: Atoms) -> list[int]:
+def _local_distance_fingerprints_mic(
+    atoms: Atoms,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+) -> np.ndarray:
+    """MIC-aware distance fingerprints for periodic endpoint matching."""
+    pos = atoms.get_positions()
+    n = len(atoms)
+    fp = np.zeros((n, max(0, n - 1)), dtype=float)
+    for i in range(n):
+        disp = pos - pos[i]
+        disp_mic, _ = find_mic(disp, cell=cell, pbc=pbc)
+        d = np.linalg.norm(disp_mic, axis=1)
+        d = np.delete(d, i)
+        d.sort()
+        if d.size > 0:
+            fp[i, : d.size] = d
+    return fp
+
+
+def _mic_matching_context(
+    reactant: Atoms,
+    *,
+    n_slab: int,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Return (cell, pbc) for MIC-aware fingerprint matching, or (None, None)."""
+    if not _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
+        return None, None
+    return _cell_array(reactant.cell), _pbc_for_mic_alignment(reactant.pbc)
+
+
+def _match_atoms_by_fingerprint(
+    a1: Atoms,
+    a2: Atoms,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
+) -> list[int]:
     """Return mapping such that mapped_idx[i] is index in `a2` matching atom i in `a1`.
 
     Uses per-atom local-distance fingerprints and the Hungarian algorithm to
     obtain a permutation that is robust to rotations and permutations.
+    When ``mic_cell`` and ``mic_pbc`` are set, fingerprints use minimum-image
+    distances (required for slab endpoints near periodic boundaries).
     """
     if len(a1) != len(a2):
         raise ValueError("Atoms objects have different lengths")
 
     mapping = [-1] * len(a1)
-    fp1_all = _local_distance_fingerprints(a1)
-    fp2_all = _local_distance_fingerprints(a2)
+    use_mic = mic_cell is not None and mic_pbc is not None
+    if use_mic:
+        fp1_all = _local_distance_fingerprints_mic(a1, mic_cell, mic_pbc)
+        fp2_all = _local_distance_fingerprints_mic(a2, mic_cell, mic_pbc)
+    else:
+        fp1_all = _local_distance_fingerprints(a1)
+        fp2_all = _local_distance_fingerprints(a2)
     # Match separately for each atomic number (handles mixed-species clusters)
     for z in set(a1.numbers):
         idx1 = [i for i, x in enumerate(a1.numbers) if x == z]
@@ -233,18 +277,32 @@ def _match_atoms_by_fingerprint(a1: Atoms, a2: Atoms) -> list[int]:
     return mapping
 
 
-def _reorder_block_positions_to_match(a1_block: Atoms, a2_block: Atoms) -> np.ndarray:
+def _reorder_block_positions_to_match(
+    a1_block: Atoms,
+    a2_block: Atoms,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
+) -> np.ndarray:
     """Return positions (N,3) for a2_block reordered to match a1_block ordering."""
-    m = _match_atoms_by_fingerprint(a1_block, a2_block)
+    m = _match_atoms_by_fingerprint(
+        a1_block, a2_block, mic_cell=mic_cell, mic_pbc=mic_pbc
+    )
     pos2 = a2_block.get_positions()
     return pos2[m]
 
 
 def _permute_atoms_block_to_match(
-    a1_block: Atoms, a2_block: Atoms
+    a1_block: Atoms,
+    a2_block: Atoms,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (positions, atomic_numbers) for a2_block permuted to match a1_block."""
-    mapping = _match_atoms_by_fingerprint(a1_block, a2_block)
+    mapping = _match_atoms_by_fingerprint(
+        a1_block, a2_block, mic_cell=mic_cell, mic_pbc=mic_pbc
+    )
     pos2 = a2_block.get_positions()
     nums2 = a2_block.numbers
     return pos2[mapping], nums2[mapping]
@@ -256,6 +314,9 @@ def _align_endpoints_blockwise(
     n_slab: int,
     n_core: int,
     n_ads: int,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
 ) -> None:
     """Match product to reactant per block (slab indices unchanged; core/ads via fingerprint)."""
     n = len(a1)
@@ -269,13 +330,17 @@ def _align_endpoints_blockwise(
     n2 = a2.numbers.copy()
     if n_core > 0:
         s1, s2 = n_slab, n_slab + n_core
-        p_blk, n_blk = _permute_atoms_block_to_match(a1[s1:s2], a2[s1:s2])
+        p_blk, n_blk = _permute_atoms_block_to_match(
+            a1[s1:s2], a2[s1:s2], mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
         p2[s1:s2] = p_blk
         n2[s1:s2] = n_blk
     if n_ads > 0:
         t1 = n_slab + n_core
         t2 = t1 + n_ads
-        p_blk, n_blk = _permute_atoms_block_to_match(a1[t1:t2], a2[t1:t2])
+        p_blk, n_blk = _permute_atoms_block_to_match(
+            a1[t1:t2], a2[t1:t2], mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
         p2[t1:t2] = p_blk
         n2[t1:t2] = n_blk
     a2.set_positions(p2)
@@ -500,9 +565,42 @@ def _score_mobile_endpoint_displacement(
     """Return (max, rms) mobile-atom displacement norms in the reactant MIC frame."""
     if not np.any(mobile_mask):
         return 0.0, 0.0
-    disp = prod_pos[mobile_mask] - ref_pos[mobile_mask]
-    norms = np.linalg.norm(disp, axis=1)
+    disp_mic = _mic_displacements(ref_pos, prod_pos, cell, pbc)
+    norms = np.linalg.norm(disp_mic[mobile_mask], axis=1)
     return float(np.max(norms)), float(np.sqrt(np.mean(norms**2)))
+
+
+def _collective_mobile_lattice_snap(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+    mobile_mask: np.ndarray,
+    *,
+    axis_a: int,
+    axis_b: int,
+    max_shift: int,
+) -> np.ndarray:
+    """Pick a uniform in-plane lattice image for mobile atoms before per-atom MIC snap."""
+    if not np.any(mobile_mask):
+        return prod_pos
+
+    best_pos = prod_pos.copy()
+    best_score, _ = _score_mobile_endpoint_displacement(
+        ref_pos, best_pos, mobile_mask, cell, pbc
+    )
+    for shift in _lattice_translation_candidates(
+        cell, axis_a, axis_b, max_shift=max_shift
+    ):
+        shifted = prod_pos.copy()
+        shifted[mobile_mask] += shift
+        score, _ = _score_mobile_endpoint_displacement(
+            ref_pos, shifted, mobile_mask, cell, pbc
+        )
+        if score < best_score:
+            best_score = score
+            best_pos = shifted
+    return best_pos
 
 
 def _apply_global_inplane_kabsch(
@@ -544,10 +642,11 @@ def _align_product_surface_pbc(
     slab/periodic endpoint prep through this helper (not mobile-only Kabsch).
 
     Only energy-equivalent transforms are considered:
-    - integer in-plane lattice translations (cell-boundary remapping),
-    - minimum-image wrapping,
-    - global in-plane rigid rotation (same ``R`` for all atoms; anchors reset
-      to reactant afterward so fixed slab atoms stay registered).
+    - collective uniform in-plane lattice image for mobile atoms,
+    - per-atom minimum-image wrapping,
+    - integer in-plane lattice translations up to ``max_lattice_shift`` cells,
+    - global in-plane rigid rotation (same ``R`` for all atoms; evaluated jointly
+      with each shift candidate; anchors reset to reactant afterward).
 
     Does **not** rotate mobile atoms independently of the lattice frame.
     """
@@ -563,9 +662,20 @@ def _align_product_surface_pbc(
         anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
     )
 
-    prod = _snap_to_reactant_mic_frame(
-        ref_pos, product_positions, cell, pbc_mic, anchor_mask
-    )
+    prod = np.asarray(product_positions, dtype=float).copy()
+    if enable_cell_remap:
+        prod = _collective_mobile_lattice_snap(
+            ref_pos,
+            prod,
+            cell,
+            pbc_mic,
+            mobile_mask,
+            axis_a=axis_a,
+            axis_b=axis_b,
+            max_shift=max_lattice_shift,
+        )
+
+    prod = _snap_to_reactant_mic_frame(ref_pos, prod, cell, pbc_mic, anchor_mask)
 
     best_pos = prod.copy()
     best_score, _ = _score_mobile_endpoint_displacement(
@@ -580,32 +690,35 @@ def _align_product_surface_pbc(
 
     for shift in shifts:
         prod_shifted = prod + shift
-        prod_final = _snap_to_reactant_mic_frame(
+        prod_snapped = _snap_to_reactant_mic_frame(
             ref_pos, prod_shifted, cell, pbc_mic, anchor_mask
         )
+        candidates: list[tuple[float, np.ndarray]] = []
         score, _ = _score_mobile_endpoint_displacement(
-            ref_pos, prod_final, mobile_mask, cell, pbc_mic
+            ref_pos, prod_snapped, mobile_mask, cell, pbc_mic
         )
-        if score < best_score:
-            best_score = score
-            best_pos = prod_final
+        candidates.append((score, prod_snapped))
 
-    if enable_lattice_rotation:
-        prod_rot = _apply_global_inplane_kabsch(
-            ref_pos,
-            best_pos,
-            mobile_mask,
-            normal_axis=normal_axis,
-            anchor_mask=anchor_mask,
-        )
-        prod_final = _snap_to_reactant_mic_frame(
-            ref_pos, prod_rot, cell, pbc_mic, anchor_mask
-        )
-        score, _ = _score_mobile_endpoint_displacement(
-            ref_pos, prod_final, mobile_mask, cell, pbc_mic
-        )
-        if score < best_score:
-            best_pos = prod_final
+        if enable_lattice_rotation:
+            prod_rot = _apply_global_inplane_kabsch(
+                ref_pos,
+                prod_snapped,
+                mobile_mask,
+                normal_axis=normal_axis,
+                anchor_mask=anchor_mask,
+            )
+            prod_rot_snapped = _snap_to_reactant_mic_frame(
+                ref_pos, prod_rot, cell, pbc_mic, anchor_mask
+            )
+            score_rot, _ = _score_mobile_endpoint_displacement(
+                ref_pos, prod_rot_snapped, mobile_mask, cell, pbc_mic
+            )
+            candidates.append((score_rot, prod_rot_snapped))
+
+        for score_c, pos_c in candidates:
+            if score_c < best_score:
+                best_score = score_c
+                best_pos = pos_c
 
     return _snap_to_reactant_mic_frame(ref_pos, best_pos, cell, pbc_mic, anchor_mask)
 
@@ -622,6 +735,7 @@ def _align_product_for_neb(
     n_slab: int = 0,
     surface_cell_remap: bool = True,
     surface_lattice_rotation: bool = True,
+    surface_max_lattice_shift: int = 1,
 ) -> np.ndarray:
     """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC)."""
     if _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
@@ -631,6 +745,7 @@ def _align_product_for_neb(
             n_slab=n_slab,
             enable_cell_remap=surface_cell_remap,
             enable_lattice_rotation=surface_lattice_rotation,
+            max_lattice_shift=surface_max_lattice_shift,
         )
     return _align_product_kabsch_to_reactant(
         reactant,
@@ -715,6 +830,7 @@ def _reorder_product_to_match_reactant(
 ) -> np.ndarray:
     """Reorder product atoms (positions and species) to match reactant ordering."""
     n_atom = len(reactant)
+    mic_cell, mic_pbc = _mic_matching_context(reactant, n_slab=n_slab)
     use_blocks = (
         n_core_mobile is not None
         and n_adsorbate_mobile is not None
@@ -727,10 +843,17 @@ def _reorder_product_to_match_reactant(
             n_slab,
             int(n_core_mobile),
             int(n_adsorbate_mobile),
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
         )
         return product.get_positions()
     if 0 < n_slab < n_atom:
-        p_m, n_m = _permute_atoms_block_to_match(reactant[n_slab:], product[n_slab:])
+        p_m, n_m = _permute_atoms_block_to_match(
+            reactant[n_slab:],
+            product[n_slab:],
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
+        )
         pos = product.get_positions().copy()
         nums = product.numbers.copy()
         pos[n_slab:] = p_m
@@ -738,7 +861,9 @@ def _reorder_product_to_match_reactant(
         product.set_positions(pos)
         product.numbers = nums
         return pos
-    mapping = _match_atoms_by_fingerprint(reactant, product)
+    mapping = _match_atoms_by_fingerprint(
+        reactant, product, mic_cell=mic_cell, mic_pbc=mic_pbc
+    )
     product.set_positions(product.get_positions()[mapping])
     product.numbers = product.numbers[mapping]
     return product.get_positions()
@@ -760,14 +885,17 @@ def interpolate_path(
     n_adsorbate_mobile: int | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
+    neb_surface_max_lattice_shift: int = 1,
 ) -> list[Atoms]:
     """Interpolate between two structures and return images including endpoints.
 
     ``align_endpoints`` (default True): reorder endpoint atoms to match reactant.
     For slab/surface workflows (``n_slab > 0`` or periodic cell), alignment uses
-    :func:`_align_product_surface_pbc`: MIC wrapping, optional integer in-plane
-    lattice shifts, and global in-plane rotation with anchors reset to the
-    reactant slab frame (no independent mobile-only rotation). Gas-phase clusters
+    :func:`_align_product_surface_pbc`: MIC-aware matching, collective mobile
+    lattice-image selection, per-atom MIC snapping, optional integer in-plane
+    lattice shifts (``neb_surface_max_lattice_shift``), and global in-plane rotation
+    evaluated jointly with each shift, with anchors reset to the reactant slab frame
+    (no independent mobile-only rotation). Gas-phase clusters
     without a slab prefix use Kabsch (3D or in-plane when ``mic`` is active).
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
@@ -817,6 +945,7 @@ def interpolate_path(
             n_slab=n_slab,
             surface_cell_remap=surface_cell_remap,
             surface_lattice_rotation=surface_lattice_rotation,
+            surface_max_lattice_shift=neb_surface_max_lattice_shift,
         )
         a2_copy.set_positions(aligned)
         if _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab):
@@ -1041,6 +1170,7 @@ def find_transition_state(
     n_adsorbate_mobile: int | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
+    neb_surface_max_lattice_shift: int = 1,
 ) -> dict[str, Any]:
     """Run NEB to locate a transition state between two structures.
 
@@ -1053,6 +1183,10 @@ def find_transition_state(
         n_slab: Blockwise alignment: slab length (default 0).
         n_core_mobile: Mobile core count (with ``n_adsorbate_mobile`` for blockwise NEB).
         n_adsorbate_mobile: Mobile adsorbate fragment count.
+        neb_surface_cell_remap: Enable in-plane lattice-image search (surface).
+        neb_surface_lattice_rotation: Enable global in-plane rotation (surface).
+        neb_surface_max_lattice_shift: Max integer cell index searched in-plane
+            during remap (default ``1``).
 
     Returns:
         A summary dict with TS geometry, energies and convergence status.
@@ -1148,6 +1282,7 @@ def find_transition_state(
             n_adsorbate_mobile=n_adsorbate_mobile,
             neb_surface_cell_remap=neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
         )
 
         if np.allclose(

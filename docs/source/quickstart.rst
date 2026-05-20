@@ -117,9 +117,11 @@ band; ASE ``NEB.interpolate`` then fills only the interior images.
 
 - Same reordering, plus slab-aware matching when ``adsorbates`` define core/adsorbate blocks.
 - ``neb_interpolation_mic=True`` (enforced for surface system types).
-- ``neb_surface_cell_remap`` and ``neb_surface_lattice_rotation`` (default ``True``): MIC wrapping,
-  integer in-plane lattice translations, and **global** in-plane rotation with compatible cell
-  handling. Fixed slab atoms remain anchored to the reactant frame.
+- ``neb_surface_cell_remap`` and ``neb_surface_lattice_rotation`` (default ``True``): MIC-aware
+  fingerprint matching, collective in-plane lattice-image selection for mobile atoms, per-atom
+  MIC snapping, integer in-plane lattice translations (search span
+  ``neb_surface_max_lattice_shift``, default ``1``), and **global** in-plane rotation evaluated
+  jointly with each shift candidate. Fixed slab atoms remain anchored to the reactant frame.
 
 Do not disable alignment unless you deliberately want raw GO minima as NEB endpoints:
 
@@ -134,6 +136,7 @@ Optional surface-only toggles (defaults are usually correct):
 
    ts_params["neb_surface_cell_remap"] = True       # in-plane lattice-image search
    ts_params["neb_surface_lattice_rotation"] = True  # global in-plane Kabsch + MIC snap
+   ts_params["neb_surface_max_lattice_shift"] = 2   # if minima differ by >1 cell in-plane
 
 Creating Your Own Examples
 --------------------------
@@ -200,6 +203,7 @@ Parameter Customization Guide
 - ``neb_interpolation_mic`` — MIC during path interpolation (default ``True`` on surfaces)
 - ``neb_surface_cell_remap`` — In-plane lattice-boundary remapping for slab endpoints (surface default ``True``)
 - ``neb_surface_lattice_rotation`` — Lattice-compatible global in-plane rotation (surface default ``True``)
+- ``neb_surface_max_lattice_shift`` — Maximum integer in-plane cell index searched during remap (default ``1``; increase when adsorbates hop multiple cells)
 - ``neb_interpolation_method`` — ``"idpp"`` (default) or ``"linear"``
 - ``neb_perturb_sigma`` — Optional Gaussian noise on interior images only (Å)
 

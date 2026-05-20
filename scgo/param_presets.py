@@ -58,6 +58,7 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
         "neb_interpolation_mic": False,
         "neb_surface_cell_remap": False,
         "neb_surface_lattice_rotation": False,
+        "neb_surface_max_lattice_shift": 1,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.05,
@@ -74,6 +75,7 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
         "neb_interpolation_mic": False,
         "neb_surface_cell_remap": False,
         "neb_surface_lattice_rotation": False,
+        "neb_surface_max_lattice_shift": 1,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.05,
@@ -90,6 +92,7 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
         "neb_interpolation_mic": True,
         "neb_surface_cell_remap": True,
         "neb_surface_lattice_rotation": True,
+        "neb_surface_max_lattice_shift": 1,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.1,
@@ -106,6 +109,7 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
         "neb_interpolation_mic": True,
         "neb_surface_cell_remap": True,
         "neb_surface_lattice_rotation": True,
+        "neb_surface_max_lattice_shift": 1,
         "neb_n_images": 5,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.1,
@@ -566,8 +570,8 @@ def get_ts_search_params(
 
     NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
     system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,
-    and ``neb_surface_lattice_rotation`` so path interpolation starts from
-    lattice-compatible aligned endpoints.
+    ``neb_surface_lattice_rotation``, and ``neb_surface_max_lattice_shift`` (default
+    ``1``) so path interpolation starts from lattice-compatible aligned endpoints.
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):

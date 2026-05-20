@@ -77,6 +77,7 @@ def test_coerce_sparse_ts_params_falls_back_to_per_system_defaults(system_type):
         "neb_tangent_method",
         "neb_surface_cell_remap",
         "neb_surface_lattice_rotation",
+        "neb_surface_max_lattice_shift",
     ):
         expected = defaults[key]
         assert kwargs[key] == expected, (

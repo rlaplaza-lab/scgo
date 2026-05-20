@@ -27,4 +27,4 @@ Each system type sets defaults consumed by :func:`~scgo.param_presets.get_ts_sea
 
 - ``neb_force_mic`` — surface types use minimum-image path interpolation.
 - ``neb_disable_alignment`` — when ``False`` (default), ``neb_align_endpoints`` stays on in presets.
-- ``neb_surface_cell_remap`` / ``neb_surface_lattice_rotation`` — enabled for ``surface_cluster`` and ``surface_cluster_adsorbate``; use lattice-compatible in-plane shifts and global rotation before NEB interpolation (not independent mobile-only rotations).
+- ``neb_surface_cell_remap`` / ``neb_surface_lattice_rotation`` — enabled for ``surface_cluster`` and ``surface_cluster_adsorbate``; use lattice-compatible in-plane shifts and global rotation before NEB interpolation (not independent mobile-only rotations). The remap search span is controlled at runtime by ``neb_surface_max_lattice_shift`` in TS presets (default ``1`` cell in each in-plane direction).

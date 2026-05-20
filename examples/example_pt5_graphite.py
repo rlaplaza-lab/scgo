@@ -45,7 +45,9 @@ def _build_ts_params(surface_config) -> dict:
     """Load TS preset, then tweak max pair budget.
 
     Preset defaults keep NEB endpoint alignment on (``neb_align_endpoints``) with
-    surface MIC + lattice-compatible PBC alignment before path interpolation.
+    surface MIC + lattice-compatible PBC alignment (``neb_surface_cell_remap``,
+    ``neb_surface_lattice_rotation``, ``neb_surface_max_lattice_shift``) before
+    path interpolation.
     """
     ts_params = get_ts_search_params(
         system_type=SYSTEM_TYPE,

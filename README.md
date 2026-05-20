@@ -153,7 +153,7 @@ Notes:
 
 **Per-pair entries** in `ts_search_summary_*.json` (and overlapping fields in `neb_*_metadata.json`) typically include: `pair_id`, `status` (`success` / `failed`), `neb_converged`, `n_images`, `spring_constant`, `reactant_energy`, `product_energy`, `ts_energy`, `barrier_height`, `error`, and on success `ts_image_index`. When traceability is available, `minima_indices` and **`minima_provenance`** appear: each endpoint lists `run_id`, `trial_id`, `source_db`, `source_db_relpath`, `systems_row_id`, `confid`, `gaid`, `unique_id`, `final_id`, `energy` (see `scgo/ts_search/transition_state_io.py`).
 
-**`neb_{pair_id}_metadata.json`** merges the provenance header with pair fields above plus, when present: `final_fmax`, `steps_taken`, `force_calls`, and NEB-parameter echoes (`use_torchsim`, `neb_backend`, `interpolation_method`, `climb`, `align_endpoints`, `perturb_sigma`, `neb_interpolation_mic`, `neb_surface_cell_remap`, `neb_surface_lattice_rotation`, `fmax`, `neb_steps`, etc.).
+**`neb_{pair_id}_metadata.json`** merges the provenance header with pair fields above plus, when present: `final_fmax`, `steps_taken`, `force_calls`, and NEB-parameter echoes (`use_torchsim`, `neb_backend`, `interpolation_method`, `climb`, `align_endpoints`, `perturb_sigma`, `neb_interpolation_mic`, `neb_surface_cell_remap`, `neb_surface_lattice_rotation`, `neb_surface_max_lattice_shift`, `fmax`, `neb_steps`, etc.).
 
 ---
 
@@ -165,7 +165,7 @@ Notes:
 **NEB endpoint alignment (on by default):** Presets set `neb_align_endpoints=True` for all system types. Before ASE path interpolation (`idpp` or `linear`), SCGO reorders product atoms to match the reactant, then rigidly aligns endpoints so interior images start from a sensible band:
 
 - **Gas clusters** — 3D Kabsch on the mobile region (or whole structure when no slab prefix).
-- **Slab / periodic systems** — lattice-compatible PBC alignment (`neb_interpolation_mic=True` on surface types): minimum-image wrapping, optional integer in-plane lattice shifts (`neb_surface_cell_remap`), and global in-plane rotation paired with compatible cell handling (`neb_surface_lattice_rotation`). Slab/`FixAtoms` anchors stay registered; mobile atoms are not rotated independently of the lattice frame (avoids energy-inequivalent distortions).
+- **Slab / periodic systems** — lattice-compatible PBC alignment (`neb_interpolation_mic=True` on surface types): MIC-aware atom matching, collective mobile lattice-image selection, per-atom MIC snapping, optional integer in-plane lattice shifts (`neb_surface_cell_remap`, search span `neb_surface_max_lattice_shift` default `1`), and global in-plane rotation evaluated jointly with each shift (`neb_surface_lattice_rotation`). Slab/`FixAtoms` anchors stay registered; mobile atoms are not rotated independently of the lattice frame (avoids energy-inequivalent distortions).
 
 Path interpolation always uses the **aligned** reactant and product copies as band endpoints; only interior images are filled by `NEB.interpolate`. Disable with `ts_params["neb_align_endpoints"] = False` only when you intentionally want raw GO minima as endpoints.
 
@@ -336,6 +336,7 @@ Per-system NEB defaults from `get_ts_search_params` include:
 | `neb_interpolation_mic` | `False` | `True` (forced by policy) |
 | `neb_surface_cell_remap` | `False` | `True` |
 | `neb_surface_lattice_rotation` | `False` | `True` |
+| `neb_surface_max_lattice_shift` | `1` | `1` |
 
 For `*_adsorbate` runs, pass `adsorbates=` to `run_go_ts` so TS can use blockwise slab / core / adsorbate endpoint matching when alignment is enabled.
 

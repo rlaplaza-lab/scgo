@@ -116,6 +116,7 @@ def coerce_ts_params_to_runner_kwargs(
         "neb_tangent_method",
         "neb_surface_cell_remap",
         "neb_surface_lattice_rotation",
+        "neb_surface_max_lattice_shift",
     ):
         kwargs[key] = ts_params.get(key, ts_defaults[key])
 

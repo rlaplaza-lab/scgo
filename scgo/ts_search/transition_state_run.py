@@ -106,6 +106,7 @@ def _run_serial_neb_search(
     n_adsorbate_mobile: int | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
+    neb_surface_max_lattice_shift: int = 1,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
     allow_dissociative_adsorption: bool = False,
@@ -205,6 +206,7 @@ def _run_serial_neb_search(
                 n_adsorbate_mobile=n_adsorbate_mobile,
                 neb_surface_cell_remap=neb_surface_cell_remap,
                 neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+                neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             )
         except (RuntimeError, ValueError) as e:
             logger.error(
@@ -362,6 +364,7 @@ def run_transition_state_search(
     neb_interpolation_mic: bool = False,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
+    neb_surface_max_lattice_shift: int = 1,
     neb_tangent_method: str = DEFAULT_NEB_TANGENT_METHOD,
     use_torchsim: bool = False,
     use_parallel_neb: bool = False,
@@ -540,6 +543,7 @@ def run_transition_state_search(
         "neb_interpolation_mic": neb_interpolation_mic,
         "neb_surface_cell_remap": neb_surface_cell_remap,
         "neb_surface_lattice_rotation": neb_surface_lattice_rotation,
+        "neb_surface_max_lattice_shift": neb_surface_max_lattice_shift,
         "neb_tangent_method": neb_tangent_method,
     }
     if surface_config is not None:
@@ -631,6 +635,7 @@ def run_transition_state_search(
             neb_tangent_method=neb_tangent_method,
             neb_surface_cell_remap=neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             torchsim_params=torchsim_params,
             system_type=system_type,
             n_slab=neb_n_slab,
@@ -664,6 +669,7 @@ def run_transition_state_search(
             neb_tangent_method=neb_tangent_method,
             neb_surface_cell_remap=neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             verbosity=verbosity,
             system_type=system_type,
             write_timing_json=write_timing_json,

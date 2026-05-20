@@ -19,7 +19,7 @@ Key Features
 - **Multiple Optimization Algorithms**: Basin Hopping (BH) and Genetic Algorithm (GA)
 - **MLIP Support**: MACE and UMA (fairchem) for GPU-accelerated optimization
 - **Surface Workflows**: Support for slab-supported clusters with adsorbates
-- **Transition State Search**: NEB-based TS search with automated pair selection and default endpoint alignment (PBC-aware on surfaces)
+- **Transition State Search**: NEB-based TS search with automated pair selection and default endpoint alignment (PBC-aware on surfaces, including configurable in-plane lattice-image search)
 - **Flexible API**: High-level runners and low-level control for custom workflows
 
 Quick Start

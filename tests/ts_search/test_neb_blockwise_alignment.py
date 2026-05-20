@@ -89,4 +89,6 @@ def test_interpolate_path_blockwise_mic_on_periodic_surface() -> None:
     disp = images[-1].get_positions() - images[0].get_positions()
     assert float(np.max(np.linalg.norm(disp[:n_slab], axis=1))) < 1e-2
     mobile_disp = np.linalg.norm(disp[n_slab:], axis=1)
-    assert float(np.max(mobile_disp)) < 2.5
+    assert float(np.max(mobile_disp)) < 0.25
+    rms = float(np.sqrt(np.mean(mobile_disp**2)))
+    assert rms < 0.15
