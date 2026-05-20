@@ -164,6 +164,23 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
     AtomConstraint._scgo_device_patch = True
 
 
+_TORCHSIM_WARNINGS_REGISTERED = False
+
+
+def _register_torchsim_warning_filters() -> None:
+    """Suppress known upstream TorchSim/warp warnings (not actionable in SCGO)."""
+    global _TORCHSIM_WARNINGS_REGISTERED  # noqa: PLW0603
+    if _TORCHSIM_WARNINGS_REGISTERED:
+        return
+    warnings.filterwarnings(
+        "ignore",
+        message=r"The \.grad attribute of a Tensor that is not a leaf Tensor",
+        category=UserWarning,
+        module=r"warp\._src\.torch",
+    )
+    _TORCHSIM_WARNINGS_REGISTERED = True
+
+
 def build_torchsim_fixatoms_from_ase_batch(
     atoms_list: Sequence[Atoms],
     device: object,
@@ -349,6 +366,7 @@ class TorchSimBatchRelaxer:
         # Lazy import: only require TorchSim when actually instantiating the relaxer.
         import torch_sim as ts  # type: ignore
 
+        _register_torchsim_warning_filters()
         self._ts = ts
         if self.device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
