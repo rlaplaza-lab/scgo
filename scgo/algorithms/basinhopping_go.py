@@ -164,7 +164,8 @@ def bh_go(
     detailed_timing: bool = False,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
     *,
     rng: np.random.Generator,
 ) -> list[tuple[float, Atoms]]:
@@ -377,7 +378,8 @@ def bh_go(
             n_slab=n_slab if surface_mode else None,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
-            allow_dissociative_adsorption=allow_dissociative_adsorption,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         )
         add_metadata(
             a_current,
@@ -468,7 +470,8 @@ def bh_go(
                 n_slab=n_slab if surface_mode else None,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
-                allow_dissociative_adsorption=allow_dissociative_adsorption,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             )
             add_metadata(
                 a_trial,

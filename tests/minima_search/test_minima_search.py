@@ -9,12 +9,14 @@ import torch
 from ase import Atoms
 from ase.build import fcc111
 from ase.calculators.emt import EMT
+from ase.io import read
 
 import scgo.minima_search.core as main_mod
+from scgo.database.metadata import add_metadata
 from scgo.minima_search import run_trials, scgo
 from scgo.utils.helpers import ensure_directory_exists
 from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
-from tests.test_utils import setup_test_atoms
+from tests.test_utils import create_test_atoms, setup_test_atoms
 
 
 class TestEnsureCalculator:
@@ -512,6 +514,192 @@ class TestRunTrials:
 
         # Should return list (may be empty)
         assert isinstance(results, list)
+
+
+def _slab_pt_adsorbate_pair(*, mobile_xy=(0.1, 0.1), wrap_x=False):
+    """Build reference and x-wrapped slab+Pt adsorbate minima with surface metadata."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.5
+    ref = slab.copy() + Atoms("Pt", positions=[[mobile_xy[0], mobile_xy[1], z0]])
+    x_mob = slab.cell[0, 0] - mobile_xy[0] if wrap_x else mobile_xy[0]
+    wrapped = slab.copy() + Atoms("Pt", positions=[[x_mob, mobile_xy[1], z0]])
+    for atoms in (ref, wrapped):
+        atoms.pbc = slab.pbc
+        add_metadata(
+            atoms,
+            run_id="run_test",
+            trial_id=1,
+            system_type="surface_cluster",
+            n_slab_atoms=n_slab,
+            raw_score=0.0,
+        )
+    return ref, wrapped, n_slab
+
+
+class TestRunTrialsSurfaceAlignment:
+    """Slab final minima are aligned to the lowest-energy minimum before write."""
+
+    def test_resolve_surface_alignment_defaults(self):
+        kwargs = _resolve_surface_alignment_kwargs(
+            {"system_type": "surface_cluster", "surface_config": object()}
+        )
+        assert kwargs is not None
+        assert kwargs["enable_cell_remap"] is True
+        assert kwargs["enable_lattice_rotation"] is True
+        assert kwargs["max_lattice_shift"] == 1
+
+    def test_resolve_surface_alignment_gas_returns_none(self):
+        assert _resolve_surface_alignment_kwargs({"system_type": "gas_cluster"}) is None
+
+    def test_resolve_surface_alignment_reads_params(self):
+        from scgo.surface.config import SurfaceSystemConfig
+
+        slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+        cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+        kwargs = _resolve_surface_alignment_kwargs(
+            {
+                "system_type": "surface_cluster",
+                "surface_config": cfg,
+                "neb_surface_cell_remap": False,
+                "neb_surface_lattice_rotation": True,
+                "neb_surface_max_lattice_shift": 3,
+            }
+        )
+        assert kwargs is not None
+        assert kwargs["enable_cell_remap"] is False
+        assert kwargs["enable_lattice_rotation"] is True
+        assert kwargs["max_lattice_shift"] == 3
+
+    def test_run_trials_aligns_slab_final_minima_to_best(
+        self, tmp_path, rng, monkeypatch
+    ):
+        ref, wrapped, _n_slab = _slab_pt_adsorbate_pair(wrap_x=True)
+        align_calls = 0
+
+        def _fake_scgo(**_kwargs):
+            return [(-1.0, ref), (-0.5, wrapped)]
+
+        monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+
+        orig_align = main_mod._align_slab_minimum_to_reference
+
+        def _spy_align(reference, candidate, **kwargs):
+            nonlocal align_calls
+            align_calls += 1
+            orig_align(reference, candidate, **kwargs)
+
+        monkeypatch.setattr(main_mod, "_align_slab_minimum_to_reference", _spy_align)
+
+        from scgo.surface.config import SurfaceSystemConfig
+
+        slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+        cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+        output_dir = str(tmp_path / "slab_align")
+
+        run_trials(
+            composition=["Pt"],
+            global_optimizer="simple",
+            global_optimizer_kwargs={
+                "niter": 1,
+                "system_type": "surface_cluster",
+                "surface_config": cfg,
+            },
+            n_trials=1,
+            output_dir=output_dir,
+            rng=rng,
+            validate_with_hessian=False,
+            tag_final_minima=False,
+            verbosity=0,
+        )
+
+        assert align_calls == 2
+        xyz_dir = os.path.join(output_dir, "final_unique_minima")
+        written = sorted(f for f in os.listdir(xyz_dir) if f.endswith(".xyz"))
+        assert len(written) == 2
+        best_written = read(os.path.join(xyz_dir, written[0]))
+        second_written = read(os.path.join(xyz_dir, written[1]))
+        disp = second_written.get_positions() - best_written.get_positions()
+        assert abs(float(disp[-1, 0])) < 0.5
+
+    def test_run_trials_forwards_alignment_knobs(self, tmp_path, rng, monkeypatch):
+        ref, wrapped, n_slab = _slab_pt_adsorbate_pair(wrap_x=True)
+        captured: dict[str, int] = {}
+
+        def _fake_scgo(**_kwargs):
+            return [(-1.0, ref), (-0.5, wrapped)]
+
+        monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+
+        from scgo.ts_search import transition_state as ts_mod
+
+        orig_pbc = ts_mod._align_product_surface_pbc
+
+        def _spy_pbc(reactant, product_positions, **kwargs):
+            captured["max_lattice_shift"] = kwargs.get("max_lattice_shift", -1)
+            return orig_pbc(reactant, product_positions, **kwargs)
+
+        monkeypatch.setattr(ts_mod, "_align_product_surface_pbc", _spy_pbc)
+
+        from scgo.surface.config import SurfaceSystemConfig
+
+        slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+        cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+
+        run_trials(
+            composition=["Pt"],
+            global_optimizer="simple",
+            global_optimizer_kwargs={
+                "niter": 1,
+                "system_type": "surface_cluster",
+                "surface_config": cfg,
+                "neb_surface_max_lattice_shift": 2,
+            },
+            n_trials=1,
+            output_dir=str(tmp_path / "slab_knobs"),
+            rng=rng,
+            validate_with_hessian=False,
+            tag_final_minima=False,
+            verbosity=0,
+        )
+
+        assert captured["max_lattice_shift"] == 2
+        assert n_slab > 0
+
+    def test_run_trials_gas_skips_slab_alignment(self, tmp_path, rng, monkeypatch):
+        atoms = create_test_atoms(["Pt", "Pt"])
+        add_metadata(atoms, run_id="run_test", trial_id=1, system_type="gas_cluster")
+        align_calls = 0
+
+        def _fake_scgo(**_kwargs):
+            return [(-1.0, atoms)]
+
+        monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+
+        def _spy_align(*_args, **_kwargs):
+            nonlocal align_calls
+            align_calls += 1
+
+        monkeypatch.setattr(main_mod, "_align_slab_minimum_to_reference", _spy_align)
+
+        run_trials(
+            composition=["Pt", "Pt"],
+            global_optimizer="simple",
+            global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
+            n_trials=1,
+            output_dir=str(tmp_path / "gas_no_align"),
+            rng=rng,
+            validate_with_hessian=False,
+            tag_final_minima=False,
+            verbosity=0,
+        )
+
+        assert align_calls == 0
+
+
+def _resolve_surface_alignment_kwargs(kwargs):
+    return main_mod._resolve_surface_alignment_kwargs(kwargs)
 
 
 class TestWriteResultsSummary:

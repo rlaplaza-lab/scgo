@@ -106,25 +106,41 @@ def get_mobile_atom_indices(atoms: Atoms) -> np.ndarray:
 def get_shared_mobile_atom_indices(
     a1: Atoms,
     a2: Atoms,
+    *,
+    n_slab: int | None = None,
 ) -> np.ndarray:
     """Return index set suitable for comparing two structures.
 
-    Uses the intersection of mobile (non-``FixAtoms``) indices from both
-    structures. Raises if that intersection is empty.
+    When ``n_slab`` is set (e.g. from :class:`~scgo.surface.config.SurfaceSystemConfig`
+    at TS time), indices ``n_slab:`` are used on both structures. This is the
+    authoritative partition for surface workflows and does not require
+    ``FixAtoms`` or stored ``n_slab_atoms`` metadata on loaded minima.
+
+    Otherwise uses the intersection of mobile (non-``FixAtoms``) indices, with a
+    metadata fallback when constraints are missing. Raises if the chosen set is empty.
     """
     if len(a1) != len(a2):
         raise ValueError(
             f"The two configurations must have the same number of atoms: {len(a1)} vs {len(a2)}",
         )
 
+    if n_slab is not None:
+        n_slab_i = int(n_slab)
+        if n_slab_i < 0 or n_slab_i >= len(a1):
+            raise ValueError(
+                f"n_slab={n_slab_i} invalid for structure comparison (len={len(a1)})."
+            )
+        mobile = np.arange(n_slab_i, len(a1), dtype=int)
+        if mobile.size == 0:
+            raise ValueError("No mobile atoms after applying surface n_slab partition.")
+        return mobile
+
     idx1 = get_mobile_atom_indices(a1)
     idx2 = get_mobile_atom_indices(a2)
     shared = np.intersect1d(idx1, idx2, assume_unique=False)
     if shared.size == 0:
         raise ValueError("No shared mobile atoms across endpoints.")
-    # Surface minima may occasionally lose constraints on load. When both
-    # endpoints expose slab-prefix metadata, compare only adsorbate+cluster atoms.
-    # This avoids slab motion dominating TS pair similarity.
+    # Legacy fallback when constraints were stripped on DB load.
     n_slab_1 = _n_slab_from_metadata(a1)
     n_slab_2 = _n_slab_from_metadata(a2)
     if (

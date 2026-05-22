@@ -198,7 +198,7 @@ def combine_and_grow(
     cell_side: float,
     rng: np.random.Generator,
     vdw_scaling: float = 1.0,
-    min_distance_factor: float = 0.5,
+    min_distance_factor: float = SEED_CLASH_FACTOR,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Combines seeds and grows to target composition."""

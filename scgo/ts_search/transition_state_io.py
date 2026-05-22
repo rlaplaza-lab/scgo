@@ -147,6 +147,7 @@ def select_structure_pairs(
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
     similarity_pair_cor_max: float = 0.1,
     surface_aware: bool = False,
+    n_slab: int | None = None,
 ) -> list[tuple[int, int]]:
     """Select pairs of minima for TS calculations.
 
@@ -167,6 +168,8 @@ def select_structure_pairs(
         similarity_pair_cor_max: Maximum single distance difference tolerance.
             Default 0.1 Å (tighter than GA to ensure truly distinct structures).
         surface_aware: Use slightly looser scoring scales (slab / periodic systems).
+        n_slab: When set (from ``SurfaceSystemConfig.slab``), structural comparison
+            uses only atoms ``n_slab:`` so pair selection ignores frozen slab motion.
 
     Returns:
         List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
@@ -223,6 +226,7 @@ def select_structure_pairs(
                     tolerance=similarity_tolerance,
                     pair_cor_max=similarity_pair_cor_max,
                     use_mic=surface_aware,
+                    n_slab=n_slab,
                 )
 
                 if are_similar:
@@ -347,6 +351,7 @@ def _cluster_ts_candidates_globally(
     similarity_pair_cor_max: float,
     *,
     use_mic: bool = False,
+    n_slab: int | None = None,
 ) -> list[list[tuple[float, Atoms, str, tuple[int, int], dict[str, Any]]]]:
     """Cluster TS candidates by energy + geometry in one deterministic pass."""
     if not candidates:
@@ -369,6 +374,7 @@ def _cluster_ts_candidates_globally(
                 tolerance=similarity_tolerance,
                 pair_cor_max=similarity_pair_cor_max,
                 use_mic=use_mic,
+                n_slab=n_slab,
             )
             if are_similar:
                 matched_idx = idx
@@ -394,6 +400,7 @@ def write_final_unique_ts(
     minima_base_dir: str | None = None,
     run_context: dict[str, Any] | None = None,
     surface_aware: bool = False,
+    n_slab: int | None = None,
 ) -> list[dict[str, Any]]:
     """Deduplicate successful TS geometries globally and write unique `.xyz` files.
 
@@ -460,6 +467,7 @@ def write_final_unique_ts(
         similarity_tolerance,
         similarity_pair_cor_max,
         use_mic=surface_aware,
+        n_slab=n_slab,
     )
 
     rank = 0

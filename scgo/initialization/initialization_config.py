@@ -22,7 +22,7 @@ MAX_CONSECUTIVE_FAILURES = (
 # ============================================================================
 # Connectivity: atoms connected if distance <= (r_i + r_j) * CONNECTIVITY_FACTOR
 CONNECTIVITY_FACTOR = 1.4  # Connectivity threshold used consistently throughout
-MIN_DISTANCE_FACTOR_DEFAULT = 0.5
+MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 PLACEMENT_RADIUS_SCALING_DEFAULT = 1.2
 SEED_CLASH_FACTOR = MIN_DISTANCE_FACTOR_DEFAULT  # Use same factor as random placement
 

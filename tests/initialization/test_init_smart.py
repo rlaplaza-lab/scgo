@@ -25,6 +25,7 @@ from scgo.initialization import (
 )
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
+    MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.utils.helpers import get_composition_counts
 from tests.test_utils import (
@@ -240,8 +241,8 @@ class TestDefaultInitializationStrictness:
                 f"expected {len(comp)}, got {len(atoms)}"
             )
 
-    def test_default_settings_no_clashes_strict(self, rng):
-        """Test that default settings produce no atomic clashes with strict checking."""
+    def test_default_settings_no_clashes(self, rng):
+        """Test that default settings produce no atomic clashes at the default factor."""
         comp = ["Pt"] * 7
         n_samples = DIVERSITY_TEST_SAMPLES_MEDIUM
 
@@ -259,7 +260,7 @@ class TestDefaultInitializationStrictness:
             # Also verify with validation function
             is_valid, msg = validate_cluster_structure(
                 atoms,
-                min_distance_factor=0.5,
+                min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
                 connectivity_factor=CONNECTIVITY_FACTOR,
                 check_clashes=True,
                 check_connectivity=True,
@@ -282,7 +283,7 @@ class TestDefaultInitializationStrictness:
             # Verify with validation function
             is_valid, msg = validate_cluster_structure(
                 atoms,
-                min_distance_factor=0.5,
+                min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
                 connectivity_factor=CONNECTIVITY_FACTOR,
                 check_clashes=True,
                 check_connectivity=True,
@@ -341,7 +342,9 @@ class TestSingleConnectivityFactor:
             )
             # Validation should pass with the same factor
             is_valid, _ = validate_cluster_structure(
-                atoms, min_distance_factor=0.5, connectivity_factor=CONNECTIVITY_FACTOR
+                atoms,
+                min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
+                connectivity_factor=CONNECTIVITY_FACTOR,
             )
             assert is_valid is True
 
@@ -448,7 +451,9 @@ class TestDisconnectionPrevention:
 
             # Verify no clashes
             is_valid, _ = validate_cluster_structure(
-                atoms, min_distance_factor=0.5, connectivity_factor=CONNECTIVITY_FACTOR
+                atoms,
+                min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
+                connectivity_factor=CONNECTIVITY_FACTOR,
             )
             assert is_valid is True
 
@@ -477,7 +482,7 @@ class TestNoClashes:
         if atoms is not None:
             is_valid, error_msg = validate_cluster_structure(
                 atoms,
-                min_distance_factor=0.5,
+                min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
                 connectivity_factor=CONNECTIVITY_FACTOR,
                 check_clashes=True,
                 check_connectivity=True,

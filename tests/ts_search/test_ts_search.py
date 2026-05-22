@@ -266,6 +266,29 @@ def test_calculate_similarity_uses_mic_for_periodic_surfaces():
     assert bool(mic_similar) is True
 
 
+def test_calculate_similarity_uses_adsorbate_slice_when_n_slab_from_surface_config():
+    """Explicit n_slab (from SurfaceSystemConfig) scopes comparison without metadata."""
+    atoms1 = Atoms(
+        "Pt4OH",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.6, 0.4, 2.0],
+            [0.6, 0.4, 2.9],
+        ],
+    )
+    atoms2 = atoms1.copy()
+    pos2 = atoms2.get_positions()
+    pos2[:4, 0] += 0.7  # slab-only displacement
+    atoms2.set_positions(pos2)
+
+    cum_diff, _, are_similar = calculate_structure_similarity(atoms1, atoms2, n_slab=4)
+    assert cum_diff == pytest.approx(0.0, abs=1e-10)
+    assert are_similar is True
+
+
 def test_calculate_similarity_uses_adsorbate_slice_when_surface_metadata_present():
     """When slab constraints are absent, n_slab metadata should scope comparison."""
     atoms1 = Atoms(
@@ -289,6 +312,40 @@ def test_calculate_similarity_uses_adsorbate_slice_when_surface_metadata_present
     cum_diff, _, are_similar = calculate_structure_similarity(atoms1, atoms2)
     assert cum_diff == pytest.approx(0.0, abs=1e-10)
     assert are_similar is True
+
+
+def test_select_structure_pairs_ignores_slab_when_n_slab_from_surface_config():
+    """Pair selection uses n_slab from surface_config, not FixAtoms on loaded minima."""
+    base = Atoms(
+        "Pt5",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [1.2, 0.0, 0.0],
+            [0.6, 1.0, 0.0],
+            [0.6, 0.4, 1.8],
+            [1.8, 0.4, 1.8],
+        ],
+    )
+    slab_shifted = base.copy()
+    shifted_pos = slab_shifted.get_positions()
+    shifted_pos[:3, 1] += 0.35
+    slab_shifted.set_positions(shifted_pos)
+    mobile_changed = base.copy()
+    mobile_pos = mobile_changed.get_positions()
+    mobile_pos[4, 0] += 0.8
+    mobile_changed.set_positions(mobile_pos)
+
+    minima = [(-1.0, base), (-0.95, slab_shifted), (-0.90, mobile_changed)]
+    pairs = select_structure_pairs(
+        minima,
+        max_pairs=None,
+        similarity_tolerance=0.01,
+        similarity_pair_cor_max=0.2,
+        n_slab=3,
+    )
+
+    assert (0, 1) not in pairs
+    assert (0, 2) in pairs
 
 
 def test_select_structure_pairs_ignores_fixed_slab_atom_differences():

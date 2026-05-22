@@ -169,6 +169,10 @@ Notes:
 
 Path interpolation always uses the **aligned** reactant and product copies as band endpoints; only interior images are filled by `NEB.interpolate`. Disable with `ts_params["neb_align_endpoints"] = False` only when you intentionally want raw GO minima as endpoints.
 
+**Surface GO final XYZ alignment:** For `surface_cluster` and `surface_cluster_adsorbate`, before writing `final_unique_minima/*.xyz`, SCGO PBC-aligns each minimum to the lowest-energy trial using the same slab protocol as NEB (`neb_surface_cell_remap`, `neb_surface_lattice_rotation`, `neb_surface_max_lattice_shift` from optimizer kwargs, gated by `SystemPolicy`). This keeps stored frames comparable across trials; TS/NEB endpoint alignment is unchanged.
+
+**Initialization clash factor:** Default `min_distance_factor` is **0.4** (was 0.5) in `scgo.initialization.initialization_config.MIN_DISTANCE_FACTOR_DEFAULT`; override per run if you need stricter placement.
+
 Preset-vs-runtime split in `runner_api`:
 
 - Put scientific/tuning knobs in preset dicts (`go_params`/`ts_params`): calculator choice, optimizer settings, NEB settings, pairing thresholds, etc.
@@ -265,6 +269,27 @@ Adsorbate inputs and initial structures: For both `gas_cluster_adsorbate` and `s
 Do not set `n_relax_top_slab_layers` together with `n_fix_bottom_slab_layers`, or together with `fix_all_slab_atoms=True`. For typical `ase.build.fcc111` slabs with vacuum along **z**, use `surface_normal_axis=2` (the default).
 
 Run metadata records a JSON-safe summary of these flags (no embedded `Atoms`) under the sanitized `surface_config` key.
+
+### Surface mobile connectivity (validation)
+
+For `surface_cluster` and `surface_cluster_adsorbate`, GO/GA/BH and TS validate that the mobile region is slab-bound. Defaults in `get_default_params()` and `get_ts_search_params()`:
+
+| Flag | Default | Effect when `True` |
+|------|---------|-------------------|
+| `allow_cluster_fragmentation` | `False` | Multiple disconnected core/mixed mobile subgroups allowed (each must touch the slab). |
+| `allow_adsorbate_surface_detachment` | `False` | Adsorbate-only mobile subgroups on the slab without cluster contact (requires exactly one core/mixed subgroup when fragmentation is off). |
+
+**Typical modes:** both `False` (strict single connected mobile cluster); fragmentation only (`True`, `False`); both `True` (any mobile split, each subgroup slab-connected). For `surface_cluster_adsorbate`, core vs adsorbate subgroups are classified using `adsorbate_definition['core_symbols']`.
+
+**Breaking rename:** `allow_dissociative_adsorption` was removed. Migration:
+
+| Old | New |
+|-----|-----|
+| `False` | `allow_cluster_fragmentation=False`, `allow_adsorbate_surface_detachment=False` |
+| `True` | both flags `True` |
+| (no old equivalent) | fragmentation only or detachment only — use the partial combos above |
+
+**TS pair selection:** When `surface_config` is set, structural similarity and pair filtering use `n_slab=len(slab)` so displacements in frozen slab atoms alone do not create spurious distinct-minima pairs.
 
 ---
 

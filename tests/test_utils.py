@@ -495,7 +495,7 @@ def get_structure_signature(atoms: Atoms) -> tuple:
 def assert_cluster_valid(
     atoms: Atoms,
     expected_composition: list[str],
-    min_distance_factor: float = 0.5,
+    min_distance_factor: float = _tc.MIN_DISTANCE_FACTOR_DEFAULT,
     connectivity_factor: float | None = None,
     check_connectivity: bool | None = None,
 ) -> None:
@@ -507,7 +507,8 @@ def assert_cluster_valid(
     Args:
         atoms: Atoms object to validate
         expected_composition: Expected chemical composition list
-        min_distance_factor: Minimum distance factor for clash checking (default: 0.5)
+        min_distance_factor: Minimum distance factor for clash checking
+            (default: MIN_DISTANCE_FACTOR_DEFAULT, currently 0.4)
         connectivity_factor: Connectivity factor to use (default: None uses CONNECTIVITY_FACTOR)
         check_connectivity: Whether to check connectivity (default: None auto-detects from atom count)
 

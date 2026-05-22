@@ -203,7 +203,8 @@ def _neb_endpoint_copies(
     n_slab: int = 0,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[Atoms, Atoms]:
     """Copy minima endpoints, optionally re-attaching surface FixAtoms constraints."""
     from scgo.surface.constraints import attach_slab_constraints_from_surface_config
@@ -220,7 +221,8 @@ def _neb_endpoint_copies(
         n_slab=n_slab,
         adsorbate_definition=adsorbate_definition,
         connectivity_factor=connectivity_factor,
-        allow_dissociative_adsorption=allow_dissociative_adsorption,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
     validate_structure_for_system_type(
         prod,
@@ -229,7 +231,8 @@ def _neb_endpoint_copies(
         n_slab=n_slab,
         adsorbate_definition=adsorbate_definition,
         connectivity_factor=connectivity_factor,
-        allow_dissociative_adsorption=allow_dissociative_adsorption,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
     return react, prod
 
@@ -261,7 +264,8 @@ def run_parallel_neb_search(
     n_adsorbate_mobile: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Run all pairs through ParallelNEBBatch. Returns (results, timing meta)."""
     t_parallel0 = perf_counter()
@@ -279,7 +283,8 @@ def run_parallel_neb_search(
             n_slab=n_slab,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
-            allow_dissociative_adsorption=allow_dissociative_adsorption,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         )
         endpoints.append(ri)
         endpoints.append(rj)
@@ -303,7 +308,8 @@ def run_parallel_neb_search(
             n_slab=n_slab,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
-            allow_dissociative_adsorption=allow_dissociative_adsorption,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         )
         images = interpolate_path(
             react_ep,

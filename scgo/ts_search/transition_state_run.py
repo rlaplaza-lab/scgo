@@ -27,6 +27,7 @@ from scgo.surface.constraints import (
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
     SystemType,
+    _n_core_mobile_from_adsorbate_definition,
     get_system_policy,
     validate_composition_against_adsorbate,
     validate_structure_for_system_type,
@@ -109,7 +110,8 @@ def _run_serial_neb_search(
     neb_surface_max_lattice_shift: int = 1,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> list[dict[str, Any]]:
     """Run NEBs sequentially via :func:`find_transition_state` (one calc per pair)."""
     logger = get_logger(__name__)
@@ -148,7 +150,8 @@ def _run_serial_neb_search(
                 n_slab=n_slab,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
-                allow_dissociative_adsorption=allow_dissociative_adsorption,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             )
             validate_structure_for_system_type(
                 prod_ep,
@@ -157,7 +160,8 @@ def _run_serial_neb_search(
                 n_slab=n_slab,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
-                allow_dissociative_adsorption=allow_dissociative_adsorption,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             )
         except ValueError as e:
             logger.warning(
@@ -259,8 +263,14 @@ def _warn_on_surface_mobile_indices(
     minima: list[tuple[float, Any]],
     *,
     system_type: SystemType,
+    n_slab: int = 0,
 ) -> None:
-    """Log diagnostics when surface minima expose suspicious mobile-index sets."""
+    """Log diagnostics when surface minima lack a usable mobile partition.
+
+    When ``n_slab > 0`` (from ``surface_config``), pair comparison uses the slab
+    prefix from the live surface template, not stored ``n_slab_atoms`` metadata.
+    Warnings about \"all atoms mobile\" apply only when that partition is unavailable.
+    """
     logger = get_logger(__name__)
     policy = get_system_policy(system_type)
     if not policy.uses_surface:
@@ -268,25 +278,27 @@ def _warn_on_surface_mobile_indices(
 
     from scgo.utils.comparators import get_shared_mobile_atom_indices
 
+    slab_n = int(n_slab) if n_slab > 0 else None
     sample_count = min(3, len(minima))
     for i in range(sample_count):
         for j in range(i + 1, sample_count):
             ai = minima[i][1]
             aj = minima[j][1]
             try:
-                shared = get_shared_mobile_atom_indices(ai, aj)
+                shared = get_shared_mobile_atom_indices(ai, aj, n_slab=slab_n)
             except ValueError:
                 logger.warning(
-                    "Surface TS pair (%d,%d) has no shared mobile atoms from constraints; "
-                    "pair similarity will be skipped.",
+                    "Surface TS pair (%d,%d) has no shared mobile atoms for comparison; "
+                    "pair similarity may be skipped.",
                     i,
                     j,
                 )
                 continue
-            if shared.size >= len(ai):
+            if slab_n is None and shared.size >= len(ai):
                 logger.warning(
-                    "Surface TS pair (%d,%d) compares all atoms as mobile; this often "
-                    "means slab constraints are missing on minima.",
+                    "Surface TS pair (%d,%d) compares all atoms as mobile; pass "
+                    "surface_config so TS can use len(slab) as n_slab, or ensure "
+                    "minima carry FixAtoms / n_slab_atoms metadata.",
                     i,
                     j,
                 )
@@ -297,8 +309,10 @@ def _apply_surface_ts_geometry_gate(
     *,
     surface_config: SurfaceSystemConfig | None,
     system_type: SystemType,
+    adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> None:
     """Reject successful TS results that violate supported-deposit geometry."""
     if surface_config is None:
@@ -333,7 +347,11 @@ def _apply_surface_ts_geometry_gate(
                 surface_normal_axis=axis,
                 use_mic=use_mic,
                 connectivity_factor=cf,
-                allow_dissociative_adsorption=allow_dissociative_adsorption,
+                n_core_mobile=_n_core_mobile_from_adsorbate_definition(
+                    adsorbate_definition
+                ),
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             )
             if not ok:
                 result["status"] = "failed"
@@ -379,7 +397,8 @@ def run_transition_state_search(
     write_timing_json: bool = False,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> list[dict[str, Any]]:
     """Run transition state search for clusters of given composition.
 
@@ -592,7 +611,7 @@ def run_transition_state_search(
             neb_surface_cell_remap,
             neb_surface_lattice_rotation,
         )
-    _warn_on_surface_mobile_indices(minima, system_type=system_type)
+    _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 
     pairs = select_structure_pairs(
         minima,
@@ -601,6 +620,7 @@ def run_transition_state_search(
         similarity_tolerance=similarity_tolerance,
         similarity_pair_cor_max=similarity_pair_cor_max,
         surface_aware=bool(neb_interpolation_mic),
+        n_slab=neb_n_slab if neb_n_slab > 0 else None,
     )
 
     if not pairs:
@@ -643,7 +663,8 @@ def run_transition_state_search(
             n_adsorbate_mobile=neb_n_ads_m,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
-            allow_dissociative_adsorption=allow_dissociative_adsorption,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         )
         cleanup_torch_cuda(logger=logger)
     else:
@@ -678,7 +699,8 @@ def run_transition_state_search(
             n_adsorbate_mobile=neb_n_ads_m,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
-            allow_dissociative_adsorption=allow_dissociative_adsorption,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         )
 
     ts_phase_wall = perf_counter() - t_ts0
@@ -716,8 +738,10 @@ def run_transition_state_search(
         ts_results,
         surface_config=surface_config,
         system_type=system_type,
+        adsorbate_definition=adsorbate_definition,
         connectivity_factor=connectivity_factor,
-        allow_dissociative_adsorption=allow_dissociative_adsorption,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
 
     save_transition_state_results(
@@ -747,6 +771,7 @@ def run_transition_state_search(
             minima_base_dir=ts_output_dir,
             run_context=run_context,
             surface_aware=system_policy.uses_surface,
+            n_slab=neb_n_slab if neb_n_slab > 0 else None,
         )
 
         if tag_ts_in_db and unique_ts:

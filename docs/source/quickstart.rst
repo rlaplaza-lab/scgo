@@ -138,6 +138,28 @@ Optional surface-only toggles (defaults are usually correct):
    ts_params["neb_surface_lattice_rotation"] = True  # global in-plane Kabsch + MIC snap
    ts_params["neb_surface_max_lattice_shift"] = 2   # if minima differ by >1 cell in-plane
 
+Surface mobile connectivity relaxation
+--------------------------------------
+
+Surface GO/TS presets include ``allow_cluster_fragmentation`` and
+``allow_adsorbate_surface_detachment`` (both default ``False``). They control
+:func:`~scgo.surface.validation.validate_supported_cluster_deposit` during GA/BH
+and TS geometry gates:
+
+- **Strict (default):** one connected mobile cluster bound to the slab.
+- **Fragmentation only** (``allow_cluster_fragmentation=True``): multiple
+  core/mixed subgroups; adsorbate-only fragments on the slab are still rejected.
+- **Detachment** (``allow_adsorbate_surface_detachment=True``): one core/mixed
+  subgroup plus optional adsorbate-only subgroups on the slab.
+- **Both True:** any mobile split allowed if every subgroup touches the slab.
+
+The removed ``allow_dissociative_adsorption`` flag maps to **both** new flags set
+to ``True``. Pass the new keys in ``go_params`` / ``ts_params`` or per-optimizer
+``optimizer_params`` entries.
+
+For surface runs, TS pair selection and similarity use ``n_slab`` from
+``surface_config`` so slab-only coordinate shifts do not count as distinct minima.
+
 Creating Your Own Examples
 --------------------------
 

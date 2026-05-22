@@ -178,104 +178,113 @@ def _adsorbate_subgroup_touches_slab(
     )
 
 
-def validate_supported_cluster_deposit(
+def _classify_mobile_component(
+    local_indices: list[int],
+    n_core_mobile: int,
+) -> str:
+    """Classify a mobile connected component as ``core``, ``ads_only``, or ``mixed``."""
+    has_core = any(int(i) < n_core_mobile for i in local_indices)
+    has_ads = any(int(i) >= n_core_mobile for i in local_indices)
+    if has_core and has_ads:
+        return "mixed"
+    if has_core:
+        return "core"
+    return "ads_only"
+
+
+def _validate_mobile_connectivity_policy(
+    combined: Atoms,
+    n_slab: int,
+    mobile: Atoms,
+    *,
+    n_core_mobile: int,
+    connectivity_factor: float,
+    use_mic: bool,
+    allow_cluster_fragmentation: bool,
+    allow_adsorbate_surface_detachment: bool,
+) -> tuple[bool, str]:
+    """Enforce mobile-region connectivity rules and per-subgroup slab contact."""
+    n_ads = len(mobile)
+    if n_ads < 2:
+        return _check_mobile_touches_slab(
+            combined, n_slab, connectivity_factor=connectivity_factor, use_mic=use_mic
+        )
+
+    components, _ = _find_connected_components(
+        mobile, connectivity_factor, use_mic=use_mic
+    )
+    subgroups = list(components.values())
+    allow_split = allow_cluster_fragmentation or allow_adsorbate_surface_detachment
+
+    if not allow_split:
+        if len(subgroups) != 1:
+            return (
+                False,
+                "Mobile region must form a single connected component "
+                f"(found {len(subgroups)} components; enable "
+                "allow_cluster_fragmentation and/or allow_adsorbate_surface_detachment "
+                "to permit splits)",
+            )
+        return _check_mobile_touches_slab(
+            combined, n_slab, connectivity_factor=connectivity_factor, use_mic=use_mic
+        )
+
+    core_like: list[list[int]] = []
+    ads_only: list[list[int]] = []
+    for subgroup in subgroups:
+        kind = _classify_mobile_component(subgroup, n_core_mobile)
+        if kind == "ads_only":
+            ads_only.append(subgroup)
+        else:
+            core_like.append(subgroup)
+
+    if allow_cluster_fragmentation and not allow_adsorbate_surface_detachment:
+        if ads_only:
+            return (
+                False,
+                "Detached adsorbate-only mobile subgroups are not allowed "
+                "(set allow_adsorbate_surface_detachment=True to permit adsorbates "
+                "on the slab without cluster contact)",
+            )
+    elif (
+        allow_adsorbate_surface_detachment
+        and not allow_cluster_fragmentation
+        and len(core_like) != 1
+    ):
+        return (
+            False,
+            "Exactly one core-connected mobile component is required when "
+            f"allow_cluster_fragmentation=False (found {len(core_like)} "
+            "core/mixed components)",
+        )
+    # both flags True: any split is allowed
+
+    for subgroup in subgroups:
+        if not _adsorbate_subgroup_touches_slab(
+            combined,
+            n_slab,
+            subgroup,
+            connectivity_factor=connectivity_factor,
+            use_mic=use_mic,
+        ):
+            return (
+                False,
+                "Every mobile subgroup must touch the slab "
+                f"(subgroup size {len(subgroup)} has no slab contact within "
+                f"connectivity_factor={connectivity_factor})",
+            )
+    return True, ""
+
+
+def _check_mobile_touches_slab(
     combined: Atoms,
     n_slab: int,
     *,
-    surface_normal_axis: int,
-    use_mic: bool = False,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-    penetration_tolerance: float = _BINDING_PENETRATION_TOLERANCE_A,
-    allow_dissociative_adsorption: bool = False,
+    connectivity_factor: float,
+    use_mic: bool,
 ) -> tuple[bool, str]:
-    """Validate a combined slab + supported mobile cluster (full cluster, not the fragment only).
-
-    The slice ``combined[n_slab:]`` is the **entire** supported mobile region: nanoparticle
-    core plus any chemisorbed species. (This is not the same as
-    ``adsorbate_definition['adsorbate_symbols']`` alone.)
-
-    Default (``allow_dissociative_adsorption=False``): the mobile region must form one
-    connected component (when ``len(ads) > 2``) and touch the slab.
-
-    Dissociative (``allow_dissociative_adsorption=True``): the mobile region may split into
-    multiple connected subgroups, but every subgroup must touch the slab.
-
-    Clash screening always uses
-    :func:`~scgo.initialization.geometry_helpers.validate_cluster_structure` on the mobile
-    slice. Optionally uses MIC for distances when ``use_mic`` is True (match
-    :attr:`SurfaceSystemConfig.comparator_use_mic`).
-
-    Args:
-        combined: Full system with slab atoms first, then the supported mobile cluster.
-        n_slab: Number of slab atoms (prefix length).
-        surface_normal_axis: Cartesian axis index for the surface normal.
-        use_mic: Pass through to distance and connectivity checks when True.
-        min_distance_factor: Mobile cluster self clash scale (initialization default).
-        connectivity_factor: Bonding connectivity scale (initialization default).
-        penetration_tolerance: Allow mobile cluster atoms this far (Å) below the
-            nominal slab top along ``surface_normal_axis``.
-        allow_dissociative_adsorption: If True, allow multiple mobile subgroups that are
-            each slab-connected; if False, require a single connected mobile cluster.
-
-    Returns:
-        ``(True, "")`` if valid, else ``(False, message)``.
-    """
+    """True when at least one mobile atom is within bonding distance of the slab."""
     n = len(combined)
-    if n_slab < 0 or n_slab > n:
-        return False, f"Invalid n_slab={n_slab} for len(combined)={n}"
-    if n_slab == n:
-        return False, "No adsorbate atoms in combined structure"
-
-    ads = combined[n_slab:]
-    n_ads = len(ads)
-    # Internal connectivity is only enforced for 3+ mobile atoms (same as gas-phase init).
-    require_single_mobile_component = n_ads > 2 and not allow_dissociative_adsorption
-    ok, err = validate_cluster_structure(
-        ads,
-        min_distance_factor,
-        connectivity_factor,
-        check_clashes=True,
-        check_connectivity=require_single_mobile_component,
-        use_mic=use_mic,
-    )
-    if not ok:
-        return False, f"Adsorbate validation failed: {err}"
-
-    slab = combined[:n_slab]
-    slab_top = _slab_top_coordinate(slab, surface_normal_axis)
-    positions = combined.get_positions()
-    ads_coords = positions[n_slab:]
-    axis_coord = ads_coords[:, surface_normal_axis]
-    if bool(np.any(axis_coord < slab_top - penetration_tolerance)):
-        min_c = float(np.min(axis_coord))
-        return (
-            False,
-            "Adsorbate penetrates below nominal slab top along surface normal "
-            f"(min coord={min_c:.3f} Å, slab_top={slab_top:.3f} Å)",
-        )
-
-    if allow_dissociative_adsorption and n_ads >= 2:
-        components, _ = _find_connected_components(
-            ads, connectivity_factor, use_mic=use_mic
-        )
-        subgroups = list(components.values())
-        for subgroup in subgroups:
-            if not _adsorbate_subgroup_touches_slab(
-                combined,
-                n_slab,
-                subgroup,
-                connectivity_factor=connectivity_factor,
-                use_mic=use_mic,
-            ):
-                return (
-                    False,
-                    "Dissociative adsorption requires every mobile subgroup to touch "
-                    f"the slab (subgroup size {len(subgroup)} has no slab contact within "
-                    f"connectivity_factor={connectivity_factor})",
-                )
-        return True, ""
-
     symbols = combined.get_chemical_symbols()
     touches = False
     min_cross = float("inf")
@@ -299,5 +308,108 @@ def validate_supported_cluster_deposit(
             f"(min cross-set distance={min_cross:.3f} Å, "
             f"connectivity_factor={connectivity_factor})",
         )
-
     return True, ""
+
+
+def validate_supported_cluster_deposit(
+    combined: Atoms,
+    n_slab: int,
+    *,
+    surface_normal_axis: int,
+    use_mic: bool = False,
+    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    penetration_tolerance: float = _BINDING_PENETRATION_TOLERANCE_A,
+    n_core_mobile: int | None = None,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
+) -> tuple[bool, str]:
+    """Validate a combined slab + supported mobile cluster (full cluster, not the fragment only).
+
+    The slice ``combined[n_slab:]`` is the **entire** supported mobile region: nanoparticle
+    core plus any chemisorbed species. (This is not the same as
+    ``adsorbate_definition['adsorbate_symbols']`` alone.)
+
+    **Default** (both relaxation flags False): the mobile region must form one
+    connected component (when ``len(mobile) > 2``) and touch the slab.
+
+    **``allow_cluster_fragmentation``**: multiple core/mixed mobile subgroups are allowed;
+    detached adsorbate-only subgroups are still rejected unless
+    ``allow_adsorbate_surface_detachment`` is also True.
+
+    **``allow_adsorbate_surface_detachment``**: exactly one core/mixed subgroup is required
+    when cluster fragmentation is disabled; additional adsorbate-only subgroups on the slab
+    are allowed.
+
+    **Both flags True**: any mobile split is allowed if every subgroup touches the slab.
+
+    Clash screening always uses
+    :func:`~scgo.initialization.geometry_helpers.validate_cluster_structure` on the mobile
+    slice. Optionally uses MIC for distances when ``use_mic`` is True (match
+    :attr:`SurfaceSystemConfig.comparator_use_mic`).
+
+    Args:
+        combined: Full system with slab atoms first, then the supported mobile cluster.
+        n_slab: Number of slab atoms (prefix length).
+        surface_normal_axis: Cartesian axis index for the surface normal.
+        use_mic: Pass through to distance and connectivity checks when True.
+        min_distance_factor: Mobile cluster self clash scale (initialization default).
+        connectivity_factor: Bonding connectivity scale (initialization default).
+        penetration_tolerance: Allow mobile cluster atoms this far (Å) below the
+            nominal slab top along ``surface_normal_axis``.
+        n_core_mobile: Atoms in the mobile slice belonging to the cluster core (prefix).
+            When ``None``, all mobile atoms are treated as core (``surface_cluster``).
+        allow_cluster_fragmentation: Allow multiple disconnected core-bearing subgroups.
+        allow_adsorbate_surface_detachment: Allow adsorbate-only subgroups on the slab.
+
+    Returns:
+        ``(True, "")`` if valid, else ``(False, message)``.
+    """
+    n = len(combined)
+    if n_slab < 0 or n_slab > n:
+        return False, f"Invalid n_slab={n_slab} for len(combined)={n}"
+    if n_slab == n:
+        return False, "No adsorbate atoms in combined structure"
+
+    mobile = combined[n_slab:]
+    n_ads = len(mobile)
+    n_core_eff = int(n_ads if n_core_mobile is None else n_core_mobile)
+    if n_core_eff < 0 or n_core_eff > n_ads:
+        return False, f"Invalid n_core_mobile={n_core_mobile} for mobile len={n_ads}"
+
+    allow_split = allow_cluster_fragmentation or allow_adsorbate_surface_detachment
+    require_single_mobile_component = n_ads > 2 and not allow_split
+    ok, err = validate_cluster_structure(
+        mobile,
+        min_distance_factor,
+        connectivity_factor,
+        check_clashes=True,
+        check_connectivity=require_single_mobile_component,
+        use_mic=use_mic,
+    )
+    if not ok:
+        return False, f"Adsorbate validation failed: {err}"
+
+    slab = combined[:n_slab]
+    slab_top = _slab_top_coordinate(slab, surface_normal_axis)
+    positions = combined.get_positions()
+    ads_coords = positions[n_slab:]
+    axis_coord = ads_coords[:, surface_normal_axis]
+    if bool(np.any(axis_coord < slab_top - penetration_tolerance)):
+        min_c = float(np.min(axis_coord))
+        return (
+            False,
+            "Adsorbate penetrates below nominal slab top along surface normal "
+            f"(min coord={min_c:.3f} Å, slab_top={slab_top:.3f} Å)",
+        )
+
+    return _validate_mobile_connectivity_policy(
+        combined,
+        n_slab,
+        mobile,
+        n_core_mobile=n_core_eff,
+        connectivity_factor=connectivity_factor,
+        use_mic=use_mic,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+    )

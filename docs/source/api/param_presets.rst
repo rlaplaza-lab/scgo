@@ -10,6 +10,11 @@ Transition-state presets (:func:`~scgo.param_presets.get_ts_search_params`) set
 to ``1``, so NEB bands start from lattice-compatible aligned endpoints. See
 :doc:`/quickstart` (NEB endpoint alignment).
 
+GO presets from :func:`~scgo.param_presets.get_default_params` and TS presets from
+:func:`~scgo.param_presets.get_ts_search_params` also include
+``allow_cluster_fragmentation`` and ``allow_adsorbate_surface_detachment`` (default
+``False``). See :doc:`/api/system_types` (surface mobile connectivity).
+
 .. automodule:: scgo.param_presets
    :members:
    :undoc-members:

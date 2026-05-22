@@ -83,6 +83,34 @@ def _assign_penalty_energy(atoms: Atoms) -> float:
     return PENALTY_ENERGY
 
 
+def adsorbate_primary_cell_shift(
+    atoms: Atoms,
+    *,
+    n_slab: int,
+) -> np.ndarray:
+    """Cartesian shift that moves the mobile-region COM into the primary cell on PBC axes."""
+    shift = np.zeros(3, dtype=float)
+    n = len(atoms)
+    if n_slab >= n:
+        return shift
+    pos = atoms.get_positions()
+    masses = atoms.get_masses()
+    com = np.average(pos[n_slab:], axis=0, weights=masses[n_slab:])
+    com_s = atoms.cell.scaled_positions(com.reshape(1, 3))[0]
+    for i in range(3):
+        if bool(atoms.pbc[i]):
+            shift += float(np.floor(com_s[i])) * np.asarray(atoms.cell[i], dtype=float)
+    return shift
+
+
+def apply_primary_cell_shift(atoms: Atoms, shift: np.ndarray) -> None:
+    """Apply a uniform Cartesian lattice shift and wrap (in-place)."""
+    if np.any(shift != 0):
+        atoms.positions = atoms.get_positions() - shift
+    if np.any(atoms.get_pbc()):
+        atoms.wrap()
+
+
 def canonicalize_storage_frame(
     atoms: Atoms,
     *,
@@ -103,19 +131,9 @@ def canonicalize_storage_frame(
     if pbc_aware and n_slab > 0:
         n = len(atoms)
         if n_slab < n:
-            pos = atoms.get_positions()
-            masses = atoms.get_masses()
-            com = np.average(pos[n_slab:], axis=0, weights=masses[n_slab:])
-            com_s = atoms.cell.scaled_positions(com.reshape(1, 3))[0]
-            shift = np.zeros(3, dtype=float)
-            for i in range(3):
-                if bool(atoms.pbc[i]):
-                    shift += float(np.floor(com_s[i])) * np.asarray(
-                        atoms.cell[i], dtype=float
-                    )
-            if np.any(shift != 0):
-                atoms.positions = pos - shift
-            atoms.wrap()
+            apply_primary_cell_shift(
+                atoms, adsorbate_primary_cell_shift(atoms, n_slab=n_slab)
+            )
         return
 
     # Wrap periodic axes if needed

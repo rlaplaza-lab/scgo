@@ -205,6 +205,18 @@ def validate_mobile_symbols_match_adsorbate_definition(
         )
 
 
+def _n_core_mobile_from_adsorbate_definition(
+    adsorbate_definition: AdsorbateDefinition | None,
+) -> int | None:
+    """Return mobile core atom count from ``adsorbate_definition``, or ``None`` if absent."""
+    if adsorbate_definition is None:
+        return None
+    cr = adsorbate_definition.get("core_symbols", [])
+    if not isinstance(cr, list):
+        return None
+    return len(cr)
+
+
 def validate_structure_for_system_type(
     atoms: Atoms,
     *,
@@ -213,7 +225,8 @@ def validate_structure_for_system_type(
     n_slab: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
-    allow_dissociative_adsorption: bool = False,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> None:
     """Apply system-type-specific structural validation.
 
@@ -229,9 +242,11 @@ def validate_structure_for_system_type(
         adsorbate_definition: Adsorbate definition (for adsorbate systems)
         connectivity_factor: Connectivity factor to use for cluster connectivity
             validation. If None, defaults to CONNECTIVITY_FACTOR from config.
-        allow_dissociative_adsorption: For surface systems, allow multiple mobile
-            subgroups if each subgroup is slab-connected (default: single connected
-            mobile cluster bound to the slab).
+        allow_cluster_fragmentation: For surface systems, allow multiple disconnected
+            core-bearing mobile subgroups (each must touch the slab).
+        allow_adsorbate_surface_detachment: For surface systems, allow adsorbate-only
+            mobile subgroups on the slab without cluster contact (requires exactly
+            one core/mixed subgroup when fragmentation is disabled).
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface:
@@ -254,7 +269,11 @@ def validate_structure_for_system_type(
                 surface_normal_axis=surface_config.surface_normal_axis,
                 use_mic=bool(surface_config.comparator_use_mic),
                 connectivity_factor=cf,
-                allow_dissociative_adsorption=allow_dissociative_adsorption,
+                n_core_mobile=_n_core_mobile_from_adsorbate_definition(
+                    adsorbate_definition
+                ),
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             )
             if not ok:
                 raise ValueError(msg)

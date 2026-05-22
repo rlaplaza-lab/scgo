@@ -40,6 +40,8 @@ from scgo.system_types import (
     validate_system_type_settings,
 )
 from scgo.utils.helpers import (
+    adsorbate_primary_cell_shift,
+    apply_primary_cell_shift,
     canonicalize_storage_frame,
     compute_final_id,
     ensure_directory_exists,
@@ -62,6 +64,8 @@ from scgo.utils.validation import validate_composition
 
 # Default required calculator methods
 _DEFAULT_REQUIRED_METHODS = ["get_potential_energy", "get_forces"]
+
+_SURFACE_SYSTEM_TYPES = frozenset({"surface_cluster", "surface_cluster_adsorbate"})
 
 
 def _create_surface_initialized_atoms(
@@ -136,6 +140,69 @@ def _create_gas_cluster_adsorbate_initial_atoms(
             "increase max_hierarchical_attempts or relax fragment placement."
         )
     return atoms
+
+
+def _is_slab_surface_minimum(atoms: Atoms) -> tuple[bool, int]:
+    """Return whether ``atoms`` is a slab surface minimum and its ``n_slab_atoms``."""
+    system_type = get_metadata(atoms, "system_type")
+    n_slab = int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
+    if system_type in _SURFACE_SYSTEM_TYPES and n_slab > 0:
+        return True, n_slab
+    return False, n_slab
+
+
+def _resolve_surface_alignment_kwargs(
+    global_optimizer_kwargs: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve slab final-write alignment knobs from GO kwargs and system policy."""
+    system_type = global_optimizer_kwargs.get("system_type")
+    if not isinstance(system_type, str):
+        system_type = (
+            "surface_cluster"
+            if global_optimizer_kwargs.get("surface_config") is not None
+            else "gas_cluster"
+        )
+    policy = get_system_policy(system_type)  # type: ignore[arg-type]
+    if not policy.uses_surface:
+        return None
+
+    cell_remap = bool(global_optimizer_kwargs.get("neb_surface_cell_remap", True))
+    lattice_rotation = bool(
+        global_optimizer_kwargs.get("neb_surface_lattice_rotation", True)
+    )
+    max_shift = int(global_optimizer_kwargs.get("neb_surface_max_lattice_shift", 1))
+    cell_remap = policy.neb_surface_cell_remap and cell_remap
+    lattice_rotation = policy.neb_surface_lattice_rotation and lattice_rotation
+    return {
+        "enable_cell_remap": cell_remap,
+        "enable_lattice_rotation": lattice_rotation,
+        "max_lattice_shift": max_shift,
+    }
+
+
+def _align_slab_minimum_to_reference(
+    reference: Atoms,
+    candidate: Atoms,
+    *,
+    n_slab: int,
+    enable_cell_remap: bool,
+    enable_lattice_rotation: bool,
+    max_lattice_shift: int,
+) -> None:
+    """Align ``candidate`` to ``reference`` using the TS slab PBC protocol (in-place)."""
+    from scgo.ts_search.transition_state import _align_product_surface_pbc
+
+    aligned = _align_product_surface_pbc(
+        reference,
+        candidate.get_positions(),
+        n_slab=n_slab,
+        enable_cell_remap=enable_cell_remap,
+        enable_lattice_rotation=enable_lattice_rotation,
+        max_lattice_shift=max_lattice_shift,
+    )
+    candidate.set_positions(aligned)
+    candidate.set_cell(reference.cell)
+    candidate.pbc = reference.pbc
 
 
 def _sanitize_global_optimizer_kwargs_for_metadata(
@@ -801,6 +868,20 @@ def run_trials(
         params=params,
     )
 
+    surface_align_kwargs = _resolve_surface_alignment_kwargs(global_optimizer_kwargs)
+    reference_atoms: Atoms | None = None
+    reference_n_slab = 0
+    reference_primary_cell_shift: np.ndarray | None = None
+    if surface_align_kwargs and final_minima:
+        _best_energy, best_atoms = final_minima[0]
+        is_slab_ref, reference_n_slab = _is_slab_surface_minimum(best_atoms)
+        if is_slab_ref:
+            reference_atoms = best_atoms.copy()
+            reference_atoms.calc = None
+            reference_primary_cell_shift = adsorbate_primary_cell_shift(
+                reference_atoms, n_slab=reference_n_slab
+            )
+
     final_minima_info: list[dict] = []
     for i, (_energy, atoms) in enumerate(final_minima):
         provenance = get_provenance(atoms)
@@ -823,18 +904,38 @@ def run_trials(
             validate_stored_mobile_partition_metadata(atoms_clean)
         except ValueError as e:
             logger.warning("Structure metadata check before write: %s", e)
-        if (
-            system_type in {"surface_cluster", "surface_cluster_adsorbate"}
-            and n_slab_meta
-        ):
-            canonicalize_storage_frame(
-                atoms_clean,
-                pbc_aware=True,
-                center=False,
-                n_slab=int(n_slab_meta),
-            )
-        else:
-            canonicalize_storage_frame(atoms_clean)
+        aligned_to_surface_reference = False
+        if reference_atoms is not None and surface_align_kwargs is not None:
+            is_slab_candidate, _ = _is_slab_surface_minimum(atoms_clean)
+            if is_slab_candidate:
+                _align_slab_minimum_to_reference(
+                    reference_atoms,
+                    atoms_clean,
+                    n_slab=reference_n_slab,
+                    enable_cell_remap=surface_align_kwargs["enable_cell_remap"],
+                    enable_lattice_rotation=surface_align_kwargs[
+                        "enable_lattice_rotation"
+                    ],
+                    max_lattice_shift=surface_align_kwargs["max_lattice_shift"],
+                )
+                aligned_to_surface_reference = True
+                if reference_primary_cell_shift is not None and np.any(
+                    reference_primary_cell_shift != 0
+                ):
+                    apply_primary_cell_shift(atoms_clean, reference_primary_cell_shift)
+        if not aligned_to_surface_reference:
+            if (
+                system_type in {"surface_cluster", "surface_cluster_adsorbate"}
+                and n_slab_meta
+            ):
+                canonicalize_storage_frame(
+                    atoms_clean,
+                    pbc_aware=True,
+                    center=False,
+                    n_slab=int(n_slab_meta),
+                )
+            else:
+                canonicalize_storage_frame(atoms_clean)
         if "tags" in atoms_clean.arrays:
             del atoms_clean.arrays["tags"]
 

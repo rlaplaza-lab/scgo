@@ -100,6 +100,7 @@ def calculate_structure_similarity(
     *,
     ignore_fixed_atoms: bool = True,
     use_mic: bool = False,
+    n_slab: int | None = None,
 ) -> tuple[float, float, bool]:
     """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ."""
     from scgo.utils.comparators import (
@@ -116,6 +117,7 @@ def calculate_structure_similarity(
         comparison_indices = get_shared_mobile_atom_indices(
             atoms1,
             atoms2,
+            n_slab=n_slab,
         )
     else:
         comparison_indices = np.arange(len(atoms1), dtype=int)

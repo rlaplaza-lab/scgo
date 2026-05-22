@@ -70,7 +70,7 @@ DEFAULT_GA_PARAMS = {
 
 # Geometry parameters
 CONNECTIVITY_FACTOR_DEFAULT = 1.4
-MIN_DISTANCE_FACTOR_DEFAULT = 0.5
+MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 
 # Magic number cluster sizes (known stable structures)
 MAGIC_NUMBER_SIZES = {
