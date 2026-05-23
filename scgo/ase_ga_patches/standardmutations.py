@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 """A collection of mutations that can be used."""
-from math import acos, cos, pi, sin
+from math import pi
 
 import numpy as np
 from ase import Atoms
@@ -28,6 +28,95 @@ def _get_blmin_distance(blmin, atomic_number_a, atomic_number_b):
     if key in blmin:
         return blmin[key]
     return blmin[(int(atomic_number_b), int(atomic_number_a))]
+
+
+def _steric_deficit(positions, atomic_numbers, blmin):
+    from scipy.spatial.distance import pdist, squareform
+
+    n_atoms = len(positions)
+    if n_atoms <= 1:
+        return 0.0
+
+    distances = squareform(pdist(positions))
+    deficit = 0.0
+    for i in range(n_atoms):
+        for j in range(i + 1, n_atoms):
+            required = _get_blmin_distance(blmin, atomic_numbers[i], atomic_numbers[j])
+            gap = required - distances[i, j]
+            if gap > 0.0:
+                deficit += gap
+    return deficit
+
+
+def _steric_deficit_two_sets(
+    left_positions,
+    left_numbers,
+    right_positions,
+    right_numbers,
+    blmin,
+):
+    deficit = 0.0
+    for i, left_pos in enumerate(left_positions):
+        for j, right_pos in enumerate(right_positions):
+            required = _get_blmin_distance(blmin, left_numbers[i], right_numbers[j])
+            gap = required - np.linalg.norm(left_pos - right_pos)
+            if gap > 0.0:
+                deficit += gap
+    return deficit
+
+
+def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):
+    """Ranked unit directions from slab normal, PCA axes, and random fill."""
+    centered = positions - center_of_mass
+    candidates = []
+    outward = None
+
+    if len(slab) > 0:
+        outward = center_of_mass - np.mean(slab.get_positions(), axis=0)
+        _append_unique_unit_vector(candidates, outward)
+
+    if len(centered) > 1:
+        covariance = np.dot(centered.T, centered)
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+        order = np.argsort(eigenvalues)
+        axes = [eigenvectors[:, index] for index in order]
+
+        for axis in axes:
+            oriented_axis = axis
+            if outward is not None and np.dot(oriented_axis, outward) < 0.0:
+                oriented_axis = -oriented_axis
+            _append_unique_unit_vector(candidates, oriented_axis)
+
+        if len(axes) >= 2:
+            blends = [axes[0] + axes[-1]]
+            if len(axes) >= 3:
+                blends.append(axes[1] + axes[-1])
+            else:
+                blends.append(axes[0] + axes[1])
+            for axis in blends:
+                oriented_axis = axis
+                if outward is not None and np.dot(oriented_axis, outward) < 0.0:
+                    oriented_axis = -oriented_axis
+                _append_unique_unit_vector(candidates, oriented_axis)
+
+        radial_norms = np.linalg.norm(centered, axis=1)
+        if len(radial_norms) > 0:
+            radial_axis = centered[int(np.argmax(radial_norms))]
+            if outward is not None and np.dot(radial_axis, outward) < 0.0:
+                radial_axis = -radial_axis
+            _append_unique_unit_vector(candidates, radial_axis)
+    else:
+        _append_unique_unit_vector(candidates, np.array([0.0, 0.0, 1.0]))
+
+    attempts = 0
+    while len(candidates) < max_candidates and attempts < 100:
+        axis = _random_unit_vector(rng)
+        if outward is not None and np.dot(axis, outward) < 0.0:
+            axis = -axis
+        _append_unique_unit_vector(candidates, axis)
+        attempts += 1
+
+    return candidates[:max_candidates]
 
 
 class RattleMutation(OffspringCreator):
@@ -752,7 +841,7 @@ class MirrorMutation(OffspringCreator):
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, reflect=True,
-                 target_tags=None, rng=None, verbose=False, max_tries=1000):
+                 target_tags=None, rng=None, verbose=False, max_tries=12):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -762,6 +851,7 @@ class MirrorMutation(OffspringCreator):
         self.target_tags = target_tags
         self.system_type = system_type
         self._policy = get_system_policy(system_type)
+        self.last_attempt_count = 0
 
         self.descriptor = "MirrorMutation"
         self.min_inputs = 1
@@ -778,20 +868,95 @@ class MirrorMutation(OffspringCreator):
 
         return self.finalize_individual(indi), "mutation: mirror"
 
+    def _candidate_planes(self, positions, center_of_mass, slab):
+        max_candidates = max(1, min(int(self.max_tries), 12))
+        candidates = _geometry_candidate_directions(
+            positions,
+            center_of_mass,
+            slab,
+            self.rng,
+            min(6, max_candidates),
+        )
+        outward = None
+        if len(slab) > 0:
+            outward = center_of_mass - np.mean(slab.get_positions(), axis=0)
+
+        attempts = 0
+        while len(candidates) < max_candidates and attempts < 100:
+            axis = _random_unit_vector(self.rng)
+            if outward is not None and np.dot(axis, outward) < 0.0:
+                axis = -axis
+            _append_unique_unit_vector(candidates, axis)
+            attempts += 1
+
+        return candidates[:max_candidates]
+
+    def _build_mirror_top(self, num, pos, center_of_mass, plane, reflect):
+        unique_types = list(set(num))
+        nu = {u: sum(num == u) for u in unique_types}
+
+        distances = [
+            (index, float(np.dot(pos[index] - center_of_mass, plane)))
+            for index in range(len(pos))
+        ]
+        distances.sort(key=lambda item: item[1])
+        nu_taken = {}
+
+        p_use = []
+        n_use = []
+        for index, _distance in distances:
+            element = num[index]
+            if element not in nu_taken:
+                nu_taken[element] = 0
+            if nu_taken[element] < nu[element] / 2.0:
+                p_use.append(pos[index])
+                n_use.append(element)
+                nu_taken[element] += 1
+
+        mirrored = []
+        for point in p_use:
+            mirrored_point = point - 2.0 * np.dot(point - center_of_mass, plane) * plane
+            if reflect:
+                mirrored_point = (
+                    -mirrored_point
+                    + 2.0 * center_of_mass
+                    + 2.0 * plane * np.dot(mirrored_point - center_of_mass, plane)
+                )
+            mirrored.append(mirrored_point)
+
+        n_use.extend(n_use)
+        p_use.extend(mirrored)
+
+        for element in nu:
+            if nu[element] % 2 == 0:
+                continue
+            while n_use.count(element) > nu[element]:
+                for index in range(int(len(n_use) / 2), len(n_use)):
+                    if n_use[index] == element:
+                        del p_use[index]
+                        del n_use[index]
+                        break
+            assert n_use.count(element) == nu[element]
+
+        for index in range(len(n_use)):
+            if num[index] == n_use[index]:
+                continue
+            for swap_index in range(index + 1, len(n_use)):
+                if n_use[swap_index] == num[index]:
+                    n_use[index], n_use[swap_index] = n_use[swap_index], n_use[index]
+                    p_use[index], p_use[swap_index] = p_use[swap_index], p_use[index]
+                    break
+
+        return Atoms(num, p_use)
+
     def mutate(self, atoms):
         """Do the mutation of the atoms input."""
-        reflect = self.reflect
-        tc = True
         slab = atoms[0:len(atoms) - self.n_top]
         top = atoms[len(atoms) - self.n_top: len(atoms)]
         num = top.numbers
-        unique_types = list(set(num))
-        nu = {u: sum(num == u) for u in unique_types}
-        n_tries = self.max_tries
-        counter = 0
-        changed = False
+        pos = top.get_positions()
+        center_of_mass = np.average(pos, axis=0)
 
-        # Determine which tags to target (if use_tags is enabled)
         tags = top.get_tags() if hasattr(top, 'get_tags') else np.arange(len(top))
         unique_tags = np.unique(tags)
         if self.target_tags is not None:
@@ -800,95 +965,50 @@ class MirrorMutation(OffspringCreator):
             if len(unique_tags) == 0:
                 return None
 
-        while tc and counter < n_tries:
-            counter += 1
-            cand = top.copy()
-            pos = cand.get_positions()
+        reflect_options = [self.reflect]
+        if not self.reflect:
+            reflect_options.append(True)
+        else:
+            reflect_options.append(False)
 
-            cm = np.average(top.get_positions(), axis=0)
+        max_candidates = max(1, min(int(self.max_tries), 12))
+        ranked_candidates = []
+        for plane in self._candidate_planes(pos, center_of_mass, slab):
+            for reflect in reflect_options:
+                mutant = self._build_mirror_top(
+                    num,
+                    pos,
+                    center_of_mass,
+                    plane,
+                    reflect,
+                )
+                mutant.set_cell(slab.get_cell())
+                mutant.set_pbc(slab.get_pbc())
+                score = _steric_deficit(mutant.get_positions(), num, self.blmin)
+                if len(slab) > 0:
+                    score += _steric_deficit_two_sets(
+                        mutant.get_positions(),
+                        num,
+                        slab.get_positions(),
+                        slab.numbers,
+                        self.blmin,
+                    )
+                ranked_candidates.append((score, mutant))
 
-            # Uniform random direction on the sphere (correct area element).
-            theta = acos(1.0 - 2.0 * self.rng.random())
-            phi = 2. * pi * self.rng.random()
-            n = (cos(phi) * sin(theta), sin(phi) * sin(theta), cos(theta))
-            n = np.array(n)
+        ranked_candidates.sort(key=lambda item: item[0])
+        ranked_candidates = ranked_candidates[:max_candidates]
 
-            # Calculate all atoms signed distance to the cutting plane
-            D = []
-            for (i, p) in enumerate(pos):
-                d = np.dot(p - cm, n)
-                D.append((i, d))
-
-            # Sort the atoms by their signed distance
-            D.sort(key=lambda x: x[1])
-            nu_taken = {}
-
-            # Select half of the atoms needed for a full cluster
-            p_use = []
-            n_use = []
-            for (i, _d) in D:
-                if num[i] not in nu_taken:
-                    nu_taken[num[i]] = 0
-                if nu_taken[num[i]] < nu[num[i]] / 2.:
-                    p_use.append(pos[i])
-                    n_use.append(num[i])
-                    nu_taken[num[i]] += 1
-
-            # calculate the mirrored position and add these.
-            pn = []
-            for p in p_use:
-                pt = p - 2. * np.dot(p - cm, n) * n
-                if reflect:
-                    pt = -pt + 2 * cm + 2 * n * np.dot(pt - cm, n)
-                pn.append(pt)
-
-            n_use.extend(n_use)
-            p_use.extend(pn)
-
-            # In the case of an uneven number of
-            # atoms we need to add one extra
-            for n in nu:
-                if nu[n] % 2 == 0:
-                    continue
-                while n_use.count(n) > nu[n]:
-                    for i in range(int(len(n_use) / 2), len(n_use)):
-                        if n_use[i] == n:
-                            del p_use[i]
-                            del n_use[i]
-                            break
-                assert n_use.count(n) == nu[n]
-
-            # Make sure we have the correct number of atoms
-            # and rearrange the atoms so they are in the right order
-            for i in range(len(n_use)):
-                if num[i] == n_use[i]:
-                    continue
-                for j in range(i + 1, len(n_use)):
-                    if n_use[j] == num[i]:
-                        tn = n_use[i]
-                        tp = p_use[i]
-                        n_use[i] = n_use[j]
-                        p_use[i] = p_use[j]
-                        p_use[j] = tp
-                        n_use[j] = tn
-
-            # Finally we check that nothing is too close in the end product.
-            cand = Atoms(num, p_use, cell=slab.get_cell(), pbc=slab.get_pbc())
-
-            tc = atoms_too_close(cand, self.blmin)
-            if tc:
+        self.last_attempt_count = 0
+        for _score, mutant in ranked_candidates:
+            self.last_attempt_count += 1
+            if atoms_too_close(mutant, self.blmin):
                 continue
-            tc = atoms_too_close_two_sets(slab, cand, self.blmin)
+            if atoms_too_close_two_sets(slab, mutant, self.blmin):
+                continue
+            return slab + mutant
 
-            if not changed and counter > n_tries // 2:
-                reflect = not reflect
-                changed = True
-
-            tot = slab + cand
-
-        if counter == n_tries:
-            return None
-        return tot
+        self.last_attempt_count = len(ranked_candidates)
+        return None
 
 
 class RotationalMutation(OffspringCreator):
@@ -937,7 +1057,7 @@ class RotationalMutation(OffspringCreator):
 
     def __init__(self, blmin, system_type: SystemType, n_top=None, fraction=0.33, tags=None,
                  min_angle=1.57, test_dist_to_slab=True, target_tags=None,
-                 rng=None, verbose=False, max_inner_attempts=10000):
+                 rng=None, verbose=False, max_inner_attempts=24):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -950,6 +1070,7 @@ class RotationalMutation(OffspringCreator):
         self.system_type = system_type
         self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
+        self.last_attempt_count = 0
         self.descriptor = "RotationalMutation"
         self.min_inputs = 1
 
@@ -965,6 +1086,86 @@ class RotationalMutation(OffspringCreator):
 
         return self.finalize_individual(indi), "mutation: rotational"
 
+    def _candidate_rotation_axes(self, positions):
+        candidates = []
+        if len(positions) == 2:
+            bond = positions[1] - positions[0]
+            bond /= np.linalg.norm(bond)
+            for alt in (
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 1.0, 0.0]),
+                np.array([0.0, 0.0, 1.0]),
+            ):
+                axis = np.cross(bond, alt)
+                norm = np.linalg.norm(axis)
+                if norm > 1e-12:
+                    _append_unique_unit_vector(candidates, axis / norm)
+        else:
+            centered = positions - np.mean(positions, axis=0)
+            if len(centered) > 1:
+                covariance = np.dot(centered.T, centered)
+                eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+                for index in np.argsort(eigenvalues):
+                    _append_unique_unit_vector(candidates, eigenvectors[:, index])
+
+        attempts = 0
+        while len(candidates) < 3 and attempts < 20:
+            _append_unique_unit_vector(candidates, _random_unit_vector(self.rng))
+            attempts += 1
+
+        return candidates[:3]
+
+    def _candidate_angles(self):
+        min_angle = self.min_angle
+        mid_angle = 0.5 * (min_angle + np.pi)
+        angles = [min_angle, mid_angle, np.pi]
+        max_angles = max(1, min(int(self.max_inner_attempts), 4))
+        angles = angles[:max_angles]
+        if len(angles) < max_angles:
+            angles.append(min_angle + (np.pi - min_angle) * self.rng.random())
+        return angles
+
+    def _rotation_configs(self, chosen_tags, indices, positions):
+        axis_sets = {
+            tag: self._candidate_rotation_axes(positions[indices[tag]])
+            for tag in chosen_tags
+        }
+        angles = self._candidate_angles()
+        configs = []
+
+        for angle in angles:
+            config = {}
+            for tag in chosen_tags:
+                axes = axis_sets[tag]
+                if not axes:
+                    continue
+                config[tag] = (axes[0], angle)
+            if len(config) == len(chosen_tags):
+                configs.append(config)
+
+        for axis_index in range(1, 3):
+            for angle in angles:
+                config = {}
+                for tag in chosen_tags:
+                    axes = axis_sets[tag]
+                    if len(axes) <= axis_index:
+                        continue
+                    config[tag] = (axes[axis_index], angle)
+                if len(config) == len(chosen_tags):
+                    configs.append(config)
+
+        max_configs = max(1, min(int(self.max_inner_attempts), 24))
+        return configs[:max_configs]
+
+    def _apply_rotation_config(self, positions, indices, config):
+        new_positions = np.copy(positions)
+        for tag, (axis, angle) in config.items():
+            moiety = new_positions[indices[tag]]
+            center = np.mean(moiety, axis=0)
+            rotation = get_rotation_matrix(axis, angle)
+            new_positions[indices[tag]] = np.dot(rotation, (moiety - center).T).T + center
+        return new_positions
+
     def mutate(self, atoms):
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
@@ -975,6 +1176,7 @@ class RotationalMutation(OffspringCreator):
         gather_atoms_by_tag(mutant)
         pos = mutant.get_positions()
         tags = mutant.get_tags()
+        numbers = mutant.get_atomic_numbers()
 
         # Determine which tags to target
         unique_tags = np.unique(tags)
@@ -996,59 +1198,48 @@ class RotationalMutation(OffspringCreator):
 
         n_rot = int(np.ceil(len(indices) * self.fraction))
         if n_rot > 0 and len(indices) > 0:
-            chosen_tags = self.rng.choice(list(indices.keys()), size=min(n_rot, len(indices)),
-                                          replace=False)
+            chosen_tags = self.rng.choice(
+                list(indices.keys()),
+                size=min(n_rot, len(indices)),
+                replace=False,
+            )
         else:
-            chosen_tags = []
+            return None
 
-        too_close = True
-        count = 0
-        maxcount = self.max_inner_attempts
-        while too_close and count < maxcount:
-            newpos = np.copy(pos)
-            for tag in chosen_tags:
-                p = np.copy(newpos[indices[tag]])
-                cop = np.mean(p, axis=0)
+        configs = self._rotation_configs(chosen_tags, indices, pos)
+        if not configs:
+            return None
 
-                if len(p) == 2:
-                    # Generate axis guaranteed not collinear with bond:
-                    # cross(bond, random) is always perpendicular to bond.
-                    line = (p[1] - p[0]) / np.linalg.norm(p[1] - p[0])
-                    rvec = self.rng.standard_normal(3)
-                    axis = np.cross(line, rvec)
-                    norm = np.linalg.norm(axis)
-                    if norm < 1e-12:
-                        # Extremely rare: rvec exactly parallel to line.
-                        # Pick a deterministic fallback perpendicular.
-                        alt = np.array([1.0, 0.0, 0.0])
-                        if abs(np.dot(line, alt)) > 0.9:
-                            alt = np.array([0.0, 1.0, 0.0])
-                        axis = np.cross(line, alt)
-                        norm = np.linalg.norm(axis)
-                    axis /= norm
-                else:
-                    axis = self.rng.standard_normal(3)
-                    axis /= np.linalg.norm(axis)
+        ranked = []
+        for config in configs:
+            newpos = self._apply_rotation_config(pos, indices, config)
+            score = _steric_deficit(newpos, numbers, self.blmin)
+            if len(slab) > 0:
+                score += _steric_deficit_two_sets(
+                    newpos,
+                    numbers,
+                    slab.get_positions(),
+                    slab.numbers,
+                    self.blmin,
+                )
+            ranked.append((score, newpos))
 
-                angle = self.min_angle + (np.pi - self.min_angle) * self.rng.random()
-
-                m = get_rotation_matrix(axis, angle)
-                newpos[indices[tag]] = np.dot(m, (p - cop).T).T + cop
-
+        ranked.sort(key=lambda item: item[0])
+        self.last_attempt_count = 0
+        for _score, newpos in ranked:
+            self.last_attempt_count += 1
             mutant.set_positions(newpos)
-            # Only center gas-phase clusters; surface adsorbates must keep
-            # their positions relative to the slab.
             if not self._policy.uses_surface:
                 mutant.center()
-            too_close = atoms_too_close(mutant, self.blmin, use_tags=True)
-            count += 1
 
+            too_close = atoms_too_close(mutant, self.blmin, use_tags=True)
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
 
-        mutant = None if count == maxcount else slab + mutant
+            if not too_close:
+                return slab + mutant
 
-        return mutant
+        return None
 
 
 class FlatteningMutation(OffspringCreator):
@@ -1076,7 +1267,7 @@ class FlatteningMutation(OffspringCreator):
 
     def __init__(self, blmin, n_top, system_type: SystemType, thickness_factor=0.5,
                  test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=5000):
+                 max_inner_attempts=12):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -1093,57 +1284,14 @@ class FlatteningMutation(OffspringCreator):
         self.min_inputs = 1
 
     def _candidate_normals(self, positions, center_of_mass, slab):
-        centered = positions - center_of_mass
-        candidates = []
-        outward = None
         max_candidates = max(1, min(int(self.max_inner_attempts), 6))
-
-        if len(slab) > 0:
-            outward = center_of_mass - np.mean(slab.get_positions(), axis=0)
-            _append_unique_unit_vector(candidates, outward)
-
-        if len(centered) > 1:
-            covariance = np.dot(centered.T, centered)
-            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-            order = np.argsort(eigenvalues)
-            axes = [eigenvectors[:, index] for index in order]
-
-            for axis in axes:
-                oriented_axis = axis
-                if outward is not None and np.dot(oriented_axis, outward) < 0.0:
-                    oriented_axis = -oriented_axis
-                _append_unique_unit_vector(candidates, oriented_axis)
-
-            if len(axes) >= 2:
-                blends = [axes[0] + axes[-1]]
-                if len(axes) >= 3:
-                    blends.append(axes[1] + axes[-1])
-                else:
-                    blends.append(axes[0] + axes[1])
-                for axis in blends:
-                    oriented_axis = axis
-                    if outward is not None and np.dot(oriented_axis, outward) < 0.0:
-                        oriented_axis = -oriented_axis
-                    _append_unique_unit_vector(candidates, oriented_axis)
-
-            radial_norms = np.linalg.norm(centered, axis=1)
-            if len(radial_norms) > 0:
-                radial_axis = centered[int(np.argmax(radial_norms))]
-                if outward is not None and np.dot(radial_axis, outward) < 0.0:
-                    radial_axis = -radial_axis
-                _append_unique_unit_vector(candidates, radial_axis)
-        else:
-            _append_unique_unit_vector(candidates, np.array([0.0, 0.0, 1.0]))
-
-        attempts = 0
-        while len(candidates) < max_candidates and attempts < 100:
-            axis = _random_unit_vector(self.rng)
-            if outward is not None and np.dot(axis, outward) < 0.0:
-                axis = -axis
-            _append_unique_unit_vector(candidates, axis)
-            attempts += 1
-
-        return candidates[:max_candidates]
+        return _geometry_candidate_directions(
+            positions,
+            center_of_mass,
+            slab,
+            self.rng,
+            max_candidates,
+        )
 
     def _resolve_normal_offsets(
         self,
@@ -1369,14 +1517,16 @@ class BreathingMutation(OffspringCreator):
 
     def _candidate_scales(self, positions, atomic_numbers, slab):
         feasible_lower = self._minimum_feasible_scale(positions, atomic_numbers)
-        if feasible_lower > self.scale_max + 1e-12:
-            return []
+        tol = 1e-9
+        # Dense parents (e.g. tight random-spherical init) can require s > scale_max to
+        # clear blmin. Apply the minimum relieving uniform expansion instead of giving up.
+        if feasible_lower > self.scale_max + tol:
+            return [float(feasible_lower)]
 
         feasible_lower = max(self.scale_min, feasible_lower)
         interval_width = max(0.0, self.scale_max - feasible_lower)
-        max_candidates = max(1, min(int(self.max_inner_attempts), 5))
+        max_candidates = max(1, min(int(self.max_inner_attempts), 8))
         candidates = []
-        tol = 1e-9
         allow_unit_scale = interval_width <= tol
 
         def append_candidate(scale, force=False):

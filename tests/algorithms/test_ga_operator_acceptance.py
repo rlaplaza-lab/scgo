@@ -65,10 +65,10 @@ MAX_CROSSOVER_ATTEMPTS = 12
 _ACCEPTANCE_FLATTENING_THICKNESS = 0.5
 # Cap inner trials so surface + gas acceptance stays CI-bounded while matching
 # the bounded candidate sets used by the operators.
-_ACCEPTANCE_FLATTEN_MAX_INNER = 900
-_ACCEPTANCE_ROT_MAX_INNER = 900
-_ACCEPTANCE_MIRROR_TRIES = 280
-_ACCEPTANCE_BREATHING_MAX_INNER = 900
+_ACCEPTANCE_FLATTEN_MAX_INNER = 12
+_ACCEPTANCE_ROT_MAX_INNER = 24
+_ACCEPTANCE_MIRROR_TRIES = 12
+_ACCEPTANCE_BREATHING_MAX_INNER = 5
 _ACCEPTANCE_SLIDE_MAX_INNER = 12
 
 _TEMPLATE_CORE_OPERATOR_NAMES = ("rattle", "rotational", "anisotropic_rattle")
@@ -284,9 +284,9 @@ def test_mutations_gas_pt55_icosahedral_template_core_operators() -> None:
             blmin,
             0,
             flattening_thickness_factor=0.5,
-            flattening_max_inner_attempts=5000,
-            rotational_max_inner_attempts=10000,
-            mirror_max_tries=1000,
+            flattening_max_inner_attempts=12,
+            rotational_max_inner_attempts=24,
+            mirror_max_tries=12,
         )
         assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
 
@@ -307,10 +307,6 @@ def test_mutations_gas_pt55_random_spherical_all_factory_operators() -> None:
     assert "permutation" not in name_map
 
     for op_name in sorted(name_map.keys(), key=lambda k: name_map[k]):
-        # Breathing rarely succeeds on large random monometallic clusters within the
-        # bounded outer attempt budget; gas bimetallic and smaller cases cover it.
-        if op_name == "breathing":
-            continue
         ok = _mutation_operator_succeeds(
             op_name,
             name_map,

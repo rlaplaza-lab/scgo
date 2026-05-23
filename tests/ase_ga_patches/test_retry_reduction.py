@@ -26,6 +26,7 @@ from scgo.ase_ga_patches.standardmutations import (
     BreathingMutation,
     FlatteningMutation,
     InPlaneSlideMutation,
+    MirrorMutation,
     OverlapReliefMutation,
     PermutationMutation,
     RattleMutation,
@@ -136,9 +137,11 @@ class TestRotationalMutationAngleRange:
             min_angle=np.pi / 2,
             test_dist_to_slab=False,
             rng=np.random.default_rng(42),
+            max_inner_attempts=24,
         )
         result = mut.mutate(atoms)
         assert result is not None
+        assert mut.last_attempt_count <= 24
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +259,46 @@ class TestMirrorFactoryUsesReflectedMode:
         assert mirror.reflect is True
 
 
+class TestMirrorBoundedCandidates:
+    def test_mirror_uses_ranked_plane_set(self, au2pt2_atoms):
+        atoms = au2pt2_atoms.copy()
+        blmin = _blmin(atoms)
+        mut = MirrorMutation(
+            blmin,
+            len(atoms),
+            system_type="gas_cluster",
+            rng=np.random.default_rng(17),
+            max_tries=12,
+        )
+        result = mut.mutate(atoms)
+        assert result is not None
+        assert mut.last_attempt_count <= 12
+
+
+class TestRotationalBoundedCandidates:
+    def test_rotational_uses_ranked_axis_angle_set(self):
+        atoms = Atoms(
+            "Pt4",
+            positions=[[0, 0, 0], [2.5, 0, 0], [5.0, 0, 0], [7.5, 0, 0]],
+            tags=[0, 0, 1, 1],
+        )
+        atoms.center(vacuum=10.0)
+        blmin = {(78, 78): 0.1}
+        mut = RotationalMutation(
+            blmin,
+            system_type="gas_cluster",
+            n_top=4,
+            fraction=1.0,
+            min_angle=np.pi / 2,
+            test_dist_to_slab=False,
+            rng=np.random.default_rng(42),
+            max_inner_attempts=24,
+        )
+        result = mut.mutate(atoms)
+        assert result is not None
+        assert mut.last_attempt_count <= 24
+
+
 # ---------------------------------------------------------------------------
 # 8. FlatteningMutation vectorised projection matches scalar version
 # ---------------------------------------------------------------------------
@@ -327,6 +370,38 @@ class TestBreathingBoundedCandidates:
 
         assert result is not None
         assert mut.last_attempt_count <= 5
+
+    def test_breathing_relief_when_nominal_scale_max_is_too_small(self):
+        """Tight clusters need s > scale_max; apply minimum relieving expansion."""
+        from scgo.initialization import create_initial_cluster
+
+        composition = ["Pt"] * 55
+        atoms = create_initial_cluster(
+            composition,
+            rng=np.random.default_rng(1234),
+            mode="random_spherical",
+            vacuum=10.0,
+        )
+        blmin = _blmin(atoms)
+        mut = BreathingMutation(
+            blmin,
+            len(atoms),
+            system_type="gas_cluster",
+            scale_min=0.82,
+            scale_max=1.22,
+            test_dist_to_slab=False,
+            rng=np.random.default_rng(0),
+            max_inner_attempts=5,
+        )
+        pos = atoms.get_positions()
+        num = atoms.get_atomic_numbers()
+        feasible_lower = mut._minimum_feasible_scale(pos, num)
+        assert feasible_lower > mut.scale_max
+        scales = mut._candidate_scales(pos, num, atoms[:0])
+        assert len(scales) == 1
+        assert np.isclose(scales[0], feasible_lower)
+        assert mut.mutate(atoms) is not None
+        assert mut.last_attempt_count == 1
 
 
 # ---------------------------------------------------------------------------

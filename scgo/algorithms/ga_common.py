@@ -660,9 +660,9 @@ def create_mutation_operators(
     n_slab: int = 0,
     surface_normal_axis: int = 2,
     flattening_thickness_factor: float = 0.5,
-    flattening_max_inner_attempts: int = 5000,
-    rotational_max_inner_attempts: int = 10000,
-    mirror_max_tries: int = 1000,
+    flattening_max_inner_attempts: int = 12,
+    rotational_max_inner_attempts: int = 24,
+    mirror_max_tries: int = 12,
     breathing_max_inner_attempts: int = 1000,
     in_plane_slide_max_inner_attempts: int = 1000,
     in_plane_slide_max_displacement: float = 10.0,
@@ -686,9 +686,9 @@ def create_mutation_operators(
         surface_normal_axis: Slab normal (0, 1, or 2) for in-plane slide.
         flattening_thickness_factor: Passed to :class:`FlatteningMutation`
             (larger values relax post-projection thickness, helping large clusters).
-        flattening_max_inner_attempts: Max random-plane trials per flattening call.
-        rotational_max_inner_attempts: Max trials per rotational mutation call.
-        mirror_max_tries: Max cutting-plane trials per mirror mutation call.
+        flattening_max_inner_attempts: Max ranked flattening candidates per call.
+        rotational_max_inner_attempts: Max ranked rotation candidates per call.
+        mirror_max_tries: Max ranked mirror cutting-plane candidates per call.
         breathing_max_inner_attempts: Max radial-scale trials per breathing call.
         in_plane_slide_max_inner_attempts: Max slide trials per slide call.
         in_plane_slide_max_displacement: Maximum displacement magnitude (Å) per
