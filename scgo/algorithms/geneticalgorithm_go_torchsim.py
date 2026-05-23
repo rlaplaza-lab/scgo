@@ -57,7 +57,6 @@ from scgo.database.metadata import (
     update_metadata,
 )
 from scgo.initialization import compute_cell_side
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.system_types import (
@@ -397,17 +396,13 @@ def ga_go_torchsim(
     }
     per_generation: list[dict[str, Any]] | None = [] if detailed_timing else None
 
-    # Extract connectivity factor from config or params
-    if connectivity_factor is None:
-        if cluster_adsorbate_config is not None:
-            connectivity_factor = cluster_adsorbate_config.structure_connectivity_factor
-        elif surface_config is not None:
-            connectivity_factor = surface_config.structure_connectivity_factor
-        else:
-            connectivity_factor = CONNECTIVITY_FACTOR
+    from scgo.system_types import resolve_connectivity_factor
 
-    if system_type == "gas_cluster" and surface_config is not None:
-        system_type = "surface_cluster"
+    connectivity_factor = resolve_connectivity_factor(
+        connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        surface_config=surface_config,
+    )
     validate_composition(composition, allow_empty=False, allow_tuple=False)
     validate_system_type_settings(
         system_type=system_type, surface_config=surface_config

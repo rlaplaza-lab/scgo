@@ -17,7 +17,6 @@ from scgo.constants import (
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_NEB_TANGENT_METHOD,
 )
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
@@ -29,6 +28,7 @@ from scgo.system_types import (
     SystemType,
     _n_core_mobile_from_adsorbate_definition,
     get_system_policy,
+    resolve_connectivity_factor,
     validate_composition_against_adsorbate,
     validate_structure_for_system_type,
     validate_system_type_settings,
@@ -324,8 +324,7 @@ def _apply_surface_ts_geometry_gate(
     n_slab = len(surface_config.slab)
     use_mic = bool(surface_config.comparator_use_mic)
     axis = int(surface_config.surface_normal_axis)
-    # Use the provided connectivity_factor, or default to CONNECTIVITY_FACTOR
-    cf = connectivity_factor if connectivity_factor is not None else CONNECTIVITY_FACTOR
+    cf = resolve_connectivity_factor(connectivity_factor, surface_config=surface_config)
     checks = (
         ("reactant", "reactant_structure"),
         ("product", "product_structure"),
@@ -448,9 +447,9 @@ def run_transition_state_search(
     logger = get_logger(__name__)
     cleanup_torch_cuda(logger=logger)
 
-    # Ensure connectivity_factor always has a valid value
-    if connectivity_factor is None:
-        connectivity_factor = CONNECTIVITY_FACTOR
+    connectivity_factor = resolve_connectivity_factor(
+        connectivity_factor, surface_config=surface_config
+    )
 
     validate_composition(composition, allow_empty=False)
     validate_system_type_settings(

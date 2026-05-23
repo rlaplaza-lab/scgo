@@ -7,6 +7,7 @@ from typing import Literal, NotRequired, TypedDict
 
 from ase import Atoms
 
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
@@ -141,6 +142,22 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
 def get_system_policy(system_type: SystemType) -> SystemPolicy:
     """Return centralized behavior policy for one explicit system type."""
     return SYSTEM_TYPE_POLICIES[system_type]
+
+
+def resolve_connectivity_factor(
+    connectivity_factor: float | None,
+    *,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
+    surface_config: SurfaceSystemConfig | None = None,
+) -> float:
+    """Resolve structure connectivity factor from explicit value or configs."""
+    if connectivity_factor is not None:
+        return float(connectivity_factor)
+    if cluster_adsorbate_config is not None:
+        return float(cluster_adsorbate_config.structure_connectivity_factor)
+    if surface_config is not None:
+        return float(surface_config.structure_connectivity_factor)
+    return float(CONNECTIVITY_FACTOR)
 
 
 def validate_system_type_settings(

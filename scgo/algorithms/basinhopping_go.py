@@ -28,7 +28,6 @@ from scgo.constants import (
 from scgo.database import HPC_DATABASE_EXCEPTIONS, SCGODatabaseManager, setup_database
 from scgo.database.metadata import add_metadata, persist_provenance
 from scgo.database.sync import retry_with_backoff
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
@@ -224,14 +223,13 @@ def bh_go(
         system_type=system_type, surface_config=surface_config
     )
 
-    # Extract connectivity factor from config or params
-    if connectivity_factor is None:
-        if cluster_adsorbate_config is not None:
-            connectivity_factor = cluster_adsorbate_config.structure_connectivity_factor
-        elif surface_config is not None:
-            connectivity_factor = surface_config.structure_connectivity_factor
-        else:
-            connectivity_factor = CONNECTIVITY_FACTOR
+    from scgo.system_types import resolve_connectivity_factor
+
+    connectivity_factor = resolve_connectivity_factor(
+        connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        surface_config=surface_config,
+    )
 
     policy = get_system_policy(system_type)
     surface_mode = policy.uses_surface

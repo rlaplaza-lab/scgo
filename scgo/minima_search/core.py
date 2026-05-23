@@ -157,10 +157,8 @@ def _resolve_surface_alignment_kwargs(
     """Resolve slab final-write alignment knobs from GO kwargs and system policy."""
     system_type = global_optimizer_kwargs.get("system_type")
     if not isinstance(system_type, str):
-        system_type = (
-            "surface_cluster"
-            if global_optimizer_kwargs.get("surface_config") is not None
-            else "gas_cluster"
+        raise ValueError(
+            "system_type must be set in global_optimizer_kwargs for surface alignment."
         )
     policy = get_system_policy(system_type)  # type: ignore[arg-type]
     if not policy.uses_surface:
@@ -868,7 +866,14 @@ def run_trials(
         params=params,
     )
 
-    surface_align_kwargs = _resolve_surface_alignment_kwargs(global_optimizer_kwargs)
+    align_kwargs_source = dict(global_optimizer_kwargs)
+    if not isinstance(align_kwargs_source.get("system_type"), str):
+        align_kwargs_source["system_type"] = (
+            "surface_cluster"
+            if align_kwargs_source.get("surface_config") is not None
+            else "gas_cluster"
+        )
+    surface_align_kwargs = _resolve_surface_alignment_kwargs(align_kwargs_source)
     reference_atoms: Atoms | None = None
     reference_n_slab = 0
     reference_primary_cell_shift: np.ndarray | None = None

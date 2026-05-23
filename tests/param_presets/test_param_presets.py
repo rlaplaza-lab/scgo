@@ -320,6 +320,7 @@ def test_production_style_mace_go_ts_surface_has_surface_config(monkeypatch):
         {"fitness_strategy": "low_energy"},
         ["Pt"] * 5,
         "ga",
+        system_type="surface_cluster",
     )
     assert prepared["niter_local_relaxation"] >= 400
     assert ts_params["surface_config"] is cfg

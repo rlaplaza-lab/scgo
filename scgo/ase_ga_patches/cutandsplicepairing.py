@@ -170,8 +170,6 @@ class CutAndSplicePairing(OffspringCreator):
         self.target_tags = target_tags
         self.last_attempt_count = 0
         self.last_cell_attempt_count = 0
-        if len(self.slab) > 0 and system_type == "gas_cluster":
-            system_type = "surface_cluster"
         if len(self.slab) > 0 and not uses_surface(system_type):
             raise ValueError(
                 "CutAndSplicePairing received slab atoms with non-surface "

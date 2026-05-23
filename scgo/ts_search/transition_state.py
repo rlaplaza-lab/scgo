@@ -423,34 +423,6 @@ def _mobile_alignment_mask(
     return mobile
 
 
-def _apply_inplane_mobile_kabsch(
-    ref_pos: np.ndarray,
-    prod_pos: np.ndarray,
-    mobile_mask: np.ndarray,
-    *,
-    surface_normal_axis: int,
-) -> np.ndarray:
-    """Rotate mobile atoms in-plane so product geometry matches reactant.
-
-    Deprecated for surface NEB: use :func:`_align_product_surface_pbc` instead,
-    which applies a global lattice-compatible rotation.
-    """
-    idx = np.where(mobile_mask)[0]
-    if idx.size < 2 or idx.size == mobile_mask.size:
-        return prod_pos
-    p_ref = ref_pos[idx]
-    p_prod = prod_pos[idx]
-    center = p_ref.mean(axis=0)
-    p_ref_c = p_ref - center
-    p_prod_c = p_prod - center
-    rot = _kabsch_rotation_in_plane(
-        p_ref_c, p_prod_c, surface_normal_axis=surface_normal_axis
-    )
-    out = prod_pos.copy()
-    out[idx] = (p_prod_c @ rot.T) + center
-    return out
-
-
 def _cell_array(cell: Any) -> np.ndarray:
     """Return a 3x3 cell matrix from ASE ``Cell`` or ndarray."""
     if hasattr(cell, "array"):
@@ -755,16 +727,6 @@ def _align_product_for_neb(
         n_slab=n_slab,
         in_plane_only=False,
     )
-
-
-def _align_product_mic_to_reactant(
-    reactant: Atoms,
-    product_positions: np.ndarray,
-    *,
-    n_slab: int = 0,
-) -> np.ndarray:
-    """Deprecated alias; routes to :func:`_align_product_for_neb` (no mobile-only rotation)."""
-    return _align_product_for_neb(reactant, product_positions, n_slab=n_slab)
 
 
 def _align_product_kabsch_to_reactant(

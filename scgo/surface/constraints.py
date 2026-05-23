@@ -12,60 +12,66 @@ from scipy.cluster.hierarchy import fclusterdata
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.validation import validate_surface_config_slab_prefix
 
+_LAYER_CLUSTER_THRESHOLD_ANG = 0.4
+
+
+def _layer_indices_by_clustering(
+    positions: np.ndarray,
+    axis: int,
+    *,
+    n_layers: int,
+    from_top: bool,
+) -> set[int]:
+    """Return atom indices in ``n_layers`` distinct coordinate layers along ``axis``."""
+    if n_layers < 1 or len(positions) == 0:
+        return set()
+
+    coord = positions[:, axis].reshape(-1, 1)
+    try:
+        clusters = fclusterdata(
+            coord,
+            _LAYER_CLUSTER_THRESHOLD_ANG,
+            criterion="distance",
+            method="single",
+        )
+        unique_clusters = np.unique(clusters)
+        cluster_means = np.array([coord[clusters == c].mean() for c in unique_clusters])
+        sorted_cluster_ids = unique_clusters[np.argsort(cluster_means)]
+
+        if from_top:
+            if len(sorted_cluster_ids) <= n_layers:
+                return set(range(len(positions)))
+            selected = sorted_cluster_ids[-n_layers:]
+        else:
+            if len(sorted_cluster_ids) < n_layers:
+                return set(range(len(positions)))
+            selected = sorted_cluster_ids[:n_layers]
+
+        return {i for i in range(len(positions)) if clusters[i] in selected}
+    except Exception:
+        coord_flat = positions[:, axis]
+        rounded = np.round(coord_flat, decimals=6)
+        unique_vals = np.sort(np.unique(rounded))
+        if from_top:
+            if len(unique_vals) <= n_layers:
+                return set(range(len(positions)))
+            top_vals = set(unique_vals[-n_layers:].tolist())
+            return {i for i in range(len(positions)) if rounded[i] in top_vals}
+        if len(unique_vals) < n_layers:
+            return set(range(len(positions)))
+        cutoff = unique_vals[n_layers - 1]
+        return {i for i in range(len(positions)) if rounded[i] <= cutoff + 1e-9}
+
 
 def _distinct_layers_along_axis(
     positions: np.ndarray,
     axis: int,
     n_layers: int,
 ) -> set[int]:
-    """Return atom indices belonging to the n_layers lowest distinct layers.
-
-    Uses distance-based clustering to identify atomic planes, which is more robust
-    for distorted slabs with defects than simple coordinate rounding. Atoms are
-    clustered based on their coordinate along the specified axis, and the n_layers
-    lowest clusters are identified.
-    """
-    coord = positions[:, axis].reshape(-1, 1)
-
-    # Use hierarchical clustering to group atoms into layers
-    # The tolerance parameter controls how close atoms need to be to be
-    # considered in the same layer. 0.4 Angstrom is a reasonable default
-    # that allows for significant distortion while still separating distinct planes.
-    try:
-        # First, determine the optimal number of clusters by trying to find
-        # distinct layers with a distance threshold
-        threshold = 0.4  # Angstrom - allows for thermal vibration + relaxation
-
-        # Perform clustering
-        clusters = fclusterdata(coord, threshold, criterion="distance", method="single")
-
-        # Get unique cluster IDs sorted by their mean coordinate value
-        unique_clusters = np.unique(clusters)
-        cluster_means = np.array([coord[clusters == c].mean() for c in unique_clusters])
-        sorted_cluster_ids = unique_clusters[np.argsort(cluster_means)]
-
-        # If we have fewer clusters than requested layers, return all atoms
-        if len(sorted_cluster_ids) < n_layers:
-            return set(range(len(positions)))
-
-        # Select the n_layers lowest clusters
-        selected_clusters = sorted_cluster_ids[:n_layers]
-
-        # Include all atoms in the selected clusters
-        indices = {i for i in range(len(positions)) if clusters[i] in selected_clusters}
-
-        return indices
-
-    except Exception:
-        # Fallback to the original rounding method if clustering fails
-        coord_flat = positions[:, axis]
-        rounded = np.round(coord_flat, decimals=6)
-        unique_vals = np.sort(np.unique(rounded))
-        if len(unique_vals) < n_layers:
-            return set(range(len(positions)))
-        cutoff = unique_vals[n_layers - 1]
-        indices = {i for i in range(len(positions)) if rounded[i] <= cutoff + 1e-9}
-        return indices
+    """Return atom indices belonging to the n_layers lowest distinct layers."""
+    return _layer_indices_by_clustering(
+        positions, axis, n_layers=n_layers, from_top=False
+    )
 
 
 def _indices_in_top_n_distinct_layers(
@@ -73,53 +79,8 @@ def _indices_in_top_n_distinct_layers(
     axis: int,
     n_top: int,
 ) -> set[int]:
-    """Return atom indices in the n_top highest distinct coordinate layers.
-
-    Uses distance-based clustering to identify atomic planes, which is more robust
-    for distorted slabs with defects than simple coordinate rounding. Atoms are
-    clustered based on their coordinate along the specified axis, and the n_top
-    highest clusters are identified.
-    """
-    if n_top < 1 or len(positions) == 0:
-        return set()
-
-    coord = positions[:, axis].reshape(-1, 1)
-
-    try:
-        # Use hierarchical clustering to group atoms into layers
-        # The tolerance parameter controls how close atoms need to be to be
-        # considered in the same layer. 0.4 Angstrom is a reasonable default
-        # that allows for significant distortion while still separating distinct planes.
-        threshold = 0.4  # Angstrom - allows for thermal vibration + relaxation
-
-        # Perform clustering
-        clusters = fclusterdata(coord, threshold, criterion="distance", method="single")
-
-        # Get unique cluster IDs sorted by their mean coordinate value
-        unique_clusters = np.unique(clusters)
-        cluster_means = np.array([coord[clusters == c].mean() for c in unique_clusters])
-        sorted_cluster_ids = unique_clusters[np.argsort(cluster_means)]
-
-        # If we have fewer or equal clusters than requested top layers, return all atoms
-        if len(sorted_cluster_ids) <= n_top:
-            return set(range(len(positions)))
-
-        # Select the n_top highest clusters
-        selected_clusters = sorted_cluster_ids[-n_top:]
-
-        # Get all atoms in the selected clusters
-        return {i for i in range(len(positions)) if clusters[i] in selected_clusters}
-
-    except Exception:
-        # Fallback to the original rounding method if clustering fails
-        coord_flat = positions[:, axis]
-        rounded = np.round(coord_flat, decimals=6)
-        unique_vals = np.sort(np.unique(rounded))
-        if len(unique_vals) <= n_top:
-            return set(range(len(positions)))
-        top_vals = unique_vals[-n_top:]
-        top_set = set(top_vals.tolist())
-        return {i for i in range(len(positions)) if rounded[i] in top_set}
+    """Return atom indices in the n_top highest distinct coordinate layers."""
+    return _layer_indices_by_clustering(positions, axis, n_layers=n_top, from_top=True)
 
 
 def attach_slab_constraints(

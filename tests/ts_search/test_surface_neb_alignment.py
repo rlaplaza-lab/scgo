@@ -98,8 +98,8 @@ def test_surface_alignment_rotation_reduces_mobile_rms():
     assert float(np.max(slab_disp)) < 1e-6
 
 
-def test_interpolate_path_surface_uses_pbc_align_not_mobile_kabsch(monkeypatch):
-    """Slab NEB must not call mobile-only Kabsch (energy-inequivalent rotation)."""
+def test_interpolate_path_surface_uses_pbc_align_entrypoint(monkeypatch):
+    """Slab NEB routes endpoint alignment through ``_align_product_for_neb``."""
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
     slab.pbc = [True, True, False]
     z0 = slab.get_positions()[:, 2].max() + 1.5
@@ -107,18 +107,13 @@ def test_interpolate_path_surface_uses_pbc_align_not_mobile_kabsch(monkeypatch):
     a = slab.copy() + Atoms("Pt", positions=[[0.1, 0.1, z0]])
     b = slab.copy() + Atoms("Pt", positions=[[slab.cell[0, 0] - 0.1, 0.1, z0]])
 
-    called = {"mobile_kabsch": 0, "for_neb": 0}
+    called = {"for_neb": 0}
     orig_for_neb = ts_mod._align_product_for_neb
-
-    def _track_mobile(*args, **kwargs):
-        called["mobile_kabsch"] += 1
-        return ts_mod._apply_inplane_mobile_kabsch(*args, **kwargs)
 
     def _track_for_neb(*args, **kwargs):
         called["for_neb"] += 1
         return orig_for_neb(*args, **kwargs)
 
-    monkeypatch.setattr(ts_mod, "_apply_inplane_mobile_kabsch", _track_mobile)
     monkeypatch.setattr(ts_mod, "_align_product_for_neb", _track_for_neb)
 
     interpolate_path(
@@ -132,7 +127,6 @@ def test_interpolate_path_surface_uses_pbc_align_not_mobile_kabsch(monkeypatch):
         system_type="surface_cluster",
     )
     assert called["for_neb"] == 1
-    assert called["mobile_kabsch"] == 0
 
 
 def test_interpolate_path_surface_unifies_product_cell():

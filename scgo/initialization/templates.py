@@ -1461,23 +1461,20 @@ def generate_template_structure(
     return gen_func(composition, n_atoms, rng, connectivity_factor)
 
 
-def _find_valid_template_types(
-    n_atoms: int, rng: np.random.Generator | None = None
-) -> list[str]:
+def _find_valid_template_types(n_atoms: int) -> list[str]:
     """Find all template types that can successfully generate a structure with n_atoms.
+
+    Validity probing is deterministic and keyed only by ``n_atoms`` so cached and
+    concurrent calls produce stable results independent of caller RNG state.
 
     Args:
         n_atoms: Target number of atoms
-        rng: Unused compatibility parameter. Validity probing is intentionally
-            deterministic and keyed only by ``n_atoms`` so cached and concurrent
-            calls produce stable results independent of caller RNG state.
 
     Returns:
         List of template type names that can generate this size
     """
     if n_atoms <= 0:
         return []
-    _ = rng
 
     leader = False
     with _VALID_TEMPLATE_TYPES_LOCK:
@@ -1785,7 +1782,7 @@ def generate_template_matches(
     is_exact_match: bool = nearest_magic == n_atoms
 
     if include_exact and is_exact_match:
-        valid_types = _find_valid_template_types(n_atoms, rng)
+        valid_types = _find_valid_template_types(n_atoms)
         for template_type in valid_types:
             try:
                 atoms = _TEMPLATE_GENERATORS[template_type](
@@ -1814,7 +1811,7 @@ def generate_template_matches(
                 )
 
     if include_near and not is_exact_match:
-        valid_types = _find_valid_template_types(nearest_magic, rng)
+        valid_types = _find_valid_template_types(nearest_magic)
         for template_type in valid_types:
             try:
                 adjusted: Atoms | None = _generate_template_with_atom_adjustment(

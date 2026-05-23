@@ -47,7 +47,6 @@ from scgo.database.metadata import (
 )
 from scgo.database.sync import retry_with_backoff
 from scgo.initialization import compute_cell_side
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.system_types import (
@@ -171,23 +170,16 @@ def ga_go(
     profile_counters: dict[str, int] = {"offspring_created": 0}
     per_generation: list[dict[str, Any]] | None = [] if detailed_timing else None
 
-    # Extract connectivity factor from config or params
-    if connectivity_factor is None:
-        if cluster_adsorbate_config is not None:
-            connectivity_factor = cluster_adsorbate_config.structure_connectivity_factor
-        elif surface_config is not None:
-            connectivity_factor = surface_config.structure_connectivity_factor
-        else:
-            connectivity_factor = CONNECTIVITY_FACTOR
+    from scgo.system_types import resolve_connectivity_factor
 
-    resolved_system_type: SystemType = (
-        "surface_cluster"
-        if system_type == "gas_cluster" and surface_config is not None
-        else system_type
+    connectivity_factor = resolve_connectivity_factor(
+        connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        surface_config=surface_config,
     )
     validate_composition(composition, allow_empty=False, allow_tuple=False)
     validate_system_type_settings(
-        system_type=resolved_system_type, surface_config=surface_config
+        system_type=system_type, surface_config=surface_config
     )
     validate_ga_common_params(
         niter=niter,
@@ -210,7 +202,7 @@ def ga_go(
 
     n_to_optimize = len(composition)
 
-    surface_mode = uses_surface(resolved_system_type)
+    surface_mode = uses_surface(system_type)
     if surface_mode:
         if not isinstance(surface_config, SurfaceSystemConfig):
             raise TypeError(
@@ -255,7 +247,7 @@ def ga_go(
         n_to_optimize,
         rng,
         slab_atoms=slab_for_pairing,
-        system_type=resolved_system_type,
+        system_type=system_type,
         composition=composition,
         adsorbate_definition=adsorbate_definition,
     )
@@ -286,7 +278,7 @@ def ga_go(
         blmin=blmin,
         rng=rng,
         use_adaptive=use_adaptive_mutations,
-        system_type=resolved_system_type,
+        system_type=system_type,
         n_slab=n_slab,
         surface_normal_axis=(surface_config.surface_normal_axis if surface_mode else 2),
         adsorbate_definition=adsorbate_definition,
@@ -332,7 +324,7 @@ def ga_go(
             mode="smart",
             previous_search_glob=previous_search_glob,
             n_jobs=n_jobs_population_init,
-            system_type=resolved_system_type,
+            system_type=system_type,
             adsorbate_definition=adsorbate_definition,
             adsorbate_fragment_template=adsorbate_fragment_template,
             cluster_adsorbate_config=cluster_adsorbate_config,
@@ -397,12 +389,12 @@ def ga_go(
                 n_slab,
                 composition,
                 adsorbate_definition,
-                resolved_system_type,
+                system_type,
             )
             try:
                 validate_structure_for_system_type(
                     cand,
-                    system_type=resolved_system_type,
+                    system_type=system_type,
                     surface_config=surface_config,
                     n_slab=n_slab,
                     adsorbate_definition=adsorbate_definition,
@@ -453,13 +445,13 @@ def ga_go(
                 n_slab,
                 composition,
                 adsorbate_definition,
-                resolved_system_type,
+                system_type,
             )
             validation_error: str | None = None
             try:
                 validate_structure_for_system_type(
                     cand,
-                    system_type=resolved_system_type,
+                    system_type=system_type,
                     surface_config=surface_config,
                     n_slab=n_slab if surface_mode else None,
                     adsorbate_definition=adsorbate_definition,
@@ -483,7 +475,7 @@ def ga_go(
                 **ga_run_metadata_extras(
                     surface_config,
                     n_slab,
-                    resolved_system_type,
+                    system_type,
                     composition,
                     adsorbate_definition=adsorbate_definition,
                 ),
@@ -627,13 +619,13 @@ def ga_go(
                     n_slab,
                     composition,
                     adsorbate_definition,
-                    resolved_system_type,
+                    system_type,
                 )
                 validation_error: str | None = None
                 try:
                     validate_structure_for_system_type(
                         a3,
-                        system_type=resolved_system_type,
+                        system_type=system_type,
                         surface_config=surface_config,
                         n_slab=n_slab,
                         adsorbate_definition=adsorbate_definition,
@@ -682,12 +674,12 @@ def ga_go(
                     n_slab,
                     composition,
                     adsorbate_definition,
-                    resolved_system_type,
+                    system_type,
                 )
                 try:
                     validate_structure_for_system_type(
                         a3,
-                        system_type=resolved_system_type,
+                        system_type=system_type,
                         surface_config=surface_config,
                         n_slab=n_slab if surface_mode else None,
                         adsorbate_definition=adsorbate_definition,
@@ -712,7 +704,7 @@ def ga_go(
                     **ga_run_metadata_extras(
                         surface_config,
                         n_slab,
-                        resolved_system_type,
+                        system_type,
                         composition,
                         adsorbate_definition=adsorbate_definition,
                     ),

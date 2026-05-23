@@ -342,32 +342,13 @@ def resolve_diversity_params(
     return diversity_params
 
 
-def resolve_and_validate_system_type(
-    *,
-    algo_params: dict[str, Any],
-) -> SystemType:
-    """Resolve system_type and validate companion settings."""
-    system_type_raw = algo_params.get("system_type")
-    has_surface_config = algo_params.get("surface_config") is not None
-    if isinstance(system_type_raw, str):
-        if has_surface_config and system_type_raw == "gas_cluster":
-            resolved_type: SystemType = "surface_cluster"
-        else:
-            resolved_type = system_type_raw
-    else:
-        resolved_type = "surface_cluster" if has_surface_config else "gas_cluster"
-    validate_system_type_settings(
-        system_type=resolved_type,
-        surface_config=algo_params.get("surface_config"),
-    )
-    return resolved_type
-
-
 def prepare_algorithm_kwargs(
     algo_params: dict[str, Any],
     params: dict[str, Any],
     composition: list[str],
     chosen_go: str,
+    *,
+    system_type: SystemType,
 ) -> dict[str, Any]:
     """Unified parameter preparation for algorithm execution.
 
@@ -385,8 +366,15 @@ def prepare_algorithm_kwargs(
         Dictionary ready for direct algorithm execution.
     """
     resolved = resolve_auto_params(algo_params, composition, chosen_go)
-    system_type = resolve_and_validate_system_type(
-        algo_params=algo_params,
+    surface_config = algo_params.get("surface_config") or params.get("surface_config")
+    if system_type == "gas_cluster" and surface_config is not None:
+        raise ValueError(
+            "system_type='gas_cluster' does not allow surface_config. "
+            "Use surface_cluster or surface_cluster_adsorbate."
+        )
+    validate_system_type_settings(
+        system_type=system_type,
+        surface_config=surface_config,
     )
     if chosen_go == "simple":
         policy = get_system_policy(system_type)
@@ -400,6 +388,8 @@ def prepare_algorithm_kwargs(
     )
     base_kwargs.update(resolved)
     base_kwargs["system_type"] = system_type
+    if surface_config is not None:
+        base_kwargs["surface_config"] = surface_config
     policy = get_system_policy(system_type)
     if chosen_go == "ga" and policy.uses_surface:
         nlr = int(base_kwargs["niter_local_relaxation"])

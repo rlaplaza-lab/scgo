@@ -313,7 +313,7 @@ class TestFindValidTemplateTypes:
 
     def test_find_valid_types_magic_number(self, rng):
         """Test finding valid types for a magic number."""
-        valid_types = _find_valid_template_types(13, rng)
+        valid_types = _find_valid_template_types(13)
         assert isinstance(valid_types, list)
         assert len(valid_types) > 0
         assert "icosahedron" in valid_types
@@ -322,28 +322,28 @@ class TestFindValidTemplateTypes:
 
     def test_find_valid_types_non_magic(self, rng):
         """Test finding valid types for non-magic number."""
-        valid_types = _find_valid_template_types(25, rng)
+        valid_types = _find_valid_template_types(25)
         assert isinstance(valid_types, list)
         # May or may not have valid types
 
     def test_find_valid_types_zero_atoms(self, rng):
         """Test finding valid types for zero atoms."""
-        valid_types = _find_valid_template_types(0, rng)
+        valid_types = _find_valid_template_types(0)
         assert isinstance(valid_types, list)
         assert len(valid_types) == 0
 
     @pytest.mark.slow
     def test_find_valid_types_very_large(self, rng):
         """Test finding valid types for very large cluster."""
-        valid_types = _find_valid_template_types(600, rng)
+        valid_types = _find_valid_template_types(600)
         assert isinstance(valid_types, list)
         # May or may not have valid types
 
     def test_find_valid_types_reproducible(self):
         """Test that finding valid types is reproducible."""
         rng1, rng2 = create_paired_rngs(42)
-        types1 = _find_valid_template_types(13, rng1)
-        types2 = _find_valid_template_types(13, rng2)
+        types1 = _find_valid_template_types(13)
+        types2 = _find_valid_template_types(13)
         assert set(types1) == set(types2)
 
     def test_find_valid_types_singleflight_by_n_atoms(self, monkeypatch):

@@ -727,6 +727,7 @@ def test_select_structure_pairs_physics_ranking_when_capped(monkeypatch):
         tolerance: float = 0.1,
         pair_cor_max: float = 0.1,
         use_mic: bool = False,
+        **kwargs: object,
     ) -> tuple[float, float, bool]:
         pair = tuple(
             sorted(

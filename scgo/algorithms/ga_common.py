@@ -546,24 +546,13 @@ def create_ga_pairing(
         :class:`~scgo.ase_ga_patches.cutandsplicepairing.CutAndSplicePairing` or
         :class:`~scgo.ase_ga_patches.cutandsplicepairing.DualCutAndSplicePairing`.
     """
-    resolved_system_type: SystemType = (
-        "surface_cluster"
-        if system_type == "gas_cluster"
-        and slab_atoms is not None
-        and len(slab_atoms) > 0
-        else system_type
-    )
-    if (
-        not uses_surface(resolved_system_type)
-        and slab_atoms is not None
-        and len(slab_atoms) > 0
-    ):
+    if not uses_surface(system_type) and slab_atoms is not None and len(slab_atoms) > 0:
         raise ValueError(
-            f"Received non-empty slab_atoms with non-surface system_type={resolved_system_type!r}. "
+            f"Received non-empty slab_atoms with non-surface system_type={system_type!r}. "
             "Use surface_cluster or surface_cluster_adsorbate."
         )
     n_template = len(atoms_template)
-    if uses_surface(resolved_system_type):
+    if uses_surface(system_type):
         if slab_atoms is None or len(slab_atoms) == 0:
             raise ValueError("Surface system types require slab_atoms for pairing.")
         if n_template != len(slab_atoms) + n_to_optimize:
@@ -587,7 +576,7 @@ def create_ga_pairing(
     all_atom_types = get_all_atom_types(atoms_template, top_z)
     blmin = closest_distances_generator(all_atom_types, ratio_of_covalent_radii=0.7)
 
-    if uses_surface(resolved_system_type):
+    if uses_surface(system_type):
         slab = slab_atoms.copy()
     else:
         slab = Atoms(cell=atoms_template.get_cell(), pbc=atoms_template.get_pbc())
@@ -598,7 +587,7 @@ def create_ga_pairing(
     if composition is not None:
         use_partition_tags = (
             core_adsorbate_partition_counts(
-                resolved_system_type, composition, adsorbate_definition
+                system_type, composition, adsorbate_definition
             )
             is not None
         )
@@ -610,7 +599,7 @@ def create_ga_pairing(
             blmin,
             minfrac=min_parent_fraction,
             rng=child_rng_primary,
-            system_type=resolved_system_type,
+            system_type=system_type,
             use_tags=use_partition_tags,
             target_tags=[0] if use_partition_tags else None,
         )
@@ -627,7 +616,7 @@ def create_ga_pairing(
             blmin,
             minfrac=min_parent_fraction,
             rng=child_rng_primary,
-            system_type=resolved_system_type,
+            system_type=system_type,
             use_tags=use_partition_tags,
             target_tags=[0] if use_partition_tags else None,
         )
@@ -638,7 +627,7 @@ def create_ga_pairing(
         blmin,
         minfrac=min_parent_fraction,
         rng=child_rng_primary,
-        system_type=resolved_system_type,
+        system_type=system_type,
         use_tags=use_partition_tags,
         target_tags=[0] if use_partition_tags else None,
     )
@@ -648,7 +637,7 @@ def create_ga_pairing(
         blmin,
         minfrac=expl_minfrac,
         rng=create_child_rng(rng) if rng is not None else None,
-        system_type=resolved_system_type,
+        system_type=system_type,
         use_tags=use_partition_tags,
         target_tags=[0] if use_partition_tags else None,
     )
@@ -710,24 +699,19 @@ def create_mutation_operators(
     Returns:
         Tuple of (operators_list, operator_name_to_index_map).
     """
-    resolved_system_type: SystemType = (
-        "surface_cluster"
-        if system_type == "gas_cluster" and n_slab > 0
-        else system_type
-    )
-    if not uses_surface(resolved_system_type) and n_slab > 0:
+    if not uses_surface(system_type) and n_slab > 0:
         raise ValueError(
-            f"Received n_slab > 0 with non-surface system_type={resolved_system_type!r}. "
+            f"Received n_slab > 0 with non-surface system_type={system_type!r}. "
             "Use surface_cluster or surface_cluster_adsorbate."
         )
     operators = []
     name_map = {}
-    policy = get_system_policy(resolved_system_type)
+    policy = get_system_policy(system_type)
     move_scale = (
         policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
     )
     part = core_adsorbate_partition_counts(
-        resolved_system_type, composition, adsorbate_definition
+        system_type, composition, adsorbate_definition
     )
     use_partition_tags = part is not None
 
@@ -746,7 +730,7 @@ def create_mutation_operators(
         rattle_strength=0.8 * move_scale,
         rattle_prop=min(0.4, 0.4 * move_scale),
         use_tags=use_partition_tags,
-        system_type=resolved_system_type,
+        system_type=system_type,
         rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
     )
     operators.append(rattle)
@@ -755,7 +739,7 @@ def create_mutation_operators(
     overlap_relief: OverlapReliefMutation = OverlapReliefMutation(
         blmin,
         n_to_optimize,
-        system_type=resolved_system_type,
+        system_type=system_type,
         rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
     )
     operators.append(overlap_relief)
@@ -766,8 +750,8 @@ def create_mutation_operators(
             n_to_optimize,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
             blmin=blmin,
-            test_dist_to_slab=uses_surface(resolved_system_type),
-            system_type=resolved_system_type,
+            test_dist_to_slab=uses_surface(system_type),
+            system_type=system_type,
         )
         operators.append(permutation)
         name_map["permutation"] = len(operators) - 1
@@ -776,8 +760,8 @@ def create_mutation_operators(
             n_to_optimize,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
             blmin=blmin,
-            test_dist_to_slab=uses_surface(resolved_system_type),
-            system_type=resolved_system_type,
+            test_dist_to_slab=uses_surface(system_type),
+            system_type=system_type,
         )
         operators.append(shell_swap)
         name_map["shell_swap"] = len(operators) - 1
@@ -790,7 +774,7 @@ def create_mutation_operators(
                 thickness_factor=flattening_thickness_factor,
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=flattening_max_inner_attempts,
-                system_type=resolved_system_type,
+                system_type=system_type,
             )
             operators.append(flattening)
             name_map["flattening"] = len(operators) - 1
@@ -804,7 +788,7 @@ def create_mutation_operators(
                 target_tags=[0],
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=flattening_max_inner_attempts,
-                system_type=resolved_system_type,
+                system_type=system_type,
             )
             operators.append(flattening_core)
             name_map["flattening_core"] = len(operators) - 1
@@ -816,14 +800,14 @@ def create_mutation_operators(
                 target_tags=[1],
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=flattening_max_inner_attempts,
-                system_type=resolved_system_type,
+                system_type=system_type,
             )
             operators.append(flattening_ads)
             name_map["flattening_ads"] = len(operators) - 1
 
         rotational: RotationalMutation = RotationalMutation(
             blmin,
-            system_type=resolved_system_type,
+            system_type=system_type,
             n_top=n_to_optimize,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
             max_inner_attempts=rotational_max_inner_attempts,
@@ -835,7 +819,7 @@ def create_mutation_operators(
             blmin,
             n_to_optimize,
             reflect=True,
-            system_type=resolved_system_type,
+            system_type=system_type,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
             max_tries=mirror_max_tries,
         )
@@ -849,7 +833,7 @@ def create_mutation_operators(
             normal_strength=0.2 * move_scale,
             rattle_prop=min(0.5, 0.5 * move_scale),
             use_tags=use_partition_tags,
-            system_type=resolved_system_type,
+            system_type=system_type,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
         )
         operators.append(anisotropic)
@@ -861,7 +845,7 @@ def create_mutation_operators(
                 n_to_optimize,
                 scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
                 scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
-                system_type=resolved_system_type,
+                system_type=system_type,
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=breathing_max_inner_attempts,
             )
@@ -876,7 +860,7 @@ def create_mutation_operators(
                 scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
                 scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
                 target_tags=[0],
-                system_type=resolved_system_type,
+                system_type=system_type,
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=breathing_max_inner_attempts,
             )
@@ -889,19 +873,19 @@ def create_mutation_operators(
                 scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
                 scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
                 target_tags=[1],
-                system_type=resolved_system_type,
+                system_type=system_type,
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=breathing_max_inner_attempts,
             )
             operators.append(breathing_ads)
             name_map["breathing_ads"] = len(operators) - 1
 
-        if uses_surface(resolved_system_type) and n_slab > 0:
+        if uses_surface(system_type) and n_slab > 0:
             slide: InPlaneSlideMutation = InPlaneSlideMutation(
                 blmin,
                 n_to_optimize,
                 surface_normal_axis=surface_normal_axis,
-                system_type=resolved_system_type,
+                system_type=system_type,
                 rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                 max_inner_attempts=in_plane_slide_max_inner_attempts,
                 max_displacement=max(
@@ -917,7 +901,7 @@ def create_mutation_operators(
                     blmin,
                     n_to_optimize,
                     surface_normal_axis=surface_normal_axis,
-                    system_type=resolved_system_type,
+                    system_type=system_type,
                     rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                     max_inner_attempts=in_plane_slide_max_inner_attempts,
                     max_displacement=max(
@@ -932,7 +916,7 @@ def create_mutation_operators(
                     blmin,
                     n_to_optimize,
                     surface_normal_axis=surface_normal_axis,
-                    system_type=resolved_system_type,
+                    system_type=system_type,
                     rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
                     max_inner_attempts=in_plane_slide_max_inner_attempts,
                     max_displacement=max(

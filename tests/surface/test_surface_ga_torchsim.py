@@ -74,6 +74,7 @@ def test_ga_go_torchsim_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng
         batch_size=2,
         verbosity=0,
         rng=rng,
+        system_type="surface_cluster",
         surface_config=surface_config,
     )
 
@@ -119,6 +120,7 @@ def test_ga_go_torchsim_disconnected_rows_persist_but_are_ineligible(
         batch_size=2,
         verbosity=0,
         rng=rng,
+        system_type="surface_cluster",
         surface_config=surface_config,
     )
 
@@ -161,6 +163,7 @@ def test_ga_go_torchsim_surface_config_mace_cuda(pt_slab_small, tmp_path, rng):
         batch_size=2,
         verbosity=0,
         rng=rng,
+        system_type="surface_cluster",
         surface_config=surface_config,
     )
 

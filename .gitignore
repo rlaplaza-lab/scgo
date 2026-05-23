@@ -65,6 +65,7 @@ dmypy.json
 *.swp
 *.swo
 *~
+*.backup
 
 # Temporary test scripts
 *_test.py

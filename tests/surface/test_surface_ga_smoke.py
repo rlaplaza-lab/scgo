@@ -38,6 +38,7 @@ def test_ga_go_surface_config_emt_smoke(pt_slab_small, tmp_path):
         early_stopping_niter=0,
         verbosity=0,
         rng=rng,
+        system_type="surface_cluster",
         surface_config=surface_config,
     )
 
