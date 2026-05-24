@@ -42,7 +42,6 @@ __all__ = [
     "get_ts_defaults",
     "get_ts_search_params",
     "get_default_uma_params",
-    "get_ts_search_params_uma",
     "get_uma_ga_benchmark_params",
 ]
 
@@ -398,24 +397,6 @@ def get_default_uma_params() -> dict[str, Any]:
         expected_max_atoms=None,
     )
     return params
-
-
-def get_ts_search_params_uma(
-    *,
-    system_type: SystemType,
-    surface_config: SurfaceSystemConfig | None = None,
-    model_name: str = "uma-s-1p2",
-    uma_task: str | None = "oc25",
-    seed: int | None = None,
-) -> dict[str, Any]:
-    """TS preset for UMA (FairChem); same NEB defaults as MACE, for ``scgo[uma]``."""
-    return get_ts_search_params(
-        calculator="UMA",
-        calculator_kwargs={"model_name": model_name, "task_name": uma_task},
-        system_type=system_type,
-        surface_config=surface_config,
-        seed=seed,
-    )
 
 
 def get_torchsim_ga_params(

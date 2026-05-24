@@ -286,11 +286,6 @@ def _validate_calculator_compatibility(
     return True, "Calculator is compatible"
 
 
-def _filter_ga_kwargs(optimizer_kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Drop GA kwargs that are not accepted by :func:`ga_go`."""
-    return filter_dict_keys(optimizer_kwargs, {"optimizer"})
-
-
 def _select_and_run_ga(
     composition: list[str],
     output_dir: str,
@@ -314,7 +309,6 @@ def _select_and_run_ga(
     Returns:
         List of ``(energy, Atoms)`` tuples from the GA run.
     """
-    ga_kwargs = _filter_ga_kwargs(optimizer_kwargs)
     return ga_go(
         composition=composition,
         output_dir=output_dir,
@@ -323,7 +317,7 @@ def _select_and_run_ga(
         verbosity=verbosity,
         run_id=run_id,
         clean=clean,
-        **ga_kwargs,
+        **optimizer_kwargs,
     )
 
 

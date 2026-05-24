@@ -1,31 +1,21 @@
 from ase.calculators.emt import EMT
 
-from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
+from scgo.algorithms import ga_go
+from tests.test_utils import MockRelaxer
 
 
-class MockRelaxer:
-    """Minimal test relaxer that returns slightly different energies."""
-
-    def __init__(self, max_steps: int | None = None):
-        self.max_steps = max_steps
-
-    def relax_batch(self, batch: list):
-        # return (energy, atoms) spaced to avoid duplicate collapse
-        return [(float(i) * 0.1, a.copy()) for i, a in enumerate(batch)]
-
-
-def test_ga_go_torchsim_offspring_logging_levels(tmp_path, rng, capfd):
+def test_ga_go_offspring_logging_levels(tmp_path, rng, capfd):
     """Debug (2) and Trace (3) show per-generation summaries, not per-offspring spam."""
     from scgo.utils.logging import configure_logging
 
     calc = EMT()
     relaxer = MockRelaxer(max_steps=1)
-    outdir_debug = tmp_path / "ga_go_torchsim_log_debug"
+    outdir_debug = tmp_path / "ga_go_log_debug"
 
     # Run in debug mode: should contain one concise summary per generation but
     # not the per-offspring detailed lines.
     configure_logging(2)
-    minima = ga_go_torchsim(
+    minima = ga_go(
         composition=["Pt"] * 3,
         output_dir=str(outdir_debug),
         calculator=calc,
@@ -47,8 +37,8 @@ def test_ga_go_torchsim_offspring_logging_levels(tmp_path, rng, capfd):
 
     # Run in trace mode: detailed per-offspring messages should be present.
     configure_logging(3)
-    outdir_trace = tmp_path / "ga_go_torchsim_log_trace"
-    minima = ga_go_torchsim(
+    outdir_trace = tmp_path / "ga_go_log_trace"
+    minima = ga_go(
         composition=["Pt"] * 3,
         output_dir=str(outdir_trace),
         calculator=calc,

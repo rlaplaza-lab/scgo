@@ -13,7 +13,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
 
 # Algorithms
-from scgo.algorithms import bh_go, ga_go, ga_go_torchsim
+from scgo.algorithms import bh_go, ga_go
 
 # Cluster + adsorbate (composable local relax)
 from scgo.cluster_adsorbate import (
@@ -56,7 +56,6 @@ from scgo.param_presets import (
     get_testing_params,
     get_torchsim_ga_params,
     get_ts_search_params,
-    get_ts_search_params_uma,
     get_uma_ga_benchmark_params,
 )
 from scgo.runner_api import (
@@ -105,7 +104,6 @@ __all__ = [
     # Algorithms (for advanced users)
     "bh_go",
     "ga_go",
-    "ga_go_torchsim",
     # Database
     "load_previous_run_results",
     "load_reference_structures",
@@ -141,7 +139,6 @@ __all__ = [
     "get_testing_params",
     "get_ts_search_params",
     "get_default_uma_params",
-    "get_ts_search_params_uma",
     "get_torchsim_ga_params",
     "get_uma_ga_benchmark_params",
     # Main run API (see scgo.runner_api)

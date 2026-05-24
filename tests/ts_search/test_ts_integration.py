@@ -924,7 +924,7 @@ def test_run_transition_state_search_auto_tags_mixed_db_formats(tmp_path):
     """
     from ase import Atoms
 
-    from scgo.database import open_db
+    from scgo.database import get_connection
 
     # Helper to create a run dir containing a DB with two relaxed minima
     def _make_db(db_name: str):
@@ -947,7 +947,7 @@ def test_run_transition_state_search_auto_tags_mixed_db_formats(tmp_path):
         # Mark relaxed
         from ase.calculators.emt import EMT
 
-        with open_db(str(db_path)) as da:
+        with get_connection(str(db_path)) as da:
             while da.get_number_of_unrelaxed_candidates() > 0:
                 a = da.get_an_unrelaxed_candidate()
                 if "key_value_pairs" not in a.info:
@@ -987,7 +987,7 @@ def test_run_transition_state_search_auto_tags_mixed_db_formats(tmp_path):
 
     # Verify at least one of the DBs contains a persisted TS entry if a TS was found
     def _has_ts_marker(dbfile: str) -> bool:
-        with open_db(dbfile) as da:
+        with get_connection(dbfile) as da:
             rows = da.get_all_relaxed_candidates()
         return any(
             r.info.get("key_value_pairs", {}).get("is_transition_state") for r in rows

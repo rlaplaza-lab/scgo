@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from ase.calculators.calculator import Calculator
 
+_MLIP_CALCULATOR_CLASS_NAMES = frozenset(
+    {"MACECalculator", "MACE", "UMA", "FAIRChemCalculator"}
+)
+
 
 def is_ml_calculator(calculator: Calculator) -> bool:
-    """Return True when ``calculator`` looks like an MLIP (MACE/UMA/FairChem)."""
-    calculator_class_name = calculator.__class__.__name__
-    model = getattr(calculator, "model", None)
-    return hasattr(model, "forward") or calculator_class_name in (
-        "MACECalculator",
-        "MACE",
-        "UMA",
-        "FAIRChemCalculator",
-    )
+    """Return True when ``calculator`` is a known MLIP ASE calculator class."""
+    return calculator.__class__.__name__ in _MLIP_CALCULATOR_CLASS_NAMES

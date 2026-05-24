@@ -17,9 +17,9 @@ Quick Start
 
 Basic Database Operations:
 
-    from scgo.database import open_db
+    from scgo.database import get_connection
 
-    with open_db('output/run_xyz/db.db') as da:
+    with get_connection('output/run_xyz/db.db') as da:
         atoms = da.get_an_unrelaxed_candidate()
         da.add_relaxed_step(atoms)
 
@@ -28,10 +28,10 @@ High-Level Database Management:
     from scgo.database import SCGODatabaseManager
 
     with SCGODatabaseManager(base_dir='output', enable_caching=True) as manager:
-        refs = manager.load_diversity_references(
-            glob_pattern='**/*.db',
+        refs = manager.load_reference_structures(
+            '**/*.db',
             composition=['Pt', 'Pt'],
-            max_structures=100
+            max_structures=100,
         )
 
 Setup New Database:
@@ -68,13 +68,9 @@ from scgo.database.cache import (
 from scgo.database.connection import (
     close_data_connection,
     get_connection,
-    open_db,
 )
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
-from scgo.database.discovery import (
-    DatabaseDiscovery,
-    find_databases_simple,
-)
+from scgo.database.discovery import DatabaseDiscovery
 from scgo.database.exceptions import (
     DatabaseError,
     DatabaseLockError,
@@ -141,7 +137,6 @@ __all__ = [
     "SYSTEMS_JSON_COLUMN",
     "close_data_connection",
     "get_connection",
-    "open_db",
     "DatabaseError",
     "DatabaseLockError",
     "DatabaseSetupError",
@@ -152,7 +147,6 @@ __all__ = [
     "load_previous_run_results",
     "load_reference_structures",
     "DatabaseDiscovery",
-    "find_databases_simple",
     "check_database_health",
     "get_database_statistics",
     "iter_database_minima",

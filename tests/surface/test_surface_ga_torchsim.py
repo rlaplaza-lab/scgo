@@ -4,25 +4,15 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from ase.build import fcc111
 from ase.calculators.emt import EMT
 
-from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
+from scgo.algorithms import ga_go
 from scgo.calculators.mace_helpers import MACE
-from scgo.database import open_db
+from scgo.database import get_connection
 from scgo.database.metadata import get_metadata
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import slab_surface_extreme
-
-
-class MockRelaxer:
-    """Minimal relaxer matching tests/algorithms/test_geneticalgorithm_generational.py."""
-
-    def __init__(self, max_steps: int | None = None):
-        self.max_steps = max_steps
-
-    def relax_batch(self, batch):
-        return [(float(i) * 0.1, a.copy()) for i, a in enumerate(batch)]
+from tests.test_utils import MockRelaxer
 
 
 class PartiallyDisconnectingRelaxer:
@@ -41,14 +31,7 @@ class PartiallyDisconnectingRelaxer:
         return results
 
 
-@pytest.fixture
-def pt_slab_small():
-    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
-    slab.pbc = True
-    return slab
-
-
-def test_ga_go_torchsim_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng):
+def test_ga_go_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng):
     """Exercise TorchSim batching + slab constraints without CUDA or MACE."""
     slab = pt_slab_small
     surface_config = SurfaceSystemConfig(
@@ -62,7 +45,7 @@ def test_ga_go_torchsim_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng
     out = tmp_path / "surface_ga_torchsim"
     out.mkdir(parents=True, exist_ok=True)
 
-    minima = ga_go_torchsim(
+    minima = ga_go(
         composition=["Pt", "Pt"],
         output_dir=str(out),
         calculator=EMT(),
@@ -93,7 +76,7 @@ def test_ga_go_torchsim_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng
     assert np.min(ads_z) > z_top - 0.2
 
 
-def test_ga_go_torchsim_disconnected_rows_persist_but_are_ineligible(
+def test_ga_go_disconnected_rows_persist_but_are_ineligible(
     pt_slab_small, tmp_path, rng
 ):
     slab = pt_slab_small
@@ -108,7 +91,7 @@ def test_ga_go_torchsim_disconnected_rows_persist_but_are_ineligible(
     out = tmp_path / "surface_ga_torchsim_disconnected_ineligible"
     out.mkdir(parents=True, exist_ok=True)
 
-    minima = ga_go_torchsim(
+    minima = ga_go(
         composition=["Pt", "Pt"],
         output_dir=str(out),
         calculator=EMT(),
@@ -129,7 +112,7 @@ def test_ga_go_torchsim_disconnected_rows_persist_but_are_ineligible(
     for _energy, atoms in minima:
         assert bool(get_metadata(atoms, "ga_eligible", default=True))
 
-    with open_db(str(out / "ga_go.db")) as da:
+    with get_connection(str(out / "ga_go.db")) as da:
         rows = da.get_all_relaxed_candidates()
     assert rows
     assert any(not bool(get_metadata(row, "ga_eligible", default=True)) for row in rows)
@@ -137,7 +120,7 @@ def test_ga_go_torchsim_disconnected_rows_persist_but_are_ineligible(
 
 @pytest.mark.requires_cuda
 @pytest.mark.slow
-def test_ga_go_torchsim_surface_config_mace_cuda(pt_slab_small, tmp_path, rng):
+def test_ga_go_surface_config_mace_cuda(pt_slab_small, tmp_path, rng):
     """Optional real GPU path: MACE + CUDA when available (conda scgo on a GPU box)."""
     slab = pt_slab_small
     surface_config = SurfaceSystemConfig(
@@ -152,7 +135,7 @@ def test_ga_go_torchsim_surface_config_mace_cuda(pt_slab_small, tmp_path, rng):
     out.mkdir(parents=True, exist_ok=True)
 
     calc = MACE(model_name="small", device="cuda")
-    minima = ga_go_torchsim(
+    minima = ga_go(
         composition=["Pt", "Pt"],
         output_dir=str(out),
         calculator=calc,

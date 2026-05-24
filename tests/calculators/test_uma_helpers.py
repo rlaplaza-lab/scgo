@@ -41,9 +41,13 @@ def test_get_default_uma_params():
 
 def test_get_ts_search_params_uma_default_torchsim_flags():
     pytest.importorskip("fairchem")
-    from scgo.param_presets import get_ts_search_params_uma
+    from scgo.param_presets import get_ts_search_params
 
-    ts = get_ts_search_params_uma(system_type="gas_cluster")
+    ts = get_ts_search_params(
+        calculator="UMA",
+        calculator_kwargs={"model_name": "uma-s-1p2", "task_name": "oc25"},
+        system_type="gas_cluster",
+    )
     assert ts["calculator"] == "UMA"
     assert ts["use_torchsim"] is True
     assert ts["use_parallel_neb"] is False

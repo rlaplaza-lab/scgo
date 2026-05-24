@@ -12,7 +12,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from scgo.database.connection import open_db
+from scgo.database.connection import get_connection
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.registry import get_registry
 from scgo.database.schema import is_scgo_database
@@ -192,7 +192,7 @@ class DatabaseDiscovery:
 
         # Count structures
         try:
-            with open_db(db_path) as db:
+            with get_connection(db_path) as db:
                 candidates = db.get_all_relaxed_candidates()
                 info["structure_count"] = len(candidates)
         except (
@@ -307,7 +307,7 @@ class DatabaseDiscovery:
 
         for db_path in db_files:
             try:
-                with open_db(db_path) as db:
+                with get_connection(db_path) as db:
                     first_candidate = self._get_first_relaxed_candidate(db)
 
                     if not first_candidate:
@@ -332,37 +332,6 @@ class DatabaseDiscovery:
                 continue
 
         return filtered
-
-
-def find_databases_simple(
-    base_dir: str | Path,
-    db_pattern: str = "**/*.db",
-    composition: list[str] | None = None,
-) -> list[Path]:
-    """Database discovery with cache disabled (``use_cache=False``).
-
-    Only the last path segment of ``db_pattern`` is used as ``db_filename`` (e.g.
-    ``*.db`` from ``"**/*.db"``). The search follows :meth:`DatabaseDiscovery.find_databases`
-    layout rules from ``base_dir``, not a raw recursive ``**`` glob from ``db_pattern``.
-
-    Args:
-        base_dir: Directory to search
-        db_pattern: Whose last component is the filename pattern (default ``"**/*.db"``)
-        composition: Optional composition filter
-
-    Returns:
-        List of matching database paths
-
-    Example:
-        >>> db_files = find_databases_simple("output", "**/*ga_go.db")
-    """
-    discovery = DatabaseDiscovery(base_dir)
-    pattern_parts = db_pattern.split("/")
-    db_filename = pattern_parts[-1] if pattern_parts else "*.db"
-
-    return discovery.find_databases(
-        composition=composition, db_filename=db_filename, use_cache=False
-    )
 
 
 def list_discovered_db_paths_with_run_trial(

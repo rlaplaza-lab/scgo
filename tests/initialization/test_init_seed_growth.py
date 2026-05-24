@@ -322,14 +322,6 @@ class TestLargeClusterConnectivitySeedGrowth:
             )
 
 
-class TestLargeClusterConnectivitySeedGrowthMode:
-    """Stringent tests for seed+growth mode via create_initial_cluster.
-
-    Note: Basic connectivity tests have been consolidated into TestLargeClusterConnectivityAllModes
-    in test_init_common.py. This class now only contains batch and reproducibility tests.
-    """
-
-
 class TestSeedGrowthReliability:
     """Tests for grow_from_seed reliability."""
 

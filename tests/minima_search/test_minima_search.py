@@ -3,7 +3,6 @@
 import json
 import os
 
-import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
@@ -768,25 +767,6 @@ class TestWriteResultsSummary:
         assert summary["run_metadata_relpath"] == "test_run_empty/metadata.json"
         assert summary["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
         assert isinstance(summary.get("scgo_version"), str) and summary["scgo_version"]
-
-
-class _DummyMLCalculator:
-    """Minimal MACE-like calculator for testing TorchSim availability logic."""
-
-    implemented_properties = ["energy", "forces"]
-
-    def __init__(self, **kwargs):
-        class _Model:
-            def forward(self):  # pragma: no cover - never actually called
-                return None
-
-        self.model = _Model()
-
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        # Provide dummy but finite values
-        n_atoms = len(atoms)
-        self.energy = -1.0
-        self.forces = np.zeros((n_atoms, 3))
 
 
 def test_select_and_run_ga_delegates_to_ga_go(monkeypatch, rng):

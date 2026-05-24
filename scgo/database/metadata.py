@@ -261,7 +261,7 @@ def mark_final_minima_in_db(
     Returns:
         dict: summary containing counts, e.g. {"dbs_touched": int, "rows_updated": int, "details": {db_path: rows}}
     """
-    from scgo.database.connection import open_db
+    from scgo.database.connection import get_connection
     from scgo.database.discovery import DatabaseDiscovery
     from scgo.database.sync import retry_transaction
 
@@ -309,7 +309,7 @@ def mark_final_minima_in_db(
             try:
                 # Use retry_transaction for robust writes
                 with (
-                    open_db(db_path) as db,
+                    get_connection(db_path) as db,
                     retry_transaction(
                         db,
                         operation_name="mark_final_minima",

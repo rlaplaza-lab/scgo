@@ -1,6 +1,6 @@
 """Acceptance tests for GA mutation operators and crossover at production-like sizes.
 
-Uses the same factories as ``ga_go`` / ``ga_go_torchsim``:
+Uses the same factories as ``ga_go`` / ``ga_go``:
 :class:`~scgo.algorithms.ga_common.create_mutation_operators` and
 :class:`~scgo.algorithms.ga_common.create_ga_pairing`. Geometry acceptance
 mirrors slab-aware mutations and ``CutAndSplicePairing``:

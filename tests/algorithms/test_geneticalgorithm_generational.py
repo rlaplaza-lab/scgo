@@ -5,42 +5,18 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 
 import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
-from scgo.algorithms import ga_go, ga_go_torchsim
-from scgo.database import open_db
+from scgo.algorithms import ga_go
+from scgo.database import get_connection
 from scgo.database.metadata import get_metadata
-
-
-class MockRelaxer:
-    """Minimal test relaxer that returns slightly different energies."""
-
-    def __init__(self, max_steps: int | None = None):
-        self.max_steps = max_steps
-
-    def relax_batch(self, batch: list[Atoms]):
-        return [(float(i) * 0.1, a.copy()) for i, a in enumerate(batch)]
+from tests.test_utils import MockRelaxer
 
 
 def test_ga_go_generational_smoke(tmp_path, rng):
     calc = EMT()
+    relaxer = MockRelaxer(max_steps=1)
     minima = ga_go(
         composition=["Pt", "Pt", "Pt"],
         output_dir=str(tmp_path / "ga_go_gen"),
-        calculator=calc,
-        rng=rng,
-        niter=1,
-        population_size=3,
-        niter_local_relaxation=1,
-    )
-
-    assert isinstance(minima, list)
-
-
-def test_ga_go_torchsim_generational_smoke(tmp_path, rng):
-    calc = EMT()
-    relaxer = MockRelaxer(max_steps=1)
-    minima = ga_go_torchsim(
-        composition=["Pt", "Pt", "Pt"],
-        output_dir=str(tmp_path / "ga_go_torchsim_gen"),
         calculator=calc,
         relaxer=relaxer,
         niter=1,
@@ -53,18 +29,14 @@ def test_ga_go_torchsim_generational_smoke(tmp_path, rng):
     assert isinstance(minima, list)
 
 
-def test_ga_go_is_ga_go_torchsim_alias():
-    assert ga_go is ga_go_torchsim
-
-
-def test_ga_go_torchsim_accepts_optimizer(tmp_path, rng):
+def test_ga_go_accepts_optimizer(tmp_path, rng):
     from ase.optimize import LBFGS
 
     calc = EMT()
     relaxer = MockRelaxer(max_steps=1)
-    minima = ga_go_torchsim(
+    minima = ga_go(
         composition=["Pt", "Pt", "Pt"],
-        output_dir=str(tmp_path / "ga_go_torchsim_opt"),
+        output_dir=str(tmp_path / "ga_go_opt"),
         calculator=calc,
         relaxer=relaxer,
         niter=1,
@@ -77,16 +49,16 @@ def test_ga_go_torchsim_accepts_optimizer(tmp_path, rng):
     assert isinstance(minima, list)
 
 
-def test_ga_go_torchsim_optimizer_default_is_fire():
+def test_ga_go_optimizer_default_is_fire():
     import inspect
 
     from ase.optimize import FIRE
 
-    sig_ts = inspect.signature(ga_go_torchsim)
+    sig_ts = inspect.signature(ga_go)
     assert sig_ts.parameters["optimizer"].default is FIRE
 
 
-def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
+def test_ga_go_offspring_fraction_creates_expected_offspring(
     tmp_path, rng, monkeypatch
 ):
     calc = EMT()
@@ -112,8 +84,8 @@ def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
     offs_frac = 0.5
     expected_offspring = math.ceil(population_size * offs_frac)
 
-    outdir = tmp_path / "ga_go_torchsim_off"
-    minima = ga_go_torchsim(
+    outdir = tmp_path / "ga_go_off"
+    minima = ga_go(
         composition=["Pt"] * 3,
         output_dir=str(outdir),
         calculator=calc,
@@ -129,7 +101,7 @@ def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
     assert isinstance(minima, list)
 
     db_file = outdir / "ga_go.db"
-    with open_db(str(db_file)) as da:
+    with get_connection(str(db_file)) as da:
         rows = da.get_all_relaxed_candidates()
         gen0 = [a for a in rows if get_metadata(a, "generation") == 0]
 
@@ -137,7 +109,7 @@ def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
     assert len(unique_confids) - population_size == expected_offspring
 
 
-def test_ga_go_torchsim_parallel_offspring_deterministic(tmp_path):
+def test_ga_go_parallel_offspring_deterministic(tmp_path):
     calc = EMT()
     kwargs = {
         "composition": ["Pt"] * 3,
@@ -150,13 +122,13 @@ def test_ga_go_torchsim_parallel_offspring_deterministic(tmp_path):
         "batch_size": None,
         "verbosity": 0,
     }
-    minima_single = ga_go_torchsim(
+    minima_single = ga_go(
         output_dir=str(tmp_path / "torchsim_single_worker"),
         rng=np.random.default_rng(1234),
         n_jobs_offspring=1,
         **kwargs,
     )
-    minima_parallel = ga_go_torchsim(
+    minima_parallel = ga_go(
         output_dir=str(tmp_path / "torchsim_parallel_worker"),
         rng=np.random.default_rng(1234),
         n_jobs_offspring=2,
@@ -168,9 +140,7 @@ def test_ga_go_torchsim_parallel_offspring_deterministic(tmp_path):
     np.testing.assert_allclose(energies_single, energies_parallel, atol=1e-12, rtol=0.0)
 
 
-def test_ga_go_torchsim_parallel_offspring_handles_worker_failures(
-    tmp_path, rng, monkeypatch
-):
+def test_ga_go_parallel_offspring_handles_worker_failures(tmp_path, rng, monkeypatch):
     calc = EMT()
     relaxer = MockRelaxer(max_steps=1)
     base_factory = ga_mod.create_ga_pairing
@@ -191,9 +161,9 @@ def test_ga_go_torchsim_parallel_offspring_handles_worker_failures(
 
     monkeypatch.setattr(ga_mod, "create_ga_pairing", flaky_pairing_factory)
 
-    minima = ga_go_torchsim(
+    minima = ga_go(
         composition=["Pt"] * 3,
-        output_dir=str(tmp_path / "ga_go_torchsim_worker_failures"),
+        output_dir=str(tmp_path / "ga_go_worker_failures"),
         calculator=calc,
         relaxer=relaxer,
         niter=1,
@@ -221,7 +191,7 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
         niter_local_relaxation=1,
     )
 
-    with open_db(str(outdir_ase / "ga_go.db")) as da:
+    with get_connection(str(outdir_ase / "ga_go.db")) as da:
         rows_ase = da.get_all_relaxed_candidates()
     assert rows_ase
     for row in rows_ase:
@@ -235,7 +205,7 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
         )
 
     outdir_ts = tmp_path / "ga_center_torchsim"
-    ga_go_torchsim(
+    ga_go(
         composition=["Pt", "Pt", "Pt"],
         output_dir=str(outdir_ts),
         calculator=calc,
@@ -246,7 +216,7 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
         batch_size=2,
         rng=rng,
     )
-    with open_db(str(outdir_ts / "ga_go.db")) as da:
+    with get_connection(str(outdir_ts / "ga_go.db")) as da:
         rows_ts = da.get_all_relaxed_candidates()
     assert rows_ts
     for row in rows_ts:

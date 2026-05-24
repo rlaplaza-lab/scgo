@@ -24,10 +24,10 @@ def test_torchsim_batch_relaxer_import():
 
 
 def test_geneticalgorithm_go_torchsim_import():
-    """Test that ga_go_torchsim can be imported."""
-    from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
+    """Test that ga_go can be imported."""
+    from scgo.algorithms import ga_go
 
-    assert ga_go_torchsim is not None
+    assert ga_go is not None
 
 
 def test_force_dtype_conversion():

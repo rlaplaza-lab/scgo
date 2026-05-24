@@ -57,8 +57,7 @@ def get_connection(
 ) -> Generator[DataConnection, None, None]:
     """Open and yield an ASE :class:`~ase_ga.data.DataConnection` (with cleanup on exit).
 
-    This is the primary context manager for SCGO database access. The name
-    :func:`open_db` is an identical alias, kept for readability in scripts.
+    This is the primary context manager for SCGO database access.
 
     WAL mode is off by default (``DELETE`` journal) for shared/HPC filesystems;
     pass ``wal_mode=True`` on local disks when you need more write concurrency.
@@ -179,8 +178,3 @@ def _apply_busy_timeout(da, busy_timeout: int) -> None:
     if conn is not None:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute(f"PRAGMA busy_timeout={busy_timeout};")
-
-
-# Public alias (same object; used in examples and older call sites).
-open_db = get_connection
-open_db.__doc__ = "Alias of :func:`get_connection` (identical behavior)."

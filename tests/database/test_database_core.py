@@ -34,14 +34,13 @@ from scgo.database import (
     database_transaction,
     ensure_schema_version,
     filter_by_metadata,
-    find_databases_simple,
     get_all_metadata,
+    get_connection,
     get_database_statistics,
     get_metadata,
     get_schema_version,
     iter_database_minima,
     iter_databases_minima,
-    open_db,
     retry_with_backoff,
     set_schema_version,
     setup_database,
@@ -110,7 +109,7 @@ def _write_to_database(args):
         atoms.info["data"] = {"worker_tag": f"w{worker_id}"}
         atoms_list.append(atoms)
 
-    with open_db(db_path, wal_mode=True, busy_timeout=60000) as da:
+    with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
         for atoms in atoms_list:
             da.add_unrelaxed_candidate(
                 atoms, description=f"concurrent_stress:w{worker_id}"
@@ -265,7 +264,7 @@ class TestDatabaseSetupAndFlow:
         db_bh = tmp_path / "bh_test" / "bh_go.db"
         assert db_bh.exists()
 
-        with open_db(db_bh) as db:
+        with get_connection(db_bh) as db:
             assert len(db.get_all_relaxed_candidates()) > 0
 
         # Test GA
@@ -282,7 +281,7 @@ class TestDatabaseSetupAndFlow:
         db_ga = tmp_path / "ga_test" / "ga_go.db"
         assert db_ga.exists()
 
-        with open_db(db_ga) as db:
+        with get_connection(db_ga) as db:
             assert len(db.get_all_relaxed_candidates()) > 0
 
     def test_ga_runs_store_run_id_in_key_value_pairs(self, tmp_path, rng):
@@ -309,7 +308,7 @@ class TestDatabaseSetupAndFlow:
         db_file = outdir / "ga_go.db"
         assert db_file.exists()
 
-        with open_db(db_file) as da:
+        with get_connection(db_file) as da:
             rows = da.get_all_relaxed_candidates()
 
         matched = []
@@ -379,7 +378,7 @@ class TestDatabaseConnections:
         ) as (_da, _db_path):
             pass
 
-        with open_db(tmp_path / "test.db") as db:
+        with get_connection(tmp_path / "test.db") as db:
             assert isinstance(db.get_all_relaxed_candidates(), list)
 
 
@@ -403,7 +402,7 @@ class TestTransactions:
             pass
 
         with (
-            open_db(tmp_path / "test.db") as db,
+            get_connection(tmp_path / "test.db") as db,
             db.c.managed_connection() as conn,
         ):
             initial = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
@@ -411,7 +410,7 @@ class TestTransactions:
         if raise_inside:
             with (
                 pytest.raises(ValueError),
-                open_db(tmp_path / "test.db") as db,
+                get_connection(tmp_path / "test.db") as db,
                 database_transaction(db) as conn,
             ):
                 conn.execute(
@@ -422,7 +421,7 @@ class TestTransactions:
                 raise ValueError("Test error")
         else:
             with (
-                open_db(tmp_path / "test.db") as db,
+                get_connection(tmp_path / "test.db") as db,
                 database_transaction(db) as conn,
             ):
                 conn.execute(
@@ -432,7 +431,7 @@ class TestTransactions:
                 )
 
         with (
-            open_db(tmp_path / "test.db") as db,
+            get_connection(tmp_path / "test.db") as db,
             db.c.managed_connection() as conn,
         ):
             count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
@@ -451,7 +450,7 @@ class TestTransactions:
 
         config = RetryConfig(max_retries=3, initial_delay=0.1)
         with (
-            open_db(tmp_path / "test.db") as db,
+            get_connection(tmp_path / "test.db") as db,
             retry_transaction(
                 db, config=config, operation_name="transaction (test)"
             ) as conn,
@@ -472,7 +471,7 @@ class TestSchemaVersioning:
         ) as (_da, _db_path):
             pass
 
-        with open_db(tmp_path / "test.db") as db:
+        with get_connection(tmp_path / "test.db") as db:
             version = get_schema_version(db)
             assert version >= 0
 
@@ -485,7 +484,7 @@ class TestSchemaVersioning:
         ) as (_da, _db_path):
             pass
 
-        with open_db(tmp_path / "test.db") as db:
+        with get_connection(tmp_path / "test.db") as db:
             ensure_schema_version(db)
             assert get_schema_version(db) >= 1
 
@@ -630,38 +629,6 @@ class TestDiscovery:
 
         assert len(db_files) == 1
 
-    def test_discovery_filter_by_composition_uses_sql_fallback(
-        self, tmp_path, monkeypatch
-    ):
-        """If `get_all_relaxed_candidates` fails, discovery should fall back to SQL probe."""
-        run_dir = tmp_path / "run_20260204_120000" / "trial_0"
-        run_dir.mkdir(parents=True)
-
-        atoms = Atoms("Pt3")
-        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
-        # Add an extra relaxed entry so SQL probe has something to return
-        a = atoms.copy()
-        from scgo.database.metadata import add_metadata
-
-        add_metadata(a, raw_score=-10.0)
-        a.info["data"] = {"tag": "extra"}
-        da.add_relaxed_step(a)
-        close_data_connection(da)
-        del da
-
-        # Force DataConnection.get_all_relaxed_candidates to raise
-        from ase_ga.data import DataConnection
-
-        def _fail(*args, **kwargs):
-            raise TypeError("simulated fast-path failure")
-
-        monkeypatch.setattr(DataConnection, "get_all_relaxed_candidates", _fail)
-
-        discovery = DatabaseDiscovery(tmp_path)
-        db_files = discovery.find_databases(composition=["Pt", "Pt", "Pt"])
-
-        assert any(Path(str(f)).name == "ga_go.db" for f in db_files)
-
     def test_discovery_statistics(self, tmp_path):
         run_dir = tmp_path / "run_20260204_120000" / "trial_0"
         run_dir.mkdir(parents=True)
@@ -678,7 +645,7 @@ class TestDiscovery:
 
         assert stats["total_databases"] >= 1
 
-    def test_find_databases_simple(self, tmp_path):
+    def test_find_databases_uncached(self, tmp_path):
         run_dir = tmp_path / "run_20260204_120000" / "trial_0"
         run_dir.mkdir(parents=True)
 
@@ -689,7 +656,8 @@ class TestDiscovery:
         ):
             pass
 
-        db_files = find_databases_simple(tmp_path)
+        discovery = DatabaseDiscovery(tmp_path)
+        db_files = discovery.find_databases(db_filename="*.db", use_cache=False)
         assert db_files
 
 
@@ -704,12 +672,12 @@ class TestRobustness:
 
         with (
             pytest.raises(KeyError),
-            open_db(tmp_path / "test.db") as db,
+            get_connection(tmp_path / "test.db") as db,
         ):
             _ = db.get_all_relaxed_candidates()
             raise KeyError("Test exception")
 
-        with open_db(tmp_path / "test.db") as db:
+        with get_connection(tmp_path / "test.db") as db:
             assert isinstance(db.get_all_relaxed_candidates(), list)
 
     @pytest.mark.slow
@@ -728,7 +696,7 @@ class TestRobustness:
                 initial_candidate=pt2_atoms,
             ) as (_da, _db_path):
                 pass
-            with open_db(tmp_path / f"test_{i}.db") as db:
+            with get_connection(tmp_path / f"test_{i}.db") as db:
                 _ = db.get_all_relaxed_candidates()
 
         gc.collect()
@@ -1220,8 +1188,8 @@ class TestDatabaseManagerCaching:
 
         manager = SCGODatabaseManager(base_dir=tmp_path, enable_caching=True)
 
-        refs1 = manager.load_diversity_references(
-            glob_pattern="run_*/trial_*/ref_*.db",
+        refs1 = manager.load_reference_structures(
+            "run_*/trial_*/ref_*.db",
             composition=["Pt", "Pt", "Pt"],
             max_structures=20,
         )
@@ -1233,19 +1201,19 @@ class TestDatabaseManagerCaching:
         # Ensure only final-unique-minimum tagged structures were loaded
         assert all(get_metadata(a, "final_unique_minimum", False) for a in refs1)
 
-        refs2 = manager.load_diversity_references(
-            glob_pattern="run_*/trial_*/ref_*.db",
+        refs2 = manager.load_reference_structures(
+            "run_*/trial_*/ref_*.db",
             composition=["Pt", "Pt", "Pt"],
             max_structures=20,
         )
 
         assert refs1 is refs2
 
-        refs3 = manager.load_diversity_references(
-            glob_pattern="run_*/trial_*/ref_*.db",
+        refs3 = manager.load_reference_structures(
+            "run_*/trial_*/ref_*.db",
             composition=["Pt", "Pt", "Pt"],
             max_structures=20,
-            use_cache=False,
+            force_reload=True,
         )
 
         assert refs1 is not refs3

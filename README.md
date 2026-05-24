@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-![SCGO Logo](docs/_static/scgo_logo.svg)
+![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
 A compact toolkit for global optimization of small atomic clusters using ASE. SCGO provides a focused API for Basin Hopping (BH) and Genetic Algorithm (GA) workflows with practical defaults.
 
@@ -160,7 +160,7 @@ Notes:
 ## Key options (short)
 
 - **Global optimization (`params` for `run_go` / `run_go_campaign`)** is merged with `get_default_params()` via `initialize_params`: any preset that omits keys inherits defaults. Common entry points: `get_default_params()`, `get_minimal_ga_params()`, `get_testing_params()`, `get_high_energy_params()`, `get_diversity_params()`, `get_default_uma_params()` (fairchem UMA), and `get_torchsim_ga_params(system_type=..., surface_config=..., seed=..., model_name=...)` (MACE + TorchSim GA benchmark stack; requires `scgo[mace]`).
-- **Transition-state search (`ts_params` for `run_ts_search` / `run_go_ts`)** is **not** merged with GO defaults. Build a flat dict with `get_ts_search_params(...)` or `get_ts_search_params_uma(...)` and pass it explicitly alongside `go_params` when using `run_go_ts` / `run_go_ts_campaign`.
+- **Transition-state search (`ts_params` for `run_ts_search` / `run_go_ts`)** is **not** merged with GO defaults. Build a flat dict with `get_ts_search_params(...)` (e.g. `calculator="UMA"` for UMA) and pass it explicitly alongside `go_params` when using `run_go_ts` / `run_go_ts_campaign`.
 
 **NEB endpoint alignment (on by default):** Presets set `neb_align_endpoints=True` for all system types. Before ASE path interpolation (`idpp` or `linear`), SCGO reorders product atoms to match the reactant, then rigidly aligns endpoints so interior images start from a sensible band:
 
@@ -383,7 +383,7 @@ ts_results = run_ts_search(
 
 ### GO then TS
 
-`run_go_ts` / `run_go_ts_campaign` use **`go_params=`** (merged like other GO runs) and **`ts_params=`** (same flat shape as above; **not** deep-merged with `get_default_params()`). For **slab + adsorbate**, pass a `SurfaceSystemConfig` directly to `run_go_ts(..., surface_config=...)` / `run_go_ts_campaign(..., surface_config=...)`; the `composition` argument is **adsorbate symbols only** (the full system for loading minima is built as slab + adsorbate, matching GA). For MACE + TorchSim GA, start from [`get_torchsim_ga_params`](scgo/param_presets.py) with `system_type=...` and `seed` (optional `surface_config=` / `model_name=`), set `go_params["calculator"] = "MACE"` and `optimizer_params["ga"]` as needed; pair with `get_ts_search_params(...)` and set `ts_params["max_pairs"]`, etc. For UMA NEB defaults, you can use `get_ts_search_params_uma`. See `examples/example_pt5_gas.py` for a minimal end-to-end example. Default output if `output_dir` is omitted is under `scgo_runs/<stem>_<mace|uma>/` (set `output_root` / `output_stem` to change).
+`run_go_ts` / `run_go_ts_campaign` use **`go_params=`** (merged like other GO runs) and **`ts_params=`** (same flat shape as above; **not** deep-merged with `get_default_params()`). For **slab + adsorbate**, pass a `SurfaceSystemConfig` directly to `run_go_ts(..., surface_config=...)` / `run_go_ts_campaign(..., surface_config=...)`; the `composition` argument is **adsorbate symbols only** (the full system for loading minima is built as slab + adsorbate, matching GA). For MACE + TorchSim GA, start from [`get_torchsim_ga_params`](scgo/param_presets.py) with `system_type=...` and `seed` (optional `surface_config=` / `model_name=`), set `go_params["calculator"] = "MACE"` and `optimizer_params["ga"]` as needed; pair with `get_ts_search_params(...)` and set `ts_params["max_pairs"]`, etc. For UMA NEB defaults, use `get_ts_search_params(calculator="UMA", ...)`. See `examples/example_pt5_gas.py` for a minimal end-to-end example. Default output if `output_dir` is omitted is under `scgo_runs/<stem>_<mace|uma>/` (set `output_root` / `output_stem` to change).
 
 Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_benchmark_params`](scgo/param_presets.py) (re-exported from `scgo`). See `benchmark/` for long-running MLIP regression sweeps.
 

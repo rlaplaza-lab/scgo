@@ -295,8 +295,8 @@ def bh_go(
         with SCGODatabaseManager(
             base_dir=output_dir, enable_caching=True
         ) as db_manager:
-            reference_structures = db_manager.load_diversity_references(
-                glob_pattern=diversity_reference_db,
+            reference_structures = db_manager.load_reference_structures(
+                db_glob_pattern=diversity_reference_db,
                 composition=atoms.get_chemical_symbols(),
                 max_structures=diversity_max_references,
             )

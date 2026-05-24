@@ -28,6 +28,16 @@ DIVERSITY_THRESHOLD_MIN = _tc.DIVERSITY_THRESHOLD_MIN
 DIVERSITY_THRESHOLD_DEFAULT = _tc.DIVERSITY_THRESHOLD_DEFAULT
 
 
+class MockRelaxer:
+    """Minimal batch relaxer for GA tests (returns indexed energies)."""
+
+    def __init__(self, max_steps: int | None = None):
+        self.max_steps = max_steps
+
+    def relax_batch(self, batch: list[Atoms]):
+        return [(float(i) * 0.1, a.copy()) for i, a in enumerate(batch)]
+
+
 def positions_equal(a: Atoms, b: Atoms, tolerance: float = 1e-6) -> bool:
     """Check if two Atoms objects have the same positions within tolerance.
 
@@ -291,7 +301,7 @@ def run_algorithm_reproducibility_test(
     """
     import random
 
-    from scgo.algorithms import ga_go, ga_go_torchsim
+    from scgo.algorithms import ga_go
     from scgo.initialization import create_initial_cluster
 
     # For full reproducibility, seed both Python's built-in random and NumPy's random.
@@ -301,7 +311,7 @@ def run_algorithm_reproducibility_test(
         random.seed(seed)
 
     # Detect if this is a GA function with new signature
-    is_ga_function = algorithm_func in (ga_go, ga_go_torchsim)
+    is_ga_function = algorithm_func is ga_go
 
     # Run 1
     rng1, _ = create_paired_rngs(seed)

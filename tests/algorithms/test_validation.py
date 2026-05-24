@@ -14,7 +14,7 @@ from ase import Atoms
 from ase.build import bulk
 from ase.calculators.emt import EMT
 
-from scgo.algorithms import ga_go, ga_go_torchsim
+from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.initialization import create_initial_cluster, random_spherical
 from scgo.initialization.geometry_helpers import validate_cluster_structure
@@ -409,7 +409,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
             return [(0.0, a.copy()) for a in batch]
 
     with pytest.raises(ValueError):
-        ga_go_torchsim(
+        ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_ts"),
             calculator=calc,

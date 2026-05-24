@@ -130,7 +130,9 @@ def pt2_atoms():
 @pytest.fixture
 def pt_slab_small():
     """Small Pt(111) slab for adsorbate-on-surface tests."""
-    return fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab.pbc = True
+    return slab
 
 
 @pytest.fixture

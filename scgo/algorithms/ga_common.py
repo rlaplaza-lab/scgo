@@ -1165,8 +1165,8 @@ def setup_diversity_scorer(
     # Use current working directory as base_dir since this function doesn't have output_dir
     # The database manager will search relative to cwd for the glob pattern
     with SCGODatabaseManager(base_dir=".", enable_caching=True) as db_manager:
-        reference_structures: list[Atoms] = db_manager.load_diversity_references(
-            glob_pattern=diversity_reference_db,
+        reference_structures: list[Atoms] = db_manager.load_reference_structures(
+            db_glob_pattern=diversity_reference_db,
             composition=composition,
             max_structures=diversity_max_references,
         )

@@ -3,8 +3,8 @@ import pytest
 import scgo.database.connection as conn_mod
 
 
-def test_open_db_raises_runtime_error_when_json1_missing(monkeypatch, tmp_path):
-    """open_db propagates RuntimeError when JSON1 extension is unavailable."""
+def test_get_connection_raises_runtime_error_when_json1_missing(monkeypatch, tmp_path):
+    """get_connection propagates RuntimeError when JSON1 extension is unavailable."""
     db_path = tmp_path / "test.db"
     db_path.touch()
 
@@ -15,16 +15,16 @@ def test_open_db_raises_runtime_error_when_json1_missing(monkeypatch, tmp_path):
 
     with (
         pytest.raises(RuntimeError, match="SQLite JSON1 extension is required"),
-        conn_mod.open_db(db_path),
+        conn_mod.get_connection(db_path),
     ):
         pass
 
 
-def test_open_db_succeeds_when_json1_available(tmp_path):
+def test_get_connection_succeeds_when_json1_available(tmp_path):
     # Sanity check using a real connection; should not raise
     db_path = tmp_path / "test_ok.db"
     db_path.touch()
-    with conn_mod.open_db(db_path) as db, db.c.managed_connection() as conn:
+    with conn_mod.get_connection(db_path) as db, db.c.managed_connection() as conn:
         cur = conn.execute("SELECT 1")
         assert cur.fetchone()[0] == 1
 

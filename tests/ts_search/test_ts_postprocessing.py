@@ -248,7 +248,7 @@ def test_add_ts_to_database_persists_marker(tmp_path):
     """Verify add_ts_to_database writes a persistent DB marker so TS entries
     can be reliably detected by tests and downstream tooling.
     """
-    from scgo.database import open_db
+    from scgo.database import get_connection
     from scgo.database.metadata import get_metadata
     from scgo.ts_search.ts_network import add_ts_to_database
 
@@ -298,7 +298,7 @@ def test_add_ts_to_database_persists_marker(tmp_path):
     assert success is True
 
     # Verify DB contains an entry with the persistent TS marker and expected raw_score
-    with open_db(str(db_file)) as da_read:
+    with get_connection(str(db_file)) as da_read:
         rows = da_read.get_all_relaxed_candidates()
 
     # Check both key_value_pairs and get_metadata for robustness across ASE versions
@@ -384,7 +384,7 @@ def test_add_ts_to_database_returns_false_on_write_error(monkeypatch, tmp_path, 
     from scgo.ts_search.ts_network import add_ts_to_database
 
     # Simulate DB write failure inside DataConnection.add_relaxed_candidate
-    # (add_ts_to_database uses DataConnection directly, not open_db)
+    # (add_ts_to_database uses DataConnection directly, not get_connection)
     class FakeDataConnection:
         def __init__(self, path):
             self.path = path

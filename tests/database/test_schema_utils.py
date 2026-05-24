@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from scgo.database.discovery import find_databases_simple
+from scgo.database.discovery import DatabaseDiscovery
 from scgo.database.schema import get_scgo_metadata, is_scgo_database
 from scgo.database.streaming import iter_database_minima
 
@@ -30,7 +30,8 @@ def test_find_databases_skips_non_scgo_db(tmp_path: Path):
     db_path = run_dir / "ga_go.db"
     _create_dummy_db(db_path)
 
-    found = find_databases_simple(tmp_path, db_pattern="**/*.db")
+    discovery = DatabaseDiscovery(tmp_path)
+    found = discovery.find_databases(db_filename="*.db", use_cache=False)
     # Should skip the non-SCGO DB created above
     assert db_path not in found
     assert found == []
@@ -76,7 +77,8 @@ def test_find_databases_includes_scgo_db(tmp_path: Path):
     # Create a proper SCGO DB
     da = setup_database(run_dir, "ga_go.db", template, initial_candidate=template)
     try:
-        found = find_databases_simple(tmp_path, db_pattern="**/*.db")
+        discovery = DatabaseDiscovery(tmp_path)
+        found = discovery.find_databases(db_filename="*.db", use_cache=False)
         assert (run_dir / "ga_go.db") in found
     finally:
         from scgo.database.connection import close_data_connection

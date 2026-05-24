@@ -311,7 +311,7 @@ def _relax_unrelaxed_candidates(
     return successful_count
 
 
-def ga_go_torchsim(
+def ga_go(
     composition: list[str],
     output_dir: str,
     rng: np.random.Generator | None,
@@ -359,7 +359,7 @@ def ga_go_torchsim(
 ) -> list[tuple[float, Atoms]]:
     """Run the GA using TorchSim for batched relaxations.
 
-    Parameters are mostly shared with :func:`scgo.geneticalgorithm_go.ga_go`.
+    Genetic algorithm with batched relaxations (TorchSim for MLIPs, ASE batch otherwise).
     The ``relaxer`` argument controls TorchSim batching; when omitted the
     function instantiates a default :class:`TorchSimBatchRelaxer` using the
     provided ``fmax`` as a force tolerance.
@@ -384,9 +384,9 @@ def ga_go_torchsim(
             Required when fitness_strategy="diversity", ignored otherwise.
         diversity_max_references: Maximum number of reference structures to load (for performance).
         diversity_update_interval: Number of generations between reference updates (for diversity strategy).
-        surface_config: Same as :func:`scgo.geneticalgorithm_go.ga_go` (adsorbate-on-slab GA).
-        write_timing_json: Optional ``timing.json`` (see :func:`scgo.geneticalgorithm_go.ga_go`).
-        detailed_timing: Per-generation splits (see :func:`scgo.geneticalgorithm_go.ga_go`).
+        surface_config: Optional slab + adsorbate configuration for surface GA runs.
+        write_timing_json: If True, write ``timing.json`` under ``output_dir``.
+        detailed_timing: If True, record per-generation timing splits in ``timing.json``.
     """
     logger = get_logger(__name__)
     profile_t0 = perf_counter()
@@ -1295,7 +1295,3 @@ def ga_go_torchsim(
 
     finally:
         close_data_connection(da, log_errors=False)
-
-
-# Canonical GA entry point (TorchSim batch path for MLIPs, ASE batch path otherwise).
-ga_go = ga_go_torchsim

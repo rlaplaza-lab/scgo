@@ -10,8 +10,8 @@ def test_import_scgo_without_eager_torchsim():
     assert hasattr(scgo, "run_go")
 
 
-def test_ga_go_torchsim_importable_with_mace_extra():
-    """``ga_go`` / ``ga_go_torchsim`` are exported from :mod:`scgo.algorithms`."""
-    from scgo.algorithms import ga_go, ga_go_torchsim
+def test_ga_go_importable_with_mace_extra():
+    """``ga_go`` is exported from :mod:`scgo.algorithms`."""
+    from scgo.algorithms import ga_go
 
-    assert ga_go is ga_go_torchsim
+    assert callable(ga_go)

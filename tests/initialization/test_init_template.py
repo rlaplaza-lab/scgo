@@ -317,14 +317,6 @@ class TestConvexHullPlacementReliability:
         assert is_cluster_connected(result)
 
 
-class TestLargeClusterConnectivityTemplateMode:
-    """Stringent tests for template mode initialization with 50-60 atom clusters.
-
-    Note: Basic connectivity tests have been consolidated into TestLargeClusterConnectivityAllModes
-    in test_init_common.py. This class now only contains batch and reproducibility tests.
-    """
-
-
 class TestTemplateGenerationOptimization:
     """Tests for template generation optimizations."""
 

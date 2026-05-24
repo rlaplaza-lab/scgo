@@ -293,18 +293,6 @@ class TestDefaultInitializationStrictness:
             )
 
 
-class TestLargeClusterConnectivitySmartMode:
-    """Stringent tests for smart mode initialization with 50-60 atom clusters.
-
-    Note: Basic connectivity tests for single/bimetallic/trimetallic compositions
-    have been consolidated into TestLargeClusterConnectivityAllModes in test_init_common.py.
-    This class now only contains batch and reproducibility tests.
-    """
-
-
-# Reliability tests have been consolidated into TestReliabilityAllModes in test_init_common.py
-
-
 class TestSingleConnectivityFactor:
     """Tests to verify only connectivity factor 1.4 is used (no CONNECTIVITY_FACTOR_GROWTH)."""
 
@@ -401,16 +389,6 @@ class TestConnectivityValidation:
                 is_cluster_connected(atoms, connectivity_factor=CONNECTIVITY_FACTOR)
                 is True
             )
-
-
-class TestReproducibility:
-    """Reproducibility checks for initialization modes are consolidated in
-    `tests/test_initialization_modes.py::TestInitializationModesBasics::test_mode_reproducibility`.
-
-    The smart-mode-specific deterministic checks were removed to avoid
-    duplication — keep mode-specific tests only when they exercise unique
-    internal behavior not covered by the consolidated parametrized tests.
-    """
 
 
 class TestEdgeCases:

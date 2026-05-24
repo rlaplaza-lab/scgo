@@ -16,12 +16,11 @@ adapted for atomic cluster structure search:
 from __future__ import annotations
 
 from .basinhopping_go import bh_go
-from .geneticalgorithm_go_torchsim import ga_go, ga_go_torchsim
+from .geneticalgorithm_go_torchsim import ga_go
 from .simple_go import simple_go
 
 __all__ = [
     "bh_go",
     "ga_go",
-    "ga_go_torchsim",
     "simple_go",
 ]

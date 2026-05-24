@@ -205,7 +205,7 @@ def test_get_database_entry_outside_base(tmp_path):
 
 
 def test_setup_database_context_manager(tmp_path, pt2_atoms):
-    from scgo.database.connection import open_db
+    from scgo.database.connection import get_connection
     from scgo.database.helpers import setup_database
 
     # Use context-manager returned by setup_database
@@ -227,5 +227,5 @@ def test_setup_database_context_manager(tmp_path, pt2_atoms):
         assert len(da.get_all_relaxed_candidates()) >= 1
 
     # After exiting the context, DB should be readable and contain the relaxed row
-    with open_db(tmp_path / "cm.db") as da2:
+    with get_connection(tmp_path / "cm.db") as da2:
         assert len(da2.get_all_relaxed_candidates()) >= 1

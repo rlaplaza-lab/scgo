@@ -10,7 +10,7 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.optimize import FIRE, LBFGS
 
-from scgo.algorithms import ga_go, ga_go_torchsim
+from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import close_data_connection
 from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
@@ -24,20 +24,11 @@ from scgo.run_minima import (
 )
 from scgo.utils.helpers import auto_niter
 from tests.test_utils import (
+    MockRelaxer,
     compare_minima_lists,
     create_paired_rngs,
     run_algorithm_reproducibility_test,
 )
-
-
-class MockRelaxer:
-    """Minimal deterministic relaxer for fast TorchSim-path reproducibility tests."""
-
-    def __init__(self, max_steps: int | None = None):
-        self.max_steps = max_steps
-
-    def relax_batch(self, batch: list[Atoms]):
-        return [(float(i) * 0.1, a.copy()) for i, a in enumerate(batch)]
 
 
 @pytest.mark.parametrize(
@@ -215,14 +206,14 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
         "verbosity": 0,
     }
 
-    minima_single = ga_go_torchsim(
+    minima_single = ga_go(
         output_dir=str(tmp_path / "torchsim_single_cpu"),
         rng=np.random.default_rng(seed),
         n_jobs_population_init=1,
         n_jobs_offspring=1,
         **kwargs,
     )
-    minima_multi = ga_go_torchsim(
+    minima_multi = ga_go(
         output_dir=str(tmp_path / "torchsim_multi_cpu"),
         rng=np.random.default_rng(seed),
         n_jobs_population_init=-2,

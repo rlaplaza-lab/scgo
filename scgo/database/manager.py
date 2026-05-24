@@ -30,7 +30,7 @@ class SCGODatabaseManager:
 
     Example:
         >>> with SCGODatabaseManager(base_dir="output") as manager:
-        ...     refs = manager.load_diversity_references("**/*.db")
+        ...     refs = manager.load_reference_structures("**/*.db")
     """
 
     def __init__(
@@ -198,21 +198,6 @@ class SCGODatabaseManager:
 
         logger.info("Loaded %s reference structures", len(structures))
         return structures
-
-    def load_diversity_references(
-        self,
-        glob_pattern: str,
-        composition: list[str] | None = None,
-        max_structures: int = 100,
-        use_cache: bool = True,
-    ) -> list[Atoms]:
-        """Alias for :meth:`load_reference_structures`."""
-        return self.load_reference_structures(
-            db_glob_pattern=glob_pattern,
-            composition=composition,
-            max_structures=max_structures,
-            force_reload=not use_cache,
-        )
 
     def close(self):
         """Release resources held by manager caches."""
