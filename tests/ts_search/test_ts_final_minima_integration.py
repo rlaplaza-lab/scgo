@@ -49,7 +49,7 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
         for row, cid in zip(rows, confid_list, strict=False):
             row_id = row[0]
             kvp = json.loads(row[1]) if row[1] else {}
-            kvp.update({"confid": cid})
+            kvp.update({"confid": cid, "final_id": cid})
             cur.execute(
                 "UPDATE systems SET key_value_pairs = ? WHERE id = ?",
                 (json.dumps(kvp), row_id),
@@ -76,8 +76,20 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
     atoms_c2.info["metadata"]["confid"] = "c2"
 
     final_info = [
-        {"atoms": atoms_c1, "energy": 0.0, "rank": 1, "final_written": "f1"},
-        {"atoms": atoms_c2, "energy": 0.2, "rank": 2, "final_written": "f2"},
+        {
+            "atoms": atoms_c1,
+            "energy": 0.0,
+            "rank": 1,
+            "final_written": "f1",
+            "final_id": "c1",
+        },
+        {
+            "atoms": atoms_c2,
+            "energy": 0.2,
+            "rank": 2,
+            "final_written": "f2",
+            "final_id": "c2",
+        },
     ]
 
     # Invoke helper to mark DB rows

@@ -332,24 +332,6 @@ def get_composition_counts(composition: list[str]) -> Counter[str]:
     return Counter(composition)
 
 
-def get_optimizer_db_filename(optimizer: str) -> str:
-    """Get database filename for a given optimizer.
-
-    Args:
-        optimizer: Optimizer name (e.g., "bh", "ga", "simple").
-
-    Returns:
-        Database filename (e.g., "bh_go.db", "ga_go.db").
-    """
-    optimizer_name_lower: str = optimizer.lower()
-    optimizer_db_map: dict[str, str] = {
-        "bh": "bh_go.db",
-        "simple": "bh_go.db",
-        "ga": "ga_go.db",
-    }
-    return optimizer_db_map.get(optimizer_name_lower, f"{optimizer_name_lower}_go.db")
-
-
 def get_provenance(atoms: Atoms) -> dict[str, Any]:
     """Get provenance (e.g. ``run_id``, ``trial_id``) from :attr:`Atoms.info` ``metadata``.
 

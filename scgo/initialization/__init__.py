@@ -21,7 +21,6 @@ from .initializers import (
     compute_cell_side,
     create_initial_cluster,
     create_initial_cluster_batch,
-    generate_initial_population,
 )
 from .random_spherical import (
     grow_from_seed,
@@ -45,7 +44,6 @@ __all__ = [
     # Main functions
     "create_initial_cluster",
     "create_initial_cluster_batch",
-    "generate_initial_population",
     "random_spherical",
     "grow_from_seed",
     "combine_seeds",

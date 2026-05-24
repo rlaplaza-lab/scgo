@@ -72,8 +72,6 @@ from scgo.database.connection import (
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.discovery import DatabaseDiscovery
 from scgo.database.exceptions import (
-    DatabaseError,
-    DatabaseLockError,
     DatabaseMigrationError,
     DatabaseSetupError,
 )
@@ -110,7 +108,6 @@ from scgo.database.schema import (
     stamp_scgo_database,
 )
 from scgo.database.streaming import (
-    aggregate_relaxed_energy_stats,
     count_database_structures,
     iter_database_minima,
     iter_databases_minima,
@@ -137,8 +134,6 @@ __all__ = [
     "SYSTEMS_JSON_COLUMN",
     "close_data_connection",
     "get_connection",
-    "DatabaseError",
-    "DatabaseLockError",
     "DatabaseSetupError",
     "DatabaseMigrationError",
     "setup_database",
@@ -151,7 +146,6 @@ __all__ = [
     "get_database_statistics",
     "iter_database_minima",
     "iter_databases_minima",
-    "aggregate_relaxed_energy_stats",
     "count_database_structures",
     "mark_final_minima_in_db",
     "SCGODatabaseManager",

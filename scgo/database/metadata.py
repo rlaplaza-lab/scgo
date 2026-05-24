@@ -110,12 +110,6 @@ def get_all_metadata(atoms: Atoms) -> dict[str, Any]:
     return dict(atoms.info.get("metadata", {}))
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers: SCGO ``systems`` rows use ``key_value_pairs`` JSON (no
-# separate ``metadata`` column in the SQLite schema for DBs we create).
-# ---------------------------------------------------------------------------
-
-
 def _parse_key_value_pairs_row(row: tuple) -> dict[str, Any]:
     """Parse ``key_value_pairs`` JSON from ``SELECT id, energy, key_value_pairs`` rows."""
     try:
@@ -138,59 +132,93 @@ def _find_first_relaxed_row(rows: list) -> tuple | None:
     return None
 
 
-def _row_matches_run_trial_row(row: tuple, run_id, trial) -> bool:
-    kv = _parse_key_value_pairs_row(row)
-    if kv.get("run_id") != run_id:
-        return False
-    if trial is None:
-        return True
-    return kv.get("trial_id") == trial
-
-
-def _extract_row_energy(r) -> float | None:
-    """Return ``systems.energy`` (column index 1 in row selects)."""
-    try:
-        return float(r[1])
-    except (TypeError, ValueError, IndexError):
-        return None
-
-
-def _select_best_row(
-    rows: list,
-    run_id,
-    trial,
-    energy: float | None,
-    tolerance: float,
+def _match_row_by_stored_final_id(
+    conn,
+    *,
+    kvp: str,
+    select_cols: str,
+    final_id: str,
 ) -> tuple | None:
-    """Select the best matching row from candidates using a priority cascade.
+    fid_conditions = [
+        f"CAST(json_extract({kvp}, '$.final_id') AS TEXT) = ?",
+        f"CAST(json_extract({kvp}, '$.unique_id') AS TEXT) = ?",
+        "CAST(unique_id AS TEXT) = ?",
+    ]
+    fid_params = [final_id, final_id, final_id]
+    query = (
+        f"SELECT {select_cols} FROM systems WHERE "
+        + " OR ".join(fid_conditions)
+        + " ORDER BY rowid ASC"
+    )
+    rows = conn.execute(query, tuple(fid_params)).fetchall()
+    if not rows:
+        return None
+    return _find_first_relaxed_row(rows) or rows[0]
 
-    Priority order:
-    1. Row matching run/trial AND marked relaxed
-    2. Row matching run/trial (any)
-    3. Row closest in energy within tolerance
-    """
-    matching = [r for r in rows if _row_matches_run_trial_row(r, run_id, trial)]
-    relaxed_match = _find_first_relaxed_row(matching)
-    if relaxed_match is not None:
-        return relaxed_match
-    if matching:
-        return matching[0]
 
-    if energy is not None:
-        best, best_delta = None, None
-        for r in rows:
-            e_db = _extract_row_energy(r)
-            if e_db is None:
-                continue
-            delta = abs(energy - e_db)
-            if (
-                best is None
-                or delta < best_delta
-                or (delta == best_delta and r[0] < best[0])
-            ):
-                best, best_delta = r, delta
-        if best is not None and best_delta <= tolerance:
-            return best
+def _match_row_by_computed_final_id(
+    db,
+    conn,
+    *,
+    kvp: str,
+    select_cols: str,
+    final_id: str,
+    energy: float | None,
+    run_id: str | None,
+    trial: int | None,
+) -> tuple | None:
+    from scgo.utils.helpers import compute_final_id
+
+    conditions = [f"json_extract({kvp}, '$.relaxed') = 1"]
+    params: list[Any] = []
+    if run_id is not None:
+        conditions.append(f"json_extract({kvp}, '$.run_id') = ?")
+        params.append(run_id)
+    if trial is not None:
+        conditions.append(
+            f"(json_extract({kvp}, '$.trial_id') IS NULL "
+            f"OR CAST(json_extract({kvp}, '$.trial_id') AS INTEGER) = ?)"
+        )
+        params.append(trial)
+
+    query = f"SELECT {select_cols} FROM systems WHERE " + " AND ".join(conditions)
+    rows = conn.execute(query, tuple(params)).fetchall()
+    for row in rows:
+        row_id, row_energy, _ = row
+        try:
+            candidate = db.get_atoms(row_id)
+        except (
+            KeyError,
+            IndexError,
+            sqlite3.DatabaseError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as e:
+            logger.debug(
+                "mark_final_minima_in_db: failed to load atoms id=%s: %s", row_id, e
+            )
+            continue
+
+        match_energy = energy
+        if match_energy is None and row_energy is not None:
+            try:
+                match_energy = float(row_energy)
+            except (TypeError, ValueError):
+                match_energy = None
+
+        try:
+            computed_id = compute_final_id(candidate, match_energy)
+        except (AttributeError, TypeError, ValueError) as e:
+            logger.debug(
+                "mark_final_minima_in_db: compute_final_id failed for id=%s: %s",
+                row_id,
+                e,
+            )
+            continue
+
+        if computed_id == final_id:
+            return row
 
     return None
 
@@ -213,22 +241,8 @@ def persist_provenance(
     run_id: str | None = None,
     trial_id: int | None = None,
 ) -> None:
-    """Persist run/trial provenance to ``atoms.info`` for discovery.
-
-    Writes ``run_id`` / ``trial_id`` to provenance, ``metadata`` (via :func:`add_metadata`),
-    and ``key_value_pairs`` for ASE persistence.
-    """
-    if run_id is not None or trial_id is not None:
-        add_metadata(atoms, run_id=run_id, trial_id=trial_id)
-    prov = atoms.info.setdefault("provenance", {})
-    if run_id is not None:
-        prov["run_id"] = run_id
-    if trial_id is not None:
-        prov["trial_id"] = trial_id
-    if run_id is not None:
-        atoms.info.setdefault("key_value_pairs", {})["run_id"] = run_id
-    if trial_id is not None:
-        atoms.info.setdefault("key_value_pairs", {})["trial_id"] = trial_id
+    """Persist run/trial provenance to ``atoms.info`` for discovery."""
+    add_metadata(atoms, run_id=run_id, trial_id=trial_id)
 
 
 def filter_by_metadata(
@@ -247,16 +261,20 @@ def mark_final_minima_in_db(
     final_minima_info: list[dict],
     base_dir: str | Path,
     db_paths: list[str | Path] | None = None,
-    tolerance: float = 1e-4,
 ) -> dict:
     """Mark final unique minima in database ``systems.key_value_pairs`` JSON rows.
 
+    Rows are matched by ``final_id`` (canonical identifier from
+    :func:`scgo.utils.helpers.compute_final_id`). Stored ``final_id`` values in
+    ``key_value_pairs`` are checked first; otherwise relaxed rows are scanned and
+    matched by recomputing ``final_id`` from their atomic structures.
+
     Args:
         final_minima_info: List of dicts with keys: 'energy' (float), 'atoms' (Atoms),
-            'rank' (1-based int), 'final_written' (str filepath or filename)
+            'rank' (1-based int), 'final_written' (str filepath or filename),
+            'final_id' (str, required)
         base_dir: Base output directory to search for database files (used by discovery)
-        db_paths: Optional explicit list of database files to search/update (skips registry discovery)
-        tolerance: Energy tolerance for best-match fallback (default 1e-4)
+        db_paths: Optional explicit list of database files to search/update
 
     Returns:
         dict: summary containing counts, e.g. {"dbs_touched": int, "rows_updated": int, "details": {db_path: rows}}
@@ -265,34 +283,30 @@ def mark_final_minima_in_db(
     from scgo.database.discovery import DatabaseDiscovery
     from scgo.database.sync import retry_transaction
 
-    # Discovery tries the JSON registry first, then falls back to a recursive glob
-    # under base_dir (canonical run_*/trial_* layout still matches the glob).
     discovery = DatabaseDiscovery(base_dir)
 
-    # Summary counters
     total_rows_updated = 0
     dbs_touched: set[str] = set()
     details: dict[str, int] = {}
 
     for info in final_minima_info:
         atoms = info.get("atoms")
-        energy = info.get("energy")
         rank = info.get("rank")
         final_written = info.get("final_written")
+        final_id = info.get("final_id")
+        energy = info.get("energy")
 
         if atoms is None:
             logger.warning("mark_final_minima_in_db: missing atoms entry, skipping")
             continue
 
-        # Extract provenance and identifiers from canonical metadata
+        if final_id is None:
+            logger.warning("mark_final_minima_in_db: missing final_id, skipping")
+            continue
+
         run_id = get_metadata(atoms, "run_id")
         trial = get_metadata(atoms, "trial_id")
-        confid = (
-            get_metadata(atoms, "confid")
-            or get_metadata(atoms, "gaid")
-            or get_metadata(atoms, "id")
-        )
-        # Prefer explicit db_paths when provided (allows tagging non-registered DBs)
+
         if db_paths:
             db_files = [Path(p) for p in db_paths]
         else:
@@ -305,9 +319,10 @@ def mark_final_minima_in_db(
             )
             continue
 
+        fid = str(final_id)
+
         for db_path in db_files:
             try:
-                # Use retry_transaction for robust writes
                 with (
                     get_connection(db_path) as db,
                     retry_transaction(
@@ -317,86 +332,23 @@ def mark_final_minima_in_db(
                 ):
                     kvp = SYSTEMS_JSON_COLUMN
                     select_cols = f"id, energy, {kvp}"
-
-                    # Try exact match by final_id first (highest priority), then confid/gaid/id
-                    row = None
-
-                    # Prefer explicit final identifier when provided in final_minima_info
-                    final_id = info.get("final_id")
-                    if final_id is not None:
-                        fid = str(final_id)
-                        fid_conditions = [
-                            f"CAST(json_extract({kvp}, '$.final_id') AS TEXT) = ?",
-                            f"CAST(json_extract({kvp}, '$.unique_id') AS TEXT) = ?",
-                            "CAST(unique_id AS TEXT) = ?",
-                        ]
-                        fid_params = [fid, fid, fid]
-                        query = (
-                            f"SELECT {select_cols} FROM systems WHERE "
-                            + " OR ".join(fid_conditions)
-                            + " ORDER BY rowid ASC"
+                    row = _match_row_by_stored_final_id(
+                        conn,
+                        kvp=kvp,
+                        select_cols=select_cols,
+                        final_id=fid,
+                    )
+                    if row is None:
+                        row = _match_row_by_computed_final_id(
+                            db,
+                            conn,
+                            kvp=kvp,
+                            select_cols=select_cols,
+                            final_id=fid,
+                            energy=energy,
+                            run_id=run_id,
+                            trial=trial,
                         )
-                        cursor = conn.execute(query, tuple(fid_params))
-                        rows = cursor.fetchall()
-                        if rows:
-                            chosen = _find_first_relaxed_row(rows)
-                            row = chosen or rows[0]
-
-                    # If final_id did not produce a match, try confid/gaid/id
-                    if row is None and confid is not None:
-                        confid_str = str(confid)
-                        conditions = [
-                            f"CAST(json_extract({kvp}, '$.confid') AS TEXT) = ?",
-                            f"CAST(json_extract({kvp}, '$.gaid') AS TEXT) = ?",
-                            f"CAST(json_extract({kvp}, '$.id') AS TEXT) = ?",
-                            "CAST(unique_id AS TEXT) = ?",
-                        ]
-                        params = [confid_str, confid_str, confid_str, confid_str]
-                        query = (
-                            f"SELECT {select_cols} FROM systems WHERE "
-                            + " OR ".join(conditions)
-                            + " ORDER BY rowid ASC"
-                        )
-                        cursor = conn.execute(query, tuple(params))
-                        rows = cursor.fetchall()
-                        if rows:
-                            chosen = _find_first_relaxed_row(rows)
-                            row = chosen or rows[0]
-
-                    # If no exact match, fallback to best-match by energy within run/trial
-                    if row is None and run_id is not None:
-                        if trial is not None:
-                            query = f"""
-                                SELECT {select_cols}
-                                FROM systems
-                                WHERE json_extract({kvp}, '$.run_id') = ?
-                                  AND json_extract({kvp}, '$.trial_id') = ?
-                            """
-                            params = (run_id, trial)
-                        else:
-                            query = f"""
-                                SELECT {select_cols}
-                                FROM systems
-                                WHERE json_extract({kvp}, '$.run_id') = ?
-                            """
-                            params = (run_id,)
-
-                        cursor = conn.execute(query, params)
-                        rows = cursor.fetchall()
-                        if rows:
-                            row = _select_best_row(
-                                rows, run_id, trial, energy, tolerance
-                            )
-                            logger.debug(
-                                "mark_final_minima_in_db: candidate row ids for "
-                                "run=%s in %s: %s",
-                                run_id,
-                                db_path,
-                                [str(r[0]) for r in rows],
-                            )
-                            if row is None:
-                                continue
-
                     if row is None:
                         continue
 
@@ -412,7 +364,6 @@ def mark_final_minima_in_db(
                     if trial is not None:
                         existing.setdefault("trial_id", trial)
 
-                    final_id_val = info.get("final_id")
                     fw_val = (
                         os.path.basename(str(final_written))
                         if final_written is not None
@@ -422,9 +373,7 @@ def mark_final_minima_in_db(
                         "final_unique_minimum": True,
                         "final_rank": int(rank) if rank is not None else None,
                         "final_written": fw_val,
-                        "final_id": str(final_id_val)
-                        if final_id_val is not None
-                        else None,
+                        "final_id": fid,
                     }
                     existing.update(
                         {k: v for k, v in final_keys.items() if v is not None}
@@ -437,7 +386,6 @@ def mark_final_minima_in_db(
 
                     conn.commit()
 
-                    # Track successful update for summary
                     total_rows_updated += 1
                     dbs_touched.add(str(db_path))
                     details[str(db_path)] = details.get(str(db_path), 0) + 1

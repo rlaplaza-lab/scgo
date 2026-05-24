@@ -39,7 +39,6 @@ The PDF will be available in `build/latex/scgo.pdf`.
   - `conf.py` — Sphinx configuration
   - `requirements.txt` — Documentation build requirements
   - `Makefile` — Sphinx build automation (invoked via `docs/Makefile`)
-- `_static/` — Shared static assets (logo; copied into `source/_static` for HTML builds)
 - `Makefile` — Delegates to `source/Makefile`
 
 ## Online Documentation

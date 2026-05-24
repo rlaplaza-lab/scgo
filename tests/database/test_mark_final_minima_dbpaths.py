@@ -11,11 +11,16 @@ def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
     dbpath = tmp_path / "external.db"
     db = connect(str(dbpath))
 
-    # Write a candidate row with identifiable confid/run_id
+    # Write a candidate row with stable final_id/run_id
     db.write(
         Atoms("Pt", positions=[[0, 0, 0]]),
         relaxed=True,
-        key_value_pairs={"run_id": "run_ext", "trial_id": 1, "raw_score": -0.1},
+        key_value_pairs={
+            "run_id": "run_ext",
+            "trial_id": 1,
+            "raw_score": -0.1,
+            "final_id": "fid-ext",
+        },
     )
 
     # Prepare final_minima_info matching the above provenance
@@ -25,7 +30,13 @@ def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
     atoms.info["provenance"]["trial_id"] = 1
 
     final_info = [
-        {"atoms": atoms, "energy": -0.1, "rank": 1, "final_written": "foo.xyz"}
+        {
+            "atoms": atoms,
+            "energy": -0.1,
+            "rank": 1,
+            "final_written": "foo.xyz",
+            "final_id": "fid-ext",
+        }
     ]
 
     # Call helper with explicit db_paths list (skip registry discovery)
@@ -39,7 +50,7 @@ def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
     assert str(dbpath) in summary.get("details", {})
 
     # Verify DB row was updated with final_unique_minimum and that summary matches actual DB
-    assert_db_final_row(str(dbpath), "run_ext", expect_final_id=False)
+    assert_db_final_row(str(dbpath), "run_ext", expect_final_id=True)
 
     kv_list = list(_iter_system_kvps(dbpath))
     assert kv_list

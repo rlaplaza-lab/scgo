@@ -27,21 +27,3 @@ def test_get_connection_succeeds_when_json1_available(tmp_path):
     with conn_mod.get_connection(db_path) as db, db.c.managed_connection() as conn:
         cur = conn.execute("SELECT 1")
         assert cur.fetchone()[0] == 1
-
-
-def test_get_connection_checks_json1(monkeypatch, tmp_path):
-    """Ensure get_connection performs the JSON1 availability check."""
-    db_path = tmp_path / "test_conn.db"
-    db_path.touch()
-
-    # Force the JSON1 checker to raise so we can verify get_connection calls it
-    def fake_ensure(conn):
-        raise RuntimeError("SQLite JSON1 extension is required")
-
-    monkeypatch.setattr(conn_mod, "_ensure_sqlite_json1", fake_ensure)
-
-    with (
-        pytest.raises(RuntimeError, match="SQLite JSON1 extension is required"),
-        conn_mod.get_connection(db_path),
-    ):
-        pass

@@ -15,10 +15,17 @@ def clear_torch_force_no_weights_only_load_env() -> None:
     os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
 
 
+def _import_spec_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ModuleNotFoundError, ValueError, ImportError):
+        return False
+
+
 def installed_mace_and_uma() -> tuple[bool, bool]:
-    """Return (mace_stack_present, fairchem_present) using importlib only."""
-    mace = importlib.util.find_spec("mace") is not None
-    uma = importlib.util.find_spec("fairchem") is not None
+    """Return (mace_stack_present, uma_stack_present) using importlib only."""
+    mace = _import_spec_available("mace")
+    uma = _import_spec_available("fairchem.core")
     return mace, uma
 
 

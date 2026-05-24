@@ -47,6 +47,16 @@ def _require_torchsim_fairchem() -> None:
         )
 
 
+_MLIP_CALCULATOR_CLASS_NAMES = frozenset(
+    {"MACECalculator", "MACE", "UMA", "FAIRChemCalculator"}
+)
+
+
+def is_ml_calculator(calculator: Calculator) -> bool:
+    """Return True when ``calculator`` is a known MLIP ASE calculator class."""
+    return calculator.__class__.__name__ in _MLIP_CALCULATOR_CLASS_NAMES
+
+
 def is_uma_like_calculator(calculator: Calculator | None) -> bool:
     """True for UMA / FAIRChem ASE calculator instances (by class name)."""
     if calculator is None:

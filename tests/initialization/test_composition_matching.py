@@ -21,30 +21,6 @@ class TestExactCompositionMatching:
         atoms = create_initial_cluster(composition, rng=rng)
         assert_cluster_valid(atoms, composition, check_connectivity=False)
 
-    def test_template_mode_exact_match(self, rng):
-        """Test that template mode produces exact composition."""
-        composition = ["Pt"] * 13
-        atoms = create_initial_cluster(composition, mode="template", rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
-
-    def test_smart_mode_exact_match(self, rng):
-        """Test that smart mode produces exact composition."""
-        composition = ["Pt", "Au"] * 5 + ["Pt"]  # 11 atoms: 6 Pt, 5 Au
-        atoms = create_initial_cluster(composition, mode="smart", rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
-
-    def test_random_spherical_exact_match(self, rng):
-        """Test that random_spherical mode produces exact composition."""
-        composition = ["Pt", "Au", "Pt"]
-        atoms = create_initial_cluster(composition, mode="random_spherical", rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
-
-    def test_seed_growth_exact_match(self, rng):
-        """Test that seed+growth mode produces exact composition."""
-        composition = ["Pt"] * 10
-        atoms = create_initial_cluster(composition, mode="seed+growth", rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
-
     def test_complex_composition_exact_match(self, rng):
         """Test complex multi-element composition."""
         composition = ["Pt", "Au", "Pd", "Pt", "Au", "Pd", "Pt"]

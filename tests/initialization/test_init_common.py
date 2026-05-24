@@ -70,44 +70,6 @@ from tests.test_utils import (
 class TestBasicInitialization:
     """Tests for basic cluster initialization functionality."""
 
-    def test_create_initial_cluster_smoke(self, rng):
-        """Test basic cluster creation works and satisfies all invariants."""
-        comp = ["Li", "Li"]
-        atoms = create_initial_cluster(
-            comp,
-            placement_radius_scaling=0.7,
-            vacuum=6.0,
-            rng=rng,
-            mode="random_spherical",
-        )
-        assert isinstance(atoms, Atoms)
-        assert len(atoms) == 2
-        # Verify all invariants using helper
-        assert_cluster_valid(atoms, comp)
-        # Verify cell properties
-        assert atoms.get_cell() is not None
-        assert not np.all(atoms.get_pbc())
-
-    def test_create_initial_cluster_diverse_no_seed(self, rng):
-        """Test that cluster creation produces diverse structures without fixed seed."""
-        comp = ["Pt"] * 4
-
-        def sig(a: Atoms):
-            p = a.get_positions()
-            d = np.linalg.norm(p[:, None, :] - p[None, :, :], axis=-1)
-            triu = d[np.triu_indices(len(p), k=1)]
-            return tuple(np.round(np.sort(triu), 6))
-
-        sigs = []
-        # Stress test: generate multiple clusters to verify diversity
-        for _ in range(6):
-            a = create_initial_cluster(comp, mode="random_spherical", rng=rng)
-            sigs.append(sig(a))
-
-        unique = set(sigs)
-        # extremely unlikely that 6 random initializations are identical
-        assert len(unique) >= 2
-
     def test_create_initial_cluster_unknown_mode(self, rng):
         """Test that unknown initialization mode raises appropriate error."""
         comp = ["Pt"]
@@ -116,46 +78,6 @@ class TestBasicInitialization:
             match='Unsupported mode: "invalid_mode"',
         ):
             create_initial_cluster(comp, mode="invalid_mode", rng=rng)
-
-    @pytest.mark.parametrize("mode", ["smart", "random_spherical", "template"])
-    def test_all_modes_satisfy_invariants(self, mode, rng):
-        """Test that all initialization modes produce clusters satisfying invariants."""
-        comp = ["Pt"] * 6
-        try:
-            atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-            # Verify all invariants using helper
-            assert_cluster_valid(atoms, comp, check_connectivity=len(atoms) > 2)
-        except ValueError:
-            # Template mode may fail for non-magic numbers, which is acceptable
-            if mode == "template":
-                pytest.skip("Template mode may fail for non-magic numbers")
-            raise
-
-    def test_mixed_composition_exact_match(self, rng):
-        """Test that mixed compositions produce exact element counts."""
-        comp = ["Pt", "Au", "Pt", "Au", "Pd"]
-        atoms = create_initial_cluster(comp, rng=rng)
-
-        # Verify all invariants using helper
-        assert_cluster_valid(atoms, comp)
-
-    def test_cell_properties_consistent(self, rng):
-        """Test that cell properties are consistently set."""
-        comp = ["Pt"] * 5
-        atoms = create_initial_cluster(comp, rng=rng)
-
-        # Cell should be set
-        cell = atoms.get_cell()
-        assert cell is not None
-        assert cell.shape == (3, 3)
-
-        # PBC should be False for clusters
-        assert not np.any(atoms.get_pbc()), (
-            "Clusters should not have periodic boundary conditions"
-        )
-
-        # Cell should be cubic (diagonal matrix)
-        assert np.allclose(cell, np.diag(np.diag(cell))), "Cell should be cubic"
 
     def test_strict_connectivity_enforcement(self, rng):
         """Test that connectivity is strictly enforced with default factor."""

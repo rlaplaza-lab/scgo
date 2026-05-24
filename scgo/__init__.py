@@ -8,9 +8,6 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-# SCGO sets torch.load behavior explicitly for trusted model loads; avoid the
-# global env override that triggers third-party import warnings.
-os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
 
 # Algorithms
 from scgo.algorithms import bh_go, ga_go

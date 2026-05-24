@@ -70,11 +70,11 @@ from scgo.system_types import (
 from scgo.utils.fitness_strategies import FitnessStrategy, validate_fitness_strategy
 from scgo.utils.helpers import extract_minima_from_database
 from scgo.utils.logging import get_logger, should_show_progress
-from scgo.utils.mlip_detection import is_ml_calculator
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.rng_helpers import ensure_rng_or_create
 from scgo.utils.timing_report import log_timing_summary, write_timing_file
+from scgo.utils.torchsim_policy import is_ml_calculator
 from scgo.utils.validation import validate_composition
 
 

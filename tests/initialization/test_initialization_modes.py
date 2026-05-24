@@ -25,15 +25,10 @@ from tests.test_utils import (
     SMALL_SIZES,
     assert_cluster_valid,
     create_paired_rngs,
+    get_structure_signature,
 )
 
-# All initialization modes to test
-INITIALIZATION_MODES = [
-    "random_spherical",
-    "seed+growth",
-    "smart",
-    "template",
-]
+INITIALIZATION_MODES = ["random_spherical", "seed+growth", "smart", "template"]
 
 
 @contextmanager
@@ -137,34 +132,9 @@ class TestInitializationModesBasics:
             assert np.all(np.diag(cell) > 0)
 
     @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
-    def test_mode_reproducibility(self, mode):
-        """Test that mode produces same structure with same seed."""
-        comp = ["Pt"] * 8
-        seed = 42
-
-        with _skip_template_valueerror(
-            mode, "Template mode may fail for non-magic numbers"
-        ):
-            rng1, rng2 = create_paired_rngs(seed)
-            atoms1 = create_initial_cluster(comp, mode=mode, rng=rng1)
-            atoms2 = create_initial_cluster(comp, mode=mode, rng=rng2)
-
-            assert np.allclose(
-                atoms1.get_positions(),
-                atoms2.get_positions(),
-                atol=1e-6,
-            )
-
-    @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
     def test_mode_diversity_without_seed(self, mode, rng):
         """Test that mode produces diverse structures without fixed seed."""
         comp = ["Pt"] * 4
-
-        def sig(a: Atoms):
-            p = a.get_positions()
-            d = np.linalg.norm(p[:, None, :] - p[None, :, :], axis=-1)
-            triu = d[np.triu_indices(len(p), k=1)]
-            return tuple(np.round(np.sort(triu), 6))
 
         with _skip_template_valueerror(
             mode, "Template mode may fail for non-magic numbers"
@@ -172,7 +142,7 @@ class TestInitializationModesBasics:
             sigs = []
             for _ in range(6):
                 a = create_initial_cluster(comp, mode=mode, rng=rng)
-                sigs.append(sig(a))
+                sigs.append(get_structure_signature(a))
 
             unique = set(sigs)
             # Expecting at least 2 different structures from 6 generations

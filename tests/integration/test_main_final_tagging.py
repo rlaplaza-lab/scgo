@@ -51,12 +51,18 @@ def test_mark_final_minima_fallback_scans_all_db(tmp_path):
     dbdir.mkdir()
     dbpath = dbdir / "other.db"
 
+    final_id = "fallback-fid"
     with connect(str(dbpath)) as db:
         pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
         db.write(
             pt2,
             relaxed=True,
-            key_value_pairs={"run_id": run_id, "trial_id": trial, "raw_score": -3.4},
+            key_value_pairs={
+                "run_id": run_id,
+                "trial_id": trial,
+                "raw_score": -3.4,
+                "final_id": final_id,
+            },
         )
 
     stamp_scgo_database(dbpath)
@@ -74,12 +80,20 @@ def test_mark_final_minima_fallback_scans_all_db(tmp_path):
     from scgo.database.metadata import mark_final_minima_in_db
 
     mark_final_minima_in_db(
-        [{"atoms": atoms, "energy": None, "rank": 1, "final_written": "foo.xyz"}],
+        [
+            {
+                "atoms": atoms,
+                "energy": None,
+                "rank": 1,
+                "final_written": "foo.xyz",
+                "final_id": final_id,
+            }
+        ],
         base_dir=str(tmp_path),
     )
 
     # Verify DB row updated — DB row for the given run_id was marked final
-    assert_db_final_row(str(dbpath), run_id, expect_final_id=False)
+    assert_db_final_row(str(dbpath), run_id, expect_final_id=True)
 
 
 def test_mark_final_minima_prefers_relaxed_row(tmp_path):
@@ -92,6 +106,7 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
     trial = 1
 
     dbpath = tmp_path / "pref.db"
+    final_id = "relaxed-fid"
     with connect(str(dbpath)) as db:
         # Create unrelaxed row (relaxed=False)
         a1 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
@@ -103,6 +118,7 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
                 "trial_id": trial,
                 "raw_score": -1.0,
                 "relaxed": False,
+                "final_id": final_id,
             },
         )
 
@@ -116,6 +132,7 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
                 "trial_id": trial,
                 "raw_score": -2.0,
                 "relaxed": True,
+                "final_id": final_id,
             },
         )
 
@@ -134,11 +151,19 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
     from scgo.database.metadata import mark_final_minima_in_db
 
     mark_final_minima_in_db(
-        [{"atoms": atoms, "energy": None, "rank": 1, "final_written": "foo.xyz"}],
+        [
+            {
+                "atoms": atoms,
+                "energy": None,
+                "rank": 1,
+                "final_written": "foo.xyz",
+                "final_id": final_id,
+            }
+        ],
         base_dir=str(tmp_path),
     )
 
-    assert_db_final_row(str(dbpath), run_id, expect_final_id=False)
+    assert_db_final_row(str(dbpath), run_id, expect_final_id=True)
 
     # specific check: ensure the tagged row is the relaxed one
     with sqlite3.connect(str(dbpath)) as conn:
@@ -148,65 +173,5 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
         assert any(
             (json.loads(r[0]) or {}).get("relaxed")
             and (json.loads(r[0]) or {}).get("final_unique_minimum")
-            for r in rows
-        ), "No relaxed row was tagged"
-
-
-def test_mark_final_minima_prefers_confid_relaxed(tmp_path):
-    """When matching by confid/gaid/id, prefer the relaxed row if multiples match."""
-
-    from ase import Atoms
-    from ase.db import connect
-
-    dbpath = tmp_path / "conf.db"
-    with connect(str(dbpath)) as db:
-        # Two rows share same gaid/confid; one unrelaxed and one relaxed. Relaxed should be chosen.
-        a1 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        db.write(
-            a1,
-            relaxed=False,
-            key_value_pairs={"gaid": 42, "raw_score": -1.0, "relaxed": False},
-        )
-
-        a2 = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
-        db.write(
-            a2,
-            relaxed=True,
-            key_value_pairs={"gaid": 42, "raw_score": -2.0, "relaxed": True},
-        )
-
-    stamp_scgo_database(dbpath)
-
-    atoms = a2.copy()
-    # Provide confid via metadata to exercise exact-match logic
-    from scgo.database.metadata import add_metadata
-
-    add_metadata(atoms, confid=42)
-
-    # Register DB explicitly — strict discovery requires registration or
-    # canonical run_xxx/trial_xxx layout.
-    from scgo.database.registry import get_registry
-
-    reg = get_registry(tmp_path)
-    reg.register_database(dbpath)
-
-    from scgo.database.metadata import mark_final_minima_in_db
-
-    mark_final_minima_in_db(
-        [{"atoms": atoms, "energy": None, "rank": 1, "final_written": "foo.xyz"}],
-        base_dir=str(tmp_path),
-    )
-
-    # ensure at least one final-tagged row exists (generic)
-    assert_db_final_row(str(dbpath), None, expect_final_id=False)
-
-    # keep the relaxed-specific assertion (concise):
-    with sqlite3.connect(str(dbpath)) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT key_value_pairs FROM systems")
-        rows = cur.fetchall()
-        assert any(
-            json.loads(r[0]).get("relaxed")
-            and json.loads(r[0]).get("final_unique_minimum")
             for r in rows
         ), "No relaxed row was tagged"

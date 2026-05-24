@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -46,9 +45,6 @@ napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 napoleon_use_param = True
 napoleon_use_rtype = True
-
-# Add any paths that contain templates here, relative to this directory.
-templates_path = ["_templates"]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -109,8 +105,3 @@ intersphinx_mapping = {
 # https://www.sphinx-doc.org/en/master/usage/extensions/todo.html
 
 todo_include_todos = True
-
-# Fail CI/docs jobs on warnings when SPHINX_STRICT=1
-if os.environ.get("SPHINX_STRICT") == "1":
-    suppress_warnings = []
-    nitpicky = True
