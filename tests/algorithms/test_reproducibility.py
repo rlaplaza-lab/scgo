@@ -10,9 +10,8 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.optimize import FIRE, LBFGS
 
+from scgo.algorithms import ga_go, ga_go_torchsim
 from scgo.algorithms.basinhopping_go import bh_go
-from scgo.algorithms.geneticalgorithm_go import ga_go
-from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
 from scgo.database import close_data_connection
 from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.minima_search import run_trials, scgo

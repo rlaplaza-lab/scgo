@@ -10,8 +10,8 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.optimize import LBFGS
 
+from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
-from scgo.algorithms.geneticalgorithm_go import ga_go
 from scgo.database.metadata import get_metadata
 from scgo.initialization import create_initial_cluster
 from scgo.utils.helpers import perform_local_relaxation

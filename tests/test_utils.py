@@ -199,8 +199,8 @@ def run_bh_ga_comparison(
         ...     ga_params={"niter": 2, "population_size": 3}
         ... )
     """
+    from scgo.algorithms import ga_go
     from scgo.algorithms.basinhopping_go import bh_go
-    from scgo.algorithms.geneticalgorithm_go import ga_go
     from scgo.initialization import create_initial_cluster
 
     # Default parameters
@@ -291,8 +291,7 @@ def run_algorithm_reproducibility_test(
     """
     import random
 
-    from scgo.algorithms.geneticalgorithm_go import ga_go
-    from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
+    from scgo.algorithms import ga_go, ga_go_torchsim
     from scgo.initialization import create_initial_cluster
 
     # For full reproducibility, seed both Python's built-in random and NumPy's random.

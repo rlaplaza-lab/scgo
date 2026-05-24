@@ -14,9 +14,8 @@ from ase import Atoms
 from ase.build import bulk
 from ase.calculators.emt import EMT
 
+from scgo.algorithms import ga_go, ga_go_torchsim
 from scgo.algorithms.basinhopping_go import bh_go
-from scgo.algorithms.geneticalgorithm_go import ga_go
-from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
 from scgo.initialization import create_initial_cluster, random_spherical
 from scgo.initialization.geometry_helpers import validate_cluster_structure
 from scgo.minima_search import run_trials, scgo

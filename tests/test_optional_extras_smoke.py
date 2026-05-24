@@ -10,20 +10,8 @@ def test_import_scgo_without_eager_torchsim():
     assert hasattr(scgo, "run_go")
 
 
-def test_lazy_ga_go_torchsim_import_error_message():
-    """``ga_go_torchsim`` is importable whenever ``torch_sim`` is available
-    (either the ``[mace]`` or ``[uma]`` extra). When neither is installed the
-    lazy attribute should raise an ``ImportError`` pointing at ``scgo[mace]``.
-    """
-    import importlib.util
+def test_ga_go_torchsim_importable_with_mace_extra():
+    """``ga_go`` / ``ga_go_torchsim`` are exported from :mod:`scgo.algorithms`."""
+    from scgo.algorithms import ga_go, ga_go_torchsim
 
-    if importlib.util.find_spec("torch_sim") is not None:
-        from scgo.algorithms import ga_go_torchsim
-
-        assert ga_go_torchsim is not None
-        return
-
-    import pytest
-
-    with pytest.raises(ImportError, match=r"scgo\[mace\]"):
-        from scgo.algorithms import ga_go_torchsim  # noqa: F401
+    assert ga_go is ga_go_torchsim

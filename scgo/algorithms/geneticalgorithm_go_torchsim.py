@@ -1,8 +1,8 @@
 """TorchSim-enhanced Genetic Algorithm global optimization for clusters.
 
-This module mirrors :mod:`scgo.geneticalgorithm_go` but swaps the sequential
-ASE relaxation stage for a batched TorchSim relaxation helper. The database
-interaction remains single-threaded to protect against SQLite locking issues.
+Genetic Algorithm global optimization with batched relaxations (TorchSim for MLIPs,
+ASE sequential batch relaxer for classical calculators). Database interaction
+remains single-threaded to protect against SQLite locking issues.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from scgo.algorithms.ga_common import (
     validate_ga_common_params,
 )
 from scgo.ase_ga_patches.population import Population
+from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
@@ -69,6 +70,7 @@ from scgo.system_types import (
 from scgo.utils.fitness_strategies import FitnessStrategy, validate_fitness_strategy
 from scgo.utils.helpers import extract_minima_from_database
 from scgo.utils.logging import get_logger, should_show_progress
+from scgo.utils.mlip_detection import is_ml_calculator
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.rng_helpers import ensure_rng_or_create
@@ -434,11 +436,19 @@ def ga_go_torchsim(
     rng = ensure_rng_or_create(rng)
 
     if relaxer is None:
-        relaxer = TorchSimBatchRelaxer(
-            force_tol=fmax,
-            mace_model_name="mace_matpes_0",
-            max_steps=niter_local_relaxation,
-        )
+        if is_ml_calculator(calculator):
+            relaxer = TorchSimBatchRelaxer(
+                force_tol=fmax,
+                mace_model_name="mace_matpes_0",
+                max_steps=niter_local_relaxation,
+            )
+        else:
+            relaxer = AseBatchRelaxer(
+                calculator,
+                optimizer=optimizer,
+                force_tol=fmax,
+                max_steps=niter_local_relaxation,
+            )
     elif (
         isinstance(niter_local_relaxation, int) and niter_local_relaxation > 0
     ) or relaxer.max_steps is None:
@@ -1285,3 +1295,7 @@ def ga_go_torchsim(
 
     finally:
         close_data_connection(da, log_errors=False)
+
+
+# Canonical GA entry point (TorchSim batch path for MLIPs, ASE batch path otherwise).
+ga_go = ga_go_torchsim

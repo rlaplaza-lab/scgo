@@ -170,7 +170,7 @@ def test_ga_go_rejects_legacy_randomstate():
     import numpy as _np
     from ase.calculators.emt import EMT
 
-    from scgo.algorithms.geneticalgorithm_go import ga_go
+    from scgo.algorithms import ga_go
 
     with pytest.raises(TypeError):
         ga_go(

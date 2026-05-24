@@ -5,7 +5,6 @@ import os
 
 import numpy as np
 import pytest
-import torch
 from ase import Atoms
 from ase.build import fcc111
 from ase.calculators.emt import EMT
@@ -790,28 +789,16 @@ class _DummyMLCalculator:
         self.forces = np.zeros((n_atoms, 3))
 
 
-def _patch_ga_go_fakes(monkeypatch, atoms):
-    called = {"torchsim": False, "ase_ga": False}
-
-    def fake_ga_go_torchsim(**kwargs):
-        called["torchsim"] = True
-        return [(-1.0, atoms.copy())]
+def test_select_and_run_ga_delegates_to_ga_go(monkeypatch, rng):
+    """Unified GA path always calls ga_go."""
+    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    called = {"ga": False}
 
     def fake_ga_go(**kwargs):
-        called["ase_ga"] = True
-        return [(-0.5, atoms.copy())]
+        called["ga"] = True
+        return [(-1.0, atoms.copy())]
 
-    monkeypatch.setattr(main_mod, "ga_go_torchsim", fake_ga_go_torchsim)
     monkeypatch.setattr(main_mod, "ga_go", fake_ga_go)
-    return called
-
-
-def test_select_and_run_ga_uses_torchsim_for_ml_calculator(monkeypatch, rng):
-    """ML calculator always uses ga_go_torchsim."""
-    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
-    calc = _DummyMLCalculator()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    called = _patch_ga_go_fakes(monkeypatch, atoms)
 
     results = main_mod._select_and_run_ga(
         composition=["H", "H"],
@@ -820,37 +807,12 @@ def test_select_and_run_ga_uses_torchsim_for_ml_calculator(monkeypatch, rng):
             "niter": 1,
             "population_size": 2,
         },
-        calculator=calc,
+        calculator=EMT(),
         rng=rng,
         verbosity=0,
     )
 
-    assert called["torchsim"] is True
-    assert called["ase_ga"] is False
-    assert isinstance(results, list)
-
-
-def test_select_and_run_ga_uses_ase_for_non_ml_calculator(monkeypatch, rng):
-    """Non-ML calculator uses ASE GA."""
-    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
-    calc = EMT()
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    called = _patch_ga_go_fakes(monkeypatch, atoms)
-
-    results = main_mod._select_and_run_ga(
-        composition=["H", "H"],
-        output_dir=".",
-        optimizer_kwargs={
-            "niter": 1,
-            "population_size": 2,
-        },
-        calculator=calc,
-        rng=rng,
-        verbosity=0,
-    )
-
-    assert called["torchsim"] is False
-    assert called["ase_ga"] is True
+    assert called["ga"] is True
     assert isinstance(results, list)
 
 

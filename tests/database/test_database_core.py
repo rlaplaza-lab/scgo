@@ -21,8 +21,8 @@ import pytest
 from ase import Atoms
 from ase.calculators.emt import EMT
 
+from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
-from scgo.algorithms.geneticalgorithm_go import ga_go
 from scgo.database import (
     DatabaseDiscovery,
     DatabaseRegistry,
@@ -290,7 +290,7 @@ class TestDatabaseSetupAndFlow:
         relaxed candidates (so discovery/filtering by run_id works)."""
         from ase.calculators.emt import EMT
 
-        from scgo.algorithms.geneticalgorithm_go import ga_go
+        from scgo.algorithms import ga_go
 
         run_id = "run_test_write"
         outdir = tmp_path / "ga_run"

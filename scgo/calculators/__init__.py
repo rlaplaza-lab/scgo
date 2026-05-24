@@ -4,9 +4,9 @@ This package contains helper modules for various energy calculators:
 
 - MACE: Machine learning potentials based on MACE models (optional ``[mace]`` extra)
 - UMA: FAIRChem UMA checkpoints (optional ``[uma]`` extra)
-- ORCA: Quantum chemistry calculations via ORCA
-- VASP: DFT calculations via VASP
 - TorchSim: GPU-accelerated batch relaxation (requires ``[mace]``)
+- VASP/ORCA export helpers live under :mod:`scgo.calculators.vasp_helpers` and
+  :mod:`scgo.calculators.orca_helpers` (not re-exported here).
 
 Note:
     MACE, UMA, and TorchSim symbols load lazily so ``import scgo.calculators``
@@ -18,19 +18,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .orca_helpers import prepare_orca_calculations, write_orca_inputs
-from .vasp_helpers import prepare_vasp_calculations
-
 __all__ = [
     "MACE",
     "MaceUrls",
     "UMA",
-    "prepare_orca_calculations",
-    "write_orca_inputs",
     "TorchSimBatchRelaxer",
     "MemoryScalerCache",
     "get_global_memory_scaler_cache",
-    "prepare_vasp_calculations",
 ]
 
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 # fragmenting; recommended for long-running TS campaigns. Set unconditionally so
 # callers do not need to export it in the shell.
 import os
-from typing import Any
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 # SCGO sets torch.load behavior explicitly for trusted model loads; avoid the
@@ -14,10 +13,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
 
 # Algorithms
-from scgo.algorithms import (
-    bh_go,
-    ga_go,
-)
+from scgo.algorithms import bh_go, ga_go, ga_go_torchsim
 
 # Cluster + adsorbate (composable local relax)
 from scgo.cluster_adsorbate import (
@@ -95,15 +91,6 @@ from scgo.utils.logging import (
 )
 
 __version__ = "0.1.0"
-
-
-def __getattr__(name: str) -> Any:
-    if name == "ga_go_torchsim":
-        from scgo.algorithms import _lazy_torchsim_ga
-
-        return _lazy_torchsim_ga.get_ga_go_torchsim()
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
 
 
 def __dir__() -> list[str]:

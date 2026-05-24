@@ -4,9 +4,8 @@ import numpy as np
 from ase import Atoms
 from ase.calculators.emt import EMT
 
-import scgo.algorithms.geneticalgorithm_go as ga_mod
-from scgo.algorithms.geneticalgorithm_go import ga_go
-from scgo.algorithms.geneticalgorithm_go_torchsim import ga_go_torchsim
+import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
+from scgo.algorithms import ga_go, ga_go_torchsim
 from scgo.database import open_db
 from scgo.database.metadata import get_metadata
 
@@ -18,7 +17,6 @@ class MockRelaxer:
         self.max_steps = max_steps
 
     def relax_batch(self, batch: list[Atoms]):
-        # return (energy, atoms) spaced to avoid duplicate collapse
         return [(float(i) * 0.1, a.copy()) for i, a in enumerate(batch)]
 
 
@@ -55,82 +53,8 @@ def test_ga_go_torchsim_generational_smoke(tmp_path, rng):
     assert isinstance(minima, list)
 
 
-def test_ga_go_disconnected_rows_persist_but_are_ineligible(tmp_path, rng, monkeypatch):
-    calc = EMT()
-    relax_counter = {"n": 0}
-    original_relax = ga_mod.perform_local_relaxation
-    original_validate = ga_mod.validate_structure_for_system_type
-
-    def tagged_relaxation(*args, **kwargs):
-        atoms = args[0]
-        original_relax(*args, **kwargs)
-        relax_counter["n"] += 1
-        if relax_counter["n"] == 1:
-            atoms.info["_force_disconnect"] = True
-
-    def selective_validate(atoms, *args, **kwargs):
-        if atoms.info.get("_force_disconnect", False):
-            atoms.info["_force_disconnect"] = False
-            raise ValueError("synthetic disconnected structure")
-        return original_validate(atoms, *args, **kwargs)
-
-    monkeypatch.setattr(ga_mod, "perform_local_relaxation", tagged_relaxation)
-    monkeypatch.setattr(
-        ga_mod, "validate_structure_for_system_type", selective_validate
-    )
-
-    outdir = tmp_path / "ga_go_disconnected_ineligible"
-    minima = ga_go(
-        composition=["Pt", "Pt", "Pt"],
-        output_dir=str(outdir),
-        calculator=calc,
-        rng=rng,
-        niter=1,
-        population_size=4,
-        niter_local_relaxation=1,
-    )
-
-    assert isinstance(minima, list)
-    assert len(minima) >= 1
-    for _energy, atoms in minima:
-        assert bool(get_metadata(atoms, "ga_eligible", default=True))
-
-    with open_db(str(outdir / "ga_go.db")) as da:
-        rows = da.get_all_relaxed_candidates()
-    assert rows
-    assert any(not bool(get_metadata(row, "ga_eligible", default=True)) for row in rows)
-
-
-def test_ga_signatures_consistent():
-    """Ensure `ga_go` and `ga_go_torchsim` expose the same public parameters.
-
-    Allow `ga_go_torchsim` to have the TorchSim-specific extras
-    (`relaxer`, `batch_size`)."""
-    import inspect
-
-    sig_ase = inspect.signature(ga_go)
-    sig_ts = inspect.signature(ga_go_torchsim)
-
-    ase_params = set(sig_ase.parameters.keys())
-    ts_params = set(sig_ts.parameters.keys())
-
-    # TorchSim may add these extras but otherwise parameter sets must match
-    extras = {"relaxer", "batch_size", "n_jobs_offspring"}
-    assert ase_params == (ts_params - extras)
-
-    # Check a couple of important default alignments
-    assert (
-        sig_ase.parameters["niter_local_relaxation"].default
-        == sig_ts.parameters["niter_local_relaxation"].default
-    )
-    assert (
-        sig_ase.parameters["mutation_probability"].default
-        == sig_ts.parameters["mutation_probability"].default
-    )
-    assert (
-        sig_ase.parameters["offspring_fraction"].default
-        == sig_ts.parameters["offspring_fraction"].default
-    )
+def test_ga_go_is_ga_go_torchsim_alias():
+    assert ga_go is ga_go_torchsim
 
 
 def test_ga_go_torchsim_accepts_optimizer(tmp_path, rng):
@@ -162,74 +86,11 @@ def test_ga_go_torchsim_optimizer_default_is_fire():
     assert sig_ts.parameters["optimizer"].default is FIRE
 
 
-def test_ga_go_offspring_fraction_creates_expected_offspring(
-    tmp_path, rng, monkeypatch
-):
-    """Verify offspring count equals ceil(population_size * offspring_fraction)."""
-    from scgo.database import open_db
-
-    calc = EMT()
-
-    # Monkeypatch pairing to always return a fresh unique child
-    import scgo.algorithms.geneticalgorithm_go as ga_mod
-
-    counter = {"i": 0}
-
-    def fake_create_pairing(atoms_template, n_to_optimize, rng_arg, **kwargs):
-        class Pairing:
-            def get_new_individual(self, parents):
-                i = counter["i"]
-                counter["i"] += 1
-                a = Atoms(
-                    symbols=atoms_template.get_chemical_symbols(),
-                    positions=[[i * 0.13, 0, 0] for _ in range(n_to_optimize)],
-                )
-                return a, f"fake:label{i}"
-
-        return Pairing()
-
-    monkeypatch.setattr(ga_mod, "create_ga_pairing", fake_create_pairing)
-
-    population_size = 5
-    offs_frac = 0.6
-    expected_offspring = math.ceil(population_size * offs_frac)
-
-    outdir = tmp_path / "ga_go_off"
-    minima = ga_go(
-        composition=["Pt"] * 3,
-        output_dir=str(outdir),
-        calculator=calc,
-        rng=rng,
-        niter=1,
-        population_size=population_size,
-        offspring_fraction=offs_frac,
-        niter_local_relaxation=1,
-    )
-
-    assert isinstance(minima, list)
-
-    db_file = outdir / "ga_go.db"
-    with open_db(str(db_file)) as da:
-        from scgo.database.metadata import get_metadata
-
-        rows = da.get_all_relaxed_candidates()
-        gen0 = [a for a in rows if get_metadata(a, "generation") == 0]
-
-    # Count unique configurations (avoid counting multiple relaxed steps for same conf)
-    unique_confids = {a.info.get("confid") for a in gen0}
-    assert len(unique_confids) - population_size == expected_offspring
-
-
 def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
     tmp_path, rng, monkeypatch
 ):
-    from scgo.database import open_db
-
     calc = EMT()
     relaxer = MockRelaxer(max_steps=1)
-
-    import scgo.algorithms.geneticalgorithm_go_torchsim as ga_ts_mod
-
     counter = {"i": 0}
 
     def fake_create_pairing(atoms_template, n_to_optimize, rng_arg, **kwargs):
@@ -245,7 +106,7 @@ def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
 
         return Pairing()
 
-    monkeypatch.setattr(ga_ts_mod, "create_ga_pairing", fake_create_pairing)
+    monkeypatch.setattr(ga_mod, "create_ga_pairing", fake_create_pairing)
 
     population_size = 4
     offs_frac = 0.5
@@ -269,8 +130,6 @@ def test_ga_go_torchsim_offspring_fraction_creates_expected_offspring(
 
     db_file = outdir / "ga_go.db"
     with open_db(str(db_file)) as da:
-        from scgo.database.metadata import get_metadata
-
         rows = da.get_all_relaxed_candidates()
         gen0 = [a for a in rows if get_metadata(a, "generation") == 0]
 
@@ -314,10 +173,7 @@ def test_ga_go_torchsim_parallel_offspring_handles_worker_failures(
 ):
     calc = EMT()
     relaxer = MockRelaxer(max_steps=1)
-
-    import scgo.algorithms.geneticalgorithm_go_torchsim as ga_ts_mod
-
-    base_factory = ga_ts_mod.create_ga_pairing
+    base_factory = ga_mod.create_ga_pairing
     call_counter = {"n": 0}
 
     def flaky_pairing_factory(*args, **kwargs):
@@ -333,7 +189,7 @@ def test_ga_go_torchsim_parallel_offspring_handles_worker_failures(
         pairing.get_new_individual = wrapped_get  # type: ignore[assignment]
         return pairing
 
-    monkeypatch.setattr(ga_ts_mod, "create_ga_pairing", flaky_pairing_factory)
+    monkeypatch.setattr(ga_mod, "create_ga_pairing", flaky_pairing_factory)
 
     minima = ga_go_torchsim(
         composition=["Pt"] * 3,
@@ -353,8 +209,6 @@ def test_ga_go_torchsim_parallel_offspring_handles_worker_failures(
 
 
 def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
-    from scgo.database import open_db
-
     calc = EMT()
     outdir_ase = tmp_path / "ga_center_ase"
     ga_go(
@@ -399,7 +253,6 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
         bbox_center = 0.5 * (
             row.get_positions().min(axis=0) + row.get_positions().max(axis=0)
         )
-        # TorchSim + MockRelaxer uses few steps; bbox need not match cell midpoint tightly.
         np.testing.assert_allclose(
             bbox_center,
             np.diag(row.get_cell()) / 2.0,

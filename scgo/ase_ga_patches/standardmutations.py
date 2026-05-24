@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 """A collection of mutations that can be used."""
-from math import pi
 
 import numpy as np
 from ase import Atoms

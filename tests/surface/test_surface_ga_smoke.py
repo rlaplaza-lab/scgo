@@ -6,7 +6,7 @@ import numpy as np
 from ase.calculators.emt import EMT
 from numpy.random import default_rng
 
-from scgo.algorithms.geneticalgorithm_go import ga_go
+from scgo.algorithms import ga_go
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import slab_surface_extreme
 

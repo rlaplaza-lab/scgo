@@ -20,7 +20,6 @@ from ase.io import write
 from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 
 from scgo.algorithms import bh_go, ga_go, simple_go
-from scgo.algorithms._lazy_torchsim_ga import get_ga_go_torchsim
 from scgo.database import SCGODatabaseManager
 from scgo.database.metadata import (
     add_metadata,
@@ -52,7 +51,6 @@ from scgo.utils.helpers import (
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.optimizer_utils import get_optimizer_class
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.run_tracking import (
     RunMetadataJSONEncoder,
@@ -288,84 +286,9 @@ def _validate_calculator_compatibility(
     return True, "Calculator is compatible"
 
 
-def _is_ml_calculator_for_torchsim(calculator: Calculator) -> bool:
-    """True if the calculator looks like an MLIP served by TorchSim+MACE."""
-    calculator_class_name = calculator.__class__.__name__
-    # UMA/FAIRChem can be driven by TorchSim's FairChem model wrapper; do not
-    # exclude it from TorchSim GA selection.
-    model = getattr(calculator, "model", None)
-    return hasattr(model, "forward") or calculator_class_name in (
-        "MACECalculator",
-        "MACE",
-        "UMA",
-        "FAIRChemCalculator",
-    )
-
-
-def ga_go_torchsim(*args, **kwargs):
-    """TorchSim GA entry point; lazy-imports MACE/TorchSim deps (allows tests to monkeypatch)."""
-    return get_ga_go_torchsim()(*args, **kwargs)
-
-
-def _filter_ga_kwargs_for_torchsim(
-    optimizer_kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """Filter optimizer kwargs for TorchSim GA (drops ASE-only keys)."""
+def _filter_ga_kwargs(optimizer_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop GA kwargs that are not accepted by :func:`ga_go`."""
     return filter_dict_keys(optimizer_kwargs, {"optimizer"})
-
-
-def _filter_ga_kwargs_for_ase(
-    optimizer_kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """Filter and normalize optimizer kwargs for ASE GA.
-
-    Removes TorchSim-specific keys and converts optimizer string to class.
-
-    Args:
-        optimizer_kwargs: Dictionary of optimizer parameters.
-
-    Returns:
-        Filtered and normalized dictionary suitable for ASE GA.
-    """
-    ase_ga_kwargs = filter_dict_keys(
-        optimizer_kwargs,
-        {"relaxer", "batch_size", "n_jobs_offspring"},
-    )
-
-    optimizer_name = ase_ga_kwargs.get("optimizer")
-    if isinstance(optimizer_name, str):
-        ase_ga_kwargs["optimizer"] = get_optimizer_class(optimizer_name)
-
-    return ase_ga_kwargs
-
-
-def _resolve_ga_backend(
-    optimizer_kwargs: dict[str, Any],
-    calculator: Calculator,
-    logger: Any,
-) -> tuple[bool, dict[str, Any], dict[str, Any]]:
-    """TorchSim GA for MLIPs; ASE GA otherwise."""
-    requested_torchsim = optimizer_kwargs.get("relaxer") is not None
-    ml = _is_ml_calculator_for_torchsim(calculator)
-    torchsim_kwargs = _filter_ga_kwargs_for_torchsim(optimizer_kwargs)
-    ase_ga_kwargs = _filter_ga_kwargs_for_ase(optimizer_kwargs)
-
-    if requested_torchsim:
-        # Fail fast if TorchSim was explicitly requested but isn't importable.
-        # This avoids silent backends switches that can hide misconfiguration.
-        _ = get_ga_go_torchsim()
-        logger.debug("Using TorchSim GA (explicit request)")
-        return True, torchsim_kwargs, {}
-
-    if ml:
-        opt = optimizer_kwargs.get("optimizer")
-        if isinstance(opt, str) and opt.upper() != "FIRE":
-            logger.debug('TorchSim GA ignores optimizer "%s"; uses FIRE.', opt)
-        logger.debug("Using TorchSim GA (ML calculator)")
-        return True, torchsim_kwargs, {}
-
-    logger.debug("Using ASE GA (non-ML calculator)")
-    return False, {}, ase_ga_kwargs
 
 
 def _select_and_run_ga(
@@ -378,7 +301,7 @@ def _select_and_run_ga(
     run_id: str | None = None,
     clean: bool = False,
 ) -> list[tuple[float, Atoms]]:
-    """Run TorchSim GA for MLIPs and ASE GA for classical calculators.
+    """Run the unified GA implementation (TorchSim or ASE batch relaxer).
 
     Args:
         composition: List of element symbols defining the cluster composition.
@@ -391,24 +314,7 @@ def _select_and_run_ga(
     Returns:
         List of ``(energy, Atoms)`` tuples from the GA run.
     """
-    logger = get_logger(__name__)
-
-    use_torchsim, torchsim_kwargs, ase_ga_kwargs = _resolve_ga_backend(
-        optimizer_kwargs, calculator, logger
-    )
-
-    if use_torchsim:
-        return ga_go_torchsim(
-            composition=composition,
-            output_dir=output_dir,
-            calculator=calculator,
-            rng=rng,
-            verbosity=verbosity,
-            run_id=run_id,
-            clean=clean,
-            **torchsim_kwargs,
-        )
-
+    ga_kwargs = _filter_ga_kwargs(optimizer_kwargs)
     return ga_go(
         composition=composition,
         output_dir=output_dir,
@@ -417,7 +323,7 @@ def _select_and_run_ga(
         verbosity=verbosity,
         run_id=run_id,
         clean=clean,
-        **ase_ga_kwargs,
+        **ga_kwargs,
     )
 
 
