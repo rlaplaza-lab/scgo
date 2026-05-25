@@ -347,7 +347,18 @@ results = run_go(
 
 Run GO for each composition **sequentially**; returns `dict[formula, list[(energy, Atoms)]]`.
 
-For element or binary scans, build compositions explicitly and pass them to `run_go_campaign`.
+For element or binary size scans, build composition lists with helpers from `scgo.run_minima`, then pass them to `run_go_campaign` (or `run_scgo_campaign_arbitrary_compositions`):
+
+```python
+from scgo import run_go_campaign
+from scgo.param_presets import get_testing_params
+from scgo.run_minima import build_one_element_compositions, build_two_element_compositions
+
+params = get_testing_params()
+pt_scan = build_one_element_compositions("Pt", min_atoms=2, max_atoms=6)
+au_pt_scan = build_two_element_compositions("Au", "Pt", min_atoms=2, max_atoms=4)
+results = run_go_campaign(pt_scan, params=params, seed=42, system_type="gas_cluster")
+```
 
 ### Transition state search
 
@@ -389,7 +400,9 @@ Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_b
 
 ### Advanced / internals
 
-- `from scgo.run_minima import run_scgo_trials`, `run_scgo_campaign_arbitrary_compositions`, …
+- `from scgo.run_minima import run_scgo_trials`, `run_scgo_campaign_arbitrary_compositions`, `build_one_element_compositions`, `build_two_element_compositions`, …
+- `from scgo.surface import make_surface_config` for arbitrary ASE slabs (preset graphite: `make_graphite_surface_config`)
+- Low-level `scgo(...)` / `run_trials(...)`: pass `system_type` in `global_optimizer_kwargs` (required for `scgo`; `run_trials` defaults missing values to `"gas_cluster"`)
 - `from scgo.ts_search.transition_state_run import run_transition_state_search` for a flat keyword API without the `ts_params` dict.
 
 ---

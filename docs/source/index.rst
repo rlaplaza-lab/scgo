@@ -52,6 +52,7 @@ Contents
    :caption: API Reference
 
    api/runner_api
+   api/surface
    api/param_presets
    api/system_types
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pt5+OH gas-phase: GO + TS via ``run_go_ts``.
 
-``system_type= gas_cluster_adsorbate`` with hierarchical-only adsorbate inputs:
+``system_type="gas_cluster_adsorbate"`` with hierarchical-only adsorbate inputs:
 core-only ``COMPOSITION`` plus one adsorbate fragment as an ASE ``Atoms`` object.
 """
 

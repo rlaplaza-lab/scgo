@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pt5 gas-phase: GO + TS via ``run_go_ts``.
 
-``system_type= gas_cluster`` — no slab, no ``adsorbate_definition``.
+``system_type="gas_cluster"`` — no slab, no ``adsorbate_definition``.
 """
 
 from __future__ import annotations

@@ -160,6 +160,49 @@ to ``True``. Pass the new keys in ``go_params`` / ``ts_params`` or per-optimizer
 For surface runs, TS pair selection and similarity use ``n_slab`` from
 ``surface_config`` so slab-only coordinate shifts do not count as distinct minima.
 
+Multi-composition campaigns
+---------------------------
+
+For size scans over one or two elements, build composition lists and pass them to
+``run_go_campaign`` (re-exported from ``scgo``) or
+``run_scgo_campaign_arbitrary_compositions``:
+
+.. code-block:: python
+
+   from scgo import run_go_campaign
+   from scgo.param_presets import get_testing_params
+   from scgo.run_minima import (
+       build_one_element_compositions,
+       build_two_element_compositions,
+   )
+
+   params = get_testing_params()
+   compositions = build_one_element_compositions("Pt", min_atoms=2, max_atoms=6)
+   # compositions = build_two_element_compositions("Au", "Pt", 2, 4)
+   results = run_go_campaign(
+       compositions,
+       params=params,
+       seed=42,
+       system_type="gas_cluster",
+   )
+
+Custom ASE slabs (non-graphite)
+-------------------------------
+
+The graphite examples use ``make_graphite_surface_config``. For any other ASE slab,
+normalize PBC and build a ``SurfaceSystemConfig`` with ``make_surface_config``:
+
+.. code-block:: python
+
+   from ase.build import fcc111
+   from scgo.surface import make_surface_config
+
+   slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0)
+   surface_config = make_surface_config(slab)
+
+Pass the same ``surface_config`` into ``get_torchsim_ga_params``,
+``get_ts_search_params``, and ``run_go_ts`` / ``run_go``.
+
 Creating Your Own Examples
 --------------------------
 

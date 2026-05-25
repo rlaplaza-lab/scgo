@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pt5 on graphite: GO + TS via ``run_go_ts``.
 
-``system_type= surface_cluster`` — supported Pt5 cluster on the preset graphite slab (no
+``system_type="surface_cluster"`` — supported Pt5 cluster on the preset graphite slab (no
 separate adsorbate fragment).
 """
 

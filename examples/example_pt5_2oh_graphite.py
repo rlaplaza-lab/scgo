@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pt5+2OH on graphite: GO + TS via ``run_go_ts``.
 
-``system_type= surface_cluster_adsorbate`` with hierarchical-only adsorbate inputs:
+``system_type="surface_cluster_adsorbate"`` with hierarchical-only adsorbate inputs:
 core-only ``COMPOSITION`` plus one-or-more adsorbate ASE ``Atoms`` fragments.
 """
 
