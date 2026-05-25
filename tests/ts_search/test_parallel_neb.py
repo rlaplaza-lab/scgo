@@ -4,21 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from ase import Atoms
 
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 from scgo.ts_search.parallel_neb import ParallelNEBBatch
 from scgo.ts_search.transition_state import TorchSimNEB, interpolate_path
-from tests.cuda_skip import require_cuda
 
-
-@pytest.fixture
-def cu3_bent():
-    """Cu3 bent chain."""
-    positions = [[0, 0, 0], [2.5, 0, 0], [2.5, 2.5, 0]]
-    atoms = Atoms("Cu3", positions=positions)
-    atoms.center(vacuum=5.0)
-    return atoms
+pytestmark = pytest.mark.requires_cuda
 
 
 class TestParallelNEBBatch:
@@ -26,8 +17,6 @@ class TestParallelNEBBatch:
 
     def test_parallel_neb_initialization(self, cu3_triangle, cu3_linear):
         """Test ParallelNEBBatch initialization with multiple NEBs."""
-        require_cuda()
-
         relaxer = TorchSimBatchRelaxer(
             device="cuda",
             mace_model_name="mace_matpes_0",
@@ -53,8 +42,6 @@ class TestParallelNEBBatch:
     @pytest.mark.slow
     def test_parallel_neb_basic_run(self, cu3_triangle, cu3_linear, cu3_bent):
         """Test basic parallel NEB optimization with multiple paths."""
-        require_cuda()
-
         relaxer = TorchSimBatchRelaxer(
             device="cuda",
             mace_model_name="mace_matpes_0",
@@ -93,8 +80,6 @@ class TestParallelNEBBatch:
     @pytest.mark.slow
     def test_parallel_neb_summary(self, cu3_triangle, cu3_linear):
         """Test ParallelNEBBatch summary statistics."""
-        require_cuda()
-
         relaxer = TorchSimBatchRelaxer(
             device="cuda",
             mace_model_name="mace_matpes_0",
@@ -119,8 +104,6 @@ class TestParallelNEBBatch:
 
     def test_parallel_neb_batching_efficiency(self, cu3_triangle, cu3_linear, cu3_bent):
         """Test that parallel NEB batches images from multiple NEBs together."""
-        require_cuda()
-
         relaxer = TorchSimBatchRelaxer(
             device="cuda",
             mace_model_name="mace_matpes_0",
@@ -146,8 +129,6 @@ class TestParallelNEBBatch:
 
     def test_parallel_neb_partial_convergence(self, cu3_triangle, cu3_linear, cu3_bent):
         """Test parallel NEB with different convergence rates."""
-        require_cuda()
-
         relaxer = TorchSimBatchRelaxer(
             device="cuda",
             mace_model_name="mace_matpes_0",

@@ -230,68 +230,23 @@ def parse_composition_arg(comp_str: str) -> list[str]:
 # this module holds implementation entry points used by that layer.
 
 
-def run_scgo_campaign_one_element(
-    element: str,
-    min_atoms: int,
-    max_atoms: int,
-    system_type: SystemType,
-    params: dict | None = None,
-    seed: int | None = None,
-    verbosity: int = 1,
-    run_id: str | None = None,
-    clean: bool = False,
-    output_dir: str | Path | None = None,
-) -> dict[str, list[tuple[float, Atoms]]]:
-    """Run mono-element campaigns for sizes min_atoms..max_atoms; return mapping formula->minima."""
-    configure_logging(verbosity)
-    params = initialize_params(params)
-
-    # Validate inputs
+def build_one_element_compositions(
+    element: str, min_atoms: int, max_atoms: int
+) -> list[list[str]]:
+    """Composition list for mono-element size scans (min_atoms..max_atoms)."""
     if not element or not isinstance(element, str):
         raise ValueError("element must be a non-empty string")
     if min_atoms < 1:
         raise ValueError("min_atoms must be >= 1")
     if max_atoms < min_atoms:
         raise ValueError("max_atoms must be >= min_atoms")
-
-    # Generate run_id once at campaign start if not provided
-    logger = get_logger(__name__)
-    run_id = ensure_run_id(run_id, verbosity=verbosity, logger=logger)
-
-    all_compositions = [
-        [element] * n_atoms for n_atoms in range(min_atoms, max_atoms + 1)
-    ]
-
-    return run_scgo_campaign_arbitrary_compositions(
-        all_compositions,
-        system_type,
-        params,
-        seed=seed,
-        verbosity=verbosity,
-        run_id=run_id,
-        clean=clean,
-        output_dir=output_dir,
-    )
+    return [[element] * n_atoms for n_atoms in range(min_atoms, max_atoms + 1)]
 
 
-def run_scgo_campaign_two_elements(
-    element1: str,
-    element2: str,
-    min_atoms: int,
-    max_atoms: int,
-    system_type: SystemType,
-    params: dict | None = None,
-    seed: int | None = None,
-    verbosity: int = 1,
-    run_id: str | None = None,
-    clean: bool = False,
-    output_dir: str | Path | None = None,
-) -> dict[str, list[tuple[float, Atoms]]]:
-    """Run bimetallic campaigns for sizes min_atoms..max_atoms; return mapping formula->minima."""
-    configure_logging(verbosity)
-    params = initialize_params(params)
-
-    # Validate inputs
+def build_two_element_compositions(
+    element1: str, element2: str, min_atoms: int, max_atoms: int
+) -> list[list[str]]:
+    """Composition list for bimetallic size scans (min_atoms..max_atoms)."""
     if not element1 or not isinstance(element1, str):
         raise ValueError("element1 must be a non-empty string")
     if not element2 or not isinstance(element2, str):
@@ -300,27 +255,11 @@ def run_scgo_campaign_two_elements(
         raise ValueError("min_atoms must be >= 1")
     if max_atoms < min_atoms:
         raise ValueError("max_atoms must be >= min_atoms")
-
-    # Generate run_id once at campaign start if not provided
-    logger = get_logger(__name__)
-    run_id = ensure_run_id(run_id, verbosity=verbosity, logger=logger)
-
-    all_compositions = []
+    compositions: list[list[str]] = []
     for n_atoms in range(min_atoms, max_atoms + 1):
         for i in range(n_atoms + 1):
-            composition = [element1] * i + [element2] * (n_atoms - i)
-            all_compositions.append(composition)
-
-    return run_scgo_campaign_arbitrary_compositions(
-        all_compositions,
-        system_type,
-        params,
-        seed=seed,
-        verbosity=verbosity,
-        run_id=run_id,
-        clean=clean,
-        output_dir=output_dir,
-    )
+            compositions.append([element1] * i + [element2] * (n_atoms - i))
+    return compositions
 
 
 def run_scgo_campaign_arbitrary_compositions(
@@ -615,8 +554,8 @@ def run_scgo_one_element_go_ts_pipeline(
 
 __all__ = [
     "run_scgo_trials",
-    "run_scgo_campaign_one_element",
-    "run_scgo_campaign_two_elements",
+    "build_one_element_compositions",
+    "build_two_element_compositions",
     "run_scgo_campaign_arbitrary_compositions",
     "run_scgo_go_ts_pipeline",
     "run_scgo_one_element_go_ts_pipeline",

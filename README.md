@@ -223,7 +223,7 @@ Build (or load) any ASE `Atoms` slab and pass it through the generic surface hel
 
 ```python
 from ase.build import fcc111
-from scgo.runner_surface import make_surface_config
+from scgo.surface import make_surface_config
 
 slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0)
 surface_config = make_surface_config(slab)
@@ -253,7 +253,7 @@ For the bundled graphite preset, `make_graphite_surface_config(slab_layers=3)` c
 
 - **Direct API** (any adsorbate size): `from scgo import ga_go, SurfaceSystemConfig` and pass `surface_config=...`.
 - **`run_go`**: pass `surface_config=...` directly to `run_go(...)`; it is copied into each **present** `optimizer_params` entry among `simple` / `bh` / `ga` so the active algorithm sees the slab. The high-level runner only selects GA when `len(composition) >= 4`, so use **at least four adsorbate atoms** if you rely on automatic algorithm choice; for dimers/trimers, call `ga_go` directly.
-- For slab workflows, choose `system_type="surface_cluster"` (supported cluster only) or `system_type="surface_cluster_adsorbate"` (supported cluster with explicit adsorbate-mode policies). Use `scgo.runner_surface.make_surface_config` for a custom ASE slab; use `scgo.surface.make_graphite_surface_config` for the bundled graphite template.
+- For slab workflows, choose `system_type="surface_cluster"` (supported cluster only) or `system_type="surface_cluster_adsorbate"` (supported cluster with explicit adsorbate-mode policies). Use `scgo.surface.make_surface_config` for a custom ASE slab; use `scgo.surface.make_graphite_surface_config` for the bundled graphite template.
 
 Adsorbate inputs and initial structures: For both `gas_cluster_adsorbate` and `surface_cluster_adsorbate`, pass core-only `composition` plus `adsorbates` (one `Atoms` or list of `Atoms`). SCGO derives a strict mobile partition in order (`core_symbols == composition`, then flattened adsorbate symbols); slab atoms are not part of `composition`. SCGO uses hierarchical initialization only: build the core, place the rigid fragment(s), then (for surface) deposit the combined cluster on the slab. Optional: `run_go(..., cluster_adsorbate_config=ClusterAdsorbateConfig(...))` for fragment height and validation. Use `scgo.surface.describe_surface_config` to log effective slab and height settings. GA and basin-hopping attach `n_core_atoms` and per-role symbol JSON in metadata for round-trip checks. When adsorbate metadata is present, [`validate_structure_for_system_type`](scgo/system_types.py) also asserts that the mobile region's chemical symbols match `core_symbols + adsorbate_symbols` in order (in addition to geometry checks).
 

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from scgo.surface.composition import full_adsorbate_slab_composition
-from scgo.surface.config import SurfaceSystemConfig, describe_surface_config
+from scgo.surface.config import (
+    SurfaceSystemConfig,
+    describe_surface_config,
+    make_surface_config,
+)
 from scgo.surface.constraints import (
     attach_slab_constraints,
     attach_slab_constraints_from_surface_config,
@@ -35,6 +39,7 @@ from scgo.surface.validation import (
 __all__ = [
     "SurfaceSystemConfig",
     "describe_surface_config",
+    "make_surface_config",
     "build_default_fragment_template",
     "full_adsorbate_slab_composition",
     "adsorption_energy",

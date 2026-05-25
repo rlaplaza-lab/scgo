@@ -177,87 +177,6 @@ def create_test_atoms(
     return atoms
 
 
-def run_bh_ga_comparison(
-    composition: list[str],
-    seed: int,
-    tmp_path: Any,
-    bh_params: dict[str, Any] | None = None,
-    ga_params: dict[str, Any] | None = None,
-    bh_output_suffix: str = "bh",
-    ga_output_suffix: str = "ga",
-) -> tuple[list, list]:
-    """Run BH and GA optimizers with same seed and return results.
-
-    This helper reduces duplication in benchmark tests that compare BH vs GA.
-
-    Args:
-        composition: Chemical composition list
-        seed: Random seed for reproducibility
-        tmp_path: Pytest tmp_path fixture for output directories
-        bh_params: Optional dict of parameters for bh_go (overrides defaults)
-        ga_params: Optional dict of parameters for ga_go (overrides defaults)
-        bh_output_suffix: Suffix for BH output directory
-        ga_output_suffix: Suffix for GA output directory
-
-    Returns:
-        Tuple of (minima_bh, minima_ga) lists
-
-    Example:
-        >>> minima_bh, minima_ga = run_bh_ga_comparison(
-        ...     ["Pt", "Pt"], 42, tmp_path,
-        ...     bh_params={"niter": 3, "dr": 0.3},
-        ...     ga_params={"niter": 2, "population_size": 3}
-        ... )
-    """
-    from scgo.algorithms import ga_go
-    from scgo.algorithms.basinhopping_go import bh_go
-    from scgo.initialization import create_initial_cluster
-
-    # Default parameters
-    default_bh_params = {
-        "niter": 3,
-        "dr": 0.3,
-        "niter_local_relaxation": 3,
-        "temperature": 0.01,
-    }
-    default_ga_params = {
-        "niter": 2,
-        "population_size": 3,
-        "niter_local_relaxation": 3,
-    }
-
-    # Merge with provided parameters
-    if bh_params:
-        default_bh_params.update(bh_params)
-    if ga_params:
-        default_ga_params.update(ga_params)
-
-    # Create RNGs with same seed
-    rng_bh, rng_ga = create_paired_rngs(seed)
-
-    # Run BH
-    atoms_bh = create_initial_cluster(composition, rng=rng_bh)
-    atoms_bh.calc = EMT()
-    minima_bh = bh_go(
-        atoms=atoms_bh,
-        output_dir=str(tmp_path / bh_output_suffix),
-        rng=rng_bh,
-        **default_bh_params,
-    )
-
-    # Run GA
-    calc_ga = EMT()
-    minima_ga = ga_go(
-        composition=composition,
-        output_dir=str(tmp_path / ga_output_suffix),
-        calculator=calc_ga,
-        rng=rng_ga,
-        **default_ga_params,
-    )
-
-    return minima_bh, minima_ga
-
-
 def run_algorithm_reproducibility_test(
     algorithm_func: Callable,
     composition: list[str],
@@ -471,34 +390,11 @@ def create_ga_comparator(n_top: int):
     )
 
 
-def get_structure_signature(atoms: Atoms) -> tuple:
-    """Create a signature based on sorted interatomic distances for uniqueness checking.
+def get_structure_signature(atoms: Atoms, *, precision: int = 6) -> tuple[float, ...]:
+    """Geometry signature for tests (delegates to production helper)."""
+    from scgo.initialization.candidate_discovery import get_structure_signature as _sig
 
-    The signature uses only geometry (sorted pairwise distances), not composition.
-    It is intended for same-composition use (e.g. Pt-only); clusters with the same
-    shape but different elements would compare equal.
-
-    This helper reduces duplication in tests that need to compare structures
-    by their geometric signatures.
-
-    Args:
-        atoms: Atoms object to create signature for
-
-    Returns:
-        Tuple of sorted interatomic distances (rounded to 6 decimal places)
-
-    Example:
-        >>> sig1 = get_structure_signature(atoms1)
-        >>> sig2 = get_structure_signature(atoms2)
-        >>> assert sig1 == sig2  # Structures are identical
-    """
-    positions = atoms.get_positions()
-    distances = [
-        np.linalg.norm(positions[i] - positions[j])
-        for i in range(len(positions))
-        for j in range(i + 1, len(positions))
-    ]
-    return tuple(np.round(np.sort(distances), 6))
+    return _sig(atoms, precision=precision)
 
 
 def assert_cluster_valid(

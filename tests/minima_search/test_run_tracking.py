@@ -380,7 +380,7 @@ def test_composition_isolation(tmp_path, rng):
 
 
 # `test_xyz_file_naming_with_run_id` removed — filename/run-id assertions
-# consolidated in `tests/test_output.py::test_file_naming_convention` (preferred
+# consolidated in `tests/minima_search/test_output.py::test_file_naming_convention` (preferred
 # single source-of-truth). Keep mode-specific tests only when they exercise
 # behavior not covered by the consolidated output tests.
 
@@ -474,7 +474,10 @@ def test_no_duplicates_across_runs(tmp_path):
 
 def test_campaign_run_id_consistency(tmp_path):
     """Test that campaign functions generate consistent run IDs."""
-    from scgo.run_minima import run_scgo_campaign_one_element
+    from scgo.run_minima import (
+        build_one_element_compositions,
+        run_scgo_campaign_arbitrary_compositions,
+    )
 
     params = {
         "optimizer_params": {
@@ -485,10 +488,8 @@ def test_campaign_run_id_consistency(tmp_path):
 
     campaign_dir = tmp_path / "campaign"
     # Run campaign (clean=True to avoid conflicts with previous runs)
-    _results = run_scgo_campaign_one_element(
-        element="Pt",
-        min_atoms=2,
-        max_atoms=3,
+    _results = run_scgo_campaign_arbitrary_compositions(
+        build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
         seed=42,

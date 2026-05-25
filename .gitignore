@@ -7,9 +7,12 @@ population.log
 final_unique_minima/
 .vscode/
 build/
+dist/
+*.egg-info/
 scgo.egg-info/
 test_output/
 examples/results/
+examples/logs/
 
 # Generated analysis and documentation
 *_REPORT.md
@@ -21,44 +24,35 @@ examples/results/
 
 # Search result directories
 *_searches/
-examples/results/
-examples/logs/
 orca_calcs/
 out_dir/
 results_summary.json
 cluster_oh_relax_result.json
 
-# Local maintenance files (should not be tracked)
-paths-to-remove.txt
-check_benchmark/
+# SCGO runtime sidecars
+.scgo_db_registry.json
+.scgo_db_registry.lock
+**/timing.json
 
-# Benchmark files (but keep Pt reference files)
-benchmark_files_*/
-!benchmark_files_Pt/
+# Benchmark outputs (reference XYZs under benchmark/benchmark_files_Pt/ stay tracked)
 benchmark/results/
 benchmark_output.log
 benchmark/neb_mace*.jsonl
 benchmark/neb_tight*.jsonl
-# Ad-hoc NEB experiment dumps (keep tracked suites under benchmark_files_*)
 benchmark/neb_*.json
 benchmark/neb_*.log
-# Local benchmark log dumps and profiling artifacts
 benchmark/logs/
 benchmark/profiling_logs/
 
 # Coverage reports
 .coverage
 coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
 
 # Documentation build output
 docs/build/
-htmlcov/
-.pytest_cache/
-
-# Type checking
-.mypy_cache/
-.dmypy.json
-dmypy.json
 
 # IDE
 .idea/
@@ -67,13 +61,10 @@ dmypy.json
 *~
 *.backup
 
-# Temporary test scripts
-*_test.py
-*_benchmark.py
-extract_deps*
-check_benchmark/
-investigate_*.py
-test_*.py  # Root-level test scripts (e.g., test_facet_scaling.py)
+# Root-level ad-hoc scripts only
+/test_*.py
+/*_test.py
+/*_benchmark.py
 
 # Profiler dumps (local dev)
 profiler_results/
@@ -86,12 +77,12 @@ tests/analyze_*.py
 test_results/
 test_run.log
 
-.pip-tools-cache/
-
-# Example script output files (generated during checks)
+# Example script output files
 examples/*.out
-*.out
-*.out
 
 # Ignore PNG plots in repository root (generated analysis/plots)
 /*.png
+
+# Local envs
+.venv/
+venv/

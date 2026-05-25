@@ -23,7 +23,6 @@ from scgo.ts_search.transition_state_io import (
     select_structure_pairs,
 )
 from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
-from tests.cuda_skip import require_cuda
 
 
 @pytest.fixture
@@ -826,13 +825,13 @@ def test_find_ts_mace_cpu(cu3_triangle, cu3_linear, temp_output_dir):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_cuda
 def test_find_ts_mace_gpu_torchsim(cu3_triangle, cu3_linear, temp_output_dir):
     """Test TS finding with MACE on GPU using TorchSim batching.
 
     This is the primary production use case: GPU acceleration with batched NEB.
     Verifies that GPU batching via TorchSim works end-to-end.
     """
-    require_cuda()
     device = "cuda"
 
     result = find_transition_state(
@@ -893,9 +892,9 @@ class TestTorchSimNEB:
         assert neb.get_force_calls() == 0
 
     @pytest.mark.slow
+    @pytest.mark.requires_cuda
     def test_find_ts_with_torchsim_cu3(self, cu3_triangle, cu3_linear, temp_output_dir):
         """Cu3 triangle–linear TS search with TorchSim + MACE (GPU-only)."""
-        require_cuda()
         device = "cuda"
 
         result = find_transition_state(

@@ -11,9 +11,9 @@ from scgo.param_presets import (
     get_ts_search_params,
 )
 from scgo.run_minima import (
+    build_one_element_compositions,
+    build_two_element_compositions,
     run_scgo_campaign_arbitrary_compositions,
-    run_scgo_campaign_one_element,
-    run_scgo_campaign_two_elements,
     run_scgo_go_ts_pipeline,
     run_scgo_one_element_go_ts_pipeline,
     run_scgo_trials,
@@ -87,38 +87,38 @@ def test_parse_composition_arg_formats():
     "fn,args",
     [
         pytest.param(
-            run_scgo_campaign_one_element,
-            ("", 2, 4, "gas_cluster"),
+            build_one_element_compositions,
+            ("", 2, 4),
             id="one_element_empty_symbol",
         ),
         pytest.param(
-            run_scgo_campaign_one_element,
-            ("Pt", 0, 3, "gas_cluster"),
+            build_one_element_compositions,
+            ("Pt", 0, 3),
             id="one_element_min_atoms_zero",
         ),
         pytest.param(
-            run_scgo_campaign_one_element,
-            ("Pt", 5, 3, "gas_cluster"),
+            build_one_element_compositions,
+            ("Pt", 5, 3),
             id="one_element_min_gt_max",
         ),
         pytest.param(
-            run_scgo_campaign_two_elements,
-            ("", "Pt", 2, 4, "gas_cluster"),
+            build_two_element_compositions,
+            ("", "Pt", 2, 4),
             id="two_elements_empty_first_symbol",
         ),
         pytest.param(
-            run_scgo_campaign_two_elements,
-            ("Pt", "", 2, 4, "gas_cluster"),
+            build_two_element_compositions,
+            ("Pt", "", 2, 4),
             id="two_elements_empty_second_symbol",
         ),
         pytest.param(
-            run_scgo_campaign_two_elements,
-            ("Pt", "Au", 0, 3, "gas_cluster"),
+            build_two_element_compositions,
+            ("Pt", "Au", 0, 3),
             id="two_elements_min_atoms_zero",
         ),
         pytest.param(
-            run_scgo_campaign_two_elements,
-            ("Pt", "Au", 5, 3, "gas_cluster"),
+            build_two_element_compositions,
+            ("Pt", "Au", 5, 3),
             id="two_elements_min_gt_max",
         ),
         pytest.param(
@@ -225,11 +225,12 @@ def test_campaign_respects_params_seed():
     params["seed"] = 54321
 
     # Run a tiny campaign (Pt2 only) twice and ensure deterministic results
-    res_a = run_scgo_campaign_one_element(
-        "Pt", 2, 2, "gas_cluster", params=params, verbosity=0
+    comps = build_one_element_compositions("Pt", 2, 2)
+    res_a = run_scgo_campaign_arbitrary_compositions(
+        comps, "gas_cluster", params=params, verbosity=0
     )
-    res_b = run_scgo_campaign_one_element(
-        "Pt", 2, 2, "gas_cluster", params=params, verbosity=0
+    res_b = run_scgo_campaign_arbitrary_compositions(
+        comps, "gas_cluster", params=params, verbosity=0
     )
 
     assert res_a == res_b

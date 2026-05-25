@@ -3,7 +3,7 @@
 from ase import Atoms
 from ase.build import fcc111
 
-from scgo.runner_surface import make_surface_config
+from scgo.surface import make_surface_config
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.pbc import normalize_slab_pbc
 from scgo.surface.presets import build_graphite_slab

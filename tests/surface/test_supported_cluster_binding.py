@@ -258,7 +258,7 @@ def test_adsorbate_surface_detachment_rejects_multiple_core_subgroups(
 def test_validate_structure_for_system_type_respects_connectivity_flags(
     pt_slab: Atoms,
 ) -> None:
-    from scgo.runner_surface import make_surface_config
+    from scgo.surface import make_surface_config
 
     n_slab = len(pt_slab)
     z_top = slab_surface_extreme(pt_slab, 2, upper=True)

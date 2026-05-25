@@ -17,6 +17,7 @@ import pytest
 from ase import Atoms
 
 from scgo.initialization import create_initial_cluster, is_cluster_connected
+from tests.constants import INITIALIZATION_MODES
 from tests.test_utils import (
     LARGE_SIZES,
     MEDIUM_SIZES,
@@ -27,8 +28,6 @@ from tests.test_utils import (
     create_paired_rngs,
     get_structure_signature,
 )
-
-INITIALIZATION_MODES = ["random_spherical", "seed+growth", "smart", "template"]
 
 
 @contextmanager

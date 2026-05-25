@@ -155,6 +155,28 @@ class SurfaceSystemConfig:
             )
 
 
+def make_surface_config(
+    slab: Atoms,
+    *,
+    adsorption_height_min: float = 2.0,
+    adsorption_height_max: float = 3.5,
+    fix_all_slab_atoms: bool = True,
+    comparator_use_mic: bool = True,
+    max_placement_attempts: int = 500,
+) -> SurfaceSystemConfig:
+    """Build a :class:`SurfaceSystemConfig` from an arbitrary ASE slab."""
+    slab = slab.copy()
+    normalize_slab_pbc(slab)
+    return SurfaceSystemConfig(
+        slab=slab,
+        adsorption_height_min=adsorption_height_min,
+        adsorption_height_max=adsorption_height_max,
+        fix_all_slab_atoms=fix_all_slab_atoms,
+        comparator_use_mic=comparator_use_mic,
+        max_placement_attempts=max_placement_attempts,
+    )
+
+
 def describe_surface_config(cfg: SurfaceSystemConfig) -> str:
     """Summarize key surface/deposition fields for logging and provenance."""
     return (

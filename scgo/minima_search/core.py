@@ -409,12 +409,10 @@ def scgo(
     )
     system_type = optimizer_kwargs.get("system_type")
     if not isinstance(system_type, str):
-        system_type = (
-            "surface_cluster"
-            if optimizer_kwargs.get("surface_config") is not None
-            else "gas_cluster"
+        raise ValueError(
+            "system_type must be set in global_optimizer_kwargs "
+            "(e.g. 'gas_cluster', 'surface_cluster')."
         )
-        optimizer_kwargs["system_type"] = system_type
     policy = get_system_policy(system_type)
     surface_cfg = optimizer_kwargs.get("surface_config")
     validate_system_type_settings(
@@ -574,6 +572,12 @@ def run_trials(
 
     if not isinstance(global_optimizer_kwargs, dict):
         raise ValueError("global_optimizer_kwargs must be a dictionary")
+
+    if not isinstance(global_optimizer_kwargs.get("system_type"), str):
+        global_optimizer_kwargs = {
+            **global_optimizer_kwargs,
+            "system_type": "gas_cluster",
+        }
 
     if not isinstance(n_trials, int) or n_trials <= 0:
         raise ValueError("n_trials must be positive")
@@ -768,10 +772,8 @@ def run_trials(
 
     align_kwargs_source = dict(global_optimizer_kwargs)
     if not isinstance(align_kwargs_source.get("system_type"), str):
-        align_kwargs_source["system_type"] = (
-            "surface_cluster"
-            if align_kwargs_source.get("surface_config") is not None
-            else "gas_cluster"
+        raise ValueError(
+            "system_type must be set in global_optimizer_kwargs for result alignment."
         )
     surface_align_kwargs = _resolve_surface_alignment_kwargs(align_kwargs_source)
     reference_atoms: Atoms | None = None
@@ -799,6 +801,13 @@ def run_trials(
             f"{composition_str}_minimum_{i + 1:02d}_{atoms_run_id}_trial_{trial_id}.xyz"
         )
         filepath = os.path.join(final_xyz_dir, filename)
+
+        # Match DB rows by pre-alignment geometry (same frame as relaxed candidates).
+        try:
+            final_id = compute_final_id(atoms, _energy)
+        except (AttributeError, TypeError, ValueError) as e:
+            logger.debug(f"compute_final_id failed for {filepath}: {e}")
+            final_id = None
 
         atoms_clean = atoms.copy()
         atoms_clean.calc = None
@@ -845,12 +854,6 @@ def run_trials(
             del atoms_clean.arrays["tags"]
 
         write(filepath, atoms_clean)
-
-        try:
-            final_id = compute_final_id(atoms_clean, _energy)
-        except (AttributeError, TypeError, ValueError) as e:
-            logger.debug(f"compute_final_id failed for {filepath}: {e}")
-            final_id = None
 
         final_minima_info.append(
             {

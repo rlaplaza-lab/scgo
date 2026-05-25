@@ -14,8 +14,9 @@ from ase.io import read
 from scgo.minima_search import run_trials
 from scgo.param_presets import get_testing_params
 from scgo.run_minima import (
-    run_scgo_campaign_one_element,
-    run_scgo_campaign_two_elements,
+    build_one_element_compositions,
+    build_two_element_compositions,
+    run_scgo_campaign_arbitrary_compositions,
     run_scgo_trials,
 )
 
@@ -186,10 +187,8 @@ def test_campaign_one_element(tmp_path):
     params = get_testing_params()
 
     # Run campaign for Pt2 and Pt3
-    results = run_scgo_campaign_one_element(
-        element="Pt",
-        min_atoms=2,
-        max_atoms=3,
+    results = run_scgo_campaign_arbitrary_compositions(
+        build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
         seed=456,
@@ -238,10 +237,8 @@ def test_campaign_one_element_varying_cluster_sizes(
     params["optimizer_params"]["ga"]["n_jobs_population_init"] = 1  # Sequential
 
     # Run campaign for the specified cluster size range
-    results = run_scgo_campaign_one_element(
-        element="Pt",
-        min_atoms=min_atoms,
-        max_atoms=max_atoms,
+    results = run_scgo_campaign_arbitrary_compositions(
+        build_one_element_compositions("Pt", min_atoms, max_atoms),
         system_type="gas_cluster",
         params=params,
         seed=456,
@@ -283,11 +280,8 @@ def test_campaign_two_elements(tmp_path):
     params = get_testing_params()
 
     # Run campaign for Au-Pt bimetallic clusters
-    results = run_scgo_campaign_two_elements(
-        element1="Au",
-        element2="Pt",
-        min_atoms=2,
-        max_atoms=2,
+    results = run_scgo_campaign_arbitrary_compositions(
+        build_two_element_compositions("Au", "Pt", 2, 2),
         system_type="gas_cluster",
         params=params,
         seed=789,
@@ -581,10 +575,8 @@ def test_campaign_database_handle_management(tmp_path, rng):
     params["optimizer_params"]["ga"]["population_size"] = 2
     params["optimizer_params"]["bh"]["niter"] = 1
 
-    results = run_scgo_campaign_one_element(
-        element="Pt",
-        min_atoms=2,
-        max_atoms=4,
+    results = run_scgo_campaign_arbitrary_compositions(
+        build_one_element_compositions("Pt", 2, 4),
         system_type="gas_cluster",
         params=params,
         seed=42,

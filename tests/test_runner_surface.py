@@ -1,10 +1,10 @@
-"""Tests for generic surface-runner helpers (scgo.runner_surface)."""
+"""Tests for surface config helpers (scgo.surface.make_surface_config)."""
 
 import numpy as np
 from ase import Atoms
 from ase.build import fcc111, graphene
 
-from scgo.runner_surface import make_surface_config
+from scgo.surface import make_surface_config
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.utils.helpers import get_cluster_formula
