@@ -1,6 +1,6 @@
 # SCGO: Simple Cluster Global Optimization
 
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![PyPI](https://img.shields.io/pypi/v/scgo.svg)](https://pypi.org/project/scgo/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
@@ -17,7 +17,15 @@ SCGO has a small core dependency set plus two mutually exclusive MLIP extras:
 
 Install only one of `[mace]` or `[uma]` per environment.
 
-Conda (recommended):
+**From PyPI (recommended):**
+
+```bash
+pip install "scgo[mace]"   # or: pip install "scgo[uma]"
+```
+
+For development or editable installs from source, clone the repository and use `pip install -e ".[mace]"` (see [installation docs](https://scgo.readthedocs.io/en/latest/installation.html)).
+
+Conda (full dev stack from source):
 
 ```bash
 git clone https://github.com/rlaplaza-lab/scgo.git
@@ -26,7 +34,7 @@ conda env create -f environment.yml
 conda activate scgo
 ```
 
-`environment.yml` installs the package editable with **`[mace,dev]`** (MACE/TorchSim + test/lint tooling). For a runtime-only editable install, use `pip install -e .` instead.
+`environment.yml` installs the package editable with **`[mace,dev]`** (MACE/TorchSim + test/lint tooling).
 
 The conda env uses `torch-sim-atomistic[mace]` with `nvalchemi-toolkit-ops` for TorchSim neighbor lists. Do not install `vesin` or `vesin-torch`—they conflict with the TorchSim stack we use.
 
@@ -34,7 +42,7 @@ Note: SCGO requires SQLite with the JSON1 extension (for `json_extract` and rela
 
 Sella is not required by the core SCGO package and has been removed from the default pip constraints to avoid heavy native builds during dependency resolution. If you need Sella for advanced optimization features, install it manually (it builds C extensions and may require a C toolchain and Cython).
 
-pip (alternative):
+Editable install from source (alternative):
 
 ```bash
 git clone https://github.com/rlaplaza-lab/scgo.git

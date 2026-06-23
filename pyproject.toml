@@ -35,6 +35,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/rlaplaza-lab/scgo"
+Documentation = "https://scgo.readthedocs.io/"
 Repository = "https://github.com/rlaplaza-lab/scgo"
 Issues = "https://github.com/rlaplaza-lab/scgo/issues"
 

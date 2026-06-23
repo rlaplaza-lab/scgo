@@ -4,7 +4,7 @@ This directory holds **long-running** scripts that sweep cluster sizes (or surfa
 
 ## Dependencies
 
-- **`[mace]`** (default in these scripts): TorchSim GA + MACE. Install with `pip install -e ".[mace]"` (or the conda env from the project root).
+- **`[mace]`** (default in these scripts): TorchSim GA + MACE. Install with `pip install "scgo[mace]"` from PyPI or `pip install -e ".[mace]"` from the repository root.
 - **`[uma]`** (optional): pass `--backend uma` where supported; use a separate environment from MACE to avoid conflicting extras (see main [`README.md`](../README.md)).
 
 ## Output layout
