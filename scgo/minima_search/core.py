@@ -43,8 +43,8 @@ from scgo.utils.helpers import (
     adsorbate_primary_cell_shift,
     apply_primary_cell_shift,
     canonicalize_storage_frame,
-    compute_final_id,
     ensure_directory_exists,
+    ensure_final_id,
     filter_dict_keys,
     filter_unique_minima,
     get_cluster_formula,
@@ -762,10 +762,6 @@ def run_trials(
         f'Writing {len(final_minima)} final structures to "{os.path.basename(final_xyz_dir)}"'
     )
 
-    # Replace prior composition outputs so the folder matches deduplicated finals.
-    for stale in Path(final_xyz_dir).glob(f"{composition_str}_minimum_*.xyz"):
-        stale.unlink(missing_ok=True)
-
     # Write results summary file (composition_str already cached above)
     _write_results_summary(
         output_dir=output_dir,
@@ -795,6 +791,7 @@ def run_trials(
             )
 
     final_minima_info: list[dict] = []
+    written_xyz: set[Path] = set()
     for i, (_energy, atoms) in enumerate(final_minima):
         provenance = get_provenance(atoms)
         trial_id = provenance.get("trial_id", "N/A")
@@ -808,11 +805,7 @@ def run_trials(
         filepath = os.path.join(final_xyz_dir, filename)
 
         # Match DB rows by pre-alignment geometry (same frame as relaxed candidates).
-        try:
-            final_id = compute_final_id(atoms, _energy)
-        except (AttributeError, TypeError, ValueError) as e:
-            logger.debug(f"compute_final_id failed for {filepath}: {e}")
-            final_id = None
+        final_id = ensure_final_id(atoms, _energy)
 
         atoms_clean = atoms.copy()
         atoms_clean.calc = None
@@ -859,6 +852,7 @@ def run_trials(
             del atoms_clean.arrays["tags"]
 
         write(filepath, atoms_clean)
+        written_xyz.add(Path(filepath))
 
         final_minima_info.append(
             {
@@ -869,6 +863,11 @@ def run_trials(
                 "final_id": final_id,
             }
         )
+
+    # Drop superseded XYZ files so the folder mirrors the deduplicated final set.
+    for stale in Path(final_xyz_dir).glob(f"{composition_str}_minimum_*.xyz"):
+        if stale not in written_xyz:
+            stale.unlink(missing_ok=True)
 
     # Mark final minima in DB (if enabled) to avoid re-scanning later
     if tag_final_minima:

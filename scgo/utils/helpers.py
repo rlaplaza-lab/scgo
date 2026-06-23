@@ -64,6 +64,24 @@ def compute_final_id(atoms: Atoms, energy: float | None) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def ensure_final_id(atoms: Atoms, energy: float | None = None) -> str:
+    """Return stable ``final_id``, assigning it in ``key_value_pairs`` when missing.
+
+    Relaxed DB rows and final-minima tagging both use the same identifier so
+    :func:`scgo.database.metadata.mark_final_minima_in_db` can match by stored
+    ``final_id`` without recomputing geometry from write-frame coordinates.
+    """
+    kv = atoms.info.setdefault("key_value_pairs", {})
+    existing = kv.get("final_id")
+    if existing:
+        return str(existing)
+    if energy is None:
+        energy = extract_energy_from_atoms(atoms)
+    final_id = compute_final_id(atoms, energy)
+    kv["final_id"] = final_id
+    return final_id
+
+
 def _assign_penalty_energy(atoms: Atoms) -> float:
     """Assign penalty energy to atoms object when relaxation fails.
 

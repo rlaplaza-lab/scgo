@@ -197,7 +197,9 @@ def mark_final_minima_in_db(
 ) -> dict:
     """Mark final unique minima in database ``systems.key_value_pairs`` JSON rows.
 
-    Rows are matched by ``final_id`` stored in ``key_value_pairs``.
+    Rows are matched by ``final_id`` stored in ``key_value_pairs`` at relaxed
+    persist time (:func:`scgo.utils.helpers.ensure_final_id` via the database
+    adapter's ``add_relaxed_step``).
 
     Args:
         final_minima_info: List of dicts with keys: 'energy' (float), 'atoms' (Atoms),

@@ -7,7 +7,7 @@ from scgo.database.helpers import setup_database
 from scgo.database.metadata import mark_final_minima_in_db
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
-from scgo.utils.helpers import compute_final_id
+from scgo.utils.helpers import ensure_final_id
 from tests.test_utils import assert_db_final_row
 
 
@@ -182,7 +182,7 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
                 "energy": energy,
                 "rank": rank,
                 "final_written": f"minimum_{rank:02d}.xyz",
-                "final_id": compute_final_id(atoms, energy),
+                "final_id": ensure_final_id(atoms, energy),
             }
         )
 

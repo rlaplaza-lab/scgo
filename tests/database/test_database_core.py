@@ -248,6 +248,24 @@ class TestDatabaseSetupAndFlow:
                 == -PENALTY_ENERGY
             )
 
+    def test_add_relaxed_step_persists_final_id(self, tmp_path):
+        """Relaxed rows must carry final_id for mark_final_minima_in_db matching."""
+        from scgo.utils.helpers import ensure_final_id, extract_energy_from_atoms
+
+        with _setup_test_db(
+            tmp_path, "test.db", Atoms("Pt2"), initial_candidate=None
+        ) as (da, _):
+            a = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+            a.calc = EMT()
+            _register_unrelaxed(da, a)
+            da.add_relaxed_step(a)
+
+            inserted = da.get_all_relaxed_candidates()[0]
+            kv = inserted.info.get("key_value_pairs", {})
+            assert kv.get("final_id")
+            energy = extract_energy_from_atoms(inserted)
+            assert kv["final_id"] == ensure_final_id(inserted, energy)
+
     def test_algorithm_database_integration(self, tmp_path, pt3_atoms, rng):
         """BH and GA integration creates database entries."""
         # Test BH

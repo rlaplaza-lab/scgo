@@ -37,6 +37,7 @@ from scgo.database.streaming import _iter_relaxed_minima_from_da
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock, retry_with_backoff
 from scgo.utils.helpers import (
     ensure_directory_exists,
+    ensure_final_id,
     extract_energy_from_atoms,
     extract_minima_from_database,
     get_cluster_formula,
@@ -360,17 +361,7 @@ def setup_database(
                             a, energy=PENALTY_ENERGY, forces=zero_forces
                         )
 
-                kv = a.info.setdefault("key_value_pairs", {})
-                if "final_id" not in kv:
-                    from scgo.utils.helpers import compute_final_id
-
-                    try:
-                        raw = kv.get("raw_score")
-                        energy = -float(raw) if raw is not None else None
-                    except (TypeError, ValueError):
-                        energy = None
-                    with contextlib.suppress(AttributeError, TypeError, ValueError):
-                        kv["final_id"] = compute_final_id(a, energy)
+                ensure_final_id(a)
 
                 return self._da.add_relaxed_step(a, *args, **kwargs)
 

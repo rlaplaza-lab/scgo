@@ -14,6 +14,8 @@ from scgo.utils.helpers import (
     auto_niter_ts,
     auto_population_size,
     canonicalize_storage_frame,
+    compute_final_id,
+    ensure_final_id,
     ensure_float64_forces,
     filter_unique_minima,
     get_cluster_formula,
@@ -112,6 +114,20 @@ class TestFilterUniqueMinima:
         atoms2 = atoms1.copy()
         out = filter_unique_minima([(1.0, atoms1), (1.0001, atoms2)], n_top=2, mic=True)
         assert len(out) == 1
+
+
+class TestEnsureFinalId:
+    def test_ensure_final_id_is_idempotent(self):
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        fid1 = ensure_final_id(atoms, -1.0)
+        fid2 = ensure_final_id(atoms, -2.0)
+        assert fid1 == fid2
+        assert atoms.info["key_value_pairs"]["final_id"] == fid1
+
+    def test_ensure_final_id_matches_compute(self):
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
+        energy = -0.42
+        assert ensure_final_id(atoms, energy) == compute_final_id(atoms, energy)
 
 
 class TestAutoNiter:
