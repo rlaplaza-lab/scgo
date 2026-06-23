@@ -15,8 +15,8 @@ Conda Installation (Recommended)
 
 .. code-block:: bash
 
-   git clone https://github.com/rlaplaza-lab/simple_cluster_go.git
-   cd simple_cluster_go
+   git clone https://github.com/rlaplaza-lab/scgo.git
+   cd scgo
    conda env create -f environment.yml
    conda activate scgo
 
@@ -29,8 +29,8 @@ Install with MACE support:
 
 .. code-block:: bash
 
-   git clone https://github.com/rlaplaza-lab/simple_cluster_go.git
-   cd simple_cluster_go
+   git clone https://github.com/rlaplaza-lab/scgo.git
+   cd scgo
    pip install -e ".[mace]"
 
 Or with UMA support:

@@ -10,6 +10,7 @@ import logging
 import os
 import sqlite3
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -760,6 +761,10 @@ def run_trials(
     logger.info(
         f'Writing {len(final_minima)} final structures to "{os.path.basename(final_xyz_dir)}"'
     )
+
+    # Replace prior composition outputs so the folder matches deduplicated finals.
+    for stale in Path(final_xyz_dir).glob(f"{composition_str}_minimum_*.xyz"):
+        stale.unlink(missing_ok=True)
 
     # Write results summary file (composition_str already cached above)
     _write_results_summary(

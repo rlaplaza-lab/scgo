@@ -474,9 +474,9 @@ def test_no_duplicates_across_runs(tmp_path):
 
 def test_campaign_run_id_consistency(tmp_path):
     """Test that campaign functions generate consistent run IDs."""
-    from scgo.run_minima import (
+    from scgo.runner_api import (
+        _run_go_campaign_compositions,
         build_one_element_compositions,
-        run_scgo_campaign_arbitrary_compositions,
     )
 
     params = {
@@ -488,7 +488,7 @@ def test_campaign_run_id_consistency(tmp_path):
 
     campaign_dir = tmp_path / "campaign"
     # Run campaign (clean=True to avoid conflicts with previous runs)
-    _results = run_scgo_campaign_arbitrary_compositions(
+    _results = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,

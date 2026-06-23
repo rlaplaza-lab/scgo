@@ -1,6 +1,6 @@
-"""Tests for scgo.optimization.algorithm_select."""
+"""Tests for scgo.runner_api.select_scgo_minima_algorithm."""
 
-from scgo.optimization.algorithm_select import select_scgo_minima_algorithm
+from scgo.runner_api import select_scgo_minima_algorithm
 
 
 def test_select_matches_surface_trimer_uses_bh() -> None:

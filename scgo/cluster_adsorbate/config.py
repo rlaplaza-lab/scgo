@@ -68,14 +68,3 @@ class ClusterAdsorbateConfig:
             self.structure_connectivity_factor,
             strict=True,
         )
-
-
-@dataclass(frozen=True)
-class ClusterOHConfig(ClusterAdsorbateConfig):
-    """OH-specific defaults: gas-phase O–H bond length used to build the template."""
-
-    oh_bond_length: float = 0.96
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        validate_positive("oh_bond_length", self.oh_bond_length, strict=True)

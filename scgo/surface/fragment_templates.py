@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
-# Default O–H length (Å) for built-in OH and paired-OH patterns (matches ClusterOHConfig)
+# Default O–H length (Å) for built-in OH and paired-OH patterns
 DEFAULT_OH_BOND_LENGTH = 0.96
 
 

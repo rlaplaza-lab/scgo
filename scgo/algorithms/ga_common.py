@@ -215,7 +215,7 @@ class ClusterStartGenerator(StartGenerator):
     entire population in one batch call.
 
     For ``gas_cluster_adsorbate``, pass ``adsorbate_definition`` and optional
-    fragment options; for ``deposition_layout=\"core_then_fragment\"``, uses
+    fragment options; uses
     :func:`scgo.cluster_adsorbate.hierarchical.build_hierarchical_core_fragment_cluster`
     (same as surface hierarchical seeds without a slab). Plain ``gas_cluster`` must
     not pass these keyword arguments.

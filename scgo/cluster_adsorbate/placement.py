@@ -12,7 +12,7 @@ from numpy.random import Generator
 from scipy.spatial import ConvexHull, QhullError
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
-from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig, ClusterOHConfig
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.geometry import (
     outermost_point_along_normal,
     random_rotation_matrix,
@@ -281,28 +281,3 @@ def place_fragment_on_cluster(
         config.max_placement_attempts,
     )
     return None
-
-
-def place_oh_on_cluster(
-    core: Atoms,
-    rng: Generator,
-    config: ClusterOHConfig | None = None,
-) -> Atoms | None:
-    """Build an OH fragment positioned near the cluster (O = anchor, O–H ∥ outward)."""
-    if config is None:
-        config = ClusterOHConfig()
-    d = config.oh_bond_length
-    tmpl = Atoms(
-        symbols=["O", "H"],
-        positions=np.array([[0.0, 0.0, 0.0], [d, 0.0, 0.0]], dtype=float),
-        cell=core.get_cell(),
-        pbc=core.get_pbc(),
-    )
-    return place_fragment_on_cluster(
-        core,
-        tmpl,
-        rng,
-        config,
-        anchor_index=0,
-        bond_axis=(0, 1),
-    )

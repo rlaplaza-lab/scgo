@@ -47,7 +47,6 @@ def test_validate_partition_core_adsorbate():
         adsorbate_definition={
             "adsorbate_symbols": ["O", "H", "O", "H"],
             "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-            "deposition_layout": "core_then_fragment",
         },
         context="test",
     )
@@ -87,7 +86,6 @@ def test_hierarchical_deposition_ordering_and_slab_prefix():
     ads_def = {
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "core_symbols": ["Pt", "Pt", "Pt"],
-        "deposition_layout": "core_then_fragment",
     }
     rng = np.random.default_rng(2026)
     blmin = closest_distances_generator(
@@ -134,7 +132,6 @@ def test_surface_deposition_accepts_empty_core_symbols():
     ads_def = {
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "core_symbols": [],
-        "deposition_layout": "core_then_fragment",
     }
     rng = np.random.default_rng(2027)
     blmin = closest_distances_generator(
@@ -164,7 +161,6 @@ def test_gas_hierarchical_core_fragment_smoke():
     ads_def = {
         "core_symbols": ["Pt", "Pt"],
         "adsorbate_symbols": ["O", "H"],
-        "deposition_layout": "core_then_fragment",
     }
     rng = np.random.default_rng(2026)
     tmpl = build_default_fragment_template(["O", "H"])

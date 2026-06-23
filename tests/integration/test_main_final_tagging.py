@@ -3,7 +3,7 @@ import sqlite3
 
 from scgo.database.schema import stamp_scgo_database
 from scgo.param_presets import get_testing_params
-from scgo.run_minima import run_scgo_trials
+from scgo.runner_api import _run_go_trials
 from tests.test_utils import assert_db_final_row
 
 
@@ -13,7 +13,7 @@ def test_run_scgo_tags_final_minima(tmp_path):
     params["tag_final_minima"] = True
     params["n_trials"] = 1
     # Run a trivial Pt2 search that completes quickly
-    results = run_scgo_trials(
+    results = _run_go_trials(
         ["Pt", "Pt"],
         "gas_cluster",
         params=params,

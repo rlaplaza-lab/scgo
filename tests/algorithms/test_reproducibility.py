@@ -16,11 +16,11 @@ from scgo.database import close_data_connection
 from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.minima_search import run_trials, scgo
 from scgo.param_presets import get_testing_params
-from scgo.run_minima import (
+from scgo.runner_api import (
+    _run_go_campaign_compositions,
+    _run_go_trials,
     build_one_element_compositions,
     build_two_element_compositions,
-    run_scgo_campaign_arbitrary_compositions,
-    run_scgo_trials,
 )
 from scgo.utils.helpers import auto_niter
 from tests.test_utils import (
@@ -94,7 +94,7 @@ def test_rng_in_params_raises_error(tmp_path, rng):
     params["optimizer_params"]["bh"]["rng"] = rng
 
     with pytest.raises(ValueError, match=r'"rng" should not be in params'):
-        run_scgo_campaign_arbitrary_compositions(
+        _run_go_campaign_compositions(
             build_one_element_compositions(element, n_atoms, n_atoms),
             "gas_cluster",
             params=params,
@@ -250,9 +250,9 @@ def test_full_stack_smoke(tmp_path, rng):
 
 
 def test_run_py_smoke(tmp_path):
-    """Test run_scgo_trials smoke test."""
+    """Test _run_go_trials smoke test."""
     comp = ["Pt", "Pt"]
-    results = run_scgo_trials(
+    results = _run_go_trials(
         comp,
         "gas_cluster",
         params=get_testing_params(),
@@ -270,7 +270,7 @@ def test_run_py_campaign_smoke(tmp_path):
     """Test one-element campaign smoke via composition builder."""
     params = get_testing_params()
 
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         seed=0,
@@ -297,7 +297,7 @@ def test_run_py_campaign_two_elements_smoke(tmp_path):
     """Test two-element campaign smoke via composition builder."""
     params = get_testing_params()
 
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         build_two_element_compositions("Pt", "Au", 2, 2),
         system_type="gas_cluster",
         seed=0,
@@ -400,11 +400,11 @@ def test_bh_go_smoke(tmp_path, rng):
         assert isinstance(a, Atoms)
 
 
-def test_run_scgo_campaign_arbitrary_compositions_smoke(tmp_path):
+def test__run_go_campaign_compositions_smoke(tmp_path):
     params = get_testing_params()
 
     compositions = [["Pt", "Pt"], ["Au", "Pt"]]
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         compositions,
         "gas_cluster",
         params=params,
@@ -593,7 +593,7 @@ def test_cross_composition_reproducibility(tmp_path):
     out = str(tmp_path / "campaign")
 
     # Run campaign with fixed seed (clean=True to start fresh)
-    results1 = run_scgo_campaign_arbitrary_compositions(
+    results1 = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
@@ -603,7 +603,7 @@ def test_cross_composition_reproducibility(tmp_path):
     )
 
     # Run same campaign with same seed (clean=True to start fresh)
-    results2 = run_scgo_campaign_arbitrary_compositions(
+    results2 = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
@@ -642,7 +642,7 @@ def test_cross_composition_different_seeds(tmp_path):
     out = str(tmp_path / "campaign")
 
     # Run with seed 1 (clean=True to avoid loading previous results)
-    results1 = run_scgo_campaign_arbitrary_compositions(
+    results1 = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
@@ -652,7 +652,7 @@ def test_cross_composition_different_seeds(tmp_path):
     )
 
     # Run with seed 2 (clean=True to avoid loading previous results)
-    results2 = run_scgo_campaign_arbitrary_compositions(
+    results2 = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
@@ -691,7 +691,7 @@ def test_bimetallic_campaign_reproducibility(tmp_path):
     out = str(tmp_path / "campaign")
 
     # Run bimetallic campaign with fixed seed (clean=True to start fresh)
-    results1 = run_scgo_campaign_arbitrary_compositions(
+    results1 = _run_go_campaign_compositions(
         build_two_element_compositions("Pt", "Au", 2, 2),
         system_type="gas_cluster",
         params=params,
@@ -701,7 +701,7 @@ def test_bimetallic_campaign_reproducibility(tmp_path):
     )
 
     # Run same campaign with same seed (clean=True to start fresh)
-    results2 = run_scgo_campaign_arbitrary_compositions(
+    results2 = _run_go_campaign_compositions(
         build_two_element_compositions("Pt", "Au", 2, 2),
         system_type="gas_cluster",
         params=params,
@@ -731,7 +731,7 @@ def test_arbitrary_compositions_reproducibility(tmp_path):
     compositions = [["Pt", "Pt"], ["Au", "Pt"], ["Pt", "Au", "Au"]]
 
     # Run with fixed seed (clean=True to start fresh)
-    results1 = run_scgo_campaign_arbitrary_compositions(
+    results1 = _run_go_campaign_compositions(
         compositions,
         "gas_cluster",
         params=params,
@@ -741,7 +741,7 @@ def test_arbitrary_compositions_reproducibility(tmp_path):
     )
 
     # Run with same seed (clean=True to start fresh)
-    results2 = run_scgo_campaign_arbitrary_compositions(
+    results2 = _run_go_campaign_compositions(
         compositions,
         "gas_cluster",
         params=params,

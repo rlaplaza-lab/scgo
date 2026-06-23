@@ -54,7 +54,7 @@ def build_hierarchical_core_fragment_cluster(
 
     Requires a non-empty ``core_symbols`` in ``adsorbate_definition`` and
     :func:`scgo.system_types.validate_adsorbate_definition` to have been satisfied
-    for ``deposition_layout=core_then_fragment`` (and ordered ``composition``).
+    Hierarchical core+fragment build for ordered ``composition``.
     """
     from scgo.cluster_adsorbate.combine import combine_core_adsorbate
     from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig

@@ -13,11 +13,11 @@ from ase.io import read
 
 from scgo.minima_search import run_trials
 from scgo.param_presets import get_testing_params
-from scgo.run_minima import (
+from scgo.runner_api import (
+    _run_go_campaign_compositions,
+    _run_go_trials,
     build_one_element_compositions,
     build_two_element_compositions,
-    run_scgo_campaign_arbitrary_compositions,
-    run_scgo_trials,
 )
 
 
@@ -187,7 +187,7 @@ def test_campaign_one_element(tmp_path):
     params = get_testing_params()
 
     # Run campaign for Pt2 and Pt3
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 3),
         system_type="gas_cluster",
         params=params,
@@ -237,7 +237,7 @@ def test_campaign_one_element_varying_cluster_sizes(
     params["optimizer_params"]["ga"]["n_jobs_population_init"] = 1  # Sequential
 
     # Run campaign for the specified cluster size range
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", min_atoms, max_atoms),
         system_type="gas_cluster",
         params=params,
@@ -280,7 +280,7 @@ def test_campaign_two_elements(tmp_path):
     params = get_testing_params()
 
     # Run campaign for Au-Pt bimetallic clusters
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         build_two_element_compositions("Au", "Pt", 2, 2),
         system_type="gas_cluster",
         params=params,
@@ -302,13 +302,13 @@ def test_campaign_two_elements(tmp_path):
 
 
 @pytest.mark.integration
-def test_run_scgo_trials_integration(tmp_path):
-    """Test the high-level run_scgo_trials function."""
+def test__run_go_trials_integration(tmp_path):
+    """Test the high-level _run_go_trials function."""
     comp = ["Pt", "Pt"]
     params = get_testing_params()
 
     # Use clean=True and output_dir for isolation
-    results = run_scgo_trials(
+    results = _run_go_trials(
         comp,
         "gas_cluster",
         params=params,
@@ -328,14 +328,14 @@ def test_run_scgo_trials_integration(tmp_path):
 
 
 @pytest.mark.slow
-def test_run_scgo_trials_deterministic_with_same_seed(tmp_path):
-    """run_scgo_trials should be deterministic for a fixed seed."""
+def test__run_go_trials_deterministic_with_same_seed(tmp_path):
+    """_run_go_trials should be deterministic for a fixed seed."""
     comp = ["Pt", "Pt"]
     params = get_testing_params()
     out = str(tmp_path / "pt2_det")
 
     # Use clean=True and output_dir for isolation; same dir for both runs
-    results1 = run_scgo_trials(
+    results1 = _run_go_trials(
         comp,
         "gas_cluster",
         params=deepcopy(params),
@@ -343,7 +343,7 @@ def test_run_scgo_trials_deterministic_with_same_seed(tmp_path):
         clean=True,
         output_dir=out,
     )
-    results2 = run_scgo_trials(
+    results2 = _run_go_trials(
         comp,
         "gas_cluster",
         params=deepcopy(params),
@@ -411,7 +411,7 @@ def test_bh_high_energy_strategy(tmp_path, rng):
     params["optimizer_params"]["bh"]["niter"] = 5
     params["optimizer_params"]["bh"]["niter_local_relaxation"] = 2
 
-    results = run_scgo_trials(
+    results = _run_go_trials(
         composition,
         "gas_cluster",
         params=params,
@@ -457,7 +457,7 @@ def test_ga_diversity_strategy(tmp_path, rng):
         "n_jobs_population_init"
     ] = -2  # Parallel for tests
 
-    ref_results = run_scgo_trials(
+    ref_results = _run_go_trials(
         comp_ref,
         "gas_cluster",
         params=params_ref,
@@ -477,7 +477,7 @@ def test_ga_diversity_strategy(tmp_path, rng):
         "n_jobs_population_init"
     ] = -2  # Parallel for tests
 
-    results = run_scgo_trials(
+    results = _run_go_trials(
         composition,
         "gas_cluster",
         params=params_div,
@@ -517,7 +517,7 @@ def test_mixed_fitness_strategies(tmp_path, rng):
     params_ref["optimizer_params"]["bh"]["niter"] = 2
     params_ref["optimizer_params"]["bh"]["niter_local_relaxation"] = 2
 
-    ref_results = run_scgo_trials(
+    ref_results = _run_go_trials(
         composition,
         "gas_cluster",
         params=params_ref,
@@ -541,7 +541,7 @@ def test_mixed_fitness_strategies(tmp_path, rng):
     params["optimizer_params"]["ga"]["niter"] = 2
 
     # Should work without errors
-    results = run_scgo_trials(
+    results = _run_go_trials(
         composition,
         "gas_cluster",
         params=params,
@@ -575,7 +575,7 @@ def test_campaign_database_handle_management(tmp_path, rng):
     params["optimizer_params"]["ga"]["population_size"] = 2
     params["optimizer_params"]["bh"]["niter"] = 1
 
-    results = run_scgo_campaign_arbitrary_compositions(
+    results = _run_go_campaign_compositions(
         build_one_element_compositions("Pt", 2, 4),
         system_type="gas_cluster",
         params=params,

@@ -23,8 +23,6 @@ SystemType = Literal[
     "surface_cluster_adsorbate",
 ]
 
-DepositionLayout = Literal["core_then_fragment"]
-
 
 class AdsorbateDefinition(TypedDict, total=False):
     """Role and layout for ``*_adsorbate`` system types (gas or surface mobile region).
@@ -39,12 +37,7 @@ class AdsorbateDefinition(TypedDict, total=False):
     **Empty core** (``core_symbols=[]``): all mobile atoms are in
     ``adsorbate_symbols``.
 
-    **Monolithic (default)**: one gas-phase cluster for the full mobile
-    ``composition`` (or hierarchical rules do not apply). On surfaces, the
-    cluster is then placed on the slab.
-
-    **Hierarchical** (``deposition_layout="core_then_fragment"``): build a
-    core cluster, place rigid fragment(s) with
+    Build a core cluster, place rigid fragment(s) with
     :func:`scgo.cluster_adsorbate.place_fragment_on_cluster`, then (for
     surface) deposit. Requires a fragment template or
     :func:`scgo.surface.fragment_templates.build_default_fragment_template`
@@ -53,7 +46,6 @@ class AdsorbateDefinition(TypedDict, total=False):
 
     core_symbols: list[str]
     adsorbate_symbols: list[str]
-    deposition_layout: DepositionLayout
     fragment_anchor_index: NotRequired[int]
     fragment_bond_axis: NotRequired[list[int]]
 
@@ -395,14 +387,6 @@ def validate_adsorbate_definition(
             f"{context} requires adsorbate_definition when system_type={system_type!r}."
         )
 
-    if (
-        adsorbate_definition.get("deposition_layout", "core_then_fragment")
-        != "core_then_fragment"
-    ):
-        raise ValueError(
-            "SCGO now supports hierarchical adsorbate initialization only. Set deposition_layout='core_then_fragment'."
-        )
-
     core_list, _ads_list = validate_composition_against_adsorbate(
         composition, adsorbate_definition, context=context
     )
@@ -485,7 +469,6 @@ def build_adsorbate_definition_from_inputs(
     ads_def: AdsorbateDefinition = {
         "core_symbols": core_list,
         "adsorbate_symbols": ads_list,
-        "deposition_layout": "core_then_fragment",
     }
     validate_adsorbate_definition(
         system_type=system_type,

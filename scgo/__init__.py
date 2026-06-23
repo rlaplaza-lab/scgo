@@ -15,14 +15,10 @@ from scgo.algorithms import bh_go, ga_go
 # Cluster + adsorbate (composable local relax)
 from scgo.cluster_adsorbate import (
     ClusterAdsorbateConfig,
-    ClusterOHConfig,
     attach_fix_bond_lengths,
-    attach_oh_bond_constraint,
     combine_core_adsorbate,
     place_fragment_on_cluster,
-    place_oh_on_cluster,
     relax_metal_cluster_with_adsorbate,
-    relax_metal_cluster_with_oh,
     validate_combined_cluster_structure,
 )
 
@@ -116,14 +112,10 @@ __all__ = [
     "make_graphite_surface_config",
     # Cluster + adsorbate
     "ClusterAdsorbateConfig",
-    "ClusterOHConfig",
     "attach_fix_bond_lengths",
-    "attach_oh_bond_constraint",
     "combine_core_adsorbate",
     "place_fragment_on_cluster",
-    "place_oh_on_cluster",
     "relax_metal_cluster_with_adsorbate",
-    "relax_metal_cluster_with_oh",
     "validate_combined_cluster_structure",
     # Logging
     "configure_logging",

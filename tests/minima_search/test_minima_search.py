@@ -182,7 +182,6 @@ class TestScgoFunction:
                 "adsorbate_definition": {
                     "core_symbols": ["Pt"],
                     "adsorbate_symbols": ["O", "H"],
-                    "deposition_layout": "core_then_fragment",
                 },
                 "adsorbate_fragment_template": Atoms(
                     symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]
@@ -207,7 +206,6 @@ class TestScgoFunction:
                 "adsorbate_definition": {
                     "core_symbols": [],
                     "adsorbate_symbols": ["O", "H"],
-                    "deposition_layout": "core_then_fragment",
                 },
                 "adsorbate_fragment_template": Atoms(
                     symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]

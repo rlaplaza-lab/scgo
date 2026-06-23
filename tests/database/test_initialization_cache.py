@@ -103,9 +103,3 @@ def test_unified_cache_concurrent_get_or_compute():
 
     assert all(r == "V" for r in results)
     assert calls == 1
-
-
-if __name__ == "__main__":
-    import pytest
-
-    pytest.main([__file__, "-q"])

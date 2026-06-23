@@ -25,7 +25,7 @@ class TestFilterUniqueMinima:
 
     def test_filter_unique_minima_empty(self):
         """Test filtering of empty minima list."""
-        result = filter_unique_minima([])
+        result = filter_unique_minima([], n_top=1)
         assert len(result) == 0
 
     def test_filter_unique_minima_single(self):
@@ -36,7 +36,7 @@ class TestFilterUniqueMinima:
             "provenance": {"trial_id": 1},
         }
 
-        result = filter_unique_minima([(1.0, atoms)])
+        result = filter_unique_minima([(1.0, atoms)], n_top=1)
         assert len(result) == 1
 
     def test_filter_unique_minima_basic(self):
@@ -55,7 +55,7 @@ class TestFilterUniqueMinima:
         }
 
         # Should return both since they have different positions
-        result = filter_unique_minima([(1.0, atoms1), (2.0, atoms2)])
+        result = filter_unique_minima([(1.0, atoms1), (2.0, atoms2)], n_top=1)
         assert len(result) == 2
 
     def test_filter_unique_minima_ignores_fixed_slab_atom_differences(self):
@@ -76,7 +76,9 @@ class TestFilterUniqueMinima:
         p[:3, 2] += 0.3
         slab_shifted.set_positions(p)
 
-        result = filter_unique_minima([(0.0, base), (0.001, slab_shifted)])
+        result = filter_unique_minima(
+            [(0.0, base), (0.001, slab_shifted)], n_top=1, mic=False
+        )
         assert len(result) == 1
 
     def test_filter_unique_minima_n_top_trailing_only(self):

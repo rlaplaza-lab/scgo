@@ -1296,7 +1296,3 @@ class TestDatabaseManagerCaching:
         )
 
         assert invoked["used"] is True
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

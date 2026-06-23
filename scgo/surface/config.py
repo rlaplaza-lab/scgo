@@ -48,37 +48,6 @@ class SurfaceSystemConfig:
 
     Do not set ``n_relax_top_slab_layers`` together with
     ``n_fix_bottom_slab_layers``, or together with ``fix_all_slab_atoms=True``.
-
-    Attributes:
-        slab: Frozen substrate (positions copied at use sites). Should use a
-            cell and ``pbc`` appropriate for the slab (often periodic in-plane,
-            non-periodic along the vacuum axis). Those flags are kept as given
-            (not upgraded to 3D periodicity).
-        adsorption_height_min: Minimum distance (Å) from the slab extreme along
-            the surface normal to the adsorbate's closest atom along that axis.
-        adsorption_height_max: Maximum such distance (Å).
-        surface_normal_axis: Cartesian axis index (0, 1, or 2) along which the
-            surface normal is assumed for height and layer logic. Slabs from
-            ``ase.build.fcc111`` etc. are typically oriented with vacuum along ``z``
-            (axis ``2``).
-        fix_all_slab_atoms: If True, apply ``FixAtoms`` to all slab atoms during
-            local relaxation.
-        n_fix_bottom_slab_layers: If set (and ``fix_all_slab_atoms`` is False),
-            fix only the bottom N distinct coordinate layers among slab atoms
-            along ``surface_normal_axis``. Mutually exclusive with
-            ``n_relax_top_slab_layers``.
-        n_relax_top_slab_layers: If set (and ``fix_all_slab_atoms`` is False),
-            fix every slab atom **except** those in the top N distinct layers
-            along ``surface_normal_axis`` (the layers nearest the adsorbate for a
-            typical orientation). Mutually exclusive with
-            ``n_fix_bottom_slab_layers``.
-        comparator_use_mic: If True, duplicate detection uses MIC for pairwise
-            distances on the adsorbate (useful when ``pbc`` is True in-plane).
-        cluster_init_vacuum: Vacuum (Å) for isolated cluster seed generation.
-        init_mode: Mode passed to :func:`scgo.initialization.create_initial_cluster`.
-        max_placement_attempts: Max tries per structure for valid placement.
-        structure_connectivity_factor: Connectivity factor for cluster validation
-            (default 1.4). Can be overridden by go_params/ts_params['connectivity_factor'].
     """
 
     slab: Atoms

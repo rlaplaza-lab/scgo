@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
-import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase.constraints import FixAtoms
@@ -18,7 +17,7 @@ from scgo.cluster_adsorbate.combine import (
     combine_core_adsorbate,
     expand_cubic_cell_to_fit,
 )
-from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig, ClusterOHConfig
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import attach_fix_bond_lengths
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
@@ -221,45 +220,3 @@ def relax_metal_cluster_with_adsorbate(
             else float(combined.get_distance(n_core, n_core + 1))
         )
     return combined, info
-
-
-def relax_metal_cluster_with_oh(
-    core: Atoms,
-    calculator: Calculator,
-    rng: Generator | None = None,
-    config: ClusterOHConfig | None = None,
-    *,
-    fix_core: bool = True,
-    optimizer: type[Optimizer] = LBFGS,
-    fmax: float = 0.05,
-    steps: int = 200,
-    preplaced: Atoms | None = None,
-) -> tuple[Atoms, dict[str, Any]]:
-    """Place OH (unless ``preplaced``), validate connectivity, relax locally.
-
-    Internal O–H length is not constrained by default; optional bond fixing
-    is available via :func:`relax_metal_cluster_with_adsorbate` with
-    ``bond_pairs``.
-    """
-    if config is None:
-        config = ClusterOHConfig()
-    d = config.oh_bond_length
-    tmpl = Atoms(
-        symbols=["O", "H"],
-        positions=np.array([[0.0, 0.0, 0.0], [d, 0.0, 0.0]], dtype=float),
-    )
-    return relax_metal_cluster_with_adsorbate(
-        core,
-        calculator,
-        tmpl,
-        rng=rng,
-        config=config,
-        anchor_index=0,
-        bond_axis=(0, 1),
-        bond_pairs=(),
-        fix_core=fix_core,
-        optimizer=optimizer,
-        fmax=fmax,
-        steps=steps,
-        preplaced=preplaced,
-    )

@@ -165,13 +165,13 @@ Multi-composition campaigns
 
 For size scans over one or two elements, build composition lists and pass them to
 ``run_go_campaign`` (re-exported from ``scgo``) or
-``run_scgo_campaign_arbitrary_compositions``:
+``_run_go_campaign_compositions``:
 
 .. code-block:: python
 
    from scgo import run_go_campaign
    from scgo.param_presets import get_testing_params
-   from scgo.run_minima import (
+   from scgo.runner_api import (
        build_one_element_compositions,
        build_two_element_compositions,
    )

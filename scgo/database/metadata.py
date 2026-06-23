@@ -156,73 +156,6 @@ def _match_row_by_stored_final_id(
     return _find_first_relaxed_row(rows) or rows[0]
 
 
-def _match_row_by_computed_final_id(
-    db,
-    conn,
-    *,
-    kvp: str,
-    select_cols: str,
-    final_id: str,
-    energy: float | None,
-    run_id: str | None,
-    trial: int | None,
-) -> tuple | None:
-    from scgo.utils.helpers import compute_final_id
-
-    conditions = [f"json_extract({kvp}, '$.relaxed') = 1"]
-    params: list[Any] = []
-    if run_id is not None:
-        conditions.append(f"json_extract({kvp}, '$.run_id') = ?")
-        params.append(run_id)
-    if trial is not None:
-        conditions.append(
-            f"(json_extract({kvp}, '$.trial_id') IS NULL "
-            f"OR CAST(json_extract({kvp}, '$.trial_id') AS INTEGER) = ?)"
-        )
-        params.append(trial)
-
-    query = f"SELECT {select_cols} FROM systems WHERE " + " AND ".join(conditions)
-    rows = conn.execute(query, tuple(params)).fetchall()
-    for row in rows:
-        row_id, row_energy, _ = row
-        try:
-            candidate = db.get_atoms(row_id)
-        except (
-            KeyError,
-            IndexError,
-            sqlite3.DatabaseError,
-            ValueError,
-            TypeError,
-            json.JSONDecodeError,
-        ) as e:
-            logger.debug(
-                "mark_final_minima_in_db: failed to load atoms id=%s: %s", row_id, e
-            )
-            continue
-
-        match_energy = energy
-        if match_energy is None and row_energy is not None:
-            try:
-                match_energy = float(row_energy)
-            except (TypeError, ValueError):
-                match_energy = None
-
-        try:
-            computed_id = compute_final_id(candidate, match_energy)
-        except (AttributeError, TypeError, ValueError) as e:
-            logger.debug(
-                "mark_final_minima_in_db: compute_final_id failed for id=%s: %s",
-                row_id,
-                e,
-            )
-            continue
-
-        if computed_id == final_id:
-            return row
-
-    return None
-
-
 def update_metadata(atoms: Atoms, **updates: Any) -> None:
     """Update ``atoms.info['metadata']``; mirror ``raw_score`` into key_value_pairs (ASE)."""
     if "metadata" not in atoms.info:
@@ -264,10 +197,7 @@ def mark_final_minima_in_db(
 ) -> dict:
     """Mark final unique minima in database ``systems.key_value_pairs`` JSON rows.
 
-    Rows are matched by ``final_id`` (canonical identifier from
-    :func:`scgo.utils.helpers.compute_final_id`). Stored ``final_id`` values in
-    ``key_value_pairs`` are checked first; otherwise relaxed rows are scanned and
-    matched by recomputing ``final_id`` from their atomic structures.
+    Rows are matched by ``final_id`` stored in ``key_value_pairs``.
 
     Args:
         final_minima_info: List of dicts with keys: 'energy' (float), 'atoms' (Atoms),
@@ -294,7 +224,6 @@ def mark_final_minima_in_db(
         rank = info.get("rank")
         final_written = info.get("final_written")
         final_id = info.get("final_id")
-        energy = info.get("energy")
 
         if atoms is None:
             logger.warning("mark_final_minima_in_db: missing atoms entry, skipping")
@@ -338,17 +267,6 @@ def mark_final_minima_in_db(
                         select_cols=select_cols,
                         final_id=fid,
                     )
-                    if row is None:
-                        row = _match_row_by_computed_final_id(
-                            db,
-                            conn,
-                            kvp=kvp,
-                            select_cols=select_cols,
-                            final_id=fid,
-                            energy=energy,
-                            run_id=run_id,
-                            trial=trial,
-                        )
                     if row is None:
                         continue
 

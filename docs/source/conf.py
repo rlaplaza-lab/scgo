@@ -45,10 +45,14 @@ napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 napoleon_use_param = True
 napoleon_use_rtype = True
+napoleon_use_ivar = False
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+
+# Dataclass fields are documented twice (attributes + __init__ params) under Sphinx 9.
+suppress_warnings = ["autodoc.duplicate_object"]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
@@ -88,7 +92,6 @@ autodoc_mock_imports = [
 autodoc_default_options = {
     "members": True,
     "member-order": "bysource",
-    "special-members": "__init__",
     "undoc-members": True,
     "exclude-members": "__weakref__",
 }
@@ -98,7 +101,6 @@ autodoc_default_options = {
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "ase": ("https://ase-lib.org", None),
 }
 
 # -- Options for todo extension -----------------------------------------------
