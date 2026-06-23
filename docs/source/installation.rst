@@ -31,7 +31,7 @@ MACE stack and uninstall ``vesin``/``vesin-torch`` if you encounter
 TorchSim-related errors.
 
 Conda (development from source)
------------------------------
+---------------------------------
 
 For contributors or editable installs with the full MACE + dev toolchain:
 
