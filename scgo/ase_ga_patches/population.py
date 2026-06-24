@@ -29,6 +29,15 @@ def _raw_score(a):
     return float(raw)
 
 
+def _population_candidate_sort_key(a):
+    """Stable ordering for population candidates with tied raw_score."""
+    return (
+        -_raw_score(a),
+        a.info.get("relax_id", 0),
+        a.info.get("confid", 0),
+    )
+
+
 def count_looks_like(a, all_cand, comp):
     """Utility method for counting occurrences."""
     n = 0
@@ -129,7 +138,7 @@ class Population:
         # Get all relaxed candidates from the database
         ue = self.use_extinct
         all_cand = self._get_all_relaxed_candidates(use_extinct=ue)
-        all_cand.sort(key=_raw_score, reverse=True)
+        all_cand.sort(key=_population_candidate_sort_key)
 
         # Fill up the population with the fittest unique candidates.
         i = 0
@@ -175,6 +184,8 @@ class Population:
         if new_cand is None:
             ue = self.use_extinct
             new_cand = self._get_all_relaxed_candidates(only_new=True, use_extinct=ue)
+
+        new_cand.sort(key=_population_candidate_sort_key)
 
         for a in new_cand:
             self.__add_candidate__(a)

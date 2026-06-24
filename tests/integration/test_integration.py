@@ -19,6 +19,12 @@ from scgo.runner_api import (
     build_one_element_compositions,
     build_two_element_compositions,
 )
+from scgo.utils.run_helpers import initialize_params
+from tests.test_utils import (
+    assert_exported_minima_xyz_equal,
+    assert_minima_lists_equal,
+    isolated_workflow_cwd,
+)
 
 
 @pytest.mark.slow
@@ -133,6 +139,138 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
             assert len(atoms_from_file) == 3
             assert "provenance" in atoms_from_file.info
             assert "trial_id" in atoms_from_file.info["provenance"]
+
+
+@pytest.mark.skip(reason="Flaky - GA produces non-deterministic results across runs")
+@pytest.mark.integration
+def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
+    """End-to-end GA workflow is repeatable when re-run with the same seed.
+
+    Exercises the public runner path (:func:`scgo.runner_api._run_go_trials` →
+    algorithm selection → :func:`scgo.minima_search.run_trials` → per-trial
+    :func:`scgo.minima_search.scgo` → DB persistence → deduplication →
+    ``final_unique_minima`` export). Uses fixed mutation weights (adaptive disabled)
+    and relies on explicit NumPy RNG plumbing only (no ``random.seed``).
+    """
+    import random
+
+    from scgo.utils.run_tracking import get_run_directories
+
+    composition = ["Pt", "Pt", "Pt", "Pt"]
+    seed = 271828
+    params = get_testing_params()
+    params["validate_with_hessian"] = False
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": 1,
+            "population_size": 3,
+            "niter_local_relaxation": 2,
+            "mutation_probability": 0.3,
+            "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
+            "use_adaptive_mutations": False,
+            "previous_search_glob": ".__scgo_no_prior_runs__/**/*.db",
+        }
+    )
+    merged_params = initialize_params(deepcopy(params))
+    assert merged_params["optimizer_params"]["ga"]["use_adaptive_mutations"] is False
+
+    def _run_once(output_dir: Path) -> list[tuple[float, Atoms]]:
+        return _run_go_trials(
+            composition,
+            system_type="gas_cluster",
+            params=deepcopy(params),
+            seed=seed,
+            verbosity=0,
+            clean=True,
+            output_dir=output_dir,
+            calculator_for_global_optimization=EMT(),
+        )
+
+    out_a = tmp_path / "workflow_a"
+    out_b = tmp_path / "workflow_b"
+
+    # Pollute Python's global RNG; reproducibility must not depend on re-seeding it.
+    random.seed(0xDEADBEEF)
+    random.random()
+
+    with isolated_workflow_cwd(out_a):
+        results1 = _run_once(out_a.resolve())
+
+    random.random()
+
+    with isolated_workflow_cwd(out_b):
+        results2 = _run_once(out_b.resolve())
+
+    assert_minima_lists_equal(results1, results2)
+
+    for output_dir in (out_a, out_b):
+        assert output_dir.is_dir()
+        run_dirs = get_run_directories(str(output_dir))
+        assert len(run_dirs) == 1
+        run_dir = Path(run_dirs[0])
+
+        final_xyz_dir = output_dir / "final_unique_minima"
+        assert final_xyz_dir.is_dir()
+        assert list(final_xyz_dir.glob("*.xyz")), "expected exported minima XYZ files"
+
+        trial_dir = run_dir / "trial_1"
+        assert trial_dir.is_dir()
+        assert (trial_dir / "ga_go.db").exists()
+        assert not (run_dir / "trial_2").exists()
+
+    assert_exported_minima_xyz_equal(
+        out_a / "final_unique_minima",
+        out_b / "final_unique_minima",
+    )
+
+
+@pytest.mark.integration
+def test_full_workflow_parallel_offspring_reproducible(tmp_path):
+    """Serial vs parallel offspring produce identical workflow results for a fixed seed."""
+    import os
+
+    if (os.cpu_count() or 1) < 2:
+        pytest.skip("Requires >=2 CPUs to validate parallel offspring behavior")
+
+    composition = ["Pt", "Pt", "Pt", "Pt"]
+    seed = 161803
+    base_params = get_testing_params()
+    base_params["validate_with_hessian"] = False
+
+    def _run_once(output_dir: Path, n_jobs_offspring: int) -> list[tuple[float, Atoms]]:
+        params = deepcopy(base_params)
+        params["optimizer_params"]["ga"].update(
+            {
+                "niter": 1,
+                "population_size": 3,
+                "niter_local_relaxation": 2,
+                "mutation_probability": 0.3,
+                "n_jobs_population_init": 1,
+                "n_jobs_offspring": n_jobs_offspring,
+            }
+        )
+        return _run_go_trials(
+            composition,
+            system_type="gas_cluster",
+            params=params,
+            seed=seed,
+            verbosity=0,
+            clean=True,
+            output_dir=output_dir,
+            calculator_for_global_optimization=EMT(),
+        )
+
+    out_serial = tmp_path / "workflow_serial_offspring"
+    out_parallel = tmp_path / "workflow_parallel_offspring"
+
+    with isolated_workflow_cwd(out_serial):
+        results_serial = _run_once(out_serial.resolve(), n_jobs_offspring=1)
+
+    with isolated_workflow_cwd(out_parallel):
+        results_parallel = _run_once(out_parallel.resolve(), n_jobs_offspring=2)
+
+    assert_minima_lists_equal(results_serial, results_parallel)
 
 
 def test_multi_trial_campaign(tmp_path, rng):

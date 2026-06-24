@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from numpy.random import SeedSequence
 
 
 def ensure_rng(seed: int | None = None) -> np.random.Generator:
@@ -28,6 +29,17 @@ def create_child_rng(parent_rng: np.random.Generator) -> np.random.Generator:
     """
     seed = parent_rng.integers(0, 2**63 - 1)
     return np.random.default_rng(seed)
+
+
+def offspring_rng_triple(
+    task_seed: int,
+) -> tuple[np.random.Generator, np.random.Generator, np.random.Generator]:
+    """Derive independent pairing, operator, and decision RNGs from a job seed."""
+    ss = SeedSequence([int(task_seed)])
+    pairing_rng, operator_rng, decision_rng = (
+        np.random.default_rng(s) for s in ss.spawn(3)
+    )
+    return pairing_rng, operator_rng, decision_rng
 
 
 def ensure_rng_or_create(rng: np.random.Generator | None) -> np.random.Generator:

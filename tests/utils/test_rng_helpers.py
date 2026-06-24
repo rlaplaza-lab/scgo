@@ -7,7 +7,7 @@ from scgo.ase_ga_patches.standardmutations import (
     CustomPermutationMutation,
     RattleMutation,
 )
-from scgo.utils.rng_helpers import create_child_rng, ensure_rng
+from scgo.utils.rng_helpers import create_child_rng, ensure_rng, offspring_rng_triple
 
 
 class TestEnsureRng:
@@ -125,6 +125,28 @@ class TestCreateChildRng:
         assert parent_nums != child_nums
         assert child_nums != grandchild_nums
         assert parent_nums != grandchild_nums
+
+
+class TestOffspringRngTriple:
+    """offspring_rng_triple tests."""
+
+    def test_three_streams_differ(self):
+        pairing_rng, operator_rng, decision_rng = offspring_rng_triple(42)
+        draws = [
+            [rng.random() for _ in range(10)]
+            for rng in (pairing_rng, operator_rng, decision_rng)
+        ]
+        assert draws[0] != draws[1]
+        assert draws[1] != draws[2]
+        assert draws[0] != draws[2]
+
+    def test_reproducible_from_task_seed(self):
+        triple_a = offspring_rng_triple(999)
+        triple_b = offspring_rng_triple(999)
+        for rng_a, rng_b in zip(triple_a, triple_b, strict=True):
+            assert [rng_a.random() for _ in range(5)] == [
+                rng_b.random() for _ in range(5)
+            ]
 
 
 def test_rattle_mutation_deterministic_and_accepts_generator(pt3_atoms, rng):

@@ -672,6 +672,8 @@ def _run_go_trials(
         validate_with_hessian=params.get("validate_with_hessian", False),
         tag_final_minima=params.get("tag_final_minima", True),
         rng=rng,
+        run_id=run_id,
+        clean=clean,
     )
 
     cleanup_torch_cuda(logger=logger)

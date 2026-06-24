@@ -7,10 +7,12 @@ remains single-threaded to protect against SQLite locking issues.
 
 from __future__ import annotations
 
+import copy
 import math
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import suppress
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
@@ -32,6 +34,7 @@ from scgo.algorithms.ga_common import (
     ga_run_metadata_extras,
     log_early_stopping_info,
     maybe_apply_mobile_core_ads_tags,
+    reseed_mutation_operator_rngs,
     select_population_class,
     setup_diversity_scorer,
     sort_minima_by_fitness,
@@ -72,7 +75,7 @@ from scgo.utils.helpers import extract_minima_from_database
 from scgo.utils.logging import get_logger, should_show_progress
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
-from scgo.utils.rng_helpers import ensure_rng_or_create
+from scgo.utils.rng_helpers import ensure_rng_or_create, offspring_rng_triple
 from scgo.utils.timing_report import log_timing_summary, write_timing_file
 from scgo.utils.torchsim_policy import is_ml_calculator
 from scgo.utils.validation import validate_composition
@@ -84,6 +87,149 @@ def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
         return 1
     requested = resolve_n_jobs_to_workers(n_jobs)
     return max(1, min(requested, n_tasks))
+
+
+def _sorted_unrelaxed_gaids(da: DataConnection) -> list[int]:
+    """Return unrelaxed configuration IDs in deterministic ascending order."""
+    all_unrelaxed = {row.gaid for row in da.c.select(relaxed=0)}
+    all_relaxed = {row.gaid for row in da.c.select(relaxed=1)}
+    all_queued = {row.gaid for row in da.c.select(queued=1)}
+    return sorted(
+        gaid
+        for gaid in all_unrelaxed
+        if gaid not in all_relaxed and gaid not in all_queued
+    )
+
+
+def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
+    """Load the latest trajectory for an unrelaxed configuration ID."""
+    rows = list(da.c.select(gaid=gaid))
+    rows.sort(key=lambda row: row.mtime)
+    atoms = da.get_atoms(rows[-1].id)
+    atoms.info["confid"] = gaid
+    atoms.info.setdefault("data", {})
+    return atoms
+
+
+def _picklable_atoms_copy(atoms: Atoms | None) -> Atoms | None:
+    """Return an Atoms copy safe for process-pool pickling (no calculator)."""
+    if atoms is None:
+        return None
+    copy = atoms.copy()
+    copy.calc = None
+    return copy
+
+
+@dataclass(frozen=True)
+class OffspringBuildContext:
+    """Picklable snapshot of per-generation offspring build inputs."""
+
+    atoms_template: Atoms
+    n_to_optimize: int
+    composition: list[str]
+    blmin: dict
+    system_type: SystemType
+    n_slab: int
+    slab_for_pairing: Atoms | None
+    surface_normal_axis: int
+    adsorbate_definition: AdsorbateDefinition | None
+    connectivity_factor: float | None
+    allow_cluster_fragmentation: bool
+    allow_adsorbate_surface_detachment: bool
+    surface_config: SurfaceSystemConfig | None
+    adaptive_config: dict[str, Any]
+    current_mutation_probability: float
+    operators_list: list
+    name_map: dict[str, int]
+
+
+def _offspring_worker_init() -> None:
+    """Limit BLAS threading in process-pool offspring workers."""
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+
+def _build_offspring_worker(
+    job: dict[str, Any],
+    ctx: OffspringBuildContext,
+) -> dict[str, Any]:
+    """Build one GA offspring (crossover + optional mutation) in an isolated worker."""
+    worker_logger = get_logger(__name__)
+    pairing_rng, operator_rng, decision_rng = offspring_rng_triple(job["task_seed"])
+    setup_t0 = perf_counter()
+    local_pairing = create_ga_pairing(
+        ctx.atoms_template,
+        ctx.n_to_optimize,
+        pairing_rng,
+        slab_atoms=ctx.slab_for_pairing,
+        system_type=ctx.system_type,
+        composition=ctx.composition,
+        adsorbate_definition=ctx.adsorbate_definition,
+    )
+    local_ops = copy.deepcopy(ctx.operators_list)
+    reseed_mutation_operator_rngs(local_ops, operator_rng)
+    local_mutations = update_mutation_weights(
+        operators_list=local_ops,
+        name_map=ctx.name_map,
+        adaptive_config=ctx.adaptive_config,
+    )
+    operator_setup_s = perf_counter() - setup_t0
+    crossover_t0 = perf_counter()
+    child, desc = local_pairing.get_new_individual([job["a1"], job["a2"]])
+    crossover_s = perf_counter() - crossover_t0
+    mutation_s = 0.0
+    if child is None:
+        return {
+            "index": job["index"],
+            "child": None,
+            "desc": None,
+            "operator_setup_s": operator_setup_s,
+            "crossover_s": crossover_s,
+            "mutation_s": mutation_s,
+        }
+    if decision_rng.random() < ctx.current_mutation_probability:
+        mutation_t0 = perf_counter()
+        mutated = local_mutations.get_operator().mutate(child)
+        mutation_s = perf_counter() - mutation_t0
+        if mutated is not None:
+            child = mutated
+    maybe_apply_mobile_core_ads_tags(
+        child,
+        ctx.n_slab,
+        ctx.composition,
+        ctx.adsorbate_definition,
+        ctx.system_type,
+    )
+    try:
+        validate_structure_for_system_type(
+            child,
+            system_type=ctx.system_type,
+            surface_config=ctx.surface_config,
+            n_slab=ctx.n_slab,
+            adsorbate_definition=ctx.adsorbate_definition,
+            connectivity_factor=ctx.connectivity_factor,
+            allow_cluster_fragmentation=ctx.allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=ctx.allow_adsorbate_surface_detachment,
+        )
+    except ValueError as exc:
+        worker_logger.debug("Offspring rejected by system_type validation: %s", exc)
+        return {
+            "index": job["index"],
+            "child": None,
+            "desc": desc,
+            "operator_setup_s": operator_setup_s,
+            "crossover_s": crossover_s,
+            "mutation_s": mutation_s,
+        }
+    return {
+        "index": job["index"],
+        "child": child,
+        "desc": desc,
+        "operator_setup_s": operator_setup_s,
+        "crossover_s": crossover_s,
+        "mutation_s": mutation_s,
+    }
 
 
 def _torchsim_prepare_relaxed_copy(
@@ -144,15 +290,10 @@ def _relax_unrelaxed_candidates(
 
     # Batch read candidates under a single database connection
     def _read_batch_under_connection():
-        """Read batch of candidates under a single connection."""
-        batch: list[Atoms] = []
+        """Read batch of candidates under a single connection in sorted gaid order."""
         with da.c:
-            for _ in range(to_take):
-                candidate = da.get_an_unrelaxed_candidate()
-                if candidate is None:
-                    break
-                batch.append(candidate)
-        return batch
+            gaids = _sorted_unrelaxed_gaids(da)[:to_take]
+            return [_load_unrelaxed_by_gaid(da, gaid) for gaid in gaids]
 
     t0 = perf_counter()
     batch = database_retry(
@@ -908,8 +1049,8 @@ def ga_go(
                     jobs.append(
                         {
                             "index": len(jobs),
-                            "a1": a1,
-                            "a2": a2,
+                            "a1": a1.copy(),
+                            "a2": a2.copy(),
                             "task_seed": task_seed,
                         }
                     )
@@ -917,115 +1058,35 @@ def ga_go(
                     continue
 
                 n_workers = _resolve_parallel_worker_count(n_jobs_offspring, len(jobs))
-
-                def _build_offspring(
-                    job: dict[str, Any],
-                    adaptive_config: dict[str, Any] = adaptive_config,
-                    current_mutation_probability: float = current_mutation_probability,
-                ) -> dict[str, Any]:
-                    task_rng = np.random.default_rng(job["task_seed"])
-                    setup_t0 = perf_counter()
-                    local_pairing = create_ga_pairing(
-                        atoms_template,
-                        n_to_optimize,
-                        task_rng,
-                        slab_atoms=slab_for_pairing,
-                        system_type=system_type,
-                        composition=composition,
-                        adsorbate_definition=adsorbate_definition,
-                    )
-                    local_ops, local_name_map = create_mutation_operators(
-                        composition=composition,
-                        n_to_optimize=n_to_optimize,
-                        blmin=blmin,
-                        rng=task_rng,
-                        use_adaptive=use_adaptive_mutations,
-                        system_type=system_type,
-                        n_slab=n_slab,
-                        surface_normal_axis=(
-                            surface_config.surface_normal_axis if surface_mode else 2
-                        ),
-                        adsorbate_definition=adsorbate_definition,
-                    )
-                    local_mutations = update_mutation_weights(
-                        operators_list=local_ops,
-                        name_map=local_name_map,
-                        adaptive_config=adaptive_config,
-                    )
-                    operator_setup_s = perf_counter() - setup_t0
-                    crossover_t0 = perf_counter()
-                    child, desc = local_pairing.get_new_individual(
-                        [job["a1"], job["a2"]]
-                    )
-                    crossover_s = perf_counter() - crossover_t0
-                    mutation_s = 0.0
-                    if child is None:
-                        return {
-                            "index": job["index"],
-                            "child": None,
-                            "desc": None,
-                            "operator_setup_s": operator_setup_s,
-                            "crossover_s": crossover_s,
-                            "mutation_s": mutation_s,
-                        }
-                    if task_rng.random() < current_mutation_probability:
-                        mutation_t0 = perf_counter()
-                        mutated = local_mutations.get_operator().mutate(child)
-                        mutation_s = perf_counter() - mutation_t0
-                        if mutated is not None:
-                            child = mutated
-                    maybe_apply_mobile_core_ads_tags(
-                        child,
-                        n_slab,
-                        composition,
-                        adsorbate_definition,
-                        system_type,
-                    )
-                    try:
-                        validate_structure_for_system_type(
-                            child,
-                            system_type=system_type,
-                            surface_config=surface_config,
-                            n_slab=n_slab,
-                            adsorbate_definition=adsorbate_definition,
-                            connectivity_factor=connectivity_factor,
-                            allow_cluster_fragmentation=allow_cluster_fragmentation,
-                            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                        )
-                    except ValueError as exc:
-                        # Invalid geometry after crossover/mutation: same as ``child is None`` —
-                        # skip and let the generation loop retry (do not treat as a worker bug).
-                        logger.debug(
-                            "Offspring rejected by system_type validation: %s", exc
-                        )
-                        return {
-                            "index": job["index"],
-                            "child": None,
-                            "desc": desc,
-                            "operator_setup_s": operator_setup_s,
-                            "crossover_s": crossover_s,
-                            "mutation_s": mutation_s,
-                        }
-                    return {
-                        "index": job["index"],
-                        "child": child,
-                        "desc": desc,
-                        "operator_setup_s": operator_setup_s,
-                        "crossover_s": crossover_s,
-                        "mutation_s": mutation_s,
-                    }
+                offspring_ctx = OffspringBuildContext(
+                    atoms_template=_picklable_atoms_copy(atoms_template),
+                    n_to_optimize=n_to_optimize,
+                    composition=composition,
+                    blmin=blmin,
+                    system_type=system_type,
+                    n_slab=n_slab,
+                    slab_for_pairing=_picklable_atoms_copy(slab_for_pairing),
+                    surface_normal_axis=(
+                        surface_config.surface_normal_axis if surface_mode else 2
+                    ),
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    surface_config=surface_config,
+                    adaptive_config=adaptive_config,
+                    current_mutation_probability=current_mutation_probability,
+                    operators_list=copy.deepcopy(operators_list),
+                    name_map=name_map,
+                )
 
                 t_parallel = perf_counter()
                 job_results: dict[int, dict[str, Any]] = {}
                 worker_exceptions: list[BaseException] = []
-                with ThreadPoolExecutor(
-                    max_workers=n_workers,
-                    thread_name_prefix="scgo_ga_offspring",
-                ) as executor:
-                    futures = [executor.submit(_build_offspring, job) for job in jobs]
-                    for future in as_completed(futures):
+                if n_workers == 1:
+                    for job in jobs:
                         try:
-                            result = future.result()
+                            result = _build_offspring_worker(job, offspring_ctx)
                         except (RuntimeError, ValueError, TypeError) as exc:
                             worker_failures_gen += 1
                             err_name = type(exc).__name__
@@ -1039,6 +1100,31 @@ def ga_go(
                             )
                             continue
                         job_results[result["index"]] = result
+                else:
+                    with ProcessPoolExecutor(
+                        max_workers=n_workers,
+                        initializer=_offspring_worker_init,
+                    ) as executor:
+                        futures = [
+                            executor.submit(_build_offspring_worker, job, offspring_ctx)
+                            for job in jobs
+                        ]
+                        for future in as_completed(futures):
+                            try:
+                                result = future.result()
+                            except (RuntimeError, ValueError, TypeError) as exc:
+                                worker_failures_gen += 1
+                                err_name = type(exc).__name__
+                                worker_failure_types_gen[err_name] = (
+                                    worker_failure_types_gen.get(err_name, 0) + 1
+                                )
+                                worker_exceptions.append(exc)
+                                logger.exception(
+                                    "Offspring crossover/mutation worker failed (%s)",
+                                    err_name,
+                                )
+                                continue
+                            job_results[result["index"]] = result
                 if len(jobs) > 0 and len(job_results) == 0 and worker_exceptions:
                     first = worker_exceptions[0]
                     if not all(isinstance(e, ValueError) for e in worker_exceptions):

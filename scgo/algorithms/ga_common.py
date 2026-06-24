@@ -929,6 +929,16 @@ def create_mutation_operators(
     return operators, name_map
 
 
+def reseed_mutation_operator_rngs(
+    operators: list,
+    rng: np.random.Generator,
+) -> None:
+    """Assign fresh child RNGs to mutation operators in deterministic list order."""
+    for op in operators:
+        if hasattr(op, "rng"):
+            op.rng = create_child_rng(rng)
+
+
 def update_mutation_weights(
     operators_list: list,
     name_map: dict[str, int],

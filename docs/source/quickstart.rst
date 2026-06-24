@@ -1,7 +1,9 @@
 Quick Start
 ===========
 
-SCGO provides several example scripts in the ``examples/`` directory that demonstrate different use cases. This guide explains how these examples work and how to adapt them for your own research.
+SCGO provides several example scripts in the ``examples/`` directory that
+demonstrate different use cases. This guide explains how these examples work
+and how to adapt them for your own research.
 
 Example Structure
 -----------------
@@ -17,7 +19,8 @@ All examples follow a similar pattern:
 Basic Gas-Phase Cluster (example_pt5_gas.py)
 ---------------------------------------------
 
-This example demonstrates global optimization and transition state search for a simple gas-phase Pt5 cluster.
+This example demonstrates global optimization and transition state search
+for a simple gas-phase Pt5 cluster.
 
 **Key Features:**
 - ``system_type="gas_cluster"`` — no slab, no adsorbates
@@ -40,7 +43,8 @@ This example demonstrates global optimization and transition state search for a 
    python example_pt5_gas.py
 
 **Output:**
-- Results under ``examples/results/pt5_gas_mace/`` (calculator slug appended to ``output_stem``)
+- Results under ``examples/results/pt5_gas_mace/`` (calculator slug appended
+  to ``output_stem``)
 - Contains ``Pt5_searches/`` with GO minima and ``ts_results_Pt5/`` for TS results
 
 Surface-Supported Cluster (example_pt5_graphite.py)

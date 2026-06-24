@@ -1,6 +1,9 @@
 """Shared test helpers; re-exports selected names from tests.constants."""
 
-from collections.abc import Callable
+import os
+import re
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +73,21 @@ def create_paired_rngs(seed: int):
     return np.random.default_rng(seed), np.random.default_rng(seed)
 
 
+@contextmanager
+def isolated_workflow_cwd(run_dir: Path) -> Iterator[Path]:
+    """Run a workflow from an empty directory so seed discovery ignores repo dbs."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    previous = os.getcwd()
+    os.chdir(run_dir)
+    try:
+        yield run_dir
+    finally:
+        os.chdir(previous)
+
+
+_MINIMUM_XYZ_RANK_RE = re.compile(r"_minimum_(\d+)_")
+
+
 def compare_minima_lists(minima1, minima2, rtol=1e-5, atol=1e-8):
     """Compare two lists of minima (energy, atoms) tuples.
 
@@ -98,6 +116,93 @@ def compare_minima_lists(minima1, minima2, rtol=1e-5, atol=1e-8):
         if not np.all(a1.get_atomic_numbers() == a2.get_atomic_numbers()):
             return False
     return True
+
+
+def assert_minima_lists_equal(
+    minima1,
+    minima2,
+    *,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+) -> None:
+    """Assert two minima lists match within floating-point tolerance."""
+    assert len(minima1) == len(minima2), (
+        f"Minima count mismatch: {len(minima1)} != {len(minima2)}"
+    )
+
+    for index, ((e1, a1), (e2, a2)) in enumerate(
+        zip(minima1, minima2, strict=True),
+        start=1,
+    ):
+        np.testing.assert_allclose(
+            e1,
+            e2,
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"Energy mismatch at minimum {index}",
+        )
+        np.testing.assert_allclose(
+            a1.get_positions(),
+            a2.get_positions(),
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"Position mismatch at minimum {index}",
+        )
+        assert np.all(a1.get_atomic_numbers() == a2.get_atomic_numbers()), (
+            f"Composition mismatch at minimum {index}"
+        )
+
+
+def xyz_files_by_minimum_rank(directory: Path) -> dict[int, Path]:
+    """Map exported minimum rank (1-based) to XYZ path under ``directory``."""
+    ranked: dict[int, Path] = {}
+    for path in directory.glob("*.xyz"):
+        match = _MINIMUM_XYZ_RANK_RE.search(path.name)
+        if match is not None:
+            ranked[int(match.group(1))] = path
+    return dict(sorted(ranked.items()))
+
+
+def assert_exported_minima_xyz_equal(
+    directory_a: Path,
+    directory_b: Path,
+    *,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+) -> None:
+    """Assert exported minima XYZ files match by minimum rank."""
+    from ase.io import read
+
+    ranked_a = xyz_files_by_minimum_rank(directory_a)
+    ranked_b = xyz_files_by_minimum_rank(directory_b)
+    assert ranked_a.keys() == ranked_b.keys(), (
+        f"Exported minimum ranks differ: {list(ranked_a)} vs {list(ranked_b)}"
+    )
+
+    for rank in ranked_a:
+        atoms_a = read(str(ranked_a[rank]))
+        atoms_b = read(str(ranked_b[rank]))
+        np.testing.assert_allclose(
+            atoms_a.get_positions(),
+            atoms_b.get_positions(),
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"XYZ position mismatch at minimum rank {rank:02d}",
+        )
+        assert list(atoms_a.get_atomic_numbers()) == list(
+            atoms_b.get_atomic_numbers()
+        ), f"XYZ composition mismatch at minimum rank {rank:02d}"
+
+        score_a = atoms_a.info.get("key_value_pairs", {}).get("raw_score")
+        score_b = atoms_b.info.get("key_value_pairs", {}).get("raw_score")
+        if score_a is not None and score_b is not None:
+            np.testing.assert_allclose(
+                score_a,
+                score_b,
+                rtol=rtol,
+                atol=atol,
+                err_msg=f"XYZ raw_score mismatch at minimum rank {rank:02d}",
+            )
 
 
 def setup_test_atoms(atoms: Atoms, cell_size: float = 10.0, pbc: bool = False) -> Atoms:
@@ -185,17 +290,11 @@ def run_algorithm_reproducibility_test(
     algorithm_params: dict[str, Any],
     output_suffix_1: str = "run1",
     output_suffix_2: str = "run2",
-    seed_random: bool = True,
 ) -> tuple[list, list]:
-    """Run algorithm reproducibility test by executing it twice with the same seed.
+    """Run algorithm reproducibility test by executing twice with the same NumPy seed.
 
-    This helper reduces duplication in reproducibility tests.
-
-    Note:
-        This function seeds both NumPy's random generator and Python's built-in
-        random module. The latter is necessary because some ASE components (e.g.,
-        certain optimizers) may use Python's global random state internally.
-        This is a documented workaround, not a bug.
+    SCGO algorithms consume only the explicit ``rng`` argument; callers should
+    not rely on Python's global ``random`` module for reproducibility.
 
     Args:
         algorithm_func: The algorithm function to test (bh_go or ga_go)
@@ -205,9 +304,6 @@ def run_algorithm_reproducibility_test(
         algorithm_params: Parameters to pass to the algorithm function
         output_suffix_1: Suffix for first run output directory
         output_suffix_2: Suffix for second run output directory
-        seed_random: Whether to seed Python's random module (default: True).
-            Set to False only if you're certain the algorithm doesn't use
-            Python's random module internally.
 
     Returns:
         Tuple of (minima1, minima2) from the two runs
@@ -218,38 +314,14 @@ def run_algorithm_reproducibility_test(
         ...     {"niter": 3, "dr": 0.2, "temperature": 0.01}
         ... )
     """
-    import os
-    import random
-    from contextlib import contextmanager
-
     from scgo.algorithms import ga_go
     from scgo.initialization import create_initial_cluster
 
-    @contextmanager
-    def _isolated_ga_cwd(run_dir: Path):
-        """Run GA seed discovery from an empty directory (glob uses process cwd)."""
-        run_dir.mkdir(parents=True, exist_ok=True)
-        previous = os.getcwd()
-        os.chdir(run_dir)
-        try:
-            yield
-        finally:
-            os.chdir(previous)
-
-    # For full reproducibility, seed both Python's built-in random and NumPy's random.
-    # This is necessary because some ASE components (e.g., optimizers) may use
-    # Python's global random state internally. This is a documented workaround.
-    if seed_random:
-        random.seed(seed)
-
-    # Detect if this is a GA function with new signature
     is_ga_function = algorithm_func is ga_go
 
-    # Run 1
     rng1, _ = create_paired_rngs(seed)
     if is_ga_function:
-        # GA functions take composition and calculator directly
-        with _isolated_ga_cwd(tmp_path / output_suffix_1):
+        with isolated_workflow_cwd(tmp_path / output_suffix_1):
             minima1 = algorithm_func(
                 composition,
                 calculator=EMT(),
@@ -258,7 +330,6 @@ def run_algorithm_reproducibility_test(
                 **algorithm_params,
             )
     else:
-        # Other algorithms take atoms object
         atoms1 = create_initial_cluster(composition, rng=rng1)
         atoms1.calc = EMT()
         minima1 = algorithm_func(
@@ -268,14 +339,9 @@ def run_algorithm_reproducibility_test(
             **algorithm_params,
         )
 
-    # Run 2 — reset Python's global RNG; run 1 may have consumed it via ASE optimizers.
-    if seed_random:
-        random.seed(seed)
-
     _, rng2 = create_paired_rngs(seed)
     if is_ga_function:
-        # GA functions take composition and calculator directly
-        with _isolated_ga_cwd(tmp_path / output_suffix_2):
+        with isolated_workflow_cwd(tmp_path / output_suffix_2):
             minima2 = algorithm_func(
                 composition,
                 calculator=EMT(),
@@ -284,7 +350,6 @@ def run_algorithm_reproducibility_test(
                 **algorithm_params,
             )
     else:
-        # Other algorithms take atoms object
         atoms2 = create_initial_cluster(composition, rng=rng2)
         atoms2.calc = EMT()
         minima2 = algorithm_func(

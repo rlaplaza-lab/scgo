@@ -58,3 +58,16 @@ def test_population_constructor_rejects_legacy_randomstate():
     dc = FakeDC([])
     with pytest.raises(TypeError):
         Population(dc, population_size=2, rng=_np.random.RandomState(1))
+
+
+def test_population_update_stable_tie_order():
+    """Tied raw_score candidates are processed in relax_id/confid order."""
+    from scgo.ase_ga_patches.population import _population_candidate_sort_key
+
+    tie_high = _make_candidate(["Pt", "Pt"], raw_score=-5.0, confid=20, relax_id=2)
+    tie_low = _make_candidate(["Pt", "Pt"], raw_score=-5.0, confid=10, relax_id=1)
+
+    for input_order in ([tie_high, tie_low], [tie_low, tie_high]):
+        ordered = list(input_order)
+        ordered.sort(key=_population_candidate_sort_key)
+        assert [a.info["relax_id"] for a in ordered] == [1, 2]

@@ -10,7 +10,8 @@ SCGO Documentation
 SCGO: Simple Cluster Global Optimization
 =========================================
 
-A modern Python package for global optimization of atomic clusters using ASE with Basin Hopping and Genetic Algorithms.
+A modern Python package for global optimization of atomic clusters using
+ASE with Basin Hopping and Genetic Algorithms.
 Designed for researchers in computational chemistry and materials science.
 
 Key Features
@@ -18,8 +19,11 @@ Key Features
 
 - **Multiple Optimization Algorithms**: Basin Hopping (BH) and Genetic Algorithm (GA)
 - **MLIP Support**: MACE and UMA (fairchem) for GPU-accelerated optimization
-- **Surface Workflows**: Support for slab-supported clusters with adsorbates; GO finals aligned to a common slab frame before write
-- **Transition State Search**: NEB-based TS search with automated pair selection and default endpoint alignment (PBC-aware on surfaces, including configurable in-plane lattice-image search)
+- **Surface Workflows**: Support for slab-supported clusters with adsorbates;
+  GO finals aligned to a common slab frame before write
+- **Transition State Search**: NEB-based TS search with automated pair selection
+  and default endpoint alignment (PBC-aware on surfaces, including configurable
+  in-plane lattice-image search)
 - **Flexible API**: High-level runners and low-level control for custom workflows
 
 Quick Start

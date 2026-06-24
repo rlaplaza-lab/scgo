@@ -4,7 +4,7 @@
 
 ![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
-A compact toolkit for global optimization of small atomic clusters using ASE. SCGO provides a focused API for Basin Hopping (BH) and Genetic Algorithm (GA) workflows with practical defaults.
+A compact toolkit for global optimization of atomic clusters using ASE. SCGO provides a focused API for Basin Hopping (BH) and Genetic Algorithm (GA) workflows with practical defaults.
 
 **Documentation**: Comprehensive API documentation is available in the `docs/` directory. For online documentation, see [ReadTheDocs](https://scgo.readthedocs.io/).
 
@@ -74,12 +74,11 @@ pre-commit install
 Comprehensive documentation is available in the `docs/` directory:
 
 - **Installation**: `docs/source/installation.rst` - Setup instructions for conda and pip
-- **Quick Start**: `docs/source/quickstart.rst` - Basic usage examples
+- **Quick Start**: `docs/source/quickstart.rst` - Basic usage examples and workflows
 - **API Reference**: 
   - `docs/source/api/runner_api.rst` - High-level API entry points
   - `docs/source/api/param_presets.rst` - Parameter presets
   - `docs/source/api/system_types.rst` - System type definitions
-- **Quick Start**: surface, adsorbate, and example workflows in `docs/source/quickstart.rst`
 
 To build the documentation locally:
 
@@ -211,13 +210,11 @@ summary = run_go_ts(
 )
 ```
 
-Tagging final minima in databases: ✅ After writing final XYZ files, SCGO can optionally tag the corresponding database records with metadata ("final_unique_minimum": true, "final_rank", and "final_written") so downstream tools can find final minima without re-scanning databases. This behaviour is enabled by default and can be disabled by setting `params['tag_final_minima'] = False` when calling `run_go(...)`.
+After writing final XYZ files, SCGO can optionally tag the corresponding database records with metadata ("final_unique_minimum": true, "final_rank", and "final_written") so downstream tools can find final minima without re-scanning databases. This is enabled by default; disable with `params['tag_final_minima'] = False`.
 
-- `fitness_strategy`: `low_energy` (default), `high_energy`, `diversity`.
+- `fitness_strategy`: `low_energy` (default), `high_energy`, or `diversity`. The `diversity` strategy requires a `diversity_reference_db` glob (e.g., `"Pt*_searches/**/*.db"`).
 - `validate_with_hessian` (bool): run force + Hessian checks (uses ASE vibrational analysis).
-- **GA backend**: MLIPs use TorchSim batched GA; classical calculators use ASE GA.
-
-Important: `diversity` requires a `diversity_reference_db` glob (e.g. `"Pt*_searches/**/*.db"`).
+- GA backend: MLIPs use TorchSim batched GA; classical calculators use ASE GA.
 
 ---
 
