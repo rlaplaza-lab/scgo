@@ -112,3 +112,49 @@ def test_cut_and_splice_constructor_rejects_legacy_randomstate():
             system_type="gas_cluster",
             rng=_np.random.RandomState(42),
         )
+
+
+def test_cut_and_splice_target_tags_keeps_non_target_groups():
+    # Core atoms (tag 0) plus one adsorbate atom (tag 1).
+    p1 = Atoms(
+        symbols=["Co", "Co", "Co", "O"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.2, 0.0, 0.0],
+            [1.1, 1.9, 0.0],
+            [1.1, 0.7, 2.0],
+        ],
+        cell=[12.0, 12.0, 12.0],
+        pbc=False,
+    )
+    p2 = p1.copy()
+    p2.positions += np.array(
+        [
+            [0.10, 0.00, 0.00],
+            [0.00, 0.12, 0.00],
+            [-0.08, 0.00, 0.10],
+            [0.00, 0.00, -0.10],
+        ]
+    )
+    p1.set_tags([0, 0, 0, 1])
+    p2.set_tags([0, 0, 0, 1])
+
+    n_top = len(p1)
+    # Keep geometric filters permissive; this test targets tag-handling logic.
+    co, o = 27, 8
+    blmin = {(co, co): 0.01, (co, o): 0.01, (o, co): 0.01, (o, o): 0.01}
+    pairing = CutAndSplicePairing(
+        slab=Atoms(cell=p1.get_cell(), pbc=p1.get_pbc()),
+        n_top=n_top,
+        blmin=blmin,
+        minfrac=0.5,
+        use_tags=True,
+        target_tags=[0],
+        system_type="gas_cluster_adsorbate",
+        rng=np.random.default_rng(7),
+    )
+
+    child = pairing.cross(p1, p2)
+    assert child is not None
+    assert len(child) == n_top
+    assert sorted(child.get_chemical_symbols()) == sorted(p1.get_chemical_symbols())
