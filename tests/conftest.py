@@ -241,10 +241,13 @@ def clear_initialization_caches():
     """Clear template-rotation and geometry caches so reproducibility tests stay isolated."""
     from scgo.database.cache import get_global_cache
     from scgo.initialization import geometry_helpers, initializers
+    from scgo.initialization.initialization_config import _COMPOSITION_CACHE_NS
 
     get_global_cache().clear_namespace(initializers.TEMPLATE_ROTATIONS_CACHE_NS)
+    get_global_cache().clear_namespace(_COMPOSITION_CACHE_NS)
     geometry_helpers.clear_convex_hull_cache()
 
     yield
 
     get_global_cache().clear_namespace(initializers.TEMPLATE_ROTATIONS_CACHE_NS)
+    get_global_cache().clear_namespace(_COMPOSITION_CACHE_NS)

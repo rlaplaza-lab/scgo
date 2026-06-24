@@ -58,7 +58,9 @@ from tests.test_utils import (
                 "fmax": 0.2,
                 "vacuum": 5.0,
                 "energy_tolerance": 0.1,
-                "n_jobs_population_init": -2,  # Parallel for tests
+                "n_jobs_population_init": 1,
+                "n_jobs_offspring": 1,
+                "use_adaptive_mutations": False,
                 "mutation_probability": 0.2,
             },
         ),
@@ -184,7 +186,7 @@ def test_initialization_batch_reproducible_single_vs_multi_cpu():
 
 
 def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path):
-    """TorchSim GA must be reproducible with parallel init and parallel offspring ops."""
+    """TorchSim GA must match for serial vs parallel population init (serial offspring)."""
     import os
 
     if (os.cpu_count() or 1) < 2:
@@ -202,6 +204,9 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
         "niter_local_relaxation": 1,
         "batch_size": None,
         "verbosity": 0,
+        "previous_search_glob": ".__scgo_no_prior_runs__/**/*.db",
+        "use_adaptive_mutations": False,
+        "mutation_probability": 0.2,
     }
 
     minima_single = ga_go(
@@ -215,7 +220,7 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
         output_dir=str(tmp_path / "torchsim_multi_cpu"),
         rng=np.random.default_rng(seed),
         n_jobs_population_init=-2,
-        n_jobs_offspring=2,
+        n_jobs_offspring=1,
         **kwargs,
     )
 

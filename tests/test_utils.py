@@ -218,10 +218,23 @@ def run_algorithm_reproducibility_test(
         ...     {"niter": 3, "dr": 0.2, "temperature": 0.01}
         ... )
     """
+    import os
     import random
+    from contextlib import contextmanager
 
     from scgo.algorithms import ga_go
     from scgo.initialization import create_initial_cluster
+
+    @contextmanager
+    def _isolated_ga_cwd(run_dir: Path):
+        """Run GA seed discovery from an empty directory (glob uses process cwd)."""
+        run_dir.mkdir(parents=True, exist_ok=True)
+        previous = os.getcwd()
+        os.chdir(run_dir)
+        try:
+            yield
+        finally:
+            os.chdir(previous)
 
     # For full reproducibility, seed both Python's built-in random and NumPy's random.
     # This is necessary because some ASE components (e.g., optimizers) may use
@@ -236,13 +249,14 @@ def run_algorithm_reproducibility_test(
     rng1, _ = create_paired_rngs(seed)
     if is_ga_function:
         # GA functions take composition and calculator directly
-        minima1 = algorithm_func(
-            composition,
-            calculator=EMT(),
-            output_dir=str(tmp_path / output_suffix_1),
-            rng=rng1,
-            **algorithm_params,
-        )
+        with _isolated_ga_cwd(tmp_path / output_suffix_1):
+            minima1 = algorithm_func(
+                composition,
+                calculator=EMT(),
+                output_dir=str(tmp_path / output_suffix_1),
+                rng=rng1,
+                **algorithm_params,
+            )
     else:
         # Other algorithms take atoms object
         atoms1 = create_initial_cluster(composition, rng=rng1)
@@ -254,17 +268,21 @@ def run_algorithm_reproducibility_test(
             **algorithm_params,
         )
 
-    # Run 2
+    # Run 2 — reset Python's global RNG; run 1 may have consumed it via ASE optimizers.
+    if seed_random:
+        random.seed(seed)
+
     _, rng2 = create_paired_rngs(seed)
     if is_ga_function:
         # GA functions take composition and calculator directly
-        minima2 = algorithm_func(
-            composition,
-            calculator=EMT(),
-            output_dir=str(tmp_path / output_suffix_2),
-            rng=rng2,
-            **algorithm_params,
-        )
+        with _isolated_ga_cwd(tmp_path / output_suffix_2):
+            minima2 = algorithm_func(
+                composition,
+                calculator=EMT(),
+                output_dir=str(tmp_path / output_suffix_2),
+                rng=rng2,
+                **algorithm_params,
+            )
     else:
         # Other algorithms take atoms object
         atoms2 = create_initial_cluster(composition, rng=rng2)
