@@ -43,6 +43,7 @@ for a simple gas-phase Pt5 cluster.
    python example_pt5_gas.py
 
 **Output:**
+
 - Results under ``examples/results/pt5_gas_mace/`` (calculator slug appended
   to ``output_stem``)
 - Contains ``Pt5_searches/`` with GO minima and ``ts_results_Pt5/`` for TS results
