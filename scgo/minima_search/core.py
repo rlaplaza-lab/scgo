@@ -202,6 +202,33 @@ def _align_slab_minimum_to_reference(
     candidate.pbc = reference.pbc
 
 
+# Consumed by ``scgo`` for hierarchical/surface init only; not passed to simple/BH.
+_INIT_ONLY_OPTIMIZER_KWARGS = frozenset(
+    {
+        "adsorbate_fragment_template",
+        "vacuum",
+        "init_mode",
+        "max_hierarchical_attempts",
+        "previous_search_glob",
+    }
+)
+
+
+def _optimizer_kwargs_for_algorithm_call(
+    optimizer_kwargs: dict[str, Any],
+    *,
+    global_optimizer: str,
+) -> dict[str, Any]:
+    """Return kwargs safe to pass to simple/BH after initial structure construction."""
+    if global_optimizer == "ga":
+        return optimizer_kwargs
+    return {
+        key: value
+        for key, value in optimizer_kwargs.items()
+        if key not in _INIT_ONLY_OPTIMIZER_KWARGS
+    }
+
+
 def _sanitize_global_optimizer_kwargs_for_metadata(
     global_optimizer_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
@@ -511,6 +538,10 @@ def scgo(
         else:
             atoms = create_initial_cluster(composition, rng=rng)
         atoms.calc = calculator_for_global_optimization
+        algo_kwargs = _optimizer_kwargs_for_algorithm_call(
+            optimizer_kwargs,
+            global_optimizer=optimizer_name_lower,
+        )
         all_minima = algo_function(
             atoms=atoms,
             output_dir=output_dir,
@@ -518,7 +549,7 @@ def scgo(
             verbosity=verbosity,
             run_id=run_id,
             clean=clean,
-            **optimizer_kwargs,
+            **algo_kwargs,
         )
 
     if not all_minima:

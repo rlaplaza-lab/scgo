@@ -510,7 +510,12 @@ ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
 def select_scgo_minima_algorithm(
     n_atoms: int, system_type: SystemType
 ) -> ScgoMinimaAlgorithm:
-    """Select global optimizer for composition size and system type."""
+    """Select global optimizer for composition size and system type.
+
+    Uses the mobile-atom count (core + adsorbate symbols for adsorbate modes).
+    Plain ``gas_cluster`` alone may use ``simple`` for 1–2 atoms; adsorbate and
+    surface modes never select ``simple``.
+    """
     policy = get_system_policy(system_type)
     simple_allowed = not policy.uses_surface and not policy.has_adsorbate
     if n_atoms <= 2 and simple_allowed:

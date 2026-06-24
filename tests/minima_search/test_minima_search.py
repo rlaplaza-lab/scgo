@@ -195,6 +195,54 @@ class TestScgoFunction:
         assert results == []
         assert len(captured["atoms"]) > len(slab)
 
+    def test_scgo_gas_adsorbate_bh_strips_init_only_kwargs(
+        self, tmp_path, rng, monkeypatch
+    ):
+        captured: dict[str, object] = {}
+
+        def _fake_bh_go(*, atoms, **kwargs):
+            captured["atoms"] = atoms
+            captured["kwargs"] = kwargs
+            return []
+
+        monkeypatch.setattr(main_mod, "bh_go", _fake_bh_go)
+        monkeypatch.setitem(main_mod._ALGORITHM_REGISTRY["bh"], "function", _fake_bh_go)
+
+        ads_def = {
+            "core_symbols": ["Pt", "Pt"],
+            "adsorbate_symbols": ["O"],
+        }
+        frag = Atoms(symbols=["O"], positions=[[0.0, 0.0, 0.0]])
+
+        results = scgo(
+            composition=["Pt", "Pt", "O"],
+            global_optimizer="bh",
+            global_optimizer_kwargs={
+                "niter": 1,
+                "niter_local_relaxation": 1,
+                "system_type": "gas_cluster_adsorbate",
+                "adsorbate_definition": ads_def,
+                "adsorbate_fragment_template": frag,
+                "vacuum": 12.0,
+                "init_mode": "smart",
+                "max_hierarchical_attempts": 5,
+                "previous_search_glob": "**/*.db",
+            },
+            output_dir=str(tmp_path / "gas_bh"),
+            rng=rng,
+            calculator_for_global_optimization=EMT(),
+            verbosity=0,
+        )
+        assert results == []
+        assert len(captured["atoms"]) == 3
+        bh_kwargs = captured["kwargs"]
+        assert bh_kwargs["adsorbate_definition"] == ads_def
+        assert "adsorbate_fragment_template" not in bh_kwargs
+        assert "vacuum" not in bh_kwargs
+        assert "init_mode" not in bh_kwargs
+        assert "max_hierarchical_attempts" not in bh_kwargs
+        assert "previous_search_glob" not in bh_kwargs
+
     def test_scgo_gas_adsorbate_empty_core_is_noop(self, tmp_path, rng):
         results = scgo(
             composition=["O", "H"],
