@@ -26,7 +26,7 @@ from .helpers import (
 )
 from .logging import configure_logging, get_logger
 from .mutation_weights import get_adaptive_mutation_config
-from .rng_helpers import create_child_rng, ensure_rng
+from .rng_helpers import create_child_rng, ensure_rng, get_child_rng_or_none
 
 __all__ = [
     # atoms_helpers
@@ -49,4 +49,5 @@ __all__ = [
     # rng_helpers
     "create_child_rng",
     "ensure_rng",
+    "get_child_rng_or_none",
 ]

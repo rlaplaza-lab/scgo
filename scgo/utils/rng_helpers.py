@@ -59,3 +59,20 @@ def ensure_rng_or_create(rng: np.random.Generator | None) -> np.random.Generator
     if isinstance(rng, np.random.Generator):
         return rng
     raise TypeError("rng must be an instance of numpy.random.Generator or None")
+
+
+def get_child_rng_or_none(
+    rng: np.random.Generator | None,
+) -> np.random.Generator | None:
+    """Create child RNG if parent exists, otherwise return None.
+
+    This is a convenience function to reduce the common pattern of:
+    ``create_child_rng(rng) if rng is not None else None``
+
+    Args:
+        rng: Parent RNG to derive child from, or None.
+
+    Returns:
+        New child RNG if parent was provided, otherwise None.
+    """
+    return create_child_rng(rng) if rng is not None else None

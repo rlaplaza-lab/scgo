@@ -9,6 +9,7 @@ import os
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+# Exceptions
 # Algorithms
 from scgo.algorithms import bh_go, ga_go
 
@@ -28,6 +29,15 @@ from scgo.database import (
     load_previous_run_results,
     load_reference_structures,
     setup_database,
+)
+from scgo.exceptions import (
+    SCGOConfigurationError,
+    SCGODatabaseError,
+    SCGOError,
+    SCGOFileError,
+    SCGONotImplementedError,
+    SCGORuntimeError,
+    SCGOValidationError,
 )
 
 # Initialization
@@ -81,6 +91,7 @@ from scgo.utils.logging import (
     configure_logging,
     get_logger,
 )
+from scgo.utils.rng_helpers import get_child_rng_or_none
 
 __version__ = "0.1.0"
 
@@ -94,6 +105,14 @@ __all__ = [
     "__version__",
     "AVAILABLE_MACE_MODELS",
     "AVAILABLE_UMA_MODELS",
+    # Exceptions
+    "SCGOError",
+    "SCGOConfigurationError",
+    "SCGOValidationError",
+    "SCGORuntimeError",
+    "SCGODatabaseError",
+    "SCGONotImplementedError",
+    "SCGOFileError",
     # Algorithms (for advanced users)
     "bh_go",
     "ga_go",
@@ -142,6 +161,7 @@ __all__ = [
     "run_ts_campaign",
     "run_ts_search",
     # Utilities
+    "get_child_rng_or_none",
     "get_cluster_formula",
     "is_true_minimum",
     "perform_local_relaxation",
