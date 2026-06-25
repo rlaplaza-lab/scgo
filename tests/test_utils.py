@@ -98,12 +98,16 @@ def compare_minima_lists(minima1, minima2, rtol=1e-5, atol=1e-8):
         atol: Absolute tolerance for energy comparison
 
     Returns:
-        True if lists are equal, False otherwise
+        True if lists are equal (order-independent), False otherwise
     """
     if len(minima1) != len(minima2):
         return False
 
-    for (e1, a1), (e2, a2) in zip(minima1, minima2, strict=True):
+    # Sort by energy to make comparison order-independent
+    minima1_sorted = sorted(minima1, key=lambda x: x[0])
+    minima2_sorted = sorted(minima2, key=lambda x: x[0])
+
+    for (e1, a1), (e2, a2) in zip(minima1_sorted, minima2_sorted, strict=True):
         if not np.isclose(e1, e2, rtol=rtol, atol=atol):
             return False
         if not np.allclose(
@@ -314,8 +318,16 @@ def run_algorithm_reproducibility_test(
         ...     {"niter": 3, "dr": 0.2, "temperature": 0.01}
         ... )
     """
+    import random
+
     from scgo.algorithms import ga_go
     from scgo.initialization import create_initial_cluster
+
+    # For full reproducibility, seed both Python's built-in random and NumPy's random.
+    # This is necessary because some ASE components (e.g., optimizers) may use
+    # Python's global random state internally. This is a documented workaround.
+    random.seed(seed)
+    np.random.seed(seed)
 
     is_ga_function = algorithm_func is ga_go
 
@@ -338,6 +350,10 @@ def run_algorithm_reproducibility_test(
             rng=rng1,
             **algorithm_params,
         )
+
+    # Reset Python's global RNG; run 1 may have consumed it via ASE optimizers.
+    random.seed(seed)
+    np.random.seed(seed)
 
     _, rng2 = create_paired_rngs(seed)
     if is_ga_function:

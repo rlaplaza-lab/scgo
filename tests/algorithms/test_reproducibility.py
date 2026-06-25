@@ -63,9 +63,6 @@ from tests.test_utils import (
                 "use_adaptive_mutations": False,
                 "mutation_probability": 0.2,
             },
-            marks=pytest.mark.skip(
-                reason="Flaky - GA produces non-deterministic results"
-            ),
         ),
     ],
 )
@@ -188,13 +185,15 @@ def test_initialization_batch_reproducible_single_vs_multi_cpu():
         assert a_single.get_chemical_symbols() == a_multi.get_chemical_symbols()
 
 
-@pytest.mark.skip(reason="Flaky - parallel init produces non-deterministic ordering")
 def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path):
     """TorchSim GA must match for serial vs parallel population init (serial offspring)."""
     import os
+    import random
 
     if (os.cpu_count() or 1) < 2:
         pytest.skip("Requires >=2 CPUs to validate parallel GA behavior")
+
+    from tests.test_utils import isolated_workflow_cwd
 
     composition = ["Pt"] * 3
     seed = 97531
@@ -213,20 +212,30 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
         "mutation_probability": 0.2,
     }
 
-    minima_single = ga_go(
-        output_dir=str(tmp_path / "torchsim_single_cpu"),
-        rng=np.random.default_rng(seed),
-        n_jobs_population_init=1,
-        n_jobs_offspring=1,
-        **kwargs,
-    )
-    minima_multi = ga_go(
-        output_dir=str(tmp_path / "torchsim_multi_cpu"),
-        rng=np.random.default_rng(seed),
-        n_jobs_population_init=-2,
-        n_jobs_offspring=1,
-        **kwargs,
-    )
+    # Seed Python's global RNG for reproducibility
+    random.seed(seed)
+
+    with isolated_workflow_cwd(tmp_path / "torchsim_single_cpu"):
+        minima_single = ga_go(
+            output_dir=str(tmp_path / "torchsim_single_cpu"),
+            rng=np.random.default_rng(seed),
+            n_jobs_population_init=1,
+            n_jobs_offspring=1,
+            **kwargs,
+        )
+
+    # Reset Python's global RNG between runs
+    random.seed(seed)
+    np.random.seed(seed)
+
+    with isolated_workflow_cwd(tmp_path / "torchsim_multi_cpu"):
+        minima_multi = ga_go(
+            output_dir=str(tmp_path / "torchsim_multi_cpu"),
+            rng=np.random.default_rng(seed),
+            n_jobs_population_init=-2,
+            n_jobs_offspring=1,
+            **kwargs,
+        )
 
     assert compare_minima_lists(minima_single, minima_multi)
 
