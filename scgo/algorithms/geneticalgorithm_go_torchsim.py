@@ -633,7 +633,9 @@ def ga_go(
         diversity_update_interval: Number of generations between reference updates (for diversity strategy).
         surface_config: Optional slab + adsorbate configuration for surface GA runs.
         write_timing_json: If True, write ``timing.json`` under ``output_dir``.
-        detailed_timing: If True, record per-generation timing splits in ``timing.json``.
+            Set in ``optimizer_params['ga']`` inside ``go_params``/``params``.
+        detailed_timing: If True, include ``per_generation`` rows in ``timing.json``.
+            Requires ``write_timing_json=True``.
     """
     logger = get_logger(__name__)
     profile_t0 = perf_counter()

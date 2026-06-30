@@ -14,6 +14,10 @@ and fanned out into optimizer slots. Adsorbate placement tuning
 belongs in ``go_params`` only—not as separate ``run_*`` keywords. For
 ``ts_params``, ``system_type`` remains rejected while ``surface_config`` is
 allowed and validated against the run argument.
+
+GA/BH timing JSON is configured only in ``params``/``go_params`` under
+``optimizer_params['ga']`` (or ``bh``): ``write_timing_json`` and ``detailed_timing``.
+See :mod:`scgo.utils.timing_report`.
 """
 
 from __future__ import annotations
@@ -99,12 +103,6 @@ def _require_system_type(system_type: SystemType | None, fn_name: str) -> System
     if system_type is None:
         raise ValueError(f"system_type is required for {fn_name}.")
     return system_type
-
-
-def _effective_write_timing_json(
-    write_timing_json: bool, profile_ga: bool | None
-) -> bool:
-    return bool(profile_ga) if profile_ga is not None else write_timing_json
 
 
 def _prepare_run_context(
@@ -268,17 +266,13 @@ def _with_system_type_in_optimizer_params(
     params: dict[str, Any] | None,
     *,
     system_type: SystemType,
-    write_timing_json: bool = False,
-    profile_ga: bool | None = None,
 ) -> dict[str, Any]:
-    effective = _effective_write_timing_json(write_timing_json, profile_ga)
+    """Attach ``system_type`` (and fan-out ``surface_config``) to optimizer slots."""
     out = dict(params or {})
     op = out.setdefault("optimizer_params", {})
     for algo in _ALGO_KEYS:
         cfg = op.setdefault(algo, {})
         cfg["system_type"] = system_type
-        if algo in ("ga", "bh"):
-            cfg.setdefault("write_timing_json", effective)
     # Add surface_config to all optimizer slots if it's in params
     if "surface_config" in out:
         for algo in _ALGO_KEYS:
@@ -1039,10 +1033,9 @@ def run_go(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    write_timing_json: bool = False,
-    profile_ga: bool | None = None,
     log_summary: bool = True,
 ) -> list[tuple[float, Atoms]]:
+    """Run global optimization trials for one composition."""
     st, params_prep, ads_def, ads_temp, comp = _prepare_run_context(
         composition,
         system_type=system_type,
@@ -1055,8 +1048,6 @@ def run_go(
     eff_params = _with_system_type_in_optimizer_params(
         params_prep,
         system_type=st,
-        write_timing_json=write_timing_json,
-        profile_ga=profile_ga,
     )
     eff_params = _merge_adsorbate_context_into_params(
         eff_params,
@@ -1096,10 +1087,9 @@ def run_go_campaign(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    write_timing_json: bool = False,
-    profile_ga: bool | None = None,
     log_summary: bool = True,
 ) -> dict[str, list[tuple[float, Atoms]]]:
+    """Run global optimization for multiple compositions."""
     st = _require_system_type(system_type, "run_go_campaign")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     if params is not None:
@@ -1113,8 +1103,6 @@ def run_go_campaign(
     eff_params = _with_system_type_in_optimizer_params(
         params_prep,
         system_type=st,
-        write_timing_json=write_timing_json,
-        profile_ga=profile_ga,
     )
     full_compositions: list[list[str]] = []
     for composition_item in _as_composition_list(compositions):
@@ -1175,10 +1163,9 @@ def run_go_ts(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    write_timing_json: bool = False,
-    profile_ga: bool | None = None,
     log_summary: bool = True,
 ) -> dict[str, Any]:
+    """Run global optimization then transition-state search for one composition."""
     st = _require_system_type(system_type, "run_go_ts")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     go_mat, ts_mat = _materialize_go_ts_params(
@@ -1220,8 +1207,6 @@ def run_go_ts(
     go_local = _with_system_type_in_optimizer_params(
         go_prep,
         system_type=st,
-        write_timing_json=write_timing_json,
-        profile_ga=profile_ga,
     )
     go_local = _merge_adsorbate_context_into_params(
         go_local,
@@ -1263,10 +1248,9 @@ def run_go_ts_campaign(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    write_timing_json: bool = False,
-    profile_ga: bool | None = None,
     log_summary: bool = True,
 ) -> dict[str, dict[str, Any]]:
+    """Run GO+TS for multiple compositions."""
     st = _require_system_type(system_type, "run_go_ts_campaign")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     go_mat, ts_mat = _materialize_go_ts_params(
@@ -1312,8 +1296,6 @@ def run_go_ts_campaign(
     go_local = _with_system_type_in_optimizer_params(
         go_prep,
         system_type=st,
-        write_timing_json=write_timing_json,
-        profile_ga=profile_ga,
     )
     go_local = _merge_adsorbate_context_into_params(
         go_local,

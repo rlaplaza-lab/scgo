@@ -9,10 +9,8 @@ from ase import Atoms
 from numpy.random import default_rng
 
 from scgo.cluster_adsorbate import ClusterAdsorbateConfig, place_fragment_on_cluster
-from scgo.cluster_adsorbate.placement import (
-    _compute_surface_site_candidates,
-    _select_site_type,
-)
+from scgo.cluster_adsorbate.placement import _select_site_type
+from scgo.cluster_adsorbate.sites import compute_surface_site_candidates
 
 
 def _pt_tetrahedron() -> Atoms:
@@ -31,7 +29,7 @@ def _pt_tetrahedron() -> Atoms:
 
 def test_surface_site_candidate_counts_for_tetrahedron() -> None:
     core = _pt_tetrahedron()
-    candidates = _compute_surface_site_candidates(core)
+    candidates = compute_surface_site_candidates(core)
     assert len(candidates["vertex"]) == 4
     assert len(candidates["edge"]) == 6
     assert len(candidates["facet"]) == 4

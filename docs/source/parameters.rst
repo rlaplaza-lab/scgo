@@ -22,6 +22,12 @@ Set these via `optimizer_params['ga']` or `optimizer_params['bh']`.
      - Convergence threshold for structure relaxation (eV/Å).
    * - ``mutation_probability``
      - Chance to perform a mutation in GA (0.0 to 1.0).
+   * - ``write_timing_json``
+     - Write ``timing.json`` under the trial output directory (aggregate
+       ``timings_s``, ``counters``, ``retry_failures``). Default ``False``.
+   * - ``detailed_timing``
+     - Include ``per_generation`` timing and retry breakdown in ``timing.json``.
+       Requires ``write_timing_json=True``. Default ``False``.
 
 Transition State (TS) Search
 ----------------------------
@@ -66,3 +72,14 @@ System & Calculator
      - The model to use: ``"MACE"``, ``"UMA"``, or ``"EMT"``.
    * - ``calculator_kwargs``
      - Arguments for the calculator (e.g., ``model_name``).
+
+Initialization
+--------------
+
+Cluster builders :func:`~scgo.initialization.random_spherical.random_spherical`
+and :func:`~scgo.initialization.random_spherical.grow_from_seed` accept
+``blmin_ratio`` (default: ``BLMIN_RATIO_DEFAULT``, 0.7). When set, placement
+uses at least that covalent-radius steric floor so initial structures satisfy
+the same GA operator clash checks as mutations. Pass ``blmin_ratio=None`` to
+rely only on ``min_distance_factor`` (see
+:mod:`scgo.initialization.initialization_config`).

@@ -327,11 +327,9 @@ def test_run_go_system_type_wires_optimizer_params(monkeypatch):
         params["optimizer_params"]["simple"]["system_type"]
         == "surface_cluster_adsorbate"
     )
-    assert params["optimizer_params"]["ga"]["write_timing_json"] is False
-    assert params["optimizer_params"]["bh"]["write_timing_json"] is False
 
 
-def test_run_go_profile_toggle(monkeypatch):
+def test_run_go_timing_from_params(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake_trials(composition, *args, **kwargs):
@@ -341,13 +339,17 @@ def test_run_go_profile_toggle(monkeypatch):
     monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
     run_go(
         "Pt3",
-        params={"optimizer_params": {"ga": {}}},
+        params={
+            "optimizer_params": {
+                "ga": {"write_timing_json": True, "detailed_timing": True},
+            }
+        },
         verbosity=0,
         system_type="gas_cluster",
-        profile_ga=False,
     )
-    params = captured["params"]
-    assert params["optimizer_params"]["ga"]["write_timing_json"] is False
+    ga = captured["params"]["optimizer_params"]["ga"]
+    assert ga["write_timing_json"] is True
+    assert ga["detailed_timing"] is True
 
 
 @pytest.mark.parametrize(
@@ -640,7 +642,7 @@ def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
     assert calls[1][1] == root / "Au2_campaign"
 
 
-def test_run_go_ts_wires_profile_toggle(monkeypatch):
+def test_run_go_ts_passes_timing_from_go_params(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake_pipeline(composition, system_type, **kwargs):
@@ -650,14 +652,18 @@ def test_run_go_ts_wires_profile_toggle(monkeypatch):
     monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         "Pt2",
-        go_params={"optimizer_params": {"ga": {}}},
+        go_params={
+            "optimizer_params": {
+                "ga": {"write_timing_json": True, "detailed_timing": True},
+            }
+        },
         ts_params=_emt_ts_gasc(),
         verbosity=0,
         system_type="gas_cluster",
-        profile_ga=False,
     )
-    go_params = captured["go_params"]
-    assert go_params["optimizer_params"]["ga"]["write_timing_json"] is False
+    ga = captured["go_params"]["optimizer_params"]["ga"]
+    assert ga["write_timing_json"] is True
+    assert ga["detailed_timing"] is True
 
 
 def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):

@@ -13,7 +13,7 @@ from scgo.surface.pbc import normalize_slab_pbc
 DEFAULT_GRAPHITE_SLAB_LAYERS = 5
 DEFAULT_GRAPHITE_SLAB_REPEAT_XY = 4
 DEFAULT_GRAPHITE_SLAB_VACUUM = 12.0
-# Graphite interlayer distance (AABS stacking is 3.35 A, ABC stacking is similar)
+# Graphite interlayer distance (AB stacking ~3.35 Å)
 GRAPHITE_INTERLAYER_DISTANCE = 3.35
 
 
@@ -32,42 +32,29 @@ def build_graphite_slab(
     if layers < 1:
         raise ValueError(f"layers must be >= 1, got {layers}")
 
-    # Create a single graphene layer with no vacuum
     single_layer = graphene(formula="C2", vacuum=0.0)
-
-    # Repeat in x and y directions
     single_layer = single_layer.repeat((repeat_xy, repeat_xy, 1))
 
     if layers == 1:
-        # Single layer: add vacuum below and center
         single_layer.center(vacuum=vacuum, axis=2)
         normalize_slab_pbc(single_layer)
         return single_layer
 
-    # For multiple layers, stack them with correct interlayer spacing
-    # Start with the first layer at z=0
     all_positions = single_layer.get_positions().copy()
     all_symbols = single_layer.get_chemical_symbols()
 
-    # Add additional layers with correct spacing
     for layer_idx in range(1, layers):
         layer_positions = single_layer.get_positions().copy()
         layer_positions[:, 2] += layer_idx * GRAPHITE_INTERLAYER_DISTANCE
         all_positions = np.vstack([all_positions, layer_positions])
         all_symbols.extend(single_layer.get_chemical_symbols())
 
-    # Create the combined slab
     slab = Atoms(symbols=all_symbols, positions=all_positions)
     slab.set_cell(single_layer.get_cell())
-    # Adjust cell height to accommodate all layers plus vacuum
     cell = slab.get_cell()
     cell[2, 2] = (layers - 1) * GRAPHITE_INTERLAYER_DISTANCE + vacuum
     slab.set_cell(cell)
 
-    # Center the slab in the cell with vacuum on top
-    # The bottom of the slab should be at vacuum/2, and top at cell[2,2] - vacuum/2
-    # But for surface calculations, we want the top layer near the top of the cell
-    # Shift so bottom layer is at z = vacuum/2
     positions = slab.get_positions()
     positions[:, 2] += vacuum / 2
     slab.set_positions(positions)

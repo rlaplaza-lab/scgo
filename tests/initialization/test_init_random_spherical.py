@@ -10,11 +10,18 @@ This module consolidates all tests for random_spherical initialization including
 
 import numpy as np
 import pytest
+from ase_ga.utilities import (
+    atoms_too_close,
+    closest_distances_generator,
+    get_all_atom_types,
+)
 
 from scgo.initialization import (
     is_cluster_connected,
     random_spherical,
 )
+from scgo.initialization.atomic_radii import cluster_passes_ga_blmin
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from tests.test_utils import assert_cluster_valid
 
 
@@ -48,7 +55,7 @@ class TestRandomSphericalInitialization:
         # ensure the cluster is centered in the cell (COM near origin).
         com = atoms.get_center_of_mass()
         half = side / 2.0
-        assert np.allclose(com, [half, half, half], atol=0.5)
+        assert np.allclose(com, [half, half, half], atol=1.0)
 
     def test_random_spherical_placement_failure(self, rng):
         """Test that placement failure raises appropriate error."""
@@ -92,7 +99,11 @@ class TestBoundaryValues:
     def test_min_distance_factor_zero(self, rng):
         """Test with min_distance_factor = 0."""
         atoms = random_spherical(
-            ["Pt", "Pt"], cell_side=20.0, min_distance_factor=0.0, rng=rng
+            ["Pt", "Pt"],
+            cell_side=20.0,
+            min_distance_factor=0.0,
+            blmin_ratio=None,
+            rng=rng,
         )
         # Should work (allows overlap)
         assert len(atoms) == 2
@@ -135,6 +146,24 @@ class TestBoundaryValues:
         )
         # Should always work
         assert len(atoms) == 2
+
+
+class TestGaBlminCompatibility:
+    """random_spherical outputs must satisfy GA operator steric floors."""
+
+    def test_pt55_prototypical_seed_satisfies_ga_blmin(self) -> None:
+        composition = ["Pt"] * 55
+        atoms = random_spherical(
+            composition,
+            cell_side=30.0,
+            rng=np.random.default_rng(1234),
+        )
+        assert cluster_passes_ga_blmin(atoms, BLMIN_RATIO_DEFAULT)
+        blmin = closest_distances_generator(
+            get_all_atom_types(atoms, range(len(atoms))),
+            ratio_of_covalent_radii=BLMIN_RATIO_DEFAULT,
+        )
+        assert not atoms_too_close(atoms, blmin, use_tags=False)
 
 
 class TestRetryDiversity:

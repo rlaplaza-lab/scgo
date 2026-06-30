@@ -1,4 +1,11 @@
-"""Timing summary logging and ``timing.json`` for GO, basin hopping, NEB/TS, and GO+TS."""
+"""Timing summary logging and ``timing.json`` for GO, basin hopping, NEB/TS, and GO+TS.
+
+GA/BH: set ``write_timing_json`` and ``detailed_timing`` in
+``optimizer_params['ga']`` (or ``bh``) inside ``params``/``go_params``.
+TS: set ``write_timing_json`` in ``ts_params``.
+
+Output path for GA trials: ``{trial_output_dir}/timing.json``.
+"""
 
 from __future__ import annotations
 

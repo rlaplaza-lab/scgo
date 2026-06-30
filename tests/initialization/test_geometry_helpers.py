@@ -1,8 +1,4 @@
-"""Tests for geometry helper functions.
-
-These tests verify the geometric placement functions in scgo.geometry_helpers,
-particularly the convex hull facet generation for cluster growth.
-"""
+"""Tests for geometry helper functions in scgo.initialization.geometry_helpers."""
 
 import numpy as np
 import pytest

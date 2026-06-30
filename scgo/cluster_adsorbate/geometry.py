@@ -8,12 +8,10 @@ from numpy.random import Generator
 
 def random_unit_vector(rng: Generator) -> np.ndarray:
     """Sample a uniform random unit vector in R^3."""
-    for _ in range(10):
-        v = rng.standard_normal(3)
-        n = float(np.linalg.norm(v))
-        if n >= 1e-12:
-            return (v / n).astype(float)
-    # Extremely unlikely fallback (probability ~1e-120)
+    v = rng.standard_normal(3)
+    n = float(np.linalg.norm(v))
+    if n >= 1e-12:
+        return (v / n).astype(float)
     return np.array([0.0, 0.0, 1.0], dtype=float)
 
 

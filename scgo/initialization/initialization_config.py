@@ -9,43 +9,33 @@ from __future__ import annotations
 from typing import Any
 
 # Placement and retry parameters
-MAX_PLACEMENT_ATTEMPTS_PER_ATOM = 500  # Reduced from 1000 for better performance
-MAX_CONNECTIVITY_RETRIES = (
-    10  # Increased from 5 to improve success rate for strict connectivity
-)
-MAX_CONSECUTIVE_FAILURES = (
-    50  # Early termination: if this many consecutive attempts fail, abort early
-)
+MAX_PLACEMENT_ATTEMPTS_PER_ATOM = 500
+MAX_CONNECTIVITY_RETRIES = 10
+MAX_CONSECUTIVE_FAILURES = 50
 
-# ============================================================================
-# Distance and Connectivity Parameters
-# ============================================================================
-# Connectivity: atoms connected if distance <= (r_i + r_j) * CONNECTIVITY_FACTOR
+# Distance and connectivity
+# atoms connected if distance <= (r_i + r_j) * CONNECTIVITY_FACTOR
 # GA operators use blmin_ratio=0.7 (steric floor); validation at 1.4 catches
 # borderline disconnections that still pass the tighter operator threshold.
 CONNECTIVITY_FACTOR = 1.4  # Connectivity threshold used consistently throughout
 BLMIN_RATIO_DEFAULT = 0.7  # Covalent-radius scale for GA/placement clash tables
+# Placement may relax below this during difficult fits, but never below
+# ``BLMIN_RATIO_DEFAULT`` when ``random_spherical`` enforces GA sterics.
 MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 PLACEMENT_RADIUS_SCALING_DEFAULT = 1.2
 SEED_CLASH_FACTOR = MIN_DISTANCE_FACTOR_DEFAULT  # Use same factor as random placement
 
-# ============================================================================
-# Cell and Vacuum Parameters
-# ============================================================================
+# Cell and vacuum
 VACUUM_DEFAULT = 10.0
 MAX_REASONABLE_CELL_SIDE = 1000.0  # Maximum reasonable cell side (Å)
 
-# ============================================================================
-# Boltzmann Sampling Parameters
-# ============================================================================
+# Boltzmann sampling
 BOLTZMANN_TEMPERATURE_MIN = 0.05
 BOLTZMANN_TEMPERATURE_MAX = 0.5
 ENERGY_SPREAD_TOLERANCE = 1e-6  # Tolerance for energy spread comparison
 ENERGY_SPREAD_DIVISOR = 10.0  # Divisor for adaptive temperature calculation
 
-# ============================================================================
-# Convex Hull and Geometric Parameters
-# ============================================================================
+# Convex hull and geometry
 CONVEX_HULL_PERTURBATION_SCALE = 0.1
 CONVEX_HULL_CACHE_SIZE = 100
 # Cache sizes for initialization caches (tunable via configuration)
@@ -53,9 +43,7 @@ CANDIDATE_CACHE_SIZE = 100
 COMPOSITION_CACHE_SIZE = 100
 CONVEX_HULL_VOLUME_TOLERANCE = 1e-6  # Tolerance for degenerate convex hulls
 
-# ============================================================================
-# Magic Numbers and Template Parameters
-# ============================================================================
+# Magic numbers and templates
 # Magic number detection tolerance (atoms)
 # Clusters within this many atoms of a magic number are considered "near"
 MAGIC_NUMBER_TOLERANCE = 2
@@ -123,9 +111,7 @@ MAGIC_NUMBERS = sorted(
     )
 )
 
-# ============================================================================
-# Strategy and Diversity Parameters
-# ============================================================================
+# Strategy and diversity
 # Number of seed combination strategies available
 SEED_COMBINATION_STRATEGY_COUNT = (
     5  # 0=Boltzmann, 1=low-energy, 2=high-energy, 3=mid-energy, 4=random
@@ -143,9 +129,7 @@ SEED_PREFACTOR = (
     1.5  # Scaling prefactor for seeds (higher = more allocation with more combinations)
 )
 
-# ============================================================================
-# Internal Caching and Selection Parameters
-# ============================================================================
+# Internal caching and selection
 _FIND_SMALLER_CANDIDATES_CACHE_VERSION = 3
 _MAX_CANDIDATES_PER_FORMULA = 10000
 _COMPOSITION_CACHE_NS = "composition"
@@ -175,9 +159,7 @@ MULTI_ELEMENT_TEMPLATE_PENALTY = 0.9
 # Promotes exploration of less common template types
 TEMPLATE_DIVERSITY_BOOST_FACTOR = 0.15
 
-# ============================================================================
-# Tolerance and Threshold Values
-# ============================================================================
+# Tolerance and thresholds
 LINEAR_GEOMETRY_TOLERANCE = 1e-4  # Tolerance for linear geometry detection
 ROTATION_AXIS_TOLERANCE = 1e-10  # Tolerance for rotation axis normalization
 CLASH_TOLERANCE = (
@@ -188,9 +170,7 @@ SMART_FILTERING_PERTURBATION_SCALE = (
     0.3  # Reduced perturbation scale for smart facet filtering
 )
 
-# ============================================================================
-# Relaxation and Scaling Factors
-# ============================================================================
+# Relaxation and scaling
 PLACEMENT_RELAXATION_FACTOR = 0.25  # Relaxation factor for placement attempts
 MIN_DISTANCE_THRESHOLD_LOW = 0.4  # Lower threshold for min_distance_factor
 MIN_DISTANCE_THRESHOLD_HIGH = 0.8  # Upper threshold for min_distance_factor
@@ -198,8 +178,6 @@ BOND_DISTANCE_MULTIPLIER_2ATOM = 1.2  # Multiplier for 2-atom bond distances
 BOND_DISTANCE_MULTIPLIER_3ATOM = 3.0  # Multiplier for 3-atom bond distances
 CONNECTIVITY_SUGGESTION_BUFFER = 1.05  # Buffer for connectivity factor suggestions
 
-# ============================================================================
-# Physical and Computational Parameters
-# ============================================================================
+# Physical and computational
 PACKING_EFFICIENCY_FCC_HCP = 0.74  # FCC/HCP packing efficiency
 KDTREE_THRESHOLD = 50  # Use KDTree for clusters with >= 50 atoms

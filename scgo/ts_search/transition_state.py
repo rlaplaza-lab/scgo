@@ -45,10 +45,6 @@ from scgo.utils.validation import validate_atoms, validate_calculator_attached
 if TYPE_CHECKING:
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
-# ---------------------------------------------------------------------------
-# Helper utilities
-# ---------------------------------------------------------------------------
-
 
 def _detach_calc(atoms: Atoms | None) -> None:
     """Remove calculator from structure when present."""
@@ -936,11 +932,6 @@ def interpolate_path(
     return images
 
 
-# ---------------------------------------------------------------------------
-# Result construction
-# ---------------------------------------------------------------------------
-
-
 def _coerce_neb_steps(neb_steps: int | str | None) -> int | str | None:
     """Coerce numpy integer step counts to plain int (JSON-friendly)."""
     if isinstance(neb_steps, (int, np.integer)):
@@ -1388,11 +1379,6 @@ def find_transition_state(
             )
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
 
 
 _PROVENANCE_KEYS = (

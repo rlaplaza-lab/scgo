@@ -25,11 +25,12 @@ MAX_PAIRS = 15
 
 def _build_go_params() -> dict:
     go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
-    go_params["calculator"] = "MACE"
     go_params["connectivity_factor"] = 1.4
     go_params["optimizer_params"]["ga"].update(
         niter=NITER,
         population_size=POPULATION_SIZE,
+        write_timing_json=True,
+        detailed_timing=True,
     )
     return go_params
 

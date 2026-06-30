@@ -25,22 +25,7 @@ def validate_combined_cluster_structure(
     check_connectivity: bool = True,
     use_mic: bool = False,
 ) -> tuple[bool, str]:
-    """Validate the full system using the same rules as cluster initialization.
-
-    Checks optional clash screening and that all atoms lie in one connected
-    component under covalent-radius-based edge thresholds.
-
-    Args:
-        atoms: The Atoms object to validate
-        min_distance_factor: Factor for minimum distance checks
-        connectivity_factor: Factor for connectivity threshold
-        check_clashes: Whether to check for atomic clashes
-        check_connectivity: Whether to check connectivity
-        use_mic: If True, use minimum image convention for distance calculations
-
-    Returns:
-        ``(True, "")`` if valid, else ``(False, error_message)``.
-    """
+    """Validate core + adsorbate structure (clashes and connectivity). Delegates to cluster init rules."""
     return validate_cluster_structure(
         atoms,
         min_distance_factor,

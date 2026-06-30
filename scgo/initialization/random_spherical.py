@@ -17,6 +17,7 @@ from scipy.spatial import KDTree
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 
+from .atomic_radii import cluster_passes_ga_blmin, resolve_steric_floor
 from .geometry_helpers import (
     _check_composition_feasibility,
     _generate_batch_positions_on_convex_hull,
@@ -30,6 +31,7 @@ from .geometry_helpers import (
     validate_cluster,
 )
 from .initialization_config import (
+    BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
     GROWTH_ORDER_STRATEGY_COUNT,
     KDTREE_THRESHOLD,
@@ -259,6 +261,8 @@ def _compute_effective_placement_params(
     attempt_ratio: float,
     min_distance_factor: float,
     placement_radius_scaling: float,
+    *,
+    steric_floor: float | None = None,
 ) -> tuple[float, float]:
     """Compute effective placement parameters with progressive relaxation.
 
@@ -266,6 +270,7 @@ def _compute_effective_placement_params(
         attempt_ratio: Ratio of current attempt to max attempts (0.0 to 1.0)
         min_distance_factor: Base minimum distance factor
         placement_radius_scaling: Base placement radius scaling
+        steric_floor: Never relax clash checks below this value (e.g. GA blmin).
 
     Returns:
         Tuple of (effective_scaling, effective_min_distance)
@@ -282,12 +287,17 @@ def _compute_effective_placement_params(
         1.0 - PLACEMENT_RELAXATION_FACTOR * attempt_ratio
     )
 
+    if steric_floor is not None:
+        absolute_floor = steric_floor
+    elif min_distance_factor >= MIN_DISTANCE_THRESHOLD_LOW:
+        absolute_floor = MIN_DISTANCE_THRESHOLD_LOW
+    else:
+        absolute_floor = 0.0
+
     if min_distance_factor >= MIN_DISTANCE_THRESHOLD_HIGH:
         effective_min_distance = min_distance_factor
-    elif min_distance_factor >= MIN_DISTANCE_THRESHOLD_LOW:
-        effective_min_distance = max(MIN_DISTANCE_THRESHOLD_LOW, relaxed_factor)
     else:
-        effective_min_distance = max(0.0, relaxed_factor)
+        effective_min_distance = max(absolute_floor, relaxed_factor)
 
     return effective_scaling, effective_min_distance
 
@@ -332,6 +342,7 @@ def random_spherical(
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     max_connectivity_retries: int = MAX_CONNECTIVITY_RETRIES,
+    blmin_ratio: float | None = BLMIN_RATIO_DEFAULT,
 ) -> Atoms:
     """Place atoms randomly within a compact sphere, ensuring minimum distances.
 
@@ -342,6 +353,12 @@ def random_spherical(
     configuration. A final validation step (when enabled via
     :mod:`initialization_config`) reuses the same logic to guard against
     clashes and disconnected clusters.
+
+    When ``blmin_ratio`` is set (default: ``BLMIN_RATIO_DEFAULT``), placement
+    and final validation enforce the same steric floor used by GA operators
+    (``ratio_of_covalent_radii`` / ``build_blmin``). Progressive placement
+    relaxation never drops below that floor. Pass ``blmin_ratio=None`` to
+    disable the GA floor and rely only on ``min_distance_factor``.
 
     Args:
         composition: List of element symbols for the atoms.
@@ -356,6 +373,8 @@ def random_spherical(
             connectivity threshold.
         max_connectivity_retries: Maximum number of retries if connectivity
             validation fails.
+        blmin_ratio: GA-compatible steric floor (covalent-radius scale). ``None``
+            disables the extra floor beyond ``min_distance_factor``.
         rng: Optional numpy ``Generator`` for reproducible randomness.
 
     Returns:
@@ -388,6 +407,8 @@ def random_spherical(
     if n_atoms == 0:
         return Atoms()
 
+    steric_floor = resolve_steric_floor(min_distance_factor, blmin_ratio)
+
     # Retry logic for connectivity validation
     for retry_attempt in range(max_connectivity_retries):
         new_atoms = Atoms()
@@ -396,10 +417,11 @@ def random_spherical(
         final_atoms = _add_atoms_to_cluster_iteratively(
             base_atoms=new_atoms,
             atoms_to_add=composition,
-            min_distance_factor=min_distance_factor,
+            min_distance_factor=steric_floor,
             placement_radius_scaling=placement_radius_scaling,
             rng=rng,
             connectivity_factor=connectivity_factor,
+            steric_floor=steric_floor,
         )
 
         if final_atoms is None:
@@ -428,7 +450,7 @@ def random_spherical(
         ):
             if retry_attempt == max_connectivity_retries - 1:
                 diagnostics = get_structure_diagnostics(
-                    final_atoms, min_distance_factor, connectivity_factor, use_mic=False
+                    final_atoms, steric_floor, connectivity_factor, use_mic=False
                 )
                 error_msg = format_placement_error_message(
                     context=f"create connected cluster after {max_connectivity_retries} attempts",
@@ -445,15 +467,37 @@ def random_spherical(
 
         final_atoms.center()
 
-        validated_atoms, _, _ = validate_cluster(
+        validated_atoms, is_valid, _ = validate_cluster(
             final_atoms,
             composition=None,
-            min_distance_factor=min_distance_factor,
+            min_distance_factor=steric_floor,
             connectivity_factor=connectivity_factor,
             sort_atoms=False,
-            raise_on_failure=True,
+            raise_on_failure=False,
             source="random_spherical",
         )
+        if not is_valid:
+            if retry_attempt == max_connectivity_retries - 1:
+                validate_cluster(
+                    final_atoms,
+                    composition=None,
+                    min_distance_factor=steric_floor,
+                    connectivity_factor=connectivity_factor,
+                    sort_atoms=False,
+                    raise_on_failure=True,
+                    source="random_spherical",
+                )
+            continue
+
+        if blmin_ratio is not None and not cluster_passes_ga_blmin(
+            validated_atoms, blmin_ratio
+        ):
+            if retry_attempt == max_connectivity_retries - 1:
+                raise ValueError(
+                    f"[random_spherical] Cluster failed GA blmin validation at "
+                    f"ratio={blmin_ratio} after {max_connectivity_retries} attempts."
+                )
+            continue
 
         return validated_atoms
 
@@ -471,6 +515,7 @@ def grow_from_seed(
     rng: np.random.Generator,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
+    blmin_ratio: float | None = BLMIN_RATIO_DEFAULT,
 ) -> Atoms | None:
     """Try to grow a smaller candidate :class:`ase.Atoms` to the target composition.
 
@@ -535,13 +580,16 @@ def grow_from_seed(
         target_composition=target_composition,
     )
 
+    steric_floor = resolve_steric_floor(min_distance_factor, blmin_ratio)
+
     final_atoms = _add_atoms_to_cluster_iteratively(
         base_atoms=base_atoms,
         atoms_to_add=atoms_to_add,
-        min_distance_factor=min_distance_factor,
+        min_distance_factor=steric_floor,
         placement_radius_scaling=placement_radius_scaling,
         rng=rng,
         connectivity_factor=connectivity_factor,
+        steric_floor=steric_floor,
     )
 
     if final_atoms:
@@ -558,15 +606,21 @@ def grow_from_seed(
                 f"got {final_atoms.get_chemical_symbols()} (counts: {actual_counts})"
             )
 
-        validated_atoms, _, _ = validate_cluster(
+        validated_atoms, is_valid, _ = validate_cluster(
             final_atoms,
             composition=None,
-            min_distance_factor=min_distance_factor,
+            min_distance_factor=steric_floor,
             connectivity_factor=connectivity_factor,
             sort_atoms=False,
-            raise_on_failure=True,
+            raise_on_failure=False,
             source="grow_from_seed",
         )
+        if not is_valid:
+            return None
+        if blmin_ratio is not None and not cluster_passes_ga_blmin(
+            validated_atoms, blmin_ratio
+        ):
+            return None
 
         return validated_atoms
 
@@ -581,6 +635,8 @@ def _add_atoms_to_cluster_iteratively(
     placement_radius_scaling: float,
     rng: np.random.Generator,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
+    *,
+    steric_floor: float | None = None,
 ) -> Atoms | None:
     """Iteratively adds atoms to a base Atoms object within a spherical volume.
 
@@ -640,6 +696,7 @@ def _add_atoms_to_cluster_iteratively(
             max_attempts_per_atom,
             logger,
             base_atoms,
+            steric_floor=steric_floor,
         )
 
     # Batch placement mode for clusters with ≥4 atoms
@@ -654,6 +711,7 @@ def _add_atoms_to_cluster_iteratively(
         max_attempts_per_atom,
         logger,
         base_atoms,
+        steric_floor=steric_floor,
     )
 
 
@@ -669,6 +727,8 @@ def _add_atoms_single_mode(
     max_attempts_per_atom: int,
     logger,
     base_atoms: Atoms,
+    *,
+    steric_floor: float | None = None,
 ) -> Atoms | None:
     """Single-atom placement mode for clusters with <4 atoms."""
     for atom_idx, atom_symbol in enumerate(atoms_to_add):
@@ -686,7 +746,10 @@ def _add_atoms_single_mode(
             attempt_ratio = (attempt + 1) / max_attempts_per_atom
             effective_scaling, effective_min_distance = (
                 _compute_effective_placement_params(
-                    attempt_ratio, min_distance_factor, placement_radius_scaling
+                    attempt_ratio,
+                    min_distance_factor,
+                    placement_radius_scaling,
+                    steric_floor=steric_floor,
                 )
             )
             current_positions = new_atoms.get_positions()
@@ -883,6 +946,8 @@ def _add_atoms_batch_mode(
     max_attempts_per_atom: int,
     logger,
     base_atoms: Atoms,
+    *,
+    steric_floor: float | None = None,
 ) -> Atoms | None:
     """Batch placement mode for clusters with ≥4 atoms."""
     total_target = len(base_atoms) + len(atoms_to_add)
@@ -924,7 +989,10 @@ def _add_atoms_batch_mode(
         # Progressive relaxation for batch attempts
         attempt_ratio = batch_attempt / max_batch_attempts
         effective_scaling, effective_min_distance = _compute_effective_placement_params(
-            attempt_ratio, min_distance_factor, placement_radius_scaling
+            attempt_ratio,
+            min_distance_factor,
+            placement_radius_scaling,
+            steric_floor=steric_floor,
         )
 
         current_positions = new_atoms.get_positions()
@@ -972,6 +1040,7 @@ def _add_atoms_batch_mode(
                 max_attempts_per_atom,
                 logger,
                 base_atoms,
+                steric_floor=steric_floor,
             )
 
         # Validate and place candidates

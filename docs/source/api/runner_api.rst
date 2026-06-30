@@ -3,6 +3,20 @@ Runner API
 
 High-level API entry points for global optimization and transition state searches.
 
+GA timing and profiling
+-----------------------
+
+Configure timing in ``params`` / ``go_params`` only (``optimizer_params['ga']`` or
+``bh``):
+
+* ``write_timing_json=True`` — write ``timing.json`` under each trial directory.
+* ``detailed_timing=True`` — add ``per_generation`` rows (requires
+  ``write_timing_json=True``).
+
+For TS, set ``write_timing_json`` in ``ts_params`` when needed.
+
+See :mod:`scgo.utils.timing_report` for the JSON layout.
+
 Workflow functions
 ------------------
 

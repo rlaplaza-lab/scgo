@@ -1,38 +1,12 @@
 """Acceptance tests for GA mutation operators and crossover at production-like sizes.
 
-Uses the same factories as ``ga_go`` / ``ga_go``:
-:class:`~scgo.algorithms.ga_common.create_mutation_operators` and
-:class:`~scgo.algorithms.ga_common.create_ga_pairing`. Geometry acceptance
-mirrors slab-aware mutations and ``CutAndSplicePairing``:
-:class:`~ase_ga.utilities.atoms_too_close` on the adsorbate (or the whole
-cluster in gas phase) and :func:`~ase_ga.utilities.atoms_too_close_two_sets`
-between slab and adsorbate when ``n_slab > 0``.
+Uses ``create_mutation_operators`` and ``create_ga_pairing`` from ga_common.
+Geometry acceptance mirrors production: ``atoms_too_close`` on mobile atoms and
+``atoms_too_close_two_sets`` between slab and adsorbate when ``n_slab > 0``.
 
-**Why two gas-phase 55-atom setups**
-
-- *Icosahedral template* (magic 55): ``create_initial_cluster(..., mode=\"template\")``.
-  Some operators (flattening, mirror) essentially never succeed on this dense
-  geometry within their attempt budgets; we still require **rattle**,
-  **rotational**, and **anisotropic_rattle** to succeed.
-- *Random spherical* (55 Pt): looser cluster shape. All factory operators are
-    exercised, including **flattening**, at the production
-    ``flattening_thickness_factor`` because the bounded flattening construction
-    no longer needs an acceptance-only thickness override.
-
-``create_initial_cluster`` may return an ASE ``Cluster`` subclass whose
-``copy()`` breaks inside crossover; helpers coerce to plain :class:`~ase.Atoms`.
-
-**Permutation:** monometallic Pt has no permutation slot in the factory; a
-bimetallic 55-atom gas case covers **permutation** plus the other operators.
-
-Smaller-cluster tests under ``tests/ase_ga_patches/`` remain for RNG and
-fine-grained behavior (they are not removed here).
-
-**Surface rotational mutation:** skipped in ``test_mutations_surface_pt20_all_factory_operators``
-because :class:`~scgo.ase_ga_patches.standardmutations.RotationalMutation` calls
-``center()`` on the adsorbate, which—combined with in-plane slab periodicity—makes
-``test_dist_to_slab=True`` success too rare for a bounded acceptance loop; gas-phase
-cases still cover this operator.
+Two gas-phase 55-atom setups cover icosahedral template vs random spherical
+geometries. Surface rotational mutation is skipped in the Pt20 slab test because
+``RotationalMutation.center()`` interacts poorly with in-plane slab periodicity.
 """
 
 from __future__ import annotations
@@ -70,6 +44,8 @@ _ACCEPTANCE_ROT_MAX_INNER = 24
 _ACCEPTANCE_MIRROR_TRIES = 12
 _ACCEPTANCE_BREATHING_MAX_INNER = 5
 _ACCEPTANCE_SLIDE_MAX_INNER = 12
+
+_GAS_PT55_RANDOM_SPHERICAL_SEED = 1234
 
 _TEMPLATE_CORE_OPERATOR_NAMES = ("rattle", "rotational", "anisotropic_rattle")
 
@@ -226,7 +202,7 @@ def _mutation_operator_succeeds(
     breathing_scale_min: float = 0.82,
     breathing_scale_max: float = 1.22,
 ) -> bool:
-    adsorbate_use_tags = op_name == "rotational"
+    adsorbate_use_tags = op_name == "rotational" and n_slab > 0
     for attempt in range(MAX_MUTATION_ATTEMPTS):
         op_rng = np.random.default_rng(50_000 + attempt * 97 + name_map[op_name] * 13)
         ops, nm = create_mutation_operators(
@@ -293,8 +269,13 @@ def test_mutations_gas_pt55_icosahedral_template_core_operators() -> None:
 
 @pytest.mark.slow
 def test_mutations_gas_pt55_random_spherical_all_factory_operators() -> None:
-    parent0, composition, blmin = _gas_pt55_random_spherical_parent(1234)
+    parent0, composition, blmin = _gas_pt55_random_spherical_parent(
+        _GAS_PT55_RANDOM_SPHERICAL_SEED
+    )
     parent = _prepare_ga_parent(parent0, confid=1)
+    assert not atoms_too_close(parent, blmin, use_tags=False), (
+        "random_spherical parent must satisfy GA blmin for rigid rotational mutation"
+    )
 
     _, name_map = create_mutation_operators(
         composition,

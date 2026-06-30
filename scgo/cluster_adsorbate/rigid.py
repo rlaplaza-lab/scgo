@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
@@ -11,9 +10,12 @@ from ase import Atoms
 from scgo.cluster_adsorbate.constraints import (
     attach_adsorbate_internal_geometry_constraints,
 )
-
-if TYPE_CHECKING:
-    from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
+from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
+from scgo.system_types import (
+    AdsorbateDefinition,
+    AdsorbateFragmentInput,
+    resolve_adsorbate_fragments,
+)
 
 
 def _kabsch_place_template(template: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -50,10 +52,9 @@ def restore_rigid_adsorbate_fragments(
     core_symbols = adsorbate_definition.get("core_symbols", [])
     if not isinstance(core_symbols, list):
         return
-    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths", [])
-    if not isinstance(raw_lengths, list):
-        return
-    lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    lengths = parse_positive_fragment_lengths(
+        adsorbate_definition.get("adsorbate_fragment_lengths", [])
+    )
     if len(lengths) != len(fragment_templates):
         return
 
@@ -61,8 +62,6 @@ def restore_rigid_adsorbate_fragments(
     ads_start = int(n_slab) + len(core_symbols)
     offset = 0
     for frag_len, template in zip(lengths, fragment_templates, strict=True):
-        if frag_len <= 0:
-            continue
         start = ads_start + offset
         end = start + frag_len
         template_pos = np.asarray(template.get_positions(), dtype=float)
@@ -83,7 +82,6 @@ def enforce_frozen_adsorbate_geometry(
     """Snap adsorbate fragments back to templates and optionally reattach constraints."""
     if adsorbate_definition is None or fragment_templates is None:
         return
-    from scgo.system_types import resolve_adsorbate_fragments
 
     fragments = resolve_adsorbate_fragments(
         fragment_templates,

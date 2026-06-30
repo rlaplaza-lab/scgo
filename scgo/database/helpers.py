@@ -688,11 +688,6 @@ def load_reference_structures(
     return reference_atoms
 
 
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-
 def _filter_minima_by_composition(
     minima: list[tuple[float, Atoms]],
     composition: list[str] | None = None,
@@ -717,11 +712,6 @@ def _filter_minima_by_composition(
             filtered.append((energy, atoms))
 
     return filtered
-
-
-# ============================================================================
-# Parallel Database Loading (P3.3)
-# ============================================================================
 
 
 def _load_single_database_worker(

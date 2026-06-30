@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import numpy as np
 from ase import Atoms
 
-from scgo.cluster_adsorbate.placement import _compute_surface_site_candidates
+from scgo.cluster_adsorbate.sites import compute_surface_site_candidates
 from scgo.initialization.atomic_radii import get_covalent_radius, get_vdw_radius
 
 
@@ -15,7 +15,7 @@ def count_adsorption_site_candidates(atoms: Atoms) -> int:
     """Return a conservative count of distinct adsorption sites on a 3D structure."""
     if len(atoms) == 0:
         return 0
-    sites = _compute_surface_site_candidates(atoms)
+    sites = compute_surface_site_candidates(atoms)
     return sum(len(entries) for entries in sites.values())
 
 
@@ -27,14 +27,14 @@ def estimate_fragment_footprint_radius(fragment: Atoms) -> float:
     anchor = pos[0]
     max_extent = float(np.max(np.linalg.norm(pos - anchor, axis=1)))
     symbols = fragment.get_chemical_symbols()
-    vdw_pad = max(get_vdw_radius(str(s)) for s in symbols)
+    vdw_pad = max(get_vdw_radius(s) for s in symbols)
     return max_extent + vdw_pad
 
 
 def _estimate_symbol_sphere_radius(symbols: Sequence[str]) -> float:
     if not symbols:
         return 0.0
-    return max(get_covalent_radius(str(s)) for s in symbols)
+    return max(get_covalent_radius(s) for s in symbols)
 
 
 def validate_adsorbate_placement_feasibility(
@@ -50,7 +50,7 @@ def validate_adsorbate_placement_feasibility(
     It does not replace runtime placement validation.
     """
     prefix = f"{context}: " if context else ""
-    lengths = [int(x) for x in adsorbate_fragment_lengths if int(x) > 0]
+    lengths = [n for n in (int(x) for x in adsorbate_fragment_lengths) if n > 0]
     n_frags = len(lengths)
     if n_frags == 0:
         return

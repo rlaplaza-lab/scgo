@@ -8,6 +8,10 @@ from typing import Literal, NotRequired, TypedDict
 from ase import Atoms
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.helpers import (
+    parse_positive_fragment_lengths,
+    resolve_fragment_anchor_and_bond_axis,  # noqa: F401
+)
 from scgo.cluster_adsorbate.validation import (
     validate_adsorbate_fragment_integrity,
     validate_combined_cluster_structure,
@@ -286,6 +290,7 @@ def validate_structure_for_system_type(
             fragment to remain internally connected.
     """
     policy = get_system_policy(system_type)
+    cf = connectivity_factor if connectivity_factor is not None else CONNECTIVITY_FACTOR
     if policy.uses_surface:
         if surface_config is None:
             raise ValueError(
@@ -295,11 +300,6 @@ def validate_structure_for_system_type(
             validate_surface_config_slab_prefix(atoms, surface_config)
         if policy.needs_supported_deposit_validation:
             n_slab_eff = int(n_slab if n_slab is not None else len(surface_config.slab))
-            cf = (
-                connectivity_factor
-                if connectivity_factor is not None
-                else CONNECTIVITY_FACTOR
-            )
             ok, msg = validate_supported_cluster_deposit(
                 atoms,
                 n_slab_eff,
@@ -319,12 +319,6 @@ def validate_structure_for_system_type(
             if not ok:
                 raise ValueError(msg)
     elif policy.has_adsorbate:
-        # Use the provided connectivity_factor, or default to CONNECTIVITY_FACTOR
-        cf = (
-            connectivity_factor
-            if connectivity_factor is not None
-            else CONNECTIVITY_FACTOR
-        )
         ok, msg = validate_combined_cluster_structure(atoms, connectivity_factor=cf)
         if not ok:
             raise ValueError(msg)
@@ -344,11 +338,6 @@ def validate_structure_for_system_type(
             atoms, n_mobile_slab, adsorbate_definition
         )
         if enforce_adsorbate_subgraph_integrity:
-            cf = (
-                connectivity_factor
-                if connectivity_factor is not None
-                else CONNECTIVITY_FACTOR
-            )
             core_len = _n_core_mobile_from_adsorbate_definition(adsorbate_definition)
             if core_len is None:
                 core_len = 0
@@ -511,10 +500,9 @@ def resolve_adsorbate_fragments(
     if not fragments:
         raise ValueError(f"{prefix}adsorbate fragment template(s) must not be empty.")
 
-    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths")
-    lengths: list[int] = []
-    if isinstance(raw_lengths, list) and all(isinstance(x, int) for x in raw_lengths):
-        lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    lengths = parse_positive_fragment_lengths(
+        adsorbate_definition.get("adsorbate_fragment_lengths")
+    )
     raw_ads = adsorbate_definition.get("adsorbate_symbols", [])
     ads_symbols = [str(s) for s in raw_ads] if isinstance(raw_ads, list) else []
     if not lengths and ads_symbols:

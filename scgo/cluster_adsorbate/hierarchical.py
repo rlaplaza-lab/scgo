@@ -7,12 +7,22 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from ase import Atoms
+from numpy.random import Generator
+
+from scgo.cluster_adsorbate.combine import combine_core_adsorbate
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
+from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.initialization import create_initial_cluster
 
 if TYPE_CHECKING:
-    from numpy.random import Generator
-
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
     from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
+
+
+def _stamp_site_metadata(combined: Atoms, site_types: list[str]) -> None:
+    if site_types:
+        combined.info["adsorbate_site_types_json"] = json.dumps(site_types)
+        combined.info["adsorbate_site_type"] = site_types[-1]
 
 
 def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -> Atoms:
@@ -37,17 +47,6 @@ def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -
     return cluster[selection].copy()
 
 
-def _fragment_anchor_and_bond_axis(
-    adsorbate_definition: AdsorbateDefinition,
-) -> tuple[int, tuple[int, int] | None]:
-    anchor = int(adsorbate_definition.get("fragment_anchor_index", 0))
-    fba = adsorbate_definition.get("fragment_bond_axis")
-    bond_axis: tuple[int, int] | None = None
-    if fba is not None:
-        bond_axis = (int(fba[0]), int(fba[1]))
-    return anchor, bond_axis
-
-
 def build_adsorbate_only_cluster(
     fragment_templates: Sequence[Atoms],
     rng: Generator,
@@ -58,16 +57,12 @@ def build_adsorbate_only_cluster(
     batch_site_counts: dict[str, int] | None = None,
 ) -> Atoms | None:
     """Place one or more molecular fragments without a metal core."""
-    from scgo.cluster_adsorbate.combine import combine_core_adsorbate
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-    from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
-
     if not fragment_templates:
         raise ValueError("fragment_templates must contain at least one fragment")
 
     ca = cluster_adsorbate_config or ClusterAdsorbateConfig()
     anchor, bond_axis = (
-        _fragment_anchor_and_bond_axis(adsorbate_definition)
+        resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
         if adsorbate_definition is not None
         else (0, None)
     )
@@ -105,9 +100,7 @@ def build_adsorbate_only_cluster(
             combined = combine_core_adsorbate(combined, placed)
             site_core = combined
         if all_ok:
-            if site_types:
-                combined.info["adsorbate_site_types_json"] = json.dumps(site_types)
-                combined.info["adsorbate_site_type"] = site_types[-1]
+            _stamp_site_metadata(combined, site_types)
             return combined
     return None
 
@@ -131,10 +124,6 @@ def build_hierarchical_core_fragment_cluster(
     Each entry in ``fragment_templates`` is placed sequentially on distinct
     adsorption sites while preserving previously placed fragments.
     """
-    from scgo.cluster_adsorbate.combine import combine_core_adsorbate
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-    from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
-    from scgo.initialization import create_initial_cluster
     from scgo.system_types import resolve_adsorbate_fragments
 
     core_list = [str(s) for s in adsorbate_definition["core_symbols"]]
@@ -163,7 +152,7 @@ def build_hierarchical_core_fragment_cluster(
             f"Got {list(full_composition)!r}, expected {expected_mobile!r}."
         )
 
-    anchor, bond_axis = _fragment_anchor_and_bond_axis(adsorbate_definition)
+    anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
     for _ in range(max_placement_attempts):
         core = create_initial_cluster(
@@ -176,7 +165,6 @@ def build_hierarchical_core_fragment_cluster(
         core = reorder_cluster_to_composition(core, core_list)
         combined = core
         metal_core = core
-        trial_metadata: dict[str, str] = {}
         site_types: list[str] = []
         all_placed = True
         for frag_tmpl in fragments:
@@ -203,11 +191,7 @@ def build_hierarchical_core_fragment_cluster(
         if not all_placed:
             continue
 
-        if site_types:
-            combined.info["adsorbate_site_types_json"] = json.dumps(site_types)
-            combined.info["adsorbate_site_type"] = site_types[-1]
-        elif trial_metadata.get("site_type") is not None:
-            combined.info["adsorbate_site_type"] = trial_metadata["site_type"]
+        _stamp_site_metadata(combined, site_types)
         if placement_metadata is not None and site_types:
             placement_metadata["site_types"] = ",".join(site_types)
             placement_metadata["site_type"] = site_types[-1]

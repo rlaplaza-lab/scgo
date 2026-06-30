@@ -40,11 +40,12 @@ ADSORBATES = Atoms(
 
 def _build_go_params() -> dict:
     go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
-    go_params["calculator"] = "MACE"
     go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
         niter=NITER,
         population_size=POPULATION_SIZE,
+        write_timing_json=True,
+        detailed_timing=True,
     )
     # Optional: strict template restore after mutations (default False uses tag-rigid GA)
     go_params["freeze_adsorbate_internal_geometry"] = True

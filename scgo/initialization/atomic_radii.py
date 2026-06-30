@@ -11,9 +11,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ase.data import atomic_numbers, chemical_symbols, covalent_radii, vdw_radii
+
+if TYPE_CHECKING:
+    from ase import Atoms
 
 # NOTE: Keep stdlib logging here to avoid early package-import cycles during
 # scgo bootstrap (initialization imports can execute before scgo.utils is ready).
@@ -191,3 +195,24 @@ def build_blmin(
     """Build an ASE-compatible blmin table for the given element symbols."""
     zs = [atomic_numbers[str(s)] for s in symbols]
     return build_blmin_from_zs(zs, ratio)
+
+
+def cluster_passes_ga_blmin(
+    atoms: Atoms,
+    blmin_ratio: float,
+) -> bool:
+    """Return True if ``atoms`` satisfies ASE GA steric checks at ``blmin_ratio``."""
+    from ase_ga.utilities import atoms_too_close
+
+    blmin = build_blmin_from_zs(atoms.get_atomic_numbers(), ratio=blmin_ratio)
+    return not atoms_too_close(atoms, blmin, use_tags=False)
+
+
+def resolve_steric_floor(
+    min_distance_factor: float,
+    blmin_ratio: float | None,
+) -> float:
+    """Minimum clash factor for placement: at least ``blmin_ratio`` when set."""
+    if blmin_ratio is None:
+        return min_distance_factor
+    return max(min_distance_factor, blmin_ratio)

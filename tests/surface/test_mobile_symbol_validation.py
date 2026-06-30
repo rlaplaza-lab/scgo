@@ -22,7 +22,9 @@ def _def_pt5_oh() -> dict:
 
 
 def _well_spaced_pt5_oh_positions() -> np.ndarray:
-    # Avoid clashes for validate_combined_cluster_structure
+    # Avoid clashes for validate_combined_cluster_structure; O-H must stay bonded.
+    o_pos = np.array([1.0, 0.5, 3.2])
+    h_pos = o_pos + np.array([0.0, 0.0, 0.95])  # ~0.95 Å O-H bond
     return np.array(
         [
             [0.0, 0.0, 0.0],
@@ -30,8 +32,8 @@ def _well_spaced_pt5_oh_positions() -> np.ndarray:
             [0.0, 2.8, 0.0],
             [2.6, 2.8, 0.0],
             [1.3, 1.4, 2.0],
-            [1.0, 0.5, 3.2],
-            [1.5, 2.0, 3.0],
+            o_pos,
+            h_pos,
         ],
         dtype=float,
     )
@@ -59,9 +61,12 @@ def test_validate_mobile_symbols_gas_reject_wrong_order() -> None:
 
 
 def test_validate_structure_gas_adsorbate_accepts() -> None:
+    positions = _well_spaced_pt5_oh_positions()
+    oh_bond = float(np.linalg.norm(positions[6] - positions[5]))
+    assert 0.9 <= oh_bond <= 1.2
     atoms = Atoms(
         "Pt5OH",
-        positions=_well_spaced_pt5_oh_positions(),
+        positions=positions,
         cell=[24, 24, 24],
         pbc=False,
     )

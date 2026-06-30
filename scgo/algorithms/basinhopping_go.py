@@ -224,7 +224,9 @@ def bh_go(
         temperature: Temperature for Metropolis criterion (eV), governing acceptance
             of structures based on fitness differences.
         write_timing_json: Optional ``timing.json`` under ``output_dir``.
-        detailed_timing: Per-iteration split rows in JSON when ``write_timing_json`` is set.
+            Set in ``optimizer_params['bh']`` inside ``params``/``go_params``.
+        detailed_timing: Per-iteration split rows in JSON when ``write_timing_json``
+            is set.
         deduplicate: If True (default), filter to structurally unique minima.
         energy_tolerance: Energy difference (eV) below which structures are considered duplicates.
         comparator_tol: Tolerance for interatomic distance comparator.

@@ -9,15 +9,22 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
+from ase.data import atomic_numbers as ase_atomic_numbers
 from ase.spacegroup import Spacegroup
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
-from scgo.initialization.geometry_helpers import _generate_rotation_matrix
+from scgo.initialization import create_initial_cluster
+from scgo.initialization.geometry_helpers import (
+    _generate_rotation_matrix,
+    get_covalent_radius,
+)
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
@@ -25,7 +32,6 @@ from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 if TYPE_CHECKING:
     from numpy.random import Generator
 
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
     from scgo.surface.config import SurfaceSystemConfig
     from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
 
@@ -65,17 +71,6 @@ def _slab_surface_layer(slab: Atoms, axis: int, thickness: float = 2.5) -> Atoms
     return layer.copy()
 
 
-def _fragment_anchor_and_bond_axis(
-    adsorbate_definition: AdsorbateDefinition,
-) -> tuple[int, tuple[int, int] | None]:
-    anchor = int(adsorbate_definition.get("fragment_anchor_index", 0))
-    fba = adsorbate_definition.get("fragment_bond_axis")
-    bond_axis: tuple[int, int] | None = None
-    if fba is not None:
-        bond_axis = (int(fba[0]), int(fba[1]))
-    return anchor, bond_axis
-
-
 def _build_adsorbate_fragments_on_slab(
     slab: Atoms,
     fragments: list[Atoms],
@@ -87,14 +82,12 @@ def _build_adsorbate_fragments_on_slab(
     max_placement_attempts: int,
 ) -> Atoms | None:
     """Place molecular fragments on slab top-layer hull sites (no metal core)."""
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-
     if not fragments:
         return None
 
     ca = cluster_adsorbate_config or ClusterAdsorbateConfig()
     site_core = _slab_surface_layer(slab, axis)
-    anchor, bond_axis = _fragment_anchor_and_bond_axis(adsorbate_definition)
+    anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
 
     for _ in range(max_placement_attempts):
@@ -154,29 +147,12 @@ def slab_surface_extreme(slab: Atoms, axis: int, *, upper: bool = True) -> float
 def _in_plane_translation_near_slab_atom(
     slab: Atoms, axis: int, rng: Generator, cluster_radius: float
 ) -> np.ndarray:
-    """Random fractional shift biased towards slab atoms.
-
-    Chooses a random slab atom and places the cluster near it, with some randomness.
-    The cluster is placed within a distance that ensures connectivity.
-
-    Args:
-        slab: The slab atoms
-        axis: Surface normal axis
-        rng: Random number generator
-        cluster_radius: Approximate radius of the cluster
-
-    Returns:
-        Shift vector in the plane
-    """
+    """Random in-plane shift biased towards a random slab atom."""
     cell = slab.get_cell()
-
-    # Get slab atom positions in the plane (excluding the surface normal axis)
     slab_positions = slab.get_positions()
 
-    # Choose a random slab atom
     n_slab = len(slab)
     if n_slab == 0:
-        # Fallback to random placement
         u, v = rng.random(), rng.random()
         if axis == 0:
             return np.asarray(u * cell[1] + v * cell[2], dtype=float)
@@ -185,31 +161,22 @@ def _in_plane_translation_near_slab_atom(
         else:
             return np.asarray(u * cell[0] + v * cell[1], dtype=float)
 
-    # Choose a random slab atom
     atom_idx = rng.integers(0, n_slab)
     atom_pos = slab_positions[atom_idx]
 
-    # Create shift in the plane, biased towards this atom
-    # Add some randomness to avoid exact overlap, but keep it small to ensure connectivity
-    offset_scale = (
-        cluster_radius * 0.1
-    )  # Place very near the atom (reduced from 0.3 to 0.1 to improve connectivity)
+    offset_scale = cluster_radius * 0.1
 
-    # Random direction in the plane
     if axis == 0:
-        # Plane is yz
         angle = rng.uniform(0, 2 * np.pi)
         dy = offset_scale * np.cos(angle)
         dz = offset_scale * np.sin(angle)
         return np.asarray([0, atom_pos[1] + dy, atom_pos[2] + dz], dtype=float)
     elif axis == 1:
-        # Plane is xz
         angle = rng.uniform(0, 2 * np.pi)
         dx = offset_scale * np.cos(angle)
         dz = offset_scale * np.sin(angle)
         return np.asarray([atom_pos[0] + dx, 0, atom_pos[2] + dz], dtype=float)
     else:
-        # Plane is xy (axis == 2)
         angle = rng.uniform(0, 2 * np.pi)
         dx = offset_scale * np.cos(angle)
         dy = offset_scale * np.sin(angle)
@@ -298,34 +265,13 @@ def _place_cluster_above_slab(
         slab, axis, rng, cluster_radius
     )
 
-    # Calculate minimum height needed for connectivity.
-    # The cluster extends from cluster_min to cluster_max along the axis.
-    # To ensure connectivity, we need at least one cluster atom to be within
-    # the connectivity threshold of a slab atom. The slab top is at slab_top,
-    # and slab atoms can be slightly below this (e.g., in lower layers).
-    # We use a conservative estimate: place the cluster so that its bottom
-    # is at most (connectivity_threshold - cluster_extent) above the slab top,
-    # where cluster_extent is the distance from the cluster center to its bottom.
-    # This ensures that even with some randomness in placement, connectivity is likely.
-    from scgo.initialization.geometry_helpers import get_covalent_radius
-
-    # Use connectivity factor from config, falling back to default
+    # Cap sampled height so the cluster bottom stays within bonding distance of the slab top.
     cf = config.structure_connectivity_factor
 
-    # Get representative covalent radius for connectivity calculation
-    # For the slab, use the first atom's radius (typically all same element)
     slab_symbols = slab.get_chemical_symbols()
-    slab_radius = (
-        get_covalent_radius(slab_symbols[0]) if slab_symbols else 1.36
-    )  # fallback for Pt
+    slab_radius = get_covalent_radius(slab_symbols[0]) if slab_symbols else 1.36
 
-    # For the cluster, use actual atomic numbers if provided, otherwise estimate
     if cluster_atomic_numbers is not None and len(cluster_atomic_numbers) > 0:
-        # Use the maximum covalent radius in the cluster to ensure connectivity
-        # for the largest atoms (which are most likely to be farthest from slab)
-        from ase.data import atomic_numbers as ase_atomic_numbers
-
-        # Build reverse mapping from atomic number to symbol
         number_to_symbol = {v: k for k, v in ase_atomic_numbers.items()}
 
         unique_atomic_numbers = set(cluster_atomic_numbers)
@@ -335,26 +281,12 @@ def _place_cluster_above_slab(
         ]
         cluster_radius_est = max(cluster_radii) if cluster_radii else 1.36
     else:
-        # Fallback to conservative estimate
-        cluster_radius_est = 1.36  # Use Pt radius as default (more realistic than 1.0)
+        cluster_radius_est = 1.36
 
-    # Use the sum of radii (not min) for the connectivity threshold
-    # This ensures we're using the actual bond distance for the pair
     connectivity_threshold = cf * (slab_radius + cluster_radius_est)
 
-    # Cluster extent below its center (cluster is centered at 0)
     cluster_min = float(np.min(rotated_positions[:, axis]))
 
-    # To ensure connectivity, we want the closest approach between any cluster atom
-    # and any slab atom to be within the connectivity threshold.
-    # The slab top is at slab_top, and slab atoms can be up to ~2 Å below this.
-    # A conservative approach: place the cluster so that its bottom is within
-    # (connectivity_threshold - 2.0) of the slab top, ensuring overlap with slab atom positions.
-    # But we also need to respect the user-specified height range.
-
-    # Use a height that ensures connectivity while respecting the config range
-    # Place the cluster bottom at a fraction of the connectivity threshold above slab top
-    # This ensures atoms are close enough for bonding
     target_height_above_slab = min(
         config.adsorption_height_max,
         max(config.adsorption_height_min, connectivity_threshold * 0.4),
@@ -364,8 +296,6 @@ def _place_cluster_above_slab(
         rng.uniform(config.adsorption_height_min, config.adsorption_height_max)
     )
 
-    # Use the minimum of sampled height and target height to ensure connectivity
-    # But don't go below the minimum
     effective_height = max(
         config.adsorption_height_min, min(sampled_height, target_height_above_slab)
     )
@@ -393,7 +323,6 @@ def create_deposited_cluster(
     """
     axis = config.surface_normal_axis
     slab_top = slab_surface_extreme(slab, axis, upper=True)
-    from scgo.initialization import create_initial_cluster
 
     for _ in range(config.max_placement_attempts):
         if adsorbate_definition is None:

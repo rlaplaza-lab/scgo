@@ -79,20 +79,12 @@ from .random_spherical import grow_from_seed
 
 logger: Logger = get_logger(__name__)
 
-# =============================================================================
-# CONSTANTS & REGISTRY
-# =============================================================================
-
 ICOSAHEDRON_SHELL_TO_ATOMS: dict[int, int] = {1: 1, 2: 13, 3: 55, 4: 147, 5: 309}
 
 _TEMPLATE_REGISTRY = {}
 _VALID_TEMPLATE_TYPES_CACHE: dict[int, tuple[str, ...]] = {}
 _VALID_TEMPLATE_TYPES_INFLIGHT: dict[int, Event] = {}
 _VALID_TEMPLATE_TYPES_LOCK = Lock()
-
-# =============================================================================
-# CORE HELPERS
-# =============================================================================
 
 
 def _get_base_element(composition: list[str]) -> str:

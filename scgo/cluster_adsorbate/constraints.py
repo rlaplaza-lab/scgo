@@ -7,20 +7,14 @@ from collections.abc import Sequence
 from ase import Atoms
 from ase.constraints import FixBondLength
 
+from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
+
 
 def attach_fix_bond_lengths(
     atoms: Atoms,
     bond_pairs: Sequence[tuple[int, int]],
 ) -> None:
-    """Append one :class:`~ase.constraints.FixBondLength` per pair (global indices).
-
-    Args:
-        atoms: Full system (core + adsorbate).
-        bond_pairs: Pairs of atom indices in ``atoms`` whose distances to hold fixed.
-
-    Raises:
-        ValueError: Invalid indices or duplicate pair.
-    """
+    """Append one :class:`~ase.constraints.FixBondLength` per pair (global indices)."""
     n = len(atoms)
     seen: set[tuple[int, int]] = set()
     new_constraints: list = list(atoms.constraints) if atoms.constraints else []
@@ -56,12 +50,9 @@ def attach_adsorbate_internal_geometry_constraints(
     core_symbols = adsorbate_definition.get("core_symbols", [])
     if not isinstance(core_symbols, list):
         return
-    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths", [])
-    if not isinstance(raw_lengths, list) or not all(
-        isinstance(x, int) for x in raw_lengths
-    ):
-        return
-    fragment_lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    fragment_lengths = parse_positive_fragment_lengths(
+        adsorbate_definition.get("adsorbate_fragment_lengths", [])
+    )
     if not fragment_lengths:
         return
 

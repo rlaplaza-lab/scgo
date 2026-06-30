@@ -10,6 +10,18 @@ Configuration
    :members:
    :show-inheritance:
 
+Surface site discovery
+----------------------
+
+Convex-hull vertex, edge, and facet candidates for adsorbate placement on
+clusters and slabs.
+
+.. autoclass:: scgo.cluster_adsorbate.sites.SurfaceSiteCandidate
+   :members:
+   :show-inheritance:
+
+.. autofunction:: scgo.cluster_adsorbate.sites.compute_surface_site_candidates
+
 Placement and hierarchical builds
 ---------------------------------
 

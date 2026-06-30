@@ -1,4 +1,4 @@
-"""Combine a metal core with an OH fragment."""
+"""Concatenate core and adsorbate fragment atoms."""
 
 from __future__ import annotations
 
@@ -7,15 +7,7 @@ from ase import Atoms
 
 
 def combine_core_adsorbate(core: Atoms, adsorbate: Atoms) -> Atoms:
-    """Concatenate ``core`` then ``adsorbate``; inherit cell and PBC from ``core``.
-
-    Args:
-        core: Bare cluster (metal only).
-        adsorbate: Fragment atoms in world coordinates (e.g. ``OH``, ``O``, ``H2O``).
-
-    Returns:
-        New ``Atoms`` with ``len(core) + len(adsorbate)`` atoms.
-    """
+    """Concatenate core then adsorbate; inherit cell and PBC from core."""
     if len(adsorbate) == 0:
         return core.copy()
     out = core.copy() + adsorbate.copy()

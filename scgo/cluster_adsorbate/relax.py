@@ -28,6 +28,18 @@ from scgo.utils.ts_provenance import (
 )
 
 
+def _validate_combined(
+    combined: Atoms, config: ClusterAdsorbateConfig
+) -> tuple[bool, str]:
+    return validate_combined_cluster_structure(
+        combined,
+        min_distance_factor=config.structure_min_distance_factor,
+        connectivity_factor=config.structure_connectivity_factor,
+        check_clashes=config.structure_check_clashes,
+        check_connectivity=config.structure_check_connectivity,
+    )
+
+
 def relax_metal_cluster_with_adsorbate(
     core: Atoms,
     calculator: Calculator,
@@ -46,35 +58,8 @@ def relax_metal_cluster_with_adsorbate(
 ) -> tuple[Atoms, dict[str, Any]]:
     """Place a rigid fragment (unless ``preplaced``), optionally relax with constraints.
 
-    By default no internal bond lengths are constrained; the combined system is
-    validated for connectivity (and optionally clashes) before and after
-    relaxation, using the same criteria as cluster initialization.
-
-    ``bond_pairs`` uses **fragment-local** indices; when non-empty, ASE
-    :class:`~ase.constraints.FixBondLength` is applied for each pair (optional).
-
-    Args:
-        core: Bare metal cluster (copied internally).
-        calculator: ASE calculator.
-        rng: RNG for placement; required if ``preplaced`` is None.
-        config: Placement / validation / cell settings.
-        fragment_template: Reference geometry and element ordering.
-        anchor_index: Passed to :func:`~scgo.cluster_adsorbate.placement.place_fragment_on_cluster`.
-        bond_axis: Same; use ``(0, 1)`` for diatomics aligned with the normal.
-        bond_pairs: Optional internal bonds to fix during relaxation.
-        fix_core: If True, freeze all core atoms during relaxation.
-        optimizer: ASE optimizer class.
-        fmax: Force convergence criterion (eV/Å).
-        steps: Max optimizer steps.
-        preplaced: Fragment with same symbols/order as ``fragment_template``.
-
-    Returns:
-        ``(relaxed_atoms, info)`` with energies, validation flags, and optional
-        bond length diagnostics for constrained pairs.
-
-    Raises:
-        RuntimeError: Placement failed, or structure invalid after relaxation.
-        ValueError: ``preplaced`` invalid or combined structure invalid before relax.
+    ``bond_pairs`` uses fragment-local indices. Validates connectivity before and
+    after relaxation when ``config.validate_combined_structure`` is True.
     """
     if config is None:
         config = ClusterAdsorbateConfig()
@@ -120,13 +105,7 @@ def relax_metal_cluster_with_adsorbate(
 
     ok0, err0 = True, ""
     if config.validate_combined_structure:
-        ok0, err0 = validate_combined_cluster_structure(
-            combined,
-            min_distance_factor=config.structure_min_distance_factor,
-            connectivity_factor=config.structure_connectivity_factor,
-            check_clashes=config.structure_check_clashes,
-            check_connectivity=config.structure_check_connectivity,
-        )
+        ok0, err0 = _validate_combined(combined, config)
         if not ok0:
             raise ValueError(
                 "Combined core+adsorbate failed structure validation before relax: "
@@ -154,13 +133,7 @@ def relax_metal_cluster_with_adsorbate(
 
     ok1, err1 = True, ""
     if config.validate_combined_structure:
-        ok1, err1 = validate_combined_cluster_structure(
-            combined,
-            min_distance_factor=config.structure_min_distance_factor,
-            connectivity_factor=config.structure_connectivity_factor,
-            check_clashes=config.structure_check_clashes,
-            check_connectivity=config.structure_check_connectivity,
-        )
+        ok1, err1 = _validate_combined(combined, config)
         if not ok1:
             raise RuntimeError(
                 "Combined structure failed validation after relax: " + err1

@@ -10,7 +10,7 @@ import hashlib
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import (  # Changed from ase.geometry.analysis
+from scipy.spatial import (
     ConvexHull,
     KDTree,
     QhullError,
@@ -28,13 +28,12 @@ from .initialization_config import (
     CONVEX_HULL_PERTURBATION_SCALE,
     CONVEX_HULL_VOLUME_TOLERANCE,
     LINEAR_GEOMETRY_TOLERANCE,
+    MIN_DISTANCE_FACTOR_DEFAULT,
     ROTATION_AXIS_TOLERANCE,
     SMART_FILTERING_PERTURBATION_SCALE,
 )
 
-# =============================================================================
-# CORE UTILITIES
-# =============================================================================
+# Core utilities
 
 template_debug_logger = get_logger("scgo.initialization.templates")
 
@@ -112,9 +111,7 @@ def format_placement_error_message(
     return "\n".join(parts)
 
 
-# =============================================================================
-# CONVEX HULL & CACHING
-# =============================================================================
+# Convex hull and caching
 
 # Cache namespace for convex hull computations
 _CONVEX_HULL_CACHE_NS = "convex_hull"
@@ -1442,9 +1439,6 @@ def validate_cluster(
         ValueError: If raise_on_failure=True and validation fails
 
     """
-    from scgo.initialization.initialization_config import MIN_DISTANCE_FACTOR_DEFAULT
-    from scgo.utils.helpers import get_composition_counts
-
     # Auto-detect if we should check connectivity
     if check_connectivity is None:
         check_connectivity = _should_check_connectivity(atoms)

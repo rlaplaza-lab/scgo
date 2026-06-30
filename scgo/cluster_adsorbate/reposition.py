@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close_two_sets
+from numpy.random import Generator
 
 from scgo.ase_ga_patches.standardmutations import _ensure_rng
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.helpers import (
+    parse_positive_fragment_lengths,
+    resolve_fragment_anchor_and_bond_axis,
+)
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
-from scgo.system_types import SystemType, get_system_policy
-
-if TYPE_CHECKING:
-    from numpy.random import Generator
-
-    from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
+from scgo.system_types import (
+    AdsorbateDefinition,
+    AdsorbateFragmentInput,
+    SystemType,
+    get_system_policy,
+    resolve_adsorbate_fragments,
+)
 
 
 class FragmentRepositionMutation(OffspringCreator):
@@ -65,8 +69,6 @@ class FragmentRepositionMutation(OffspringCreator):
     def _fragment_template_for_tag(
         self, mobile: Atoms, tag: int, frag_index: int
     ) -> Atoms:
-        from scgo.system_types import resolve_adsorbate_fragments
-
         if self.fragment_templates is not None:
             fragments = resolve_adsorbate_fragments(
                 self.fragment_templates,
@@ -87,11 +89,8 @@ class FragmentRepositionMutation(OffspringCreator):
         if not ads_tags:
             return None
 
-        raw_lengths = self.adsorbate_definition.get("adsorbate_fragment_lengths", [])
-        lengths = (
-            [int(x) for x in raw_lengths if int(x) > 0]
-            if isinstance(raw_lengths, list)
-            else []
+        lengths = parse_positive_fragment_lengths(
+            self.adsorbate_definition.get("adsorbate_fragment_lengths", [])
         )
         target_tag = int(self.rng.choice(ads_tags))
         frag_index = target_tag - 1
@@ -105,15 +104,11 @@ class FragmentRepositionMutation(OffspringCreator):
 
         metal_core = mobile[core_mask]
         clash_mobile = mobile[~ads_mask]
-        if len(clash_mobile) == 0:
-            return None
 
         ca = self.cluster_adsorbate_config or ClusterAdsorbateConfig()
-        anchor = int(self.adsorbate_definition.get("fragment_anchor_index", 0))
-        fba = self.adsorbate_definition.get("fragment_bond_axis")
-        bond_axis: tuple[int, int] | None = None
-        if fba is not None:
-            bond_axis = (int(fba[0]), int(fba[1]))
+        anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(
+            self.adsorbate_definition
+        )
 
         fragment_tmpl = self._fragment_template_for_tag(mobile, target_tag, frag_index)
         placed = place_fragment_on_cluster(
@@ -131,9 +126,8 @@ class FragmentRepositionMutation(OffspringCreator):
 
         new_mobile = mobile.copy()
         new_mobile.positions[ads_mask] = placed.get_positions()
-        mutant_mobile = new_mobile
-        if len(slab) > 0 and atoms_too_close_two_sets(mutant_mobile, slab, self.blmin):
+        if len(slab) > 0 and atoms_too_close_two_sets(new_mobile, slab, self.blmin):
             return None
         if not self._policy.uses_surface:
-            mutant_mobile.center()
-        return slab + mutant_mobile
+            new_mobile.center()
+        return slab + new_mobile

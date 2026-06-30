@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 from ase import Atoms
 from ase_ga.utilities import atoms_too_close_two_sets
 from numpy.random import Generator
-from scipy.spatial import ConvexHull, QhullError
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
@@ -19,6 +17,11 @@ from scgo.cluster_adsorbate.geometry import (
     random_spin_about_normal,
     random_unit_vector,
     rotation_matrix_a_to_b,
+)
+from scgo.cluster_adsorbate.sites import (
+    SiteType,
+    SurfaceSiteCandidate,
+    compute_surface_site_candidates,
 )
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.initialization.atomic_radii import build_blmin_from_zs, get_covalent_radius
@@ -32,18 +35,9 @@ from scgo.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-SiteType = Literal["vertex", "edge", "facet"]
-
 _BLMIN_RATIO_FLOOR = 0.55
 _MIN_DISTANCE_FACTOR_FLOOR = 0.3
 _RANKED_CANDIDATES_PER_ATTEMPT = 12
-
-
-@dataclass(frozen=True)
-class SurfaceSiteCandidate:
-    site_type: SiteType
-    anchor: np.ndarray
-    normal: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -53,13 +47,6 @@ class _PlacementTrial:
     n_dir: np.ndarray
     anchor_surf: np.ndarray
     height: float
-
-
-def _safe_normalize(v: np.ndarray) -> np.ndarray:
-    vn = float(np.linalg.norm(v))
-    if vn < 1e-12:
-        return np.array([0.0, 0.0, 1.0], dtype=float)
-    return v / vn
 
 
 def radii_derived_height_bounds(
@@ -101,59 +88,6 @@ def _compute_effective_placement_params(
         _MIN_DISTANCE_FACTOR_FLOOR,
     )
     return height_min, height_max, blmin_ratio, min_dist_factor
-
-
-def _compute_surface_site_candidates(
-    core: Atoms,
-) -> dict[SiteType, list[SurfaceSiteCandidate]]:
-    """Build explicit vertex/edge/facet adsorption sites from a convex hull."""
-    out: dict[SiteType, list[SurfaceSiteCandidate]] = {
-        "vertex": [],
-        "edge": [],
-        "facet": [],
-    }
-    if len(core) < 4:
-        return out
-    pos = core.get_positions()
-    com = np.mean(pos, axis=0)
-    try:
-        hull = ConvexHull(pos)
-    except (QhullError, ValueError):
-        return out
-
-    vertices = np.asarray(hull.vertices, dtype=np.intp)
-    for vidx in vertices:
-        anchor = pos[int(vidx)]
-        normal = _safe_normalize(anchor - com)
-        out["vertex"].append(
-            SurfaceSiteCandidate(site_type="vertex", anchor=anchor, normal=normal)
-        )
-
-    edge_pairs: set[tuple[int, int]] = set()
-    for simplex in hull.simplices:
-        i, j, k = int(simplex[0]), int(simplex[1]), int(simplex[2])
-        edge_pairs.add(tuple(sorted((i, j))))
-        edge_pairs.add(tuple(sorted((j, k))))
-        edge_pairs.add(tuple(sorted((i, k))))
-    for i, j in sorted(edge_pairs):
-        midpoint = 0.5 * (pos[i] + pos[j])
-        normal = _safe_normalize(midpoint - com)
-        out["edge"].append(
-            SurfaceSiteCandidate(site_type="edge", anchor=midpoint, normal=normal)
-        )
-
-    for simplex in hull.simplices:
-        tri = pos[np.asarray(simplex, dtype=np.intp)]
-        v1 = tri[1] - tri[0]
-        v2 = tri[2] - tri[0]
-        centroid = np.mean(tri, axis=0)
-        normal = _safe_normalize(np.cross(v1, v2))
-        if float(np.dot(normal, centroid - com)) < 0.0:
-            normal = -normal
-        out["facet"].append(
-            SurfaceSiteCandidate(site_type="facet", anchor=centroid, normal=normal)
-        )
-    return out
 
 
 def _select_site_type(
@@ -310,7 +244,7 @@ def place_fragment_on_cluster(
     com = np.mean(site_pos, axis=0)
     relative_site_pos = site_pos - com
     symbols = fragment_template.get_chemical_symbols()
-    site_candidates = _compute_surface_site_candidates(site_atoms)
+    site_candidates = compute_surface_site_candidates(site_atoms)
     flat_candidates = [
         candidate for entries in site_candidates.values() for candidate in entries
     ]

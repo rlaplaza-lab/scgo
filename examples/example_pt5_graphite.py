@@ -36,6 +36,8 @@ def _build_go_params(surface_config) -> dict:
     go_params["optimizer_params"]["ga"].update(
         niter=NITER,
         population_size=POPULATION_SIZE,
+        write_timing_json=True,
+        detailed_timing=True,
     )
     return go_params
 

@@ -186,9 +186,18 @@ Path interpolation always uses the **aligned** reactant and product copies as ba
 Preset-vs-runtime split in `runner_api`:
 
 - Put scientific/tuning knobs in preset dicts (`go_params`/`ts_params`): calculator choice, optimizer settings, NEB settings, pairing thresholds, adsorbate placement (`cluster_adsorbate_config`), connectivity (`connectivity_factor`), etc.
-- Keep run-control knobs on the `run_*` call itself: `verbosity`, `output_dir`, `output_root`, `output_stem`, `seed`, `log_summary`, `write_timing_json`, `profile_ga`.
+- Keep run-control knobs on the `run_*` call itself: `verbosity`, `output_dir`, `output_root`, `output_stem`, `seed`, `log_summary`.
 - Keep system-definition inputs on the `run_*` call itself: `system_type`, core-only `composition`, and `adsorbates` when applicable.
 - For surface system types, pass `surface_config` on the `run_*` call and in preset builders (`get_torchsim_ga_params`, `get_ts_search_params`); SCGO validates coherence across GO/TS presets and run arguments.
+
+**GA timing JSON** (set in `go_params` / `params` only):
+
+```python
+go_params["optimizer_params"]["ga"].update(
+    write_timing_json=True,   # writes timing.json under each trial
+    detailed_timing=True,     # include per_generation rows
+)
+```
 
 Inspect -> edit -> run pattern:
 
@@ -223,7 +232,7 @@ After writing final XYZ files, SCGO can optionally tag the corresponding databas
   - `ga_adaptive_retry_enabled` (default `True`): adapt offspring attempt budget to recent acceptance rate instead of fixed `10*n_offspring`.
   - `ga_retry_floor_multiplier` / `ga_retry_ceiling_multiplier` (defaults `4` / `15`): lower/upper bounds for adaptive retry budget.
   - `ga_fast_prefilter_enabled` (default `True`): cheap severe-clash prefilter before full system-type validation.
-  - `write_timing_json=True` includes per-run retry failure counters (`retry_failures`) and per-generation acceptance/failure breakdown in detailed mode.
+  - **Timing:** set `optimizer_params['ga']['write_timing_json']=True` in `go_params` to write `timing.json` (`timings_s`, `counters`, `retry_failures`). Add `detailed_timing=True` for `per_generation` rows. TS timing uses `write_timing_json` in `ts_params` when needed.
 
 ---
 

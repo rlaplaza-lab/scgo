@@ -63,26 +63,6 @@ def _layer_indices_by_clustering(
         return {i for i in range(len(positions)) if rounded[i] <= cutoff + 1e-9}
 
 
-def _distinct_layers_along_axis(
-    positions: np.ndarray,
-    axis: int,
-    n_layers: int,
-) -> set[int]:
-    """Return atom indices belonging to the n_layers lowest distinct layers."""
-    return _layer_indices_by_clustering(
-        positions, axis, n_layers=n_layers, from_top=False
-    )
-
-
-def _indices_in_top_n_distinct_layers(
-    positions: np.ndarray,
-    axis: int,
-    n_top: int,
-) -> set[int]:
-    """Return atom indices in the n_top highest distinct coordinate layers."""
-    return _layer_indices_by_clustering(positions, axis, n_layers=n_top, from_top=True)
-
-
 def attach_slab_constraints(
     atoms: Atoms,
     n_slab: int,
@@ -132,10 +112,11 @@ def attach_slab_constraints(
         return
 
     if n_relax_top_slab_layers is not None:
-        mobile = _indices_in_top_n_distinct_layers(
+        mobile = _layer_indices_by_clustering(
             np.asarray(slab_positions),
             surface_normal_axis,
-            n_relax_top_slab_layers,
+            n_layers=n_relax_top_slab_layers,
+            from_top=True,
         )
         fix_idx = sorted(set(range(n_slab)) - mobile)
         if fix_idx:
@@ -145,10 +126,11 @@ def attach_slab_constraints(
     if n_fix_bottom_slab_layers is None:
         return
 
-    layer_idx = _distinct_layers_along_axis(
+    layer_idx = _layer_indices_by_clustering(
         np.asarray(slab_positions),
         surface_normal_axis,
-        n_fix_bottom_slab_layers,
+        n_layers=n_fix_bottom_slab_layers,
+        from_top=False,
     )
     atoms.set_constraint(FixAtoms(indices=sorted(layer_idx)))
 
