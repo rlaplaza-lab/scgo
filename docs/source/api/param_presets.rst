@@ -13,7 +13,12 @@ to ``1``, so NEB bands start from lattice-compatible aligned endpoints. See
 GO presets from :func:`~scgo.param_presets.get_default_params` and TS presets from
 :func:`~scgo.param_presets.get_ts_search_params` also include
 ``allow_cluster_fragmentation`` and ``allow_adsorbate_surface_detachment`` (default
-``False``). See :doc:`/api/system_types` (surface mobile connectivity).
+``False``), plus ``enforce_adsorbate_subgraph_integrity`` (default ``True``) to
+reject dissociative adsorbate subgraphs (per fragment when fragment lengths are
+available; otherwise on the full adsorbate block). ``freeze_adsorbate_internal_geometry``
+defaults to ``False``; intra-fragment bonds are still preserved by tag-rigid GA
+operators unless you opt into strict template restore. See :doc:`/api/system_types`
+(surface mobile connectivity and GA operator partitioning).
 
 .. automodule:: scgo.param_presets
    :members:

@@ -160,6 +160,8 @@ def get_default_params() -> dict[str, Any]:
         "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
         "allow_cluster_fragmentation": False,
         "allow_adsorbate_surface_detachment": False,
+        "enforce_adsorbate_subgraph_integrity": True,
+        "freeze_adsorbate_internal_geometry": False,
         "fitness_strategy": "low_energy",  # Default: minimize energy
         "diversity_reference_db": None,  # For diversity strategy
         "diversity_max_references": 100,  # Performance limit
@@ -545,6 +547,7 @@ def get_ts_search_params(
         "connectivity_factor": 1.4,
         "allow_cluster_fragmentation": False,
         "allow_adsorbate_surface_detachment": False,
+        "enforce_adsorbate_subgraph_integrity": True,
         "max_pairs": None,
         "energy_gap_threshold": 2.0,
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,

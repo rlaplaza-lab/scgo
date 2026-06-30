@@ -18,7 +18,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase.calculators.emt import EMT
 from ase.io import write
-from ase_ga.utilities import closest_distances_generator, get_all_atom_types
+from ase_ga.utilities import get_all_atom_types
 
 from scgo.algorithms import bh_go, ga_go, simple_go
 from scgo.database import SCGODatabaseManager
@@ -28,6 +28,8 @@ from scgo.database.metadata import (
     mark_final_minima_in_db,
 )
 from scgo.initialization import create_initial_cluster
+from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
 from scgo.surface.validation import (
@@ -86,9 +88,9 @@ def _create_surface_initialized_atoms(
         pbc=slab.pbc,
     )
     idx_top = range(n_slab, n_slab + n_top)
-    blmin = closest_distances_generator(
-        get_all_atom_types(template, idx_top),
-        ratio_of_covalent_radii=0.7,
+    blmin = build_blmin_from_zs(
+        get_all_atom_types(template, list(idx_top)),
+        ratio=BLMIN_RATIO_DEFAULT,
     )
     deposited = create_deposited_cluster(
         composition=composition,

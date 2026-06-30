@@ -25,6 +25,9 @@ from scgo.utils.atoms_helpers import parse_energy_from_xyz_comment
 from scgo.utils.comparators import (
     PureInteratomicDistanceComparator as InteratomicDistanceComparator,
 )
+from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants & simple configuration helpers
@@ -478,7 +481,7 @@ def evaluate_cluster(
         result.messages = lines
         if verbose:
             for line in lines:
-                print(line)
+                logger.info(line)
         return result
 
     result.total_ground_truth = len(ground_truth_minima)
@@ -508,7 +511,7 @@ def evaluate_cluster(
         result.messages = lines
         if verbose:
             for line in lines:
-                print(line)
+                logger.info(line)
         return result
 
     comparator = InteratomicDistanceComparator(tol=comparator_tolerance, mic=False)
@@ -594,7 +597,7 @@ def evaluate_cluster(
 
     if verbose:
         for line in lines:
-            print(line)
+            logger.info(line)
 
     return result
 
@@ -663,7 +666,7 @@ def run_benchmark_suite(
             if not res.skipped and res.recovery_rate >= MIN_RECOVERY_RATE
         )
         attempted = sum(1 for res in results if not res.skipped)
-        print(
+        logger.info(
             f"\n=== Benchmark summary: {successful}/{attempted} clusters met the recovery threshold ({MIN_RECOVERY_RATE:.2f}). ===",
         )
 

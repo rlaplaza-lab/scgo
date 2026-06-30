@@ -13,29 +13,7 @@ from scgo.utils.validation import validate_positive
 
 @dataclass(frozen=True)
 class ClusterAdsorbateConfig:
-    """Shared placement / relaxation settings for any small adsorbate fragment.
-
-    Attributes:
-        height_min: Minimum offset (Å) along the sampled outward normal from the
-            outermost core atom in that direction to the fragment anchor atom.
-        height_max: Maximum such offset (Å).
-        max_placement_attempts: Retries with new random directions (and spins).
-        blmin_ratio: Passed to ASE ``closest_distances_generator``.
-        cell_margin: Extra padding (Å) for the cubic cell before relaxation.
-        random_spin_about_normal: If True and ``bond_axis`` is used in placement,
-            apply a random rotation about the surface normal after aligning the
-            bond to that normal (does nothing for monatomics or fully random
-            molecular orientations).
-        validate_combined_structure: If True, run structure checks on core+adsorbate
-            after placement and before/after local relaxation (connectivity by
-            default; clashes optional).
-        structure_min_distance_factor: Scale covalent radii for clash detection
-            (same meaning as in :func:`~scgo.initialization.geometry_helpers.validate_cluster_structure`).
-        structure_connectivity_factor: Edge threshold ``(r_i+r_j) * factor`` for
-            connectivity (same as cluster initialization).
-        structure_check_clashes: Whether to reject clashing combined structures.
-        structure_check_connectivity: Whether to require a single connected component.
-    """
+    """Shared placement / relaxation settings for any small adsorbate fragment."""
 
     height_min: float = 0.9
     height_max: float = 2.2

@@ -9,9 +9,11 @@ for ``*_adsorbate`` modes, core-only ``composition`` plus ``adsorbates=...``
 (single or multiple ASE ``Atoms`` fragments).
 System-definition keys in ``go_params`` are partly restricted:
 ``system_type`` remains rejected, while top-level ``surface_config`` is allowed
-and fanned out into optimizer slots. For ``ts_params``, ``system_type`` remains
-rejected while ``surface_config`` is allowed and validated against the run
-argument.
+and fanned out into optimizer slots. Adsorbate placement tuning
+(``cluster_adsorbate_config``, ``connectivity_factor``, ``freeze_adsorbate_internal_geometry``)
+belongs in ``go_params`` only—not as separate ``run_*`` keywords. For
+``ts_params``, ``system_type`` remains rejected while ``surface_config`` is
+allowed and validated against the run argument.
 """
 
 from __future__ import annotations
@@ -112,7 +114,6 @@ def _prepare_run_context(
     surface_config: SurfaceSystemConfig | None,
     params: dict[str, Any] | None,
     adsorbates: AdsorbatesInput | None,
-    cluster_adsorbate_config: Any | None = None,
     context: str,
 ) -> tuple[
     SystemType,
@@ -143,7 +144,6 @@ def _prepare_run_context(
             params_prep,
             adsorbate_definition=ads_def,
             adsorbate_fragment_template=ads_template,
-            cluster_adsorbate_config=cluster_adsorbate_config,
         )
     return st, params_prep, ads_def, ads_template, full_comp
 
@@ -449,10 +449,10 @@ def _with_adsorbate_in_optimizers(
     *,
     adsorbate_definition: Any | None = None,
     adsorbate_fragment_template: Any | None = None,
-    cluster_adsorbate_config: Any | None = None,
 ) -> dict[str, Any]:
-    """Copy ``go_params``; fan out explicit run adsorbate params to optimizer slots."""
+    """Copy ``go_params``; fan out derived adsorbate context to optimizer slots."""
     out = copy.deepcopy(go_params) if go_params is not None else {}
+    cluster_adsorbate_config = out.get("cluster_adsorbate_config")
 
     # If any adsorbate param is set, distribute to all optimizer slots
     if (
@@ -635,6 +635,8 @@ def _run_go_trials(
         "connectivity_factor",
         "allow_cluster_fragmentation",
         "allow_adsorbate_surface_detachment",
+        "enforce_adsorbate_subgraph_integrity",
+        "freeze_adsorbate_internal_geometry",
         "adsorbate_definition",
         "adsorbate_fragment_template",
         "cluster_adsorbate_config",
@@ -933,8 +935,6 @@ def _run_go_ts_pipeline(
     ts_kwargs_local.pop("system_type", None)
     write_ts_json = bool(ts_kwargs_local.pop("write_timing_json", False))
 
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-    from scgo.surface.config import SurfaceSystemConfig
     from scgo.system_types import resolve_connectivity_factor
 
     connectivity_factor_raw: float | None = ts_kwargs_local.pop(
@@ -946,22 +946,9 @@ def _run_go_ts_pipeline(
         if isinstance(surface_config_ts, SurfaceSystemConfig)
         else None
     )
-    go_cluster_adsorbate_config = (
-        go_params.get("optimizer_params", {})
-        .get("ga", {})
-        .get("cluster_adsorbate_config")
-    )
-    cluster_cfg = (
-        go_cluster_adsorbate_config
-        if isinstance(go_cluster_adsorbate_config, ClusterAdsorbateConfig)
-        else (
-            go_params.get("cluster_adsorbate_config")
-            if isinstance(
-                go_params.get("cluster_adsorbate_config"), ClusterAdsorbateConfig
-            )
-            else None
-        )
-    )
+    cluster_cfg = go_params.get("cluster_adsorbate_config")
+    if not isinstance(cluster_cfg, ClusterAdsorbateConfig):
+        cluster_cfg = None
     connectivity_factor = resolve_connectivity_factor(
         connectivity_factor_raw,
         cluster_adsorbate_config=cluster_cfg,
@@ -1052,7 +1039,6 @@ def run_go(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     write_timing_json: bool = False,
     profile_ga: bool | None = None,
     log_summary: bool = True,
@@ -1063,7 +1049,6 @@ def run_go(
         surface_config=surface_config,
         params=params,
         adsorbates=adsorbates,
-        cluster_adsorbate_config=cluster_adsorbate_config,
         context="run_go",
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=params)
@@ -1077,7 +1062,6 @@ def run_go(
         eff_params,
         adsorbate_definition=ads_def,
         adsorbate_fragment_template=ads_temp,
-        cluster_adsorbate_config=cluster_adsorbate_config,
     )
     out_path = _resolved_path(output_dir)
     t0 = perf_counter()
@@ -1112,7 +1096,6 @@ def run_go_campaign(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     write_timing_json: bool = False,
     profile_ga: bool | None = None,
     log_summary: bool = True,
@@ -1133,10 +1116,6 @@ def run_go_campaign(
         write_timing_json=write_timing_json,
         profile_ga=profile_ga,
     )
-    eff_params = _merge_adsorbate_context_into_params(
-        eff_params, cluster_adsorbate_config=cluster_adsorbate_config
-    )
-
     full_compositions: list[list[str]] = []
     for composition_item in _as_composition_list(compositions):
         ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
@@ -1154,6 +1133,13 @@ def run_go_campaign(
         full_compositions.append(full_comp)
         eff_params["adsorbate_definition"] = ads_def
         eff_params["adsorbate_fragment_template"] = ads_temp
+
+    if adsorbates is not None:
+        eff_params = _with_adsorbate_in_optimizers(
+            eff_params,
+            adsorbate_definition=eff_params.get("adsorbate_definition"),
+            adsorbate_fragment_template=eff_params.get("adsorbate_fragment_template"),
+        )
 
     out_path = _resolved_path(output_dir)
     t0 = perf_counter()
@@ -1189,7 +1175,6 @@ def run_go_ts(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     write_timing_json: bool = False,
     profile_ga: bool | None = None,
     log_summary: bool = True,
@@ -1242,7 +1227,6 @@ def run_go_ts(
         go_local,
         adsorbate_definition=ads_def,
         adsorbate_fragment_template=ads_temp,
-        cluster_adsorbate_config=cluster_adsorbate_config,
     )
     ts_kwargs = _coerce_ts_for_runner(
         ts_mat, fn_name="run_go_ts", system_type=st, surface_config=surface_config
@@ -1279,7 +1263,6 @@ def run_go_ts_campaign(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     write_timing_json: bool = False,
     profile_ga: bool | None = None,
     log_summary: bool = True,
@@ -1336,7 +1319,6 @@ def run_go_ts_campaign(
         go_local,
         adsorbate_definition=ads_def,
         adsorbate_fragment_template=ads_temp,
-        cluster_adsorbate_config=cluster_adsorbate_config,
     )
     ts_kwargs = _coerce_ts_for_runner(
         ts_mat,

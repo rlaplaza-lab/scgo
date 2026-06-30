@@ -54,3 +54,58 @@ Surface mobile connectivity
 For ``*_adsorbate`` types, ``n_core_mobile`` is inferred from
 ``adsorbate_definition['core_symbols']``. The former ``allow_dissociative_adsorption``
 parameter is removed; set both new flags to ``True`` for the old permissive behavior.
+
+Adsorbate subgraph integrity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When ``enforce_adsorbate_subgraph_integrity=True`` (default in GO/TS presets),
+SCGO rejects disconnected adsorbate subgraphs.
+
+- With runner-style ``adsorbates=Atoms | list[Atoms]`` input, each input fragment
+  must be connected and SCGO stores fragment boundaries for per-fragment checks.
+- For manual ``adsorbate_definition`` input, ``adsorbate_fragment_lengths`` is
+  optional:
+
+  - when provided, integrity is enforced per fragment;
+  - when omitted, integrity is enforced on the full adsorbate block as one
+    connected subgraph.
+
+This design supports non-linear molecules without requiring a rigid
+``fragment_bond_axis`` contract.
+
+Adsorbate placement tuning
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For ``*_adsorbate`` GO runs, optional placement and validation knobs live in
+``go_params`` only:
+
+- ``connectivity_factor`` — primary threshold for structure validation (and
+  fallback for hierarchical placement when no config is set).
+- ``cluster_adsorbate_config`` — optional
+  :class:`~scgo.cluster_adsorbate.config.ClusterAdsorbateConfig` (fragment
+  height range, ``max_placement_attempts``, ``blmin_ratio``, clash/connectivity
+  checks). Fragment placement samples convex-hull vertex/edge/facet sites,
+  ranks candidates by steric deficit, and relaxes placement thresholds on retry.
+  Prefer ``connectivity_factor`` alone unless you need placement-specific overrides.
+- ``freeze_adsorbate_internal_geometry`` — Kabsch-restore fragments after
+  mutations (strict template mode). Default ``False`` still preserves
+  intra-fragment bonds via tag-rigid GA operators.
+
+GA operators for adsorbate types
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When ``SystemPolicy.has_adsorbate`` is true, the GA partitions the mobile region
+with ASE tags (core = ``0``, each fragment = ``1..N``):
+
+- **Crossover** splices the core only; adsorbate fragments inherit from parent 0.
+- **Mutations** use tag-rigid displacements for rattle, anisotropic rattle, and
+  overlap relief so intra-fragment geometry is unchanged.
+- **Rotational / mirror / flattening / breathing / in-plane slide** use
+  core-only or adsorbate-scoped variants (``*_core``, ``*_ads``).
+- **``fragment_reposition``** re-places one adsorbate on fresh hull sites using
+  the same placement engine as initialization.
+
+Operator clash checks use :func:`~scgo.initialization.atomic_radii.build_blmin`
+(``BLMIN_RATIO_DEFAULT = 0.7``). Post-operator validation uses
+``connectivity_factor`` (typically 1.4) via
+:func:`~scgo.system_types.validate_structure_for_system_type`.

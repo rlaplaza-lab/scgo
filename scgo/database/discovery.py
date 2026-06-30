@@ -55,11 +55,26 @@ class DatabaseDiscovery:
         self.base_dir = Path(base_dir)
         self._cache: dict[str, list[Path]] = {}
         self._metadata_cache: dict[Path, dict] = {}
+        self._cache_hit_count = 0
+        self._cache_miss_count = 0
 
         # Registry for fast lookups - use global cache
         self._registry = get_registry(self.base_dir)
         logger.debug("Using registry for fast database discovery")
         logger.debug(f"Initialized DatabaseDiscovery for {self.base_dir}")
+
+    def _maybe_log_cache_summary(self) -> None:
+        """Emit compact INFO cache stats periodically without per-key noise."""
+        total = self._cache_hit_count + self._cache_miss_count
+        if total == 0 or total % 25 != 0:
+            return
+        hit_rate = int(100 * self._cache_hit_count / total)
+        logger.info(
+            "Database discovery cache summary: %d hits, %d misses (%d%% hit rate)",
+            self._cache_hit_count,
+            self._cache_miss_count,
+            hit_rate,
+        )
 
     def find_databases(
         self,
@@ -97,8 +112,13 @@ class DatabaseDiscovery:
 
         # Check cache
         if use_cache and cache_key in self._cache:
-            logger.debug("Using cached results for: %s", cache_key)
+            self._cache_hit_count += 1
+            logger.trace("Using cached results for: %s", cache_key)
+            self._maybe_log_cache_summary()
             return self._cache[cache_key]
+        if use_cache:
+            self._cache_miss_count += 1
+            self._maybe_log_cache_summary()
 
         # Try registry first for fast lookup
         if db_filename == "*.db":

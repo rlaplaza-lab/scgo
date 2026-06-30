@@ -56,6 +56,8 @@ def _apply_stagnation_boost(
         boosted["anisotropic_rattle"] *= factor * 1.25
     if "flattening" in boosted:
         boosted["flattening"] *= factor * 1.15
+    if "rotational" in boosted:
+        boosted["rotational"] *= factor * 1.10
     if "mirror" in boosted:
         boosted["mirror"] *= factor * 1.10
     if "breathing" in boosted:

@@ -150,6 +150,8 @@ def validate_algorithm_params(
             "adsorbate_definition",
             "adsorbate_fragment_template",
             "cluster_adsorbate_config",
+            "enforce_adsorbate_subgraph_integrity",
+            "freeze_adsorbate_internal_geometry",
         },
         "ga": {
             "optimizer",
@@ -185,6 +187,8 @@ def validate_algorithm_params(
             "adsorbate_definition",
             "adsorbate_fragment_template",
             "cluster_adsorbate_config",
+            "enforce_adsorbate_subgraph_integrity",
+            "freeze_adsorbate_internal_geometry",
         },
     }
 
@@ -413,6 +417,8 @@ def prepare_algorithm_kwargs(
         "connectivity_factor",
         "allow_cluster_fragmentation",
         "allow_adsorbate_surface_detachment",
+        "enforce_adsorbate_subgraph_integrity",
+        "freeze_adsorbate_internal_geometry",
     ):
         v = params.get(key)
         if v is not None:

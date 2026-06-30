@@ -99,6 +99,7 @@ def test_ga_go_offspring_fraction_creates_expected_offspring(
         offspring_fraction=offs_frac,
         niter_local_relaxation=1,
         batch_size=None,
+        ga_fast_prefilter_enabled=False,
         rng=rng,
     )
 
@@ -276,6 +277,9 @@ def test_offspring_build_context_picklable(rng):
         connectivity_factor=None,
         allow_cluster_fragmentation=False,
         allow_adsorbate_surface_detachment=False,
+        enforce_adsorbate_subgraph_integrity=True,
+        freeze_adsorbate_internal_geometry=False,
+        adsorbate_fragment_templates=None,
         surface_config=None,
         adaptive_config=adaptive_config,
         current_mutation_probability=0.3,

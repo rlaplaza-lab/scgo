@@ -227,17 +227,25 @@ def test_create_deposited_cluster_preserves_adsorbate_symbol_order_with_two_oh(
     adsorbate_definition = {
         "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
         "adsorbate_symbols": ["O", "H", "O", "H"],
+        "adsorbate_fragment_lengths": [2, 2],
     }
 
     # Create a simple fragment template for the adsorbate
     from ase import Atoms as AtomsClass
 
-    adsorbate_fragment_template = AtomsClass(
-        symbols=["O", "H", "O", "H"],
-        positions=[[0, 0, 0], [1.0, 0, 0], [0, 1.0, 0], [1.0, 1.0, 0]],
+    oh1 = AtomsClass(
+        symbols=["O", "H"],
+        positions=[[0, 0, 0], [1.0, 0, 0]],
         cell=[10, 10, 10],
         pbc=False,
     )
+    oh2 = AtomsClass(
+        symbols=["O", "H"],
+        positions=[[0, 1.0, 0], [1.0, 1.0, 0]],
+        cell=[10, 10, 10],
+        pbc=False,
+    )
+    adsorbate_fragment_template = [oh1, oh2]
 
     ads_sys = create_deposited_cluster(
         composition,
@@ -280,17 +288,25 @@ def test_create_deposited_cluster_batch_preserves_adsorbate_symbol_order_with_tw
     adsorbate_definition = {
         "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
         "adsorbate_symbols": ["O", "H", "O", "H"],
+        "adsorbate_fragment_lengths": [2, 2],
     }
 
     # Create a simple fragment template for the adsorbate
     from ase import Atoms as AtomsClass
 
-    adsorbate_fragment_template = AtomsClass(
-        symbols=["O", "H", "O", "H"],
-        positions=[[0, 0, 0], [1.0, 0, 0], [0, 1.0, 0], [1.0, 1.0, 0]],
+    oh1 = AtomsClass(
+        symbols=["O", "H"],
+        positions=[[0, 0, 0], [1.0, 0, 0]],
         cell=[10, 10, 10],
         pbc=False,
     )
+    oh2 = AtomsClass(
+        symbols=["O", "H"],
+        positions=[[0, 1.0, 0], [1.0, 1.0, 0]],
+        cell=[10, 10, 10],
+        pbc=False,
+    )
+    adsorbate_fragment_template = [oh1, oh2]
 
     batch = create_deposited_cluster_batch(
         composition,

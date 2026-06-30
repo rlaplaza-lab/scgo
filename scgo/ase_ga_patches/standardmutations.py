@@ -18,50 +18,17 @@ from scgo.ase_ga_patches._vector_utils import (
     append_unique_unit_vector as _append_unique_unit_vector,
 )
 from scgo.ase_ga_patches._vector_utils import random_unit_vector as _random_unit_vector
+from scgo.initialization.steric_scoring import (
+    get_blmin_distance as _get_blmin_distance,
+)
+from scgo.initialization.steric_scoring import (
+    steric_deficit as _steric_deficit,
+)
+from scgo.initialization.steric_scoring import (
+    steric_deficit_two_sets as _steric_deficit_two_sets,
+)
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
-
-
-def _get_blmin_distance(blmin, atomic_number_a, atomic_number_b):
-    key = (int(atomic_number_a), int(atomic_number_b))
-    if key in blmin:
-        return blmin[key]
-    return blmin[(int(atomic_number_b), int(atomic_number_a))]
-
-
-def _steric_deficit(positions, atomic_numbers, blmin):
-    from scipy.spatial.distance import pdist, squareform
-
-    n_atoms = len(positions)
-    if n_atoms <= 1:
-        return 0.0
-
-    distances = squareform(pdist(positions))
-    deficit = 0.0
-    for i in range(n_atoms):
-        for j in range(i + 1, n_atoms):
-            required = _get_blmin_distance(blmin, atomic_numbers[i], atomic_numbers[j])
-            gap = required - distances[i, j]
-            if gap > 0.0:
-                deficit += gap
-    return deficit
-
-
-def _steric_deficit_two_sets(
-    left_positions,
-    left_numbers,
-    right_positions,
-    right_numbers,
-    blmin,
-):
-    deficit = 0.0
-    for i, left_pos in enumerate(left_positions):
-        for j, right_pos in enumerate(right_positions):
-            required = _get_blmin_distance(blmin, left_numbers[i], right_numbers[j])
-            gap = required - np.linalg.norm(left_pos - right_pos)
-            if gap > 0.0:
-                deficit += gap
-    return deficit
 
 
 def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):
@@ -393,6 +360,7 @@ class OverlapReliefMutation(OffspringCreator):
         jitter=0.02,
         margin=0.04,
         test_dist_to_slab=True,
+        use_tags=False,
         rng=None,
         verbose=False,
     ):
@@ -404,6 +372,7 @@ class OverlapReliefMutation(OffspringCreator):
         self.jitter = jitter
         self.margin = margin
         self.test_dist_to_slab = test_dist_to_slab
+        self.use_tags = use_tags
         self.system_type = system_type
         self._policy = get_system_policy(system_type)
 
@@ -438,6 +407,8 @@ class OverlapReliefMutation(OffspringCreator):
 
             for i in range(len(positions)):
                 for j in range(i + 1, len(positions)):
+                    if self.use_tags and tags[i] == tags[j]:
+                        continue
                     required = _get_blmin_distance(self.blmin, numbers[i], numbers[j])
                     vector = positions[j] - positions[i]
                     distance = np.linalg.norm(vector)
@@ -470,7 +441,12 @@ class OverlapReliefMutation(OffspringCreator):
                                 if distance > 1e-12
                                 else np.array([0.0, 0.0, 1.0])
                             )
-                            displacements[i] += (required - distance + self.margin) * direction
+                            shift = (required - distance + self.margin) * direction
+                            if self.use_tags:
+                                select = np.where(tags == tags[i])[0]
+                                displacements[select] += shift
+                            else:
+                                displacements[i] += shift
                             moved = True
 
             positions += displacements
@@ -481,11 +457,20 @@ class OverlapReliefMutation(OffspringCreator):
         for add_jitter in (True, False):
             trial_positions = repaired_positions.copy()
             if add_jitter and self.jitter > 0.0:
-                trial_positions += self.rng.normal(
-                    0.0,
-                    self.jitter,
-                    size=trial_positions.shape,
-                )
+                if self.use_tags:
+                    for tag in np.unique(tags):
+                        select = np.where(tags == tag)[0]
+                        trial_positions[select] += self.rng.normal(
+                            0.0,
+                            self.jitter,
+                            size=(1, 3),
+                        )
+                else:
+                    trial_positions += self.rng.normal(
+                        0.0,
+                        self.jitter,
+                        size=trial_positions.shape,
+                    )
 
             candidate = Atoms(
                 numbers,
@@ -953,16 +938,21 @@ class MirrorMutation(OffspringCreator):
         slab = atoms[0:len(atoms) - self.n_top]
         top = atoms[len(atoms) - self.n_top: len(atoms)]
         num = top.numbers
-        pos = top.get_positions()
-        center_of_mass = np.average(pos, axis=0)
+        pos = top.get_positions().copy()
+        tags = top.get_tags() if hasattr(top, "get_tags") else np.arange(len(top))
 
-        tags = top.get_tags() if hasattr(top, 'get_tags') else np.arange(len(top))
-        unique_tags = np.unique(tags)
         if self.target_tags is not None:
-            target_tags_set = set(self.target_tags)
-            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
+            target_mask = np.isin(tags, list(self.target_tags))
+            if not np.any(target_mask):
                 return None
+            target_pos = pos[target_mask]
+            target_num = num[target_mask]
+            center_of_mass = np.average(target_pos, axis=0)
+        else:
+            target_mask = np.ones(len(top), dtype=bool)
+            target_pos = pos
+            target_num = num
+            center_of_mass = np.average(pos, axis=0)
 
         reflect_options = [self.reflect]
         if not self.reflect:
@@ -972,17 +962,21 @@ class MirrorMutation(OffspringCreator):
 
         max_candidates = max(1, min(int(self.max_tries), 12))
         ranked_candidates = []
-        for plane in self._candidate_planes(pos, center_of_mass, slab):
+        for plane in self._candidate_planes(target_pos, center_of_mass, slab):
             for reflect in reflect_options:
-                mutant = self._build_mirror_top(
-                    num,
-                    pos,
+                mirrored_top = self._build_mirror_top(
+                    target_num,
+                    target_pos,
                     center_of_mass,
                     plane,
                     reflect,
                 )
+                new_pos = pos.copy()
+                new_pos[target_mask] = mirrored_top.get_positions()
+                mutant = Atoms(num, new_pos)
                 mutant.set_cell(slab.get_cell())
                 mutant.set_pbc(slab.get_pbc())
+                mutant.set_tags(tags)
                 score = _steric_deficit(mutant.get_positions(), num, self.blmin)
                 if len(slab) > 0:
                     score += _steric_deficit_two_sets(
@@ -1056,7 +1050,7 @@ class RotationalMutation(OffspringCreator):
 
     def __init__(self, blmin, system_type: SystemType, n_top=None, fraction=0.33, tags=None,
                  min_angle=1.57, test_dist_to_slab=True, target_tags=None,
-                 rng=None, verbose=False, max_inner_attempts=24):
+                 use_tags=False, rng=None, verbose=False, max_inner_attempts=24):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -1066,6 +1060,7 @@ class RotationalMutation(OffspringCreator):
         self.min_angle = min_angle
         self.test_dist_to_slab = test_dist_to_slab
         self.target_tags = target_tags
+        self.use_tags = use_tags
         self.system_type = system_type
         self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
@@ -1231,7 +1226,7 @@ class RotationalMutation(OffspringCreator):
             if not self._policy.uses_surface:
                 mutant.center()
 
-            too_close = atoms_too_close(mutant, self.blmin, use_tags=True)
+            too_close = atoms_too_close(mutant, self.blmin, use_tags=self.use_tags)
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
 

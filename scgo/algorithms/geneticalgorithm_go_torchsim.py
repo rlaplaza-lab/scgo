@@ -22,7 +22,7 @@ from ase.calculators.singlepoint import SinglePointCalculator
 from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
 from ase_ga.data import DataConnection
-from ase_ga.utilities import closest_distances_generator, get_all_atom_types
+from ase_ga.utilities import get_all_atom_types
 from tqdm import tqdm
 
 from scgo.algorithms.ga_common import (
@@ -46,6 +46,10 @@ from scgo.ase_ga_patches.population import Population
 from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.constraints import (
+    attach_adsorbate_internal_geometry_constraints,
+)
+from scgo.cluster_adsorbate.rigid import enforce_frozen_adsorbate_geometry
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.database import (
     HPC_DATABASE_EXCEPTIONS,
@@ -54,6 +58,7 @@ from scgo.database import (
     database_retry,
     setup_database,
 )
+from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.metadata import (
     add_metadata,
     filter_by_metadata,
@@ -61,10 +66,13 @@ from scgo.database.metadata import (
     update_metadata,
 )
 from scgo.initialization import compute_cell_side
+from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.system_types import (
     AdsorbateDefinition,
+    AdsorbateFragmentInput,
     SystemType,
     uses_surface,
     validate_structure_for_system_type,
@@ -111,6 +119,34 @@ def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
     return atoms
 
 
+def _count_relaxed_candidates(da: DataConnection) -> int:
+    """Count relaxed candidates without materializing all candidate atoms."""
+    kvp = SYSTEMS_JSON_COLUMN
+    with da.c.managed_connection() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM systems "
+            f"WHERE CAST(json_extract({kvp}, '$.relaxed') AS INTEGER)=1"
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _fails_fast_geometric_prefilter(atoms: Atoms, blmin: dict) -> bool:
+    """Return True when a severe clash is detected quickly."""
+    if len(atoms) < 2:
+        return False
+    numbers = atoms.get_atomic_numbers()
+    positions = atoms.get_positions()
+    for i in range(len(atoms)):
+        zi = int(numbers[i])
+        for j in range(i + 1, len(atoms)):
+            zj = int(numbers[j])
+            distance = float(np.linalg.norm(positions[i] - positions[j]))
+            min_allowed = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
+            if min_allowed > 0.0 and distance < 0.55 * min_allowed:
+                return True
+    return False
+
+
 def _picklable_atoms_copy(atoms: Atoms | None) -> Atoms | None:
     """Return an Atoms copy safe for process-pool pickling (no calculator)."""
     if atoms is None:
@@ -118,6 +154,22 @@ def _picklable_atoms_copy(atoms: Atoms | None) -> Atoms | None:
     copy = atoms.copy()
     copy.calc = None
     return copy
+
+
+def _picklable_fragment_templates(
+    templates: AdsorbateFragmentInput | None,
+) -> list[Atoms] | None:
+    if templates is None:
+        return None
+    if isinstance(templates, Atoms):
+        copied = _picklable_atoms_copy(templates)
+        return [copied] if copied is not None else None
+    out: list[Atoms] = []
+    for frag in templates:
+        copied = _picklable_atoms_copy(frag)
+        if copied is not None:
+            out.append(copied)
+    return out or None
 
 
 @dataclass(frozen=True)
@@ -136,6 +188,9 @@ class OffspringBuildContext:
     connectivity_factor: float | None
     allow_cluster_fragmentation: bool
     allow_adsorbate_surface_detachment: bool
+    enforce_adsorbate_subgraph_integrity: bool
+    freeze_adsorbate_internal_geometry: bool
+    adsorbate_fragment_templates: list[Atoms] | None
     surface_config: SurfaceSystemConfig | None
     adaptive_config: dict[str, Any]
     current_mutation_probability: float
@@ -184,6 +239,17 @@ def _build_offspring_worker(
             "index": job["index"],
             "child": None,
             "desc": None,
+            "failure_reason": "pairing_failed",
+            "operator_setup_s": operator_setup_s,
+            "crossover_s": crossover_s,
+            "mutation_s": mutation_s,
+        }
+    if _fails_fast_geometric_prefilter(child, ctx.blmin):
+        return {
+            "index": job["index"],
+            "child": None,
+            "desc": desc,
+            "failure_reason": "too_close_prefilter",
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
@@ -194,6 +260,13 @@ def _build_offspring_worker(
         mutation_s = perf_counter() - mutation_t0
         if mutated is not None:
             child = mutated
+    if ctx.freeze_adsorbate_internal_geometry:
+        enforce_frozen_adsorbate_geometry(
+            child,
+            n_slab=ctx.n_slab,
+            adsorbate_definition=ctx.adsorbate_definition,
+            fragment_templates=ctx.adsorbate_fragment_templates,
+        )
     maybe_apply_mobile_core_ads_tags(
         child,
         ctx.n_slab,
@@ -211,6 +284,7 @@ def _build_offspring_worker(
             connectivity_factor=ctx.connectivity_factor,
             allow_cluster_fragmentation=ctx.allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=ctx.allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
         )
     except ValueError as exc:
         worker_logger.debug("Offspring rejected by system_type validation: %s", exc)
@@ -218,6 +292,7 @@ def _build_offspring_worker(
             "index": job["index"],
             "child": None,
             "desc": desc,
+            "failure_reason": "validation_failed",
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
@@ -226,6 +301,7 @@ def _build_offspring_worker(
         "index": job["index"],
         "child": child,
         "desc": desc,
+        "failure_reason": None,
         "operator_setup_s": operator_setup_s,
         "crossover_s": crossover_s,
         "mutation_s": mutation_s,
@@ -238,11 +314,21 @@ def _torchsim_prepare_relaxed_copy(
     n_slab: int,
     *,
     surface_mode: bool = False,
+    freeze_adsorbate_internal_geometry: bool = False,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
 ) -> Atoms:
     """Copy candidate and attach slab constraints before TorchSim relaxation."""
     if surface_config is not None and n_slab > 0 and not surface_mode:
         surface_mode = True
     c = cand.copy()
+    if freeze_adsorbate_internal_geometry:
+        enforce_frozen_adsorbate_geometry(
+            c,
+            n_slab=(n_slab if surface_mode else 0),
+            adsorbate_definition=adsorbate_definition,
+            fragment_templates=adsorbate_fragment_templates,
+        )
     if surface_mode and surface_config is not None and n_slab > 0:
         attach_slab_constraints(
             c,
@@ -251,6 +337,12 @@ def _torchsim_prepare_relaxed_copy(
             n_fix_bottom_slab_layers=surface_config.n_fix_bottom_slab_layers,
             n_relax_top_slab_layers=surface_config.n_relax_top_slab_layers,
             surface_normal_axis=surface_config.surface_normal_axis,
+        )
+    if freeze_adsorbate_internal_geometry:
+        attach_adsorbate_internal_geometry_constraints(
+            c,
+            n_slab=(n_slab if surface_mode else 0),
+            adsorbate_definition=adsorbate_definition,
         )
     return c
 
@@ -273,6 +365,9 @@ def _relax_unrelaxed_candidates(
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+    freeze_adsorbate_internal_geometry: bool = False,
+    adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
 ) -> int:
     """Relax unrelaxed candidates in batches and commit them to the database."""
     available = database_retry(
@@ -316,6 +411,9 @@ def _relax_unrelaxed_candidates(
                 surface_config,
                 n_slab,
                 surface_mode=surface_mode,
+                freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                adsorbate_definition=adsorbate_definition,
+                adsorbate_fragment_templates=adsorbate_fragment_templates,
             )
             for cand in batch
         ]
@@ -362,6 +460,7 @@ def _relax_unrelaxed_candidates(
                         connectivity_factor=connectivity_factor,
                         allow_cluster_fragmentation=allow_cluster_fragmentation,
                         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
                     )
                 except ValueError as exc:
                     ineligible_count += 1
@@ -492,11 +591,18 @@ def ga_go(
     write_timing_json: bool = False,
     detailed_timing: bool = False,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    adsorbate_fragment_template: Atoms | None = None,
+    adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+    freeze_adsorbate_internal_geometry: bool = False,
+    ga_adaptive_retry_enabled: bool = True,
+    ga_retry_floor_multiplier: int = 4,
+    ga_retry_ceiling_multiplier: int = 15,
+    ga_fast_prefilter_enabled: bool = True,
+    db_enable_expression_indexes: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Run the GA using TorchSim for batched relaxations.
 
@@ -536,7 +642,9 @@ def ga_go(
         "offspring_created": 0,
         "offspring_relaxed": 0,
         "offspring_worker_failures": 0,
+        "offspring_attempts_total": 0,
     }
+    profile_retry_failures: dict[str, int] = {}
     per_generation: list[dict[str, Any]] | None = [] if detailed_timing else None
 
     from scgo.system_types import resolve_connectivity_factor
@@ -663,7 +771,7 @@ def ga_go(
     )
     top_z = list({int(atoms_template[i].number) for i in idx_top})
     all_atom_types = get_all_atom_types(atoms_template, top_z)
-    blmin = closest_distances_generator(all_atom_types, ratio_of_covalent_radii=0.7)
+    blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
 
     operators_list, name_map = create_mutation_operators(
         composition=composition,
@@ -675,6 +783,9 @@ def ga_go(
         n_slab=n_slab,
         surface_normal_axis=(surface_config.surface_normal_axis if surface_mode else 2),
         adsorbate_definition=adsorbate_definition,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+        adsorbate_fragment_template=adsorbate_fragment_template,
+        cluster_adsorbate_config=cluster_adsorbate_config,
     )
 
     _ = update_mutation_weights(
@@ -751,6 +862,7 @@ def ga_go(
         initial_population=None,
         remove_existing=clean,
         remove_aux_files=clean,
+        enable_expression_indexes=db_enable_expression_indexes,
         run_id=run_id,
     )
 
@@ -792,6 +904,13 @@ def ga_go(
                 adsorbate_definition,
                 system_type,
             )
+            if freeze_adsorbate_internal_geometry:
+                enforce_frozen_adsorbate_geometry(
+                    cand,
+                    n_slab=n_slab,
+                    adsorbate_definition=adsorbate_definition,
+                    fragment_templates=adsorbate_fragment_template,
+                )
             try:
                 validate_structure_for_system_type(
                     cand,
@@ -802,6 +921,7 @@ def ga_go(
                     connectivity_factor=connectivity_factor,
                     allow_cluster_fragmentation=allow_cluster_fragmentation,
                     allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
                 )
             except ValueError as exc:
                 initial_discarded_count += 1
@@ -845,6 +965,7 @@ def ga_go(
                             connectivity_factor=connectivity_factor,
                             allow_cluster_fragmentation=allow_cluster_fragmentation,
                             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
                         )
                     except ValueError as exc:
                         validation_error = str(exc)
@@ -910,6 +1031,8 @@ def ga_go(
                         surface_config,
                         n_slab,
                         surface_mode=surface_mode,
+                        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                        adsorbate_definition=adsorbate_definition,
                     )
                     for c in batch
                 ]
@@ -989,6 +1112,7 @@ def ga_go(
         # Track best value for early stopping (energy or fitness)
         best_value = None  # Energy for low_energy, fitness for others
         generations_without_improvement = 0
+        recent_acceptance_ratios: list[float] = []
 
         for generation in tqdm(
             range(niter),
@@ -1021,6 +1145,19 @@ def ga_go(
             created = 0
             attempts = 0
             max_attempts = max(10, n_offspring * 10)
+            if ga_adaptive_retry_enabled:
+                recent_ratio = (
+                    float(np.mean(recent_acceptance_ratios[-5:]))
+                    if recent_acceptance_ratios
+                    else 0.35
+                )
+                target_ratio = max(0.05, min(0.95, recent_ratio))
+                estimated_needed = int(math.ceil(n_offspring / target_ratio))
+                floor_attempts = max(10, n_offspring * int(ga_retry_floor_multiplier))
+                ceil_attempts = max(
+                    floor_attempts, n_offspring * int(ga_retry_ceiling_multiplier)
+                )
+                max_attempts = max(floor_attempts, min(estimated_needed, ceil_attempts))
 
             t_loop = perf_counter()
             t_parent_select_gen = 0.0
@@ -1031,6 +1168,7 @@ def ga_go(
             t_offspring_parallel_wall_gen = 0.0
             worker_failures_gen = 0
             worker_failure_types_gen: dict[str, int] = {}
+            retry_failure_reasons_gen: dict[str, int] = {}
             while created < n_offspring and attempts < max_attempts:
                 attempts_remaining = max_attempts - attempts
                 if attempts_remaining <= 0:
@@ -1062,7 +1200,7 @@ def ga_go(
                     atoms_template=_picklable_atoms_copy(atoms_template),
                     n_to_optimize=n_to_optimize,
                     composition=composition,
-                    blmin=blmin,
+                    blmin=blmin if ga_fast_prefilter_enabled else {},
                     system_type=system_type,
                     n_slab=n_slab,
                     slab_for_pairing=_picklable_atoms_copy(slab_for_pairing),
@@ -1073,6 +1211,11 @@ def ga_go(
                     connectivity_factor=connectivity_factor,
                     allow_cluster_fragmentation=allow_cluster_fragmentation,
                     allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                    adsorbate_fragment_templates=_picklable_fragment_templates(
+                        adsorbate_fragment_template
+                    ),
                     surface_config=surface_config,
                     adaptive_config=adaptive_config,
                     current_mutation_probability=current_mutation_probability,
@@ -1092,6 +1235,10 @@ def ga_go(
                             err_name = type(exc).__name__
                             worker_failure_types_gen[err_name] = (
                                 worker_failure_types_gen.get(err_name, 0) + 1
+                            )
+                            reason = f"worker_exception_{err_name}"
+                            retry_failure_reasons_gen[reason] = (
+                                retry_failure_reasons_gen.get(reason, 0) + 1
                             )
                             worker_exceptions.append(exc)
                             logger.exception(
@@ -1117,6 +1264,10 @@ def ga_go(
                                 err_name = type(exc).__name__
                                 worker_failure_types_gen[err_name] = (
                                     worker_failure_types_gen.get(err_name, 0) + 1
+                                )
+                                reason = f"worker_exception_{err_name}"
+                                retry_failure_reasons_gen[reason] = (
+                                    retry_failure_reasons_gen.get(reason, 0) + 1
                                 )
                                 worker_exceptions.append(exc)
                                 logger.exception(
@@ -1155,6 +1306,10 @@ def ga_go(
                     t_mutation_gen += float(result["mutation_s"])
                     child = result["child"]
                     if child is None:
+                        reason = result.get("failure_reason") or "unknown"
+                        retry_failure_reasons_gen[reason] = (
+                            retry_failure_reasons_gen.get(reason, 0) + 1
+                        )
                         continue
                     t0 = perf_counter()
                     database_retry(
@@ -1166,6 +1321,13 @@ def ga_go(
                     )
                     t_db_unrelaxed_gen += perf_counter() - t0
                     created += 1
+            generation_acceptance = created / max(attempts, 1)
+            recent_acceptance_ratios.append(generation_acceptance)
+            profile_counters["offspring_attempts_total"] += attempts
+            for reason, count in retry_failure_reasons_gen.items():
+                profile_retry_failures[reason] = (
+                    profile_retry_failures.get(reason, 0) + count
+                )
             profile_timings["offspring_mutation_queue_s"] = profile_timings.get(
                 "offspring_mutation_queue_s", 0.0
             ) + (perf_counter() - t_loop)
@@ -1228,6 +1390,9 @@ def ga_go(
                 connectivity_factor=connectivity_factor,
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                adsorbate_fragment_templates=adsorbate_fragment_template,
             )
             relax_call_wall_s = perf_counter() - t0_relax_call
             post_db_read = float(profile_timings.get("db_read_s", 0.0))
@@ -1243,12 +1408,11 @@ def ga_go(
                 profile_counters["offspring_relaxed"] += int(offspring_count)
                 # Attempt to report a concise triple: created_this_gen / relaxed_this_call / total_relaxed
                 try:
-                    total_relaxed = database_retry(
-                        da.get_all_relaxed_candidates,
+                    total_relaxed_cnt = database_retry(
+                        lambda: _count_relaxed_candidates(da),
                         config=RetryConfig(max_retries=5),
-                        operation_name="get_all_relaxed_candidates",
+                        operation_name="count_relaxed_candidates",
                     )
-                    total_relaxed_cnt = len(total_relaxed)
                 except HPC_DATABASE_EXCEPTIONS:
                     total_relaxed_cnt = None
 
@@ -1275,7 +1439,9 @@ def ga_go(
                         "n_offspring_target": int(n_offspring),
                         "offspring_created": int(created),
                         "attempts": int(attempts),
+                        "acceptance_ratio": float(generation_acceptance),
                         "offspring_relaxed_this_call": int(offspring_count),
+                        "retry_failures": dict(retry_failure_reasons_gen),
                         "timings_s": {
                             "parent_select_s": t_parent_select_gen,
                             "operator_setup_s": t_operator_setup_gen,
@@ -1334,6 +1500,9 @@ def ga_go(
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+            adsorbate_fragment_templates=adsorbate_fragment_template,
         )
 
         all_candidates = database_retry(
@@ -1372,6 +1541,7 @@ def ga_go(
                 "backend": "torchsim_ga",
                 "timings_s": profile_timings,
                 "counters": profile_counters,
+                "retry_failures": profile_retry_failures,
             }
             if per_generation is not None:
                 out_payload["per_generation"] = per_generation

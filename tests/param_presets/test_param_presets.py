@@ -110,6 +110,13 @@ def test_ts_search_params_expose_dedupe_and_tolerance_defaults():
     assert kwargs.get("similarity_pair_cor_max") == pytest.approx(0.1)
 
 
+def test_ts_search_params_expose_adsorbate_subgraph_integrity_default():
+    ts = get_ts_search_params(system_type="gas_cluster_adsorbate")
+    assert ts["enforce_adsorbate_subgraph_integrity"] is True
+    kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster_adsorbate")
+    assert kwargs["enforce_adsorbate_subgraph_integrity"] is True
+
+
 def test_ts_search_params_allow_overrides():
     ts = get_ts_search_params(system_type="gas_cluster")
     ts["dedupe_minima"] = False

@@ -11,10 +11,13 @@ from typing import TYPE_CHECKING
 
 from ase import Atoms
 
+from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_in_choices
 
 if TYPE_CHECKING:
     from scgo.utils.diversity_scorer import DiversityScorer
+
+logger = get_logger(__name__)
 
 
 class FitnessStrategy(StrEnum):
@@ -66,9 +69,6 @@ def calculate_fitness(
         # (0.0) rather than raising. This allows algorithms to continue running
         # with a warning when reference structures are unavailable.
         if diversity_scorer is None:
-            from scgo.utils.logging import get_logger
-
-            logger = get_logger(__name__)
             logger.warning(
                 "No diversity_scorer provided; returning 0.0 fitness for diversity strategy"
             )

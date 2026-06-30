@@ -26,6 +26,7 @@ from scgo.surface.constraints import (
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
     SystemType,
+    _adsorbate_fragment_lengths_from_definition,
     _n_core_mobile_from_adsorbate_definition,
     get_system_policy,
     resolve_connectivity_factor,
@@ -112,6 +113,7 @@ def _run_serial_neb_search(
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> list[dict[str, Any]]:
     """Run NEBs sequentially via :func:`find_transition_state` (one calc per pair)."""
     logger = get_logger(__name__)
@@ -152,6 +154,7 @@ def _run_serial_neb_search(
                 connectivity_factor=connectivity_factor,
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             )
             validate_structure_for_system_type(
                 prod_ep,
@@ -162,6 +165,7 @@ def _run_serial_neb_search(
                 connectivity_factor=connectivity_factor,
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             )
         except ValueError as e:
             logger.warning(
@@ -313,6 +317,7 @@ def _apply_surface_ts_geometry_gate(
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> None:
     """Reject successful TS results that violate supported-deposit geometry."""
     if surface_config is None:
@@ -349,8 +354,12 @@ def _apply_surface_ts_geometry_gate(
                 n_core_mobile=_n_core_mobile_from_adsorbate_definition(
                     adsorbate_definition
                 ),
+                adsorbate_fragment_lengths=_adsorbate_fragment_lengths_from_definition(
+                    adsorbate_definition
+                ),
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             )
             if not ok:
                 result["status"] = "failed"
@@ -398,6 +407,7 @@ def run_transition_state_search(
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> list[dict[str, Any]]:
     """Run transition state search for clusters of given composition.
 
@@ -406,8 +416,11 @@ def run_transition_state_search(
     geodesic interpolation for initial path generation.
 
     Args:
-        composition: Atomic symbols: gas-phase cluster, or **adsorbate only** (same
-            ordering as GO) when ``system_type`` is a surface type and ``surface_config`` is set.
+        composition: List of atomic symbols for the mobile region. For high-level
+            ``run_go_ts`` / ``run_ts_search`` with ``*_adsorbate`` types, pass
+            core-only symbols plus ``adsorbates=``; the runner supplies the full
+            mobile composition here. For surface types without explicit adsorbate
+            blocks, this is the supported cluster on the slab.
         output_dir: Base directory containing run_*/ subdirectories with
             previous optimization results. If None, uses ``{formula}_searches``.
         params: Dictionary of run parameters including:
@@ -664,6 +677,7 @@ def run_transition_state_search(
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
         cleanup_torch_cuda(logger=logger)
     else:
@@ -700,6 +714,7 @@ def run_transition_state_search(
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
 
     ts_phase_wall = perf_counter() - t_ts0
@@ -741,6 +756,7 @@ def run_transition_state_search(
         connectivity_factor=connectivity_factor,
         allow_cluster_fragmentation=allow_cluster_fragmentation,
         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
     )
 
     save_transition_state_results(

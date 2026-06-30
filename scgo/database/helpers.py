@@ -49,7 +49,9 @@ from scgo.utils.run_tracking import load_run_metadata
 logger = get_logger(__name__)
 
 
-def _ensure_database_indices(db_path: str) -> None:
+def _ensure_database_indices(
+    db_path: str, *, enable_expression_indexes: bool = False
+) -> None:
     """Create SQLite indices for performance.
 
     Creates indices on commonly queried columns to improve performance
@@ -72,6 +74,24 @@ def _ensure_database_indices(db_path: str) -> None:
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_unique_id ON systems(unique_id)"
                 )
+
+            if enable_expression_indexes:
+                json_col = SYSTEMS_JSON_COLUMN
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_systems_relaxed_json "
+                        f"ON systems(json_extract({json_col}, '$.relaxed'))"
+                    )
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_systems_raw_score_json "
+                        f"ON systems(CAST(json_extract({json_col}, '$.raw_score') AS REAL))"
+                    )
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_systems_final_unique_json "
+                        f"ON systems(json_extract({json_col}, '$.final_unique_minimum'))"
+                    )
 
             conn.commit()
             logger.debug(f"Database indices created for {db_path}")
@@ -183,6 +203,7 @@ def setup_database(
     remove_existing: bool = True,
     remove_aux_files: bool = False,
     enable_wal_mode: bool = False,
+    enable_expression_indexes: bool = False,
     run_id: str | None = None,
 ) -> DataConnection:
     """Create/open an ASE `DataConnection` for `db_filename` in `output_dir`.
@@ -287,8 +308,10 @@ def setup_database(
 
         da = _open_connection()
 
-        # Create performance indices (P3.1)
-        _ensure_database_indices(db_file)
+        # Create performance indices (base + optional JSON expression indexes)
+        _ensure_database_indices(
+            db_file, enable_expression_indexes=enable_expression_indexes
+        )
 
         db_path_obj = Path(db_file)
         try:

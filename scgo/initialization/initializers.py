@@ -17,7 +17,6 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
-from ase.data import atomic_numbers, vdw_radii
 
 from scgo.database.cache import get_global_cache
 from scgo.utils.helpers import (
@@ -27,6 +26,7 @@ from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.validation import validate_composition
 
+from .atomic_radii import get_vdw_radius
 from .candidate_discovery import (
     _find_smaller_candidates,
     get_structure_signature,
@@ -36,7 +36,6 @@ from .geometry_helpers import (
     _classify_seed_geometry,
     _generate_rotation_matrix,
     _should_check_connectivity,
-    get_covalent_radius,
     validate_cluster,
     validate_cluster_structure,
 )
@@ -75,33 +74,6 @@ class InitStrategy(Enum):
     RANDOM_SPHERICAL = "random_spherical"
 
 
-def _get_effective_vdw_radius(symbol: str) -> float:
-    """Get van-der-Waals radius, falling back to scaled covalent radius if VdW is NaN.
-
-    ASE's vdw_radii table has NaN for many transition metals (e.g., Co, Fe, Ru).
-    For such elements, we use covalent_radius * 1.3 as a reasonable estimate
-    (typical VdW/covalent ratio for metals is ~1.2-1.4).
-
-    Args:
-        symbol: Element symbol (e.g., "Pt", "Co")
-
-    Returns:
-        Effective VdW radius in Angstroms
-    """
-    try:
-        r = float(vdw_radii[atomic_numbers[symbol]])
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown element symbol: {symbol}. Could not find VdW radius."
-        ) from exc
-    if not np.isfinite(r) or r <= 0:
-        r = get_covalent_radius(symbol) * 1.3
-        logger.debug(
-            f"VdW radius for {symbol} is missing/NaN in ASE; using covalent*1.3 = {r:.3f} Å"
-        )
-    return r
-
-
 def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) -> float:
     """Estimate a cubic cell side from atomic van-der-Waals volumes.
 
@@ -109,8 +81,8 @@ def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) ->
     converts that to an effective spherical radius and returns a cubic
     side that contains the cluster plus the requested ``vacuum`` padding.
 
-    For elements where ASE's vdw_radii is NaN (e.g., Co, Fe, Ru), falls back
-    to scaled covalent radius to support multi-element clusters like Pt4Co1.
+    For elements where ASE's vdw_radii is NaN (e.g., Co, Fe, Ru), uses
+    interpolated values from neighboring elements (cached per element).
 
     Args:
         composition: Sequence of element symbols (e.g. ["Pt", "Pt"])
@@ -123,7 +95,7 @@ def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) ->
     if not composition:
         return 0.0
 
-    vdw_radii_list = [_get_effective_vdw_radius(s) for s in composition]
+    vdw_radii_list = [get_vdw_radius(s) for s in composition]
     total_atomic_volume = sum(4.0 / 3.0 * np.pi * r**3 for r in vdw_radii_list)
     # Apply packing efficiency factor (~0.74 for FCC/HCP)
     packed_volume = total_atomic_volume / PACKING_EFFICIENCY_FCC_HCP

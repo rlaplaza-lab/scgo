@@ -27,10 +27,12 @@ from benchmark.benchmark_common import (
     get_benchmark_params,
     run_benchmark_suite,
 )
+from scgo.utils.logging import get_logger
 
 BENCHMARK_SEEDS = [42, 43, 44, 45]
 MODEL_NAME: str | None = None
 BENCHMARK_BACKEND = os.environ.get("SCGO_BENCHMARK_BACKEND", "mace")
+logger = get_logger(__name__)
 
 
 @pytest.mark.parametrize(
@@ -92,7 +94,7 @@ def main() -> None:
         uma_task=args.uma_task,
     )
     elapsed = time.perf_counter() - t0
-    print(f"\nBenchmark wall time: {elapsed:.1f} s ({args.backend})")
+    logger.info("Benchmark wall time: %.1f s (%s)", elapsed, args.backend)
 
 
 if __name__ == "__main__":

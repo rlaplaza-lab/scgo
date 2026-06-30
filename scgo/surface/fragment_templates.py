@@ -14,12 +14,11 @@ def build_default_fragment_template(
 ) -> Atoms | None:
     """Return a gas-phase template for simple ``adsorbate_symbols`` lists, or ``None``.
 
-    Supported patterns (exact symbol order):
+    Supported patterns (exact symbol order) for a **single** template:
         - ``["O", "H"]``: one OH
-        - ``["O", "H", "O", "H"]``: two separated OH (for duplicated OH on a core)
 
-    For other stoichiometries or orderings, pass an explicit
-    :class:`ase.Atoms` template to ``run_go(..., adsorbate_fragment_template=...)``.
+    For multiple identical fragments, pass ``adsorbates=[frag, frag, ...]`` at the
+    runner API; each fragment is placed on its own adsorption site.
     """
     s = [str(x) for x in symbols]
     if s == ["O", "H"]:

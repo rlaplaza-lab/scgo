@@ -7,11 +7,9 @@ particularly using convex hull analysis to guide growth strategies.
 from __future__ import annotations
 
 import hashlib
-import logging
 
 import numpy as np
 from ase import Atoms
-from ase.data import atomic_numbers, covalent_radii
 from scipy.spatial import (  # Changed from ase.geometry.analysis
     ConvexHull,
     KDTree,
@@ -20,7 +18,9 @@ from scipy.spatial import (  # Changed from ase.geometry.analysis
 
 from scgo.database.cache import get_global_cache
 from scgo.utils.helpers import get_composition_counts
+from scgo.utils.logging import get_logger
 
+from .atomic_radii import get_covalent_radius
 from .initialization_config import (
     CLASH_TOLERANCE,
     CONNECTIVITY_FACTOR,
@@ -36,20 +36,7 @@ from .initialization_config import (
 # CORE UTILITIES
 # =============================================================================
 
-
-def get_covalent_radius(symbol: str) -> float:
-    """Get the covalent radius for an element symbol.
-
-    Args:
-        symbol: Element symbol (e.g., "Pt", "Au")
-
-    Returns:
-        Covalent radius in Angstroms
-
-    Raises:
-        KeyError: If element symbol is not found in atomic_numbers
-    """
-    return covalent_radii[atomic_numbers[symbol]]
+template_debug_logger = get_logger("scgo.initialization.templates")
 
 
 def format_placement_error_message(
@@ -749,19 +736,18 @@ def _generate_batch_positions_on_convex_hull(
             if (
                 max_connectivity_dist is not None
                 and min_centroid_dist > max_connectivity_dist * 0.7
+                and min_distance_factor is not None
+                and new_atom_radius is not None
             ):
-                debug_logger = logging.getLogger("scgo.initialization.templates")
-                # Check if it was a clash or connectivity issue
-                if min_distance_factor is not None and new_atom_radius is not None:
-                    min_dist_to_existing = min(
-                        np.linalg.norm(candidate_pos - existing_pos)
-                        for existing_pos in positions
-                    )
-                    debug_logger.debug(
-                        f"candidate rejected: min_dist={min_dist_to_existing:.3f}, "
-                        f"min_centroid_dist={min_centroid_dist:.3f}, "
-                        f"max_conn={max_connectivity_dist:.3f}"
-                    )
+                min_dist_to_existing = min(
+                    np.linalg.norm(candidate_pos - existing_pos)
+                    for existing_pos in positions
+                )
+                template_debug_logger.debug(
+                    f"candidate rejected: min_dist={min_dist_to_existing:.3f}, "
+                    f"min_centroid_dist={min_centroid_dist:.3f}, "
+                    f"max_conn={max_connectivity_dist:.3f}"
+                )
             continue
 
         # Add candidate (either pre-validated or passed validation)

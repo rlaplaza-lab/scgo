@@ -115,7 +115,7 @@ def main() -> None:
         output_root,
     )
     elapsed = time.perf_counter() - t0
-    print(f"\nBenchmark wall time: {elapsed:.1f} s ({args.backend})")
+    logger.info("Benchmark wall time: %.1f s (%s)", elapsed, args.backend)
 
 
 if __name__ == "__main__":

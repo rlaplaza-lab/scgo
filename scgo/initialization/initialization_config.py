@@ -21,7 +21,10 @@ MAX_CONSECUTIVE_FAILURES = (
 # Distance and Connectivity Parameters
 # ============================================================================
 # Connectivity: atoms connected if distance <= (r_i + r_j) * CONNECTIVITY_FACTOR
+# GA operators use blmin_ratio=0.7 (steric floor); validation at 1.4 catches
+# borderline disconnections that still pass the tighter operator threshold.
 CONNECTIVITY_FACTOR = 1.4  # Connectivity threshold used consistently throughout
+BLMIN_RATIO_DEFAULT = 0.7  # Covalent-radius scale for GA/placement clash tables
 MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 PLACEMENT_RADIUS_SCALING_DEFAULT = 1.2
 SEED_CLASH_FACTOR = MIN_DISTANCE_FACTOR_DEFAULT  # Use same factor as random placement

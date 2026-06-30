@@ -8,7 +8,11 @@ from typing import Literal, NotRequired, TypedDict
 from ase import Atoms
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
+from scgo.cluster_adsorbate.validation import (
+    validate_adsorbate_fragment_integrity,
+    validate_combined_cluster_structure,
+)
+from scgo.initialization.geometry_helpers import _find_connected_components
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.validation import (
@@ -38,19 +42,20 @@ class AdsorbateDefinition(TypedDict, total=False):
     ``adsorbate_symbols``.
 
     Build a core cluster, place rigid fragment(s) with
-    :func:`scgo.cluster_adsorbate.place_fragment_on_cluster`, then (for
-    surface) deposit. Requires a fragment template or
-    :func:`scgo.surface.fragment_templates.build_default_fragment_template`
-    for supported symbol lists.
+    :func:`scgo.cluster_adsorbate.place_fragment_on_cluster` (one site per fragment),
+    then (for surface) deposit. Pass ``adsorbates`` as ``list[Atoms]`` with one
+    entry per fragment at the runner API; ``adsorbate_fragment_lengths`` must match.
     """
 
     core_symbols: list[str]
     adsorbate_symbols: list[str]
+    adsorbate_fragment_lengths: list[int]
     fragment_anchor_index: NotRequired[int]
     fragment_bond_axis: NotRequired[list[int]]
 
 
 AdsorbatesInput = Atoms | list[Atoms]
+AdsorbateFragmentInput = Atoms | list[Atoms]
 
 
 @dataclass(frozen=True)
@@ -226,6 +231,26 @@ def _n_core_mobile_from_adsorbate_definition(
     return len(cr)
 
 
+def _adsorbate_fragment_lengths_from_definition(
+    adsorbate_definition: AdsorbateDefinition | None,
+) -> list[int] | None:
+    """Return adsorbate fragment lengths from definition, validating shape."""
+    if adsorbate_definition is None:
+        return None
+    raw = adsorbate_definition.get("adsorbate_fragment_lengths")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(x, int) for x in raw):
+        raise ValueError(
+            "adsorbate_definition['adsorbate_fragment_lengths'] must be a list[int]."
+        )
+    if any(int(x) <= 0 for x in raw):
+        raise ValueError(
+            "adsorbate_definition['adsorbate_fragment_lengths'] must contain positive integers."
+        )
+    return [int(x) for x in raw]
+
+
 def validate_structure_for_system_type(
     atoms: Atoms,
     *,
@@ -236,6 +261,7 @@ def validate_structure_for_system_type(
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> None:
     """Apply system-type-specific structural validation.
 
@@ -256,6 +282,8 @@ def validate_structure_for_system_type(
         allow_adsorbate_surface_detachment: For surface systems, allow adsorbate-only
             mobile subgroups on the slab without cluster contact (requires exactly
             one core/mixed subgroup when fragmentation is disabled).
+        enforce_adsorbate_subgraph_integrity: When True, require each adsorbate
+            fragment to remain internally connected.
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface:
@@ -281,8 +309,12 @@ def validate_structure_for_system_type(
                 n_core_mobile=_n_core_mobile_from_adsorbate_definition(
                     adsorbate_definition
                 ),
+                adsorbate_fragment_lengths=_adsorbate_fragment_lengths_from_definition(
+                    adsorbate_definition
+                ),
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             )
             if not ok:
                 raise ValueError(msg)
@@ -311,6 +343,39 @@ def validate_structure_for_system_type(
         validate_mobile_symbols_match_adsorbate_definition(
             atoms, n_mobile_slab, adsorbate_definition
         )
+        if enforce_adsorbate_subgraph_integrity:
+            cf = (
+                connectivity_factor
+                if connectivity_factor is not None
+                else CONNECTIVITY_FACTOR
+            )
+            core_len = _n_core_mobile_from_adsorbate_definition(adsorbate_definition)
+            if core_len is None:
+                core_len = 0
+            fragment_lengths = _adsorbate_fragment_lengths_from_definition(
+                adsorbate_definition
+            )
+            if fragment_lengths is None:
+                ads_list = adsorbate_definition.get("adsorbate_symbols", [])
+                fragment_lengths = (
+                    [len(ads_list)]
+                    if isinstance(ads_list, list) and len(ads_list) > 0
+                    else []
+                )
+            # Surface branch already applies this check in
+            # validate_supported_cluster_deposit(...). Avoid duplicate errors.
+            if not policy.uses_surface:
+                use_mic = False
+                ok, msg = validate_adsorbate_fragment_integrity(
+                    atoms,
+                    n_slab=n_mobile_slab,
+                    n_core_mobile=core_len,
+                    adsorbate_fragment_lengths=fragment_lengths,
+                    connectivity_factor=cf,
+                    use_mic=use_mic,
+                )
+                if not ok:
+                    raise ValueError(msg)
 
 
 def validate_composition_against_adsorbate(
@@ -407,6 +472,87 @@ def validate_adsorbate_definition(
             f"adsorbate_definition['fragment_anchor_index'] must be int or omitted, got {ai!r}"
         )
 
+    frag_lengths = adsorbate_definition.get("adsorbate_fragment_lengths")
+    if frag_lengths is not None:
+        if not isinstance(frag_lengths, list) or not all(
+            isinstance(x, int) for x in frag_lengths
+        ):
+            raise ValueError(
+                "adsorbate_definition['adsorbate_fragment_lengths'] must be a list of integers."
+            )
+        if any(int(x) <= 0 for x in frag_lengths):
+            raise ValueError(
+                "adsorbate_definition['adsorbate_fragment_lengths'] values must be positive."
+            )
+        expected_ads_len = len(composition) - len(core_list)
+        if sum(int(x) for x in frag_lengths) != expected_ads_len:
+            raise ValueError(
+                "adsorbate_definition['adsorbate_fragment_lengths'] must sum to the adsorbate "
+                f"length ({expected_ads_len}), got {sum(int(x) for x in frag_lengths)}."
+            )
+
+
+def resolve_adsorbate_fragments(
+    templates: AdsorbateFragmentInput | None,
+    adsorbate_definition: AdsorbateDefinition,
+    *,
+    context: str = "",
+) -> list[Atoms]:
+    """Normalize fragment templates and validate them against the adsorbate definition."""
+    prefix = f"{context}: " if context else ""
+    if templates is None:
+        raise ValueError(f"{prefix}adsorbate fragment template(s) are required.")
+
+    fragments = (
+        [templates.copy()]
+        if isinstance(templates, Atoms)
+        else [frag.copy() for frag in templates]
+    )
+    if not fragments:
+        raise ValueError(f"{prefix}adsorbate fragment template(s) must not be empty.")
+
+    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths")
+    lengths: list[int] = []
+    if isinstance(raw_lengths, list) and all(isinstance(x, int) for x in raw_lengths):
+        lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    raw_ads = adsorbate_definition.get("adsorbate_symbols", [])
+    ads_symbols = [str(s) for s in raw_ads] if isinstance(raw_ads, list) else []
+    if not lengths and ads_symbols:
+        lengths = [len(ads_symbols)]
+
+    if len(fragments) != len(lengths):
+        if (
+            len(fragments) == 1
+            and len(fragments[0]) == sum(lengths)
+            and len(lengths) > 1
+        ):
+            raise ValueError(
+                f"{prefix}found one combined adsorbate template for "
+                f"{len(lengths)} fragments. Pass adsorbates as list[Atoms] "
+                "with one entry per fragment."
+            )
+        raise ValueError(
+            f"{prefix}fragment template count ({len(fragments)}) must match "
+            f"adsorbate_fragment_lengths ({len(lengths)})."
+        )
+
+    offset = 0
+    for idx, (frag, frag_len) in enumerate(zip(fragments, lengths, strict=True)):
+        if len(frag) != frag_len:
+            raise ValueError(
+                f"{prefix}adsorbate fragment {idx} has len={len(frag)}, "
+                f"expected {frag_len}."
+            )
+        expected_symbols = ads_symbols[offset : offset + frag_len]
+        if expected_symbols and list(frag.get_chemical_symbols()) != expected_symbols:
+            raise ValueError(
+                f"{prefix}adsorbate fragment {idx} symbols "
+                f"{frag.get_chemical_symbols()!r} do not match expected "
+                f"{expected_symbols!r}."
+            )
+        offset += frag_len
+    return fragments
+
 
 def normalize_adsorbates_input(
     adsorbates: AdsorbatesInput | None, *, context: str
@@ -432,6 +578,27 @@ def normalize_adsorbates_input(
     return out
 
 
+def _validate_input_adsorbate_fragments_connected(
+    adsorbates: list[Atoms], *, context: str
+) -> None:
+    """Ensure each provided input adsorbate fragment is internally connected."""
+    prefix = f"{context}: " if context else ""
+    for idx, frag in enumerate(adsorbates):
+        if len(frag) <= 1:
+            continue
+        components, _ = _find_connected_components(
+            frag,
+            connectivity_factor=CONNECTIVITY_FACTOR,
+            use_mic=False,
+        )
+        if len(components) > 1:
+            raise ValueError(
+                f"{prefix}adsorbates[{idx}] is disconnected under "
+                f"connectivity_factor={CONNECTIVITY_FACTOR}. Provide a connected "
+                "initial adsorbate geometry."
+            )
+
+
 def flatten_adsorbate_symbols(adsorbates: list[Atoms]) -> list[str]:
     symbols: list[str] = []
     for frag in adsorbates:
@@ -454,7 +621,7 @@ def build_adsorbate_definition_from_inputs(
     composition: list[str],
     adsorbates: AdsorbatesInput | None,
     context: str,
-) -> tuple[AdsorbateDefinition | None, Atoms | None, list[str]]:
+) -> tuple[AdsorbateDefinition | None, list[Atoms] | None, list[str]]:
     policy = get_system_policy(system_type)
     if not policy.has_adsorbate:
         if adsorbates is not None:
@@ -464,11 +631,13 @@ def build_adsorbate_definition_from_inputs(
         return None, None, list(composition)
     core_list = [str(s) for s in composition]
     fragments = normalize_adsorbates_input(adsorbates, context=context)
+    _validate_input_adsorbate_fragments_connected(fragments, context=context)
     ads_list = flatten_adsorbate_symbols(fragments)
     full_mobile_composition = list(core_list) + list(ads_list)
     ads_def: AdsorbateDefinition = {
         "core_symbols": core_list,
         "adsorbate_symbols": ads_list,
+        "adsorbate_fragment_lengths": [len(frag) for frag in fragments],
     }
     validate_adsorbate_definition(
         system_type=system_type,
@@ -476,4 +645,14 @@ def build_adsorbate_definition_from_inputs(
         adsorbate_definition=ads_def,
         context=context,
     )
-    return ads_def, combine_adsorbates_to_template(fragments), full_mobile_composition
+    from scgo.cluster_adsorbate.feasibility import (
+        validate_adsorbate_placement_feasibility,
+    )
+
+    validate_adsorbate_placement_feasibility(
+        core_list,
+        ads_def["adsorbate_fragment_lengths"],
+        fragments,
+        context=context,
+    )
+    return ads_def, fragments, full_mobile_composition

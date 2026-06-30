@@ -47,6 +47,7 @@ def test_validate_partition_core_adsorbate():
         adsorbate_definition={
             "adsorbate_symbols": ["O", "H", "O", "H"],
             "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
+            "adsorbate_fragment_lengths": [2, 2],
         },
         context="test",
     )
@@ -60,6 +61,7 @@ def test_validate_rejects_bad_partition():
             adsorbate_definition={
                 "adsorbate_symbols": ["O", "H"],
                 "core_symbols": ["Pt"],
+                "adsorbate_fragment_lengths": [2],
             },
             context="test",
         )
@@ -73,6 +75,7 @@ def test_validate_rejects_wrong_list_order_with_matching_multiset():
             adsorbate_definition={
                 "core_symbols": ["Pt", "Pt", "Pt"],
                 "adsorbate_symbols": ["O", "H"],
+                "adsorbate_fragment_lengths": [2],
             },
             context="test",
         )
@@ -86,12 +89,15 @@ def test_hierarchical_deposition_ordering_and_slab_prefix():
     ads_def = {
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "core_symbols": ["Pt", "Pt", "Pt"],
+        "adsorbate_fragment_lengths": [2, 2],
     }
     rng = np.random.default_rng(2026)
     blmin = closest_distances_generator(
         list({int(z) for z in slab.numbers} | {78, 8, 1}),
         ratio_of_covalent_radii=0.7,
     )
+    oh = build_default_fragment_template(["O", "H"])
+    assert oh is not None
     out = create_deposited_cluster(
         mobile,
         slab,
@@ -99,9 +105,7 @@ def test_hierarchical_deposition_ordering_and_slab_prefix():
         rng,
         cfg,
         adsorbate_definition=ads_def,
-        adsorbate_fragment_template=build_default_fragment_template(
-            ["O", "H", "O", "H"]
-        ),
+        adsorbate_fragment_template=[oh, oh.copy()],
     )
     assert out is not None
     sym = out.get_chemical_symbols()
@@ -132,14 +136,15 @@ def test_surface_deposition_accepts_empty_core_symbols():
     ads_def = {
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "core_symbols": [],
+        "adsorbate_fragment_lengths": [2, 2],
     }
     rng = np.random.default_rng(2027)
     blmin = closest_distances_generator(
         list({int(z) for z in slab.numbers} | {8, 1}),
         ratio_of_covalent_radii=0.7,
     )
-    frag = build_default_fragment_template(["O", "H", "O", "H"])
-    assert frag is not None
+    oh = build_default_fragment_template(["O", "H"])
+    assert oh is not None
     out = create_deposited_cluster(
         mobile,
         slab,
@@ -147,7 +152,7 @@ def test_surface_deposition_accepts_empty_core_symbols():
         rng,
         cfg,
         adsorbate_definition=ads_def,
-        adsorbate_fragment_template=frag,
+        adsorbate_fragment_template=[oh, oh.copy()],
     )
     assert out is not None
     sym = out.get_chemical_symbols()
@@ -161,6 +166,7 @@ def test_gas_hierarchical_core_fragment_smoke():
     ads_def = {
         "core_symbols": ["Pt", "Pt"],
         "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
     }
     rng = np.random.default_rng(2026)
     tmpl = build_default_fragment_template(["O", "H"])

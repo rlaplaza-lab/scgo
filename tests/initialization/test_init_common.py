@@ -181,7 +181,7 @@ class TestCellSideComputation:
         """Test cell side for elements with NaN vdw_radii in ASE (e.g., Co, Fe, Ru).
 
         ASE's vdw_radii table has NaN for many transition metals. compute_cell_side
-        should fall back to scaled covalent radius and return a finite value.
+        should use interpolated VdW radii and return a finite value.
         """
         import numpy as np
 

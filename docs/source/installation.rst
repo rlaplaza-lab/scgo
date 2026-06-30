@@ -78,6 +78,31 @@ Dependency Notes
 - SCGO allows ``scipy>=1.14,<3`` to resolve cleanly with fairchem UMA
   dependencies
 
+Parallel jobs and output directories
+------------------------------------
+
+SCGO generates unique run folders (``run_YYYYMMDD_HHMMSS_ffffff``), so parallel
+jobs launched from the same parent output directory usually write to different
+``*.db`` files. This means log lines like ``Using cached results for: ...`` are
+normally in-process cache hits, not a lock by themselves.
+
+However, SQLite can still serialize writes when two jobs touch the same database
+file (for example, reusing the same explicit ``run_id`` or output path), and
+shared filesystems may add contention for registry lock files. For large
+parallel campaigns, prefer one output directory per job (or job-local scratch,
+then copy results back) to minimize lock waits.
+
+For performance-sensitive GA/BH runs on local storage, you can enable optional
+DB/GA tuning knobs:
+
+- ``db_enable_expression_indexes=True`` to add JSON expression indexes used by
+  SCGO metadata filtering/sorting paths.
+- ``ga_adaptive_retry_enabled=True`` (default) with
+  ``ga_retry_floor_multiplier``/``ga_retry_ceiling_multiplier`` to bound retry
+  budgets without hard-capping exploration.
+- ``ga_fast_prefilter_enabled=True`` (default) for low-cost clash rejection
+  before full structural validation.
+
 Publishing releases
 -------------------
 

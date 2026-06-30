@@ -64,6 +64,7 @@ pre-commit install
 ### Running on HPC (Slurm, shared filesystem)
 
 - **SQLite**: SCGO keeps WAL mode off by default (fewer `-wal`/`-shm` issues on Lustre/GPFS/NFS). Prefer writing active `*.db` files under job-local scratch (`$SLURM_TMPDIR` or site-specific scratch) when you can, then copying results back to project storage.
+- **Parallel jobs**: SCGO creates unique `run_<timestamp>_<microseconds>` folders, so jobs sharing a parent output directory usually write different DB files. Lock contention is still possible if jobs touch the same `*.db` (for example, reused explicit `run_id`/path) or if shared filesystems serialize lock files; for high parallelism, prefer one output directory per job.
 - **Registry**: Discovery may write `.scgo_db_registry.json` and `.scgo_db_registry.lock` (with `flock` on Linux) for fast DB listing. When your run lives under a directory whose name ends in `_searches`, the index is kept at that parent only (not beside every `trial_*` folder). If your filesystem does not honor `flock`, use separate output directories per job or avoid parallel registry updates.
 - **Logging**: Batch-friendly defaults suppress noisy third-party loggers. For local debugging, set `SCGO_LOCAL_DEV=1` or call `configure_logging(..., hpc_mode=False)`.
 
@@ -77,6 +78,8 @@ Comprehensive documentation is available in the `docs/` directory:
 - **Quick Start**: `docs/source/quickstart.rst` - Basic usage examples and workflows
 - **API Reference**: 
   - `docs/source/api/runner_api.rst` - High-level API entry points
+  - `docs/source/api/surface.rst` - Slab configuration and deposition
+  - `docs/source/api/cluster_adsorbate.rst` - Adsorbate placement and GA repositioning
   - `docs/source/api/param_presets.rst` - Parameter presets
   - `docs/source/api/system_types.rst` - System type definitions
 
@@ -182,7 +185,7 @@ Path interpolation always uses the **aligned** reactant and product copies as ba
 
 Preset-vs-runtime split in `runner_api`:
 
-- Put scientific/tuning knobs in preset dicts (`go_params`/`ts_params`): calculator choice, optimizer settings, NEB settings, pairing thresholds, etc.
+- Put scientific/tuning knobs in preset dicts (`go_params`/`ts_params`): calculator choice, optimizer settings, NEB settings, pairing thresholds, adsorbate placement (`cluster_adsorbate_config`), connectivity (`connectivity_factor`), etc.
 - Keep run-control knobs on the `run_*` call itself: `verbosity`, `output_dir`, `output_root`, `output_stem`, `seed`, `log_summary`, `write_timing_json`, `profile_ga`.
 - Keep system-definition inputs on the `run_*` call itself: `system_type`, core-only `composition`, and `adsorbates` when applicable.
 - For surface system types, pass `surface_config` on the `run_*` call and in preset builders (`get_torchsim_ga_params`, `get_ts_search_params`); SCGO validates coherence across GO/TS presets and run arguments.
@@ -215,6 +218,12 @@ After writing final XYZ files, SCGO can optionally tag the corresponding databas
 - `fitness_strategy`: `low_energy` (default), `high_energy`, or `diversity`. The `diversity` strategy requires a `diversity_reference_db` glob (e.g., `"Pt*_searches/**/*.db"`).
 - `validate_with_hessian` (bool): run force + Hessian checks (uses ASE vibrational analysis).
 - GA backend: MLIPs use TorchSim batched GA; classical calculators use ASE GA.
+- Database/perf knobs:
+  - `db_enable_expression_indexes` (GA/BH, default `False`): enable extra SQLite JSON expression indexes for frequent metadata predicates/sorts.
+  - `ga_adaptive_retry_enabled` (default `True`): adapt offspring attempt budget to recent acceptance rate instead of fixed `10*n_offspring`.
+  - `ga_retry_floor_multiplier` / `ga_retry_ceiling_multiplier` (defaults `4` / `15`): lower/upper bounds for adaptive retry budget.
+  - `ga_fast_prefilter_enabled` (default `True`): cheap severe-clash prefilter before full system-type validation.
+  - `write_timing_json=True` includes per-run retry failure counters (`retry_failures`) and per-generation acceptance/failure breakdown in detailed mode.
 
 ---
 
@@ -260,7 +269,22 @@ For the bundled graphite preset, `make_graphite_surface_config(slab_layers=3)` c
 - **`run_go`**: pass `surface_config=...` directly to `run_go(...)`; it is copied into each **present** `optimizer_params` entry among `simple` / `bh` / `ga` so the active algorithm sees the slab. Automatic algorithm choice follows mobile atom count (see **Algorithm selection** under Global optimization).
 - For slab workflows, choose `system_type="surface_cluster"` (supported cluster only) or `system_type="surface_cluster_adsorbate"` (supported cluster with explicit adsorbate-mode policies). Use `scgo.surface.make_surface_config` for a custom ASE slab; use `scgo.surface.make_graphite_surface_config` for the bundled graphite template.
 
-Adsorbate inputs and initial structures: For both `gas_cluster_adsorbate` and `surface_cluster_adsorbate`, pass core-only `composition` plus `adsorbates` (one `Atoms` or list of `Atoms`). SCGO derives a strict mobile partition in order (`core_symbols == composition`, then flattened adsorbate symbols); slab atoms are not part of `composition`. SCGO uses hierarchical initialization only: build the core, place the rigid fragment(s), then (for surface) deposit the combined cluster on the slab. Optional: `run_go(..., cluster_adsorbate_config=ClusterAdsorbateConfig(...))` for fragment height and validation. Use `scgo.surface.describe_surface_config` to log effective slab and height settings. GA and basin-hopping attach `n_core_atoms` and per-role symbol JSON in metadata for round-trip checks. When adsorbate metadata is present, [`validate_structure_for_system_type`](scgo/system_types.py) also asserts that the mobile region's chemical symbols match `core_symbols + adsorbate_symbols` in order (in addition to geometry checks).
+Adsorbate inputs and initial structures: For both `gas_cluster_adsorbate` and `surface_cluster_adsorbate`, use core-only `composition` plus `adsorbates` as the primary API (`Atoms` for one fragment, or `list[Atoms]` for multiple fragments). SCGO derives a strict mobile partition in order (`core_symbols == composition`, then flattened adsorbate symbols); slab atoms are not part of `composition`. SCGO uses hierarchical initialization only: build the core, place rigid fragment(s) on convex-hull adsorption sites (vertex/edge/facet), then (for surface) deposit the combined cluster on the slab. Placement ranks candidate poses by steric deficit (covalent-radius `blmin`) and progressively relaxes height/clash thresholds on retry. Optional fragment placement and validation tuning lives in `go_params` (`cluster_adsorbate_config=ClusterAdsorbateConfig(...)`, or set `connectivity_factor` alone for the common case). Use `scgo.surface.describe_surface_config` to log effective slab and height settings. GA and basin-hopping attach `n_core_atoms` and per-role symbol JSON in metadata for round-trip checks (including fragment-length metadata for multi-fragment adsorbates). When adsorbate metadata is present, [`validate_structure_for_system_type`](scgo/system_types.py) also asserts that the mobile region's chemical symbols match `core_symbols + adsorbate_symbols` in order (in addition to geometry checks). Input `adsorbates` fragments are validated to be connected geometries. `adsorbate_definition['adsorbate_fragment_lengths']` is optional for manual definitions: when set, integrity is enforced per fragment; when omitted, integrity falls back to the full adsorbate block as one connected subgraph. Set `freeze_adsorbate_internal_geometry=True` in GO params for strict template rigidity (Kabsch restore after mutations); the default (`False`) still preserves intra-fragment bonds via tag-rigid GA operators.
+
+### Adsorbate GA behavior (`*_adsorbate`)
+
+For adsorbate system types, the GA uses ASE tags to partition the mobile region: **core** (tag `0`) vs **adsorbate fragments** (tags `1..N`).
+
+| Mechanism | Behavior |
+|-----------|----------|
+| Crossover | Cut-and-splice on the **core only**; adsorbate fragments stay on parent 0. |
+| Rattle / overlap relief | Tag-rigid: each fragment moves as a unit (intra-fragment geometry preserved). |
+| Rotational / mirror / flattening / breathing | Core-targeted variants (`*_core`); adsorbate distortions omitted or scoped to adsorbate tags when freeze is off. |
+| `fragment_reposition` | Re-place one adsorbate fragment on fresh hull sites (same placement engine as init). |
+| `in_plane_slide` | Surface-only; core and adsorbate variants (`in_plane_slide_core`, `in_plane_slide_ads`). |
+| Validation | `enforce_adsorbate_subgraph_integrity=True` (default) rejects dissociated fragments post-operator and post-relax. |
+
+Clash tables (`blmin`) and placement use gap-filled covalent radii via [`build_blmin`](scgo/initialization/atomic_radii.py) (`BLMIN_RATIO_DEFAULT=0.7`). Structure validation uses `connectivity_factor` (default `1.4`) — typically stricter than operator sterics, so borderline disconnections are caught at validation rather than during mutation.
 
 ### Slab motion during local relaxation
 
@@ -283,6 +307,7 @@ For `surface_cluster` and `surface_cluster_adsorbate`, GO/GA/BH and TS validate 
 |------|---------|-------------------|
 | `allow_cluster_fragmentation` | `False` | Multiple disconnected core/mixed mobile subgroups allowed (each must touch the slab). |
 | `allow_adsorbate_surface_detachment` | `False` | Adsorbate-only mobile subgroups on the slab without cluster contact (requires exactly one core/mixed subgroup when fragmentation is off). |
+| `enforce_adsorbate_subgraph_integrity` | `True` | Keep adsorbate subgraphs connected (non-dissociative). With `adsorbate_fragment_lengths`, this is per fragment; otherwise it applies to the whole adsorbate block. External bonds to core/other fragments are still allowed. |
 
 **Typical modes:** both `False` (strict single connected mobile cluster); fragmentation only (`True`, `False`); both `True` (any mobile split, each subgroup slab-connected). For `surface_cluster_adsorbate`, core vs adsorbate subgroups are classified using `adsorbate_definition['core_symbols']`.
 
@@ -346,7 +371,7 @@ results = run_go(
 )
 ```
 
-**Algorithm selection** (mobile atom count): 1–2 → simple (plain `gas_cluster` only); 3 → basin hopping; 4+ → genetic algorithm. Adsorbate system types skip `simple` (two-atom mobile regions use GA). For basin hopping and surface adsorbate runs, `scgo` builds hierarchical initial structures from `adsorbate_fragment_template` and passes `adsorbate_definition` / `cluster_adsorbate_config` to the optimizer; init-only keys (fragment template, placement glob, etc.) are not forwarded to the algorithm entry point.
+**Algorithm selection** (mobile atom count): 1–2 → simple (plain `gas_cluster` only); 3 → basin hopping; 4+ → genetic algorithm. Adsorbate system types skip `simple` (two-atom mobile regions use GA). For basin hopping and surface adsorbate runs, `scgo` builds hierarchical initial structures from `adsorbate_fragment_template` and reads `adsorbate_definition` / `cluster_adsorbate_config` from `go_params`; init-only keys (fragment template, placement glob, etc.) are not forwarded to the algorithm entry point.
 
 #### `run_go_campaign(compositions, ..., system_type=...)`
 
@@ -399,7 +424,7 @@ ts_results = run_ts_search(
 
 ### GO then TS
 
-`run_go_ts` / `run_go_ts_campaign` use **`go_params=`** (merged like other GO runs) and **`ts_params=`** (same flat shape as above; **not** deep-merged with `get_default_params()`). For **slab + adsorbate**, pass a `SurfaceSystemConfig` directly to `run_go_ts(..., surface_config=...)` / `run_go_ts_campaign(..., surface_config=...)`; the `composition` argument is **adsorbate symbols only** (the full system for loading minima is built as slab + adsorbate, matching GA). For MACE + TorchSim GA, start from [`get_torchsim_ga_params`](scgo/param_presets.py) with `system_type=...` and `seed` (optional `surface_config=` / `model_name=`), set `go_params["calculator"] = "MACE"` and `optimizer_params["ga"]` as needed; pair with `get_ts_search_params(...)` and set `ts_params["max_pairs"]`, etc. For UMA NEB defaults, use `get_ts_search_params(calculator="UMA", ...)`. See `examples/example_pt5_gas.py` for a minimal end-to-end example. Default output if `output_dir` is omitted is under `scgo_runs/<stem>_<mace|uma>/` (set `output_root` / `output_stem` to change).
+`run_go_ts` / `run_go_ts_campaign` use **`go_params=`** (merged like other GO runs) and **`ts_params=`** (same flat shape as above; **not** deep-merged with `get_default_params()`). For `*_adsorbate` system types, pass core-only `composition` and `adsorbates` on the `run_*` call (same as `run_go`); SCGO builds the full mobile composition internally. For surface workflows, pass `surface_config` on the `run_*` call and in preset builders (`get_torchsim_ga_params`, `get_ts_search_params`); values must agree when both are set. For MACE + TorchSim GA, start from [`get_torchsim_ga_params`](scgo/param_presets.py) with `system_type=...` and `seed` (optional `surface_config=` / `model_name=`), set `go_params["calculator"] = "MACE"` and `optimizer_params["ga"]` as needed; pair with `get_ts_search_params(...)` and set `ts_params["max_pairs"]`, etc. For UMA NEB defaults, use `get_ts_search_params(calculator="UMA", ...)`. See `examples/example_pt5_gas.py` for a minimal end-to-end example. Default output if `output_dir` is omitted is under `scgo_runs/<stem>_<mace|uma>/` (set `output_root` / `output_stem` to change).
 
 Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_benchmark_params`](scgo/param_presets.py) (re-exported from `scgo`). See `benchmark/` for long-running MLIP regression sweeps.
 
@@ -407,6 +432,8 @@ Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_b
 
 - `from scgo.runner_api import _run_go_trials`, `_run_go_campaign_compositions`, `build_one_element_compositions`, `build_two_element_compositions`, …
 - `from scgo.surface import make_surface_config` for arbitrary ASE slabs (preset graphite: `make_graphite_surface_config`)
+- `from scgo.cluster_adsorbate import ClusterAdsorbateConfig, place_fragment_on_cluster` — adsorbate placement; see `docs/source/api/cluster_adsorbate.rst`
+- `from scgo.initialization.atomic_radii import build_blmin` — covalent-radius clash tables for GA and placement
 - Low-level `scgo(...)` / `run_trials(...)`: pass `system_type` in `global_optimizer_kwargs` (required for `scgo`; `run_trials` defaults missing values to `"gas_cluster"`)
 - `from scgo.ts_search.transition_state_run import run_transition_state_search` for a flat keyword API without the `ts_params` dict.
 
@@ -422,10 +449,12 @@ Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_b
 |--------|----------------|-------|
 | [`examples/example_pt5_gas.py`](examples/example_pt5_gas.py) | `gas_cluster` | Gas-phase `Pt5` only |
 | [`examples/example_pt5_graphite.py`](examples/example_pt5_graphite.py) | `surface_cluster` | `Pt5` on preset graphite |
-| [`examples/example_pt5_oh_gas.py`](examples/example_pt5_oh_gas.py) | `gas_cluster_adsorbate` | core-only `Pt5` composition + one `adsorbates` OH fragment |
-| [`examples/example_pt5_2oh_graphite.py`](examples/example_pt5_2oh_graphite.py) | `surface_cluster_adsorbate` | core-only `Pt5` composition + two `adsorbates` OH fragments |
+| [`examples/example_pt5_oh_gas.py`](examples/example_pt5_oh_gas.py) | `gas_cluster_adsorbate` | core-only `Pt5` + one OH; tag-aware GA, optional `freeze_adsorbate_internal_geometry` |
+| [`examples/example_pt5_2oh_graphite.py`](examples/example_pt5_2oh_graphite.py) | `surface_cluster_adsorbate` | core-only `Pt5` + two OH on graphite; hull-site placement + `fragment_reposition` |
 
-For multi-size MLIP sweeps, see [`benchmark/`](benchmark/) (e.g. [`benchmark/benchmark_Pt.py`](benchmark/benchmark_Pt.py), [`benchmark/benchmark_Pt_surface_graphite.py`](benchmark/benchmark_Pt_surface_graphite.py)), not `tests/benchmarks/`. - See `tests/` for concrete usage patterns.
+For multi-size MLIP sweeps, see [`benchmark/`](benchmark/) (e.g. [`benchmark/benchmark_Pt.py`](benchmark/benchmark_Pt.py), [`benchmark/benchmark_Pt_surface_graphite.py`](benchmark/benchmark_Pt_surface_graphite.py)), not `tests/benchmarks/`.
+
+See `tests/` for concrete usage patterns and acceptance tests for adsorbate GA operators.
 
 ---
 

@@ -38,3 +38,41 @@ def attach_fix_bond_lengths(
         new_constraints.append(FixBondLength(int(a), int(b)))
     if new_constraints:
         atoms.set_constraint(new_constraints)
+
+
+def attach_adsorbate_internal_geometry_constraints(
+    atoms: Atoms,
+    *,
+    n_slab: int,
+    adsorbate_definition: dict | None,
+) -> None:
+    """Freeze pairwise distances inside each adsorbate fragment.
+
+    This enforces rigid internal geometry for adsorbates while still allowing
+    collective translation/rotation of each adsorbate fragment.
+    """
+    if adsorbate_definition is None:
+        return
+    core_symbols = adsorbate_definition.get("core_symbols", [])
+    if not isinstance(core_symbols, list):
+        return
+    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths", [])
+    if not isinstance(raw_lengths, list) or not all(
+        isinstance(x, int) for x in raw_lengths
+    ):
+        return
+    fragment_lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    if not fragment_lengths:
+        return
+
+    ads_start = int(n_slab) + len(core_symbols)
+    bond_pairs: list[tuple[int, int]] = []
+    cursor = ads_start
+    for frag_len in fragment_lengths:
+        for i in range(cursor, cursor + frag_len):
+            for j in range(i + 1, cursor + frag_len):
+                bond_pairs.append((i, j))
+        cursor += frag_len
+
+    if bond_pairs:
+        attach_fix_bond_lengths(atoms, bond_pairs)

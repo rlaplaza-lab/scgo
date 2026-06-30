@@ -12,9 +12,11 @@ from ase import Atoms
 from ase.spacegroup import Spacegroup
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
+from scgo.cluster_adsorbate.combine import combine_core_adsorbate
 from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
+from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.initialization.geometry_helpers import _generate_rotation_matrix
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.utils.logging import get_logger
@@ -25,7 +27,7 @@ if TYPE_CHECKING:
 
     from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
     from scgo.surface.config import SurfaceSystemConfig
-    from scgo.system_types import AdsorbateDefinition
+    from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
 
 logger = get_logger(__name__)
 _ASE_SPACEGROUP_WARMUP_LOCK = Lock()
@@ -50,6 +52,95 @@ def _warmup_ase_spacegroup_cache() -> None:
                 "Failed to pre-warm ASE Spacegroup cache; continuing without warmup.",
                 exc_info=True,
             )
+
+
+def _slab_surface_layer(slab: Atoms, axis: int, thickness: float = 2.5) -> Atoms:
+    """Return slab atoms in the top ``thickness`` Å along the surface normal."""
+    pos = slab.get_positions()
+    if len(pos) == 0:
+        return slab.copy()
+    top = slab_surface_extreme(slab, axis, upper=True)
+    mask = pos[:, axis] >= top - thickness
+    layer = slab[mask] if np.any(mask) else slab
+    return layer.copy()
+
+
+def _fragment_anchor_and_bond_axis(
+    adsorbate_definition: AdsorbateDefinition,
+) -> tuple[int, tuple[int, int] | None]:
+    anchor = int(adsorbate_definition.get("fragment_anchor_index", 0))
+    fba = adsorbate_definition.get("fragment_bond_axis")
+    bond_axis: tuple[int, int] | None = None
+    if fba is not None:
+        bond_axis = (int(fba[0]), int(fba[1]))
+    return anchor, bond_axis
+
+
+def _build_adsorbate_fragments_on_slab(
+    slab: Atoms,
+    fragments: list[Atoms],
+    adsorbate_definition: AdsorbateDefinition,
+    rng: Generator,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None,
+    batch_site_counts: dict[str, int] | None,
+    axis: int,
+    max_placement_attempts: int,
+) -> Atoms | None:
+    """Place molecular fragments on slab top-layer hull sites (no metal core)."""
+    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+
+    if not fragments:
+        return None
+
+    ca = cluster_adsorbate_config or ClusterAdsorbateConfig()
+    site_core = _slab_surface_layer(slab, axis)
+    anchor, bond_axis = _fragment_anchor_and_bond_axis(adsorbate_definition)
+    within_structure_site_counts: dict[str, int] = {}
+
+    for _ in range(max_placement_attempts):
+        mobile = Atoms()
+        mobile.set_cell(slab.get_cell())
+        mobile.set_pbc(slab.get_pbc())
+        all_ok = True
+        for frag_tmpl in fragments:
+            clash_target = slab if len(mobile) == 0 else slab + mobile
+            placed = place_fragment_on_cluster(
+                site_core,
+                frag_tmpl,
+                rng,
+                ca,
+                anchor_index=anchor,
+                bond_axis=bond_axis,
+                site_core=site_core,
+                clash_atoms=clash_target,
+                within_structure_site_counts=within_structure_site_counts,
+                batch_site_counts=batch_site_counts,
+            )
+            if placed is None:
+                all_ok = False
+                break
+            mobile = combine_core_adsorbate(mobile, placed) if len(mobile) else placed
+        if all_ok and len(mobile) > 0:
+            return combine_slab_adsorbate(slab, mobile)
+    return None
+
+
+def _near_surface_rotation_matrix(rng: Generator, axis: int) -> np.ndarray:
+    """Mostly in-plane rotation with a small tilt off the surface normal."""
+    in_plane_angle = float(rng.uniform(0.0, 2.0 * np.pi))
+    tilt = float(rng.uniform(-0.35, 0.35))
+    normal = np.zeros(3, dtype=float)
+    normal[axis] = 1.0
+    if axis == 0:
+        rot_axis = np.array([0.0, np.cos(in_plane_angle), np.sin(in_plane_angle)])
+    elif axis == 1:
+        rot_axis = np.array([np.cos(in_plane_angle), 0.0, np.sin(in_plane_angle)])
+    else:
+        rot_axis = np.array([np.cos(in_plane_angle), np.sin(in_plane_angle), 0.0])
+    rot_axis /= max(np.linalg.norm(rot_axis), 1e-12)
+    return _generate_rotation_matrix(rot_axis, tilt) @ _generate_rotation_matrix(
+        normal, in_plane_angle
+    )
 
 
 def slab_surface_extreme(slab: Atoms, axis: int, *, upper: bool = True) -> float:
@@ -180,6 +271,8 @@ def _place_cluster_above_slab(
     rng: Generator,
     config: SurfaceSystemConfig,
     cluster_atomic_numbers: np.ndarray | None = None,
+    *,
+    prefer_surface_normal: bool = False,
 ) -> np.ndarray:
     """Rotate/translate centered cluster positions into a deposited position.
 
@@ -193,9 +286,12 @@ def _place_cluster_above_slab(
         cluster_atomic_numbers: Atomic numbers of cluster atoms. If provided,
             used to calculate covalent radii for connectivity-based placement.
     """
-    rotated_positions = cluster_positions @ _random_rotation_matrix(rng).T
-
-    # Estimate cluster radius for biasing placement towards slab atoms
+    rotation = (
+        _near_surface_rotation_matrix(rng, axis)
+        if prefer_surface_normal
+        else _random_rotation_matrix(rng)
+    )
+    rotated_positions = cluster_positions @ rotation.T
     cluster_radius = float(np.max(np.linalg.norm(rotated_positions, axis=1)))
 
     translated_positions = rotated_positions + _in_plane_translation(
@@ -286,8 +382,9 @@ def create_deposited_cluster(
     config: SurfaceSystemConfig,
     previous_search_glob: str = "**/*.db",
     adsorbate_definition: AdsorbateDefinition | None = None,
-    adsorbate_fragment_template: Atoms | None = None,
+    adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
+    batch_site_counts: dict[str, int] | None = None,
 ) -> Atoms | None:
     """One adsorbate+slab structure, or None if placement fails.
 
@@ -317,7 +414,31 @@ def create_deposited_cluster(
                 str(s) for s in adsorbate_definition.get("core_symbols", [])
             ]
             if len(core_symbols) == 0:
-                cluster_seed = adsorbate_fragment_template.copy()
+                from scgo.system_types import resolve_adsorbate_fragments
+
+                fragments = resolve_adsorbate_fragments(
+                    adsorbate_fragment_template,
+                    adsorbate_definition,
+                    context="create_deposited_cluster",
+                )
+                combined = _build_adsorbate_fragments_on_slab(
+                    slab,
+                    fragments,
+                    adsorbate_definition,
+                    rng,
+                    cluster_adsorbate_config,
+                    batch_site_counts,
+                    axis,
+                    config.max_placement_attempts,
+                )
+                if combined is None:
+                    continue
+                mobile = combined[len(slab) :]
+                if atoms_too_close(mobile, blmin, use_tags=False):
+                    continue
+                if atoms_too_close_two_sets(mobile, slab, blmin):
+                    continue
+                return combined
             else:
                 cluster_seed = build_hierarchical_core_fragment_cluster(
                     composition,
@@ -329,13 +450,15 @@ def create_deposited_cluster(
                     cluster_init_vacuum=config.cluster_init_vacuum,
                     init_mode=config.init_mode,
                     max_placement_attempts=config.max_placement_attempts,
+                    batch_site_counts=batch_site_counts,
                 )
-                if cluster_seed is None:
-                    continue
+            if cluster_seed is None:
+                continue
         atomic_numbers = cluster_seed.get_atomic_numbers()
         cluster_positions = cluster_seed.get_positions().copy()
 
         cluster_positions -= np.mean(cluster_positions, axis=0)
+        prefer_surface = adsorbate_definition is not None
         deposited_positions = _place_cluster_above_slab(
             cluster_positions=cluster_positions,
             slab=slab,
@@ -344,6 +467,7 @@ def create_deposited_cluster(
             rng=rng,
             config=config,
             cluster_atomic_numbers=atomic_numbers,
+            prefer_surface_normal=prefer_surface,
         )
 
         adsorbate = Atoms(
@@ -407,8 +531,9 @@ def create_deposited_cluster_batch(
     previous_search_glob: str = "**/*.db",
     n_jobs: int = 1,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    adsorbate_fragment_template: Atoms | None = None,
+    adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
+    batch_site_counts: dict[str, int] | None = None,
 ) -> list[Atoms]:
     """Generate multiple deposited structures (sequential or threaded)."""
     if n_structures <= 0:
@@ -419,6 +544,7 @@ def create_deposited_cluster_batch(
     if n_jobs == 1:
         out: list[Atoms] = []
         attempts = 0
+        shared_site_counts = batch_site_counts
         while len(out) < n_structures and attempts < max_attempts:
             attempts += 1
             child_rng = np.random.default_rng(
@@ -434,6 +560,7 @@ def create_deposited_cluster_batch(
                 adsorbate_definition=adsorbate_definition,
                 adsorbate_fragment_template=adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
+                batch_site_counts=shared_site_counts,
             )
             if struct is not None:
                 out.append(struct)

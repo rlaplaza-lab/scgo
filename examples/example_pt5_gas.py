@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pt5 gas-phase: GO + TS via ``run_go_ts``.
 
-``system_type="gas_cluster"`` — no slab, no ``adsorbate_definition``.
+``system_type="gas_cluster"`` — gas-phase cluster only (no slab, no ``adsorbates``).
 """
 
 from __future__ import annotations
@@ -24,34 +24,28 @@ MAX_PAIRS = 15
 
 
 def _build_go_params() -> dict:
-    """Load GO preset, then tweak only the fields this run cares about."""
     go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["calculator"] = "MACE"
-    go_params["connectivity_factor"] = 1.4  # default, but explicit
+    go_params["connectivity_factor"] = 1.4
     go_params["optimizer_params"]["ga"].update(
-        niter=NITER, population_size=POPULATION_SIZE
+        niter=NITER,
+        population_size=POPULATION_SIZE,
     )
     return go_params
 
 
 def _build_ts_params() -> dict:
-    """Load TS preset, then tweak only pairing/search budget fields.
-
-    Preset leaves ``neb_align_endpoints=True`` so NEB bands start from aligned endpoints.
-    """
     ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
     ts_params["max_pairs"] = MAX_PAIRS
-    ts_params["connectivity_factor"] = 1.4  # default, but explicit
+    ts_params["connectivity_factor"] = 1.4
     return ts_params
 
 
 def main() -> None:
-    go_params = _build_go_params()
-    ts_params = _build_ts_params()
     run_go_ts(
         [ELEMENT] * N_ATOMS,
-        go_params=go_params,
-        ts_params=ts_params,
+        go_params=_build_go_params(),
+        ts_params=_build_ts_params(),
         seed=SEED,
         output_root=DEFAULT_OUTPUT_ROOT,
         output_stem=OUTPUT_STEM,

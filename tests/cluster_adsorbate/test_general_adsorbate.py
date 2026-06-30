@@ -11,9 +11,11 @@ from numpy.random import default_rng
 
 from scgo.cluster_adsorbate import (
     ClusterAdsorbateConfig,
+    attach_adsorbate_internal_geometry_constraints,
     place_fragment_on_cluster,
     relax_metal_cluster_with_adsorbate,
 )
+from scgo.system_types import validate_structure_for_system_type
 
 
 def _pt_triangle() -> Atoms:
@@ -106,3 +108,65 @@ def test_attach_fix_bond_lengths_rejects_duplicate() -> None:
     a = Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]], cell=[10, 10, 10], pbc=False)
     with pytest.raises(ValueError, match="duplicate"):
         attach_fix_bond_lengths(a, [(0, 1), (1, 0)])
+
+
+def test_gas_adsorbate_subgraph_integrity_optional_flag() -> None:
+    atoms = Atoms(
+        symbols=["Pt", "Pt", "O", "H"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.4, 0.0, 0.0],
+            [1.2, 0.0, 1.5],  # O (connected to core)
+            [3.4, 0.0, 1.5],  # H (disconnected from O under O-H threshold)
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    adsorbate_definition = {
+        "core_symbols": ["Pt", "Pt"],
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+
+    with pytest.raises(ValueError, match="fragment integrity check failed"):
+        validate_structure_for_system_type(
+            atoms,
+            system_type="gas_cluster_adsorbate",
+            adsorbate_definition=adsorbate_definition,
+            enforce_adsorbate_subgraph_integrity=True,
+        )
+
+    validate_structure_for_system_type(
+        atoms,
+        system_type="gas_cluster_adsorbate",
+        adsorbate_definition=adsorbate_definition,
+        enforce_adsorbate_subgraph_integrity=False,
+    )
+
+
+def test_attach_adsorbate_internal_geometry_constraints_freezes_bonds() -> None:
+    atoms = Atoms(
+        symbols=["Pt", "Pt", "O", "H", "O", "H"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.4, 0.0, 0.0],
+            [1.2, 0.0, 1.4],
+            [1.2, 0.0, 2.3],
+            [3.4, 0.0, 1.4],
+            [3.4, 0.0, 2.3],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    adsorbate_definition = {
+        "core_symbols": ["Pt", "Pt"],
+        "adsorbate_symbols": ["O", "H", "O", "H"],
+        "adsorbate_fragment_lengths": [2, 2],
+    }
+    attach_adsorbate_internal_geometry_constraints(
+        atoms,
+        n_slab=0,
+        adsorbate_definition=adsorbate_definition,
+    )
+    # Two OH fragments, each contributes one constrained pair.
+    assert len(atoms.constraints) == 2

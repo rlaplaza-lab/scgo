@@ -9,9 +9,9 @@ Main entry points:
 
 from __future__ import annotations
 
+from .atomic_radii import get_covalent_radius, get_vdw_radius
 from .geometry_helpers import (
     StructureDiagnostics,
-    get_covalent_radius,
     get_structure_diagnostics,
     is_cluster_connected,
     validate_cluster,
@@ -55,6 +55,7 @@ __all__ = [
     # Diagnostics and utilities
     "StructureDiagnostics",
     "get_covalent_radius",
+    "get_vdw_radius",
     "get_structure_diagnostics",
     # Template functions
     "generate_icosahedron",

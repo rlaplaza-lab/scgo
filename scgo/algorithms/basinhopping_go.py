@@ -17,8 +17,15 @@ from ase.optimize import LBFGS
 from ase.optimize.optimize import Optimizer
 from tqdm import tqdm
 
-from scgo.algorithms.ga_common import ga_run_metadata_extras
+from scgo.algorithms.ga_common import (
+    ga_run_metadata_extras,
+    maybe_apply_mobile_core_ads_tags,
+)
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.constraints import (
+    attach_adsorbate_internal_geometry_constraints,
+)
+from scgo.cluster_adsorbate.rigid import enforce_frozen_adsorbate_geometry
 from scgo.constants import (
     BOLTZMANN_K_EV_PER_K,
     DEFAULT_COMPARATOR_TOL,
@@ -32,6 +39,7 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
     AdsorbateDefinition,
+    AdsorbateFragmentInput,
     SystemType,
     get_system_policy,
     validate_structure_for_system_type,
@@ -71,6 +79,8 @@ def _move_atoms(
     move_strategy: str = "random",
     rng: np.random.Generator | None = None,
     movable_indices: list[int] | None = None,
+    *,
+    move_by_tag_groups: bool = False,
 ) -> tuple[Atoms, str]:
     """Apply a random displacement to a subset of atoms.
 
@@ -91,45 +101,71 @@ def _move_atoms(
 
     if movable_indices is None:
         movable_indices = list(range(len(atoms_new)))
-    n_atoms = len(movable_indices)
 
-    if n_atoms <= 1:
-        moved = movable_indices[0] if movable_indices else 0
-        return atoms_new, f"Moved_atoms: {moved + 1} {moved + 1}"
-
-    n_to_move_calculated = int(n_atoms * move_fraction)
-    n_to_move = min(n_atoms, max(2, n_to_move_calculated))
-
-    if move_strategy == "random":
-        indices_to_move = list(
-            rng.choice(movable_indices, size=n_to_move, replace=False),
+    if move_by_tag_groups:
+        tags = atoms_new.get_tags()
+        groups: dict[int, list[int]] = {}
+        for idx in movable_indices:
+            groups.setdefault(int(tags[idx]), []).append(int(idx))
+        group_ids = sorted(groups)
+        n_groups = len(group_ids)
+        if n_groups <= 1:
+            moved = movable_indices[0] if movable_indices else 0
+            return atoms_new, f"Moved_atoms: {moved + 1} {moved + 1}"
+        n_to_move_groups = min(
+            n_groups,
+            max(1, int(n_groups * move_fraction)),
         )
-    elif move_strategy in ["highest_force", "lowest_force"]:
-        forces = atoms.get_forces()
-        force_magnitudes = np.linalg.norm(forces[movable_indices], axis=1)
-        sorted_local = np.argsort(force_magnitudes)
-        sorted_indices = np.asarray(movable_indices, dtype=int)[sorted_local]
-        if move_strategy == "highest_force":
-            indices_to_move = sorted_indices[-n_to_move:]
-        else:  # lowest_force
-            indices_to_move = sorted_indices[:n_to_move]
+        chosen_groups = list(
+            rng.choice(group_ids, size=n_to_move_groups, replace=False),
+        )
+        indices_to_move = [
+            idx for group_id in chosen_groups for idx in groups[group_id]
+        ]
     else:
-        raise ValueError(f"Unknown move_strategy: {move_strategy}")
+        n_atoms = len(movable_indices)
+
+        if n_atoms <= 1:
+            moved = movable_indices[0] if movable_indices else 0
+            return atoms_new, f"Moved_atoms: {moved + 1} {moved + 1}"
+
+        n_to_move_calculated = int(n_atoms * move_fraction)
+        n_to_move = min(n_atoms, max(2, n_to_move_calculated))
+
+        if move_strategy == "random":
+            indices_to_move = list(
+                rng.choice(movable_indices, size=n_to_move, replace=False),
+            )
+        elif move_strategy in ["highest_force", "lowest_force"]:
+            forces = atoms.get_forces()
+            force_magnitudes = np.linalg.norm(forces[movable_indices], axis=1)
+            sorted_local = np.argsort(force_magnitudes)
+            sorted_indices = np.asarray(movable_indices, dtype=int)[sorted_local]
+            if move_strategy == "highest_force":
+                indices_to_move = sorted_indices[-n_to_move:]
+            else:  # lowest_force
+                indices_to_move = sorted_indices[:n_to_move]
+        else:
+            raise ValueError(f"Unknown move_strategy: {move_strategy}")
 
     positions = atoms_new.get_positions()
     cm = atoms_new.get_center_of_mass()
-
     disp = np.zeros_like(positions)
-    disp[indices_to_move, :] = rng.uniform(-1.0, 1.0, (n_to_move, 3))
-    positions_new = positions + dr * disp
-    atoms_new.set_positions(positions_new)
 
-    new_cm = atoms_new.get_center_of_mass()
-    atoms_new.translate(cm - new_cm)
+    if move_by_tag_groups:
+        for group_id in chosen_groups:
+            group_indices = groups[group_id]
+            displacement = dr * rng.uniform(-1.0, 1.0, 3)
+            disp[group_indices, :] = displacement
+    else:
+        disp[indices_to_move, :] = rng.uniform(-1.0, 1.0, (len(indices_to_move), 3))
+        disp *= dr
+
+    atoms_new.set_positions(positions + disp)
+    atoms_new.translate(cm - atoms_new.get_center_of_mass())
 
     moved_indices_str = " ".join(str(i + 1) for i in sorted(indices_to_move))
-    desc = f"Moved_atoms: {moved_indices_str}"
-    return atoms_new, desc
+    return atoms_new, f"Moved_atoms: {moved_indices_str}"
 
 
 def bh_go(
@@ -165,6 +201,10 @@ def bh_go(
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+    freeze_adsorbate_internal_geometry: bool = False,
+    adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
+    db_enable_expression_indexes: bool = False,
     *,
     rng: np.random.Generator,
 ) -> list[tuple[float, Atoms]]:
@@ -233,6 +273,18 @@ def bh_go(
 
     policy = get_system_policy(system_type)
     surface_mode = policy.uses_surface
+    mobile_composition = (
+        list(atoms.get_chemical_symbols()[n_slab:])
+        if surface_mode and n_slab > 0
+        else list(atoms.get_chemical_symbols())
+    )
+    maybe_apply_mobile_core_ads_tags(
+        atoms,
+        n_slab if surface_mode else 0,
+        mobile_composition,
+        adsorbate_definition,
+        system_type,
+    )
 
     def _run_metadata_extras(a: Atoms) -> dict[str, int | str]:
         mobile = (
@@ -320,6 +372,7 @@ def bh_go(
         atoms,
         initial_candidate=atoms,
         remove_existing=clean,
+        enable_expression_indexes=db_enable_expression_indexes,
         run_id=run_id,
     )
     atoms.calc = calc
@@ -360,6 +413,18 @@ def bh_go(
         )
         if surface_mode and surface_config is not None:
             attach_slab_constraints_from_surface_config(a_current, surface_config)
+        if freeze_adsorbate_internal_geometry:
+            enforce_frozen_adsorbate_geometry(
+                a_current,
+                n_slab=(n_slab if surface_mode else 0),
+                adsorbate_definition=adsorbate_definition,
+                fragment_templates=adsorbate_fragment_template,
+            )
+            attach_adsorbate_internal_geometry_constraints(
+                a_current,
+                n_slab=(n_slab if surface_mode else 0),
+                adsorbate_definition=adsorbate_definition,
+            )
         t_rel0 = perf_counter()
         e_current = perform_local_relaxation(
             a_current,
@@ -378,6 +443,7 @@ def bh_go(
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
         add_metadata(
             a_current,
@@ -428,9 +494,22 @@ def bh_go(
                 move_strategy=move_strategy,
                 rng=rng,
                 movable_indices=movable_indices,
+                move_by_tag_groups=freeze_adsorbate_internal_geometry,
             )
             if surface_mode and surface_config is not None:
                 attach_slab_constraints_from_surface_config(a_trial, surface_config)
+            if freeze_adsorbate_internal_geometry:
+                enforce_frozen_adsorbate_geometry(
+                    a_trial,
+                    n_slab=(n_slab if surface_mode else 0),
+                    adsorbate_definition=adsorbate_definition,
+                    fragment_templates=adsorbate_fragment_template,
+                )
+                attach_adsorbate_internal_geometry_constraints(
+                    a_trial,
+                    n_slab=(n_slab if surface_mode else 0),
+                    adsorbate_definition=adsorbate_definition,
+                )
             if run_id is not None:
                 persist_provenance(a_trial, run_id=run_id)
 
@@ -470,6 +549,7 @@ def bh_go(
                 connectivity_factor=connectivity_factor,
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             )
             add_metadata(
                 a_trial,

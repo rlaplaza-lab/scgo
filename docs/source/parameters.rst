@@ -52,8 +52,16 @@ System & Calculator
 
    * - Setting
      - Description
+   * - ``cluster_adsorbate_config``
+     - Optional :class:`~scgo.cluster_adsorbate.config.ClusterAdsorbateConfig` in ``go_params`` for hierarchical adsorbate fragment placement. Controls height range, ``max_placement_attempts``, ``blmin_ratio`` (covalent-radius clash table via :func:`~scgo.initialization.atomic_radii.build_blmin`), and structure checks during placement. Placement ranks candidate hull sites by steric deficit and relaxes thresholds progressively on retry. Set on ``go_params`` only—not as a ``run_*`` keyword. For typical runs, ``connectivity_factor`` alone is enough.
+   * - ``connectivity_factor``
+     - Global structure connectivity threshold ``(r_i + r_j) * factor`` for validation and (when ``cluster_adsorbate_config`` is omitted) hierarchical adsorbate placement. Overrides ``ClusterAdsorbateConfig.structure_connectivity_factor`` when both are set. GA operator sterics use ``BLMIN_RATIO_DEFAULT`` (0.7) separately from this validation threshold (default 1.4).
    * - ``allow_cluster_fragmentation``
      - Allow the cluster to break into pieces during optimization.
+   * - ``enforce_adsorbate_subgraph_integrity``
+     - For ``*_adsorbate`` system types, require connected adsorbate subgraphs (default: ``True``). Uses per-fragment checks when ``adsorbate_fragment_lengths`` is provided; otherwise validates the full adsorbate block.
+   * - ``freeze_adsorbate_internal_geometry``
+     - For ``*_adsorbate`` GO runs, Kabsch-restore each fragment to its template after mutations and omit adsorbate-internal distortions (default: ``False``). With the default, intra-fragment bonds are still preserved by tag-rigid operators; enable this for strict template fidelity.
    * - ``calculator``
      - The model to use: ``"MACE"``, ``"UMA"``, or ``"EMT"``.
    * - ``calculator_kwargs``

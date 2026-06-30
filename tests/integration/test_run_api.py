@@ -683,6 +683,7 @@ def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
     assert ads_def is not None
     assert ads_def["core_symbols"] == ["Pt", "Pt", "Pt", "Pt", "Pt"]
     assert ads_def["adsorbate_symbols"] == ["O", "H"]
+    assert ads_def["adsorbate_fragment_lengths"] == [2]
     assert True
 
 
@@ -706,6 +707,7 @@ def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_pat
     ads_def = {
         "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
         "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
     }
     _run_go_ts_pipeline(
         ["Pt", "Pt", "Pt", "Pt", "Pt", "O", "H"],

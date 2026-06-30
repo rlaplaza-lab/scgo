@@ -96,6 +96,7 @@ def coerce_ts_params_to_runner_kwargs(
         "connectivity_factor",
         "allow_cluster_fragmentation",
         "allow_adsorbate_surface_detachment",
+        "enforce_adsorbate_subgraph_integrity",
     )
     for key in passthrough_keys:
         kwargs[key] = ts_params.get(key)

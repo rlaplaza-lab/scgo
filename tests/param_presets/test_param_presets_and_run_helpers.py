@@ -36,6 +36,7 @@ def test_get_default_params_structure():
         "imag_freq_threshold",
         "n_trials",
         "optimizer_params",
+        "enforce_adsorbate_subgraph_integrity",
     ]:
         assert key in params
     assert set(params["optimizer_params"].keys()) == {"simple", "bh", "ga"}

@@ -28,7 +28,7 @@ from ase_ga.standard_comparators import (
     SequentialComparator,
 )
 from ase_ga.startgenerator import StartGenerator
-from ase_ga.utilities import closest_distances_generator, get_all_atom_types
+from ase_ga.utilities import get_all_atom_types
 
 from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
@@ -55,12 +55,15 @@ from scgo.constants import (
 
 # Prefer metadata reader for raw_score and other fields
 from scgo.database.metadata import get_metadata
+from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import (
     create_deposited_cluster,
     create_deposited_cluster_batch,
 )
 from scgo.system_types import (
+    AdsorbateFragmentInput,
     SystemType,
     get_system_policy,
     uses_surface,
@@ -102,11 +105,19 @@ def adsorbate_partition_metadata(
     )
     n_core = len(core_list)
     n_ads = len(ads_list)
+    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths")
+    fragment_lengths: list[int] = []
+    if isinstance(raw_lengths, list) and all(isinstance(x, int) for x in raw_lengths):
+        fragment_lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    if sum(fragment_lengths) != n_ads and n_ads > 0:
+        fragment_lengths = [n_ads]
     return {
         "n_core_atoms": n_core,
         "n_adsorbate_fragment_atoms": n_ads,
+        "n_adsorbate_fragments": len(fragment_lengths),
         "core_chemical_symbols_json": json.dumps(core_list),
         "adsorbate_fragment_chemical_symbols_json": json.dumps(ads_list),
+        "adsorbate_fragment_lengths_json": json.dumps(fragment_lengths),
     }
 
 
@@ -146,19 +157,52 @@ def core_adsorbate_partition_counts(
     return (len(core_list), len(ads_list))
 
 
+def core_adsorbate_partition_details(
+    system_type: SystemType,
+    composition: list[str],
+    adsorbate_definition: AdsorbateDefinition | None,
+) -> tuple[int, list[int]] | None:
+    """Mobile partition details as ``(n_core, ads_fragment_lengths)``."""
+    if not get_system_policy(system_type).has_adsorbate or adsorbate_definition is None:
+        return None
+    try:
+        core_list, ads_list = validate_composition_against_adsorbate(
+            composition,
+            adsorbate_definition,
+            context="core_adsorbate_partition_details",
+        )
+    except ValueError:
+        return None
+    if len(core_list) == 0 or len(ads_list) == 0:
+        return None
+    raw_lengths = adsorbate_definition.get("adsorbate_fragment_lengths")
+    lengths: list[int] = []
+    if isinstance(raw_lengths, list) and all(isinstance(x, int) for x in raw_lengths):
+        lengths = [int(x) for x in raw_lengths if int(x) > 0]
+    if sum(lengths) != len(ads_list):
+        lengths = [len(ads_list)]
+    return (len(core_list), lengths)
+
+
 def apply_mobile_core_ads_tags(
-    atoms: Atoms, n_slab: int, n_core: int, n_ads: int
+    atoms: Atoms, n_slab: int, n_core: int, ads_fragment_lengths: list[int]
 ) -> None:
-    """Tag mobile atoms: core=0, adsorbate=1 (slab indices also 0)."""
+    """Tag mobile atoms: core=0; adsorbate fragments get tags 1..N."""
     n = len(atoms)
+    n_ads = int(sum(int(x) for x in ads_fragment_lengths))
     if n_slab + n_core + n_ads != n:
         raise ValueError(
             f"apply_mobile_core_ads_tags: len(atoms)={n}, n_slab={n_slab}, "
             f"n_core={n_core}, n_ads={n_ads} (must sum to len)"
         )
     tags = np.zeros(n, dtype=int)
-    if n_ads:
-        tags[n_slab + n_core :] = 1
+    offset = n_slab + n_core
+    for frag_idx, frag_len in enumerate(ads_fragment_lengths):
+        next_offset = offset + int(frag_len)
+        if next_offset > n:
+            raise ValueError("adsorbate fragment lengths exceed atom count")
+        tags[offset:next_offset] = frag_idx + 1
+        offset = next_offset
     atoms.set_tags(tags)
 
 
@@ -169,13 +213,13 @@ def maybe_apply_mobile_core_ads_tags(
     adsorbate_definition: AdsorbateDefinition | None,
     system_type: SystemType,
 ) -> None:
-    part = core_adsorbate_partition_counts(
+    part = core_adsorbate_partition_details(
         system_type, composition, adsorbate_definition
     )
     if part is None:
         return
-    n_core, n_ads = part
-    apply_mobile_core_ads_tags(atoms, n_slab, n_core, n_ads)
+    n_core, ads_fragment_lengths = part
+    apply_mobile_core_ads_tags(atoms, n_slab, n_core, ads_fragment_lengths)
 
 
 def validate_ga_common_params(
@@ -234,7 +278,7 @@ class ClusterStartGenerator(StartGenerator):
         *,
         system_type: SystemType = "gas_cluster",
         adsorbate_definition: AdsorbateDefinition | None = None,
-        adsorbate_fragment_template: Atoms | None = None,
+        adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
         cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
         max_hierarchical_attempts: int = 200,
     ) -> None:
@@ -302,7 +346,9 @@ class ClusterStartGenerator(StartGenerator):
         self.system_type: SystemType = system_type
         self.adsorbate_definition = adsorbate_definition
         self.adsorbate_fragment_template = (
-            adsorbate_fragment_template.copy()
+            [frag.copy() for frag in adsorbate_fragment_template]
+            if isinstance(adsorbate_fragment_template, list)
+            else adsorbate_fragment_template.copy()
             if adsorbate_fragment_template is not None
             else None
         )
@@ -441,7 +487,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         previous_search_glob: str = "**/*.db",
         n_jobs: int = 1,
         adsorbate_definition: AdsorbateDefinition | None = None,
-        adsorbate_fragment_template: Atoms | None = None,
+        adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
         cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     ) -> None:
         self.rng: Generator | None = (
@@ -457,11 +503,18 @@ class SurfaceClusterStartGenerator(StartGenerator):
         self.n_jobs = n_jobs
         self.adsorbate_definition = adsorbate_definition
         self.adsorbate_fragment_template = (
-            adsorbate_fragment_template.copy()
+            [frag.copy() for frag in adsorbate_fragment_template]
+            if isinstance(adsorbate_fragment_template, list)
+            else adsorbate_fragment_template.copy()
             if adsorbate_fragment_template is not None
             else None
         )
         self.cluster_adsorbate_config = cluster_adsorbate_config
+        self._batch_site_type_counts: dict[str, int] = {
+            "vertex": 0,
+            "edge": 0,
+            "facet": 0,
+        }
         self._candidate_count = 0
         self._candidate_batch: list[Atoms] | None = None
 
@@ -478,6 +531,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 adsorbate_definition=adsorbate_definition,
                 adsorbate_fragment_template=self.adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
+                batch_site_counts=self._batch_site_type_counts,
             )
 
     def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
@@ -499,12 +553,16 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 adsorbate_definition=self.adsorbate_definition,
                 adsorbate_fragment_template=self.adsorbate_fragment_template,
                 cluster_adsorbate_config=self.cluster_adsorbate_config,
+                batch_site_counts=self._batch_site_type_counts,
             )
             if atoms is None:
                 raise RuntimeError(
                     "SurfaceClusterStartGenerator could not place a valid structure; "
                     "increase max_placement_attempts or height range."
                 )
+            site_type = atoms.info.get("adsorbate_site_type")
+            if isinstance(site_type, str) and site_type in self._batch_site_type_counts:
+                self._batch_site_type_counts[site_type] += 1
 
         if self.calculator is not None:
             atoms.calc = self.calculator
@@ -574,7 +632,7 @@ def create_ga_pairing(
     # ``closest_distances_generator``).
     top_z = list({int(atoms_template[i].number) for i in idx_top})
     all_atom_types = get_all_atom_types(atoms_template, top_z)
-    blmin = closest_distances_generator(all_atom_types, ratio_of_covalent_radii=0.7)
+    blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
 
     if uses_surface(system_type):
         slab = slab_atoms.copy()
@@ -649,6 +707,58 @@ def create_ga_pairing(
     )
 
 
+def _effective_operator_weight(
+    name: str | None,
+    operator_weights: dict[str, float],
+    name_map: dict[str, int],
+) -> float:
+    """Map base adaptive weights onto partitioned adsorbate operator names."""
+    if not name:
+        return 0.0
+    if name in operator_weights:
+        return float(operator_weights[name])
+
+    if name == "fragment_reposition":
+        rotational_weight = float(operator_weights.get("rotational", 0.0))
+        if rotational_weight <= 0.0:
+            return 0.0
+        if "fragment_reposition" in name_map:
+            return rotational_weight * 0.45
+        return 0.0
+
+    if name == "rotational" and "fragment_reposition" in name_map:
+        return float(operator_weights.get("rotational", 0.0)) * 0.55
+
+    partition_specs: dict[str, tuple[str, float]] = {
+        "flattening_core": ("flattening", 0.65),
+        "flattening_ads": ("flattening", 0.35),
+        "breathing_core": ("breathing", 0.65),
+        "breathing_ads": ("breathing", 0.35),
+        "in_plane_slide_core": ("in_plane_slide", 0.55),
+        "in_plane_slide_ads": ("in_plane_slide", 0.45),
+    }
+    if name not in partition_specs:
+        return 0.0
+
+    root, fraction = partition_specs[name]
+    if root not in operator_weights or root in name_map:
+        return 0.0
+
+    peer_names = [n for n in name_map if n.startswith(f"{root}_")]
+    if not peer_names:
+        return 0.0
+    if name not in peer_names:
+        return 0.0
+
+    allocated = float(operator_weights[root])
+    active_fraction = sum(
+        partition_specs[n][1] for n in peer_names if n in partition_specs
+    )
+    if active_fraction <= 0.0:
+        return allocated / len(peer_names)
+    return allocated * (fraction / active_fraction)
+
+
 def create_mutation_operators(
     composition: list[str],
     n_to_optimize: int,
@@ -669,6 +779,9 @@ def create_mutation_operators(
     breathing_scale_min: float = 0.82,
     breathing_scale_max: float = 1.22,
     adsorbate_definition: AdsorbateDefinition | None = None,
+    freeze_adsorbate_internal_geometry: bool = False,
+    adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
 ) -> tuple[list, dict[str, int]]:
     """Create mutation operators once at start of GA.
 
@@ -710,10 +823,19 @@ def create_mutation_operators(
     move_scale = (
         policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
     )
-    part = core_adsorbate_partition_counts(
+    part = core_adsorbate_partition_details(
         system_type, composition, adsorbate_definition
     )
     use_partition_tags = part is not None
+    ads_tags: list[int] = []
+    if part is not None:
+        _n_core, ads_fragment_lengths = part
+        ads_tags = list(range(1, len(ads_fragment_lengths) + 1))
+
+    core_only_tags = [0] if use_partition_tags else None
+    include_overlap_relief = not (
+        freeze_adsorbate_internal_geometry and use_partition_tags
+    )
 
     # Estimate a physically meaningful max displacement for in-plane slide
     # based on the expected cluster size. Use 3 * estimated cluster radius,
@@ -740,10 +862,12 @@ def create_mutation_operators(
         blmin,
         n_to_optimize,
         system_type=system_type,
+        use_tags=use_partition_tags,
         rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
     )
-    operators.append(overlap_relief)
-    name_map["overlap_relief"] = len(operators) - 1
+    if include_overlap_relief:
+        operators.append(overlap_relief)
+        name_map["overlap_relief"] = len(operators) - 1
 
     if len(set(composition)) > 1 and policy.allow_composition_permutations:
         permutation: CustomPermutationMutation = CustomPermutationMutation(
@@ -793,22 +917,25 @@ def create_mutation_operators(
             operators.append(flattening_core)
             name_map["flattening_core"] = len(operators) - 1
             # Adsorbate-only flattening (target adsorbate tag=1)
-            flattening_ads: FlatteningMutation = FlatteningMutation(
-                blmin,
-                n_to_optimize,
-                thickness_factor=flattening_thickness_factor,
-                target_tags=[1],
-                rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
-                max_inner_attempts=flattening_max_inner_attempts,
-                system_type=system_type,
-            )
-            operators.append(flattening_ads)
-            name_map["flattening_ads"] = len(operators) - 1
+            if not freeze_adsorbate_internal_geometry and ads_tags:
+                flattening_ads: FlatteningMutation = FlatteningMutation(
+                    blmin,
+                    n_to_optimize,
+                    thickness_factor=flattening_thickness_factor,
+                    target_tags=ads_tags,
+                    rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
+                    max_inner_attempts=flattening_max_inner_attempts,
+                    system_type=system_type,
+                )
+                operators.append(flattening_ads)
+                name_map["flattening_ads"] = len(operators) - 1
 
         rotational: RotationalMutation = RotationalMutation(
             blmin,
             system_type=system_type,
             n_top=n_to_optimize,
+            target_tags=core_only_tags,
+            use_tags=use_partition_tags,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
             max_inner_attempts=rotational_max_inner_attempts,
         )
@@ -820,6 +947,7 @@ def create_mutation_operators(
             n_to_optimize,
             reflect=True,
             system_type=system_type,
+            target_tags=core_only_tags,
             rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
             max_tries=mirror_max_tries,
         )
@@ -867,33 +995,35 @@ def create_mutation_operators(
             operators.append(breathing_core)
             name_map["breathing_core"] = len(operators) - 1
             # Adsorbate-only breathing (target adsorbate tag=1)
-            breathing_ads: BreathingMutation = BreathingMutation(
-                blmin,
-                n_to_optimize,
-                scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
-                target_tags=[1],
-                system_type=system_type,
-                rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
-                max_inner_attempts=breathing_max_inner_attempts,
-            )
-            operators.append(breathing_ads)
-            name_map["breathing_ads"] = len(operators) - 1
+            if not freeze_adsorbate_internal_geometry and ads_tags:
+                breathing_ads: BreathingMutation = BreathingMutation(
+                    blmin,
+                    n_to_optimize,
+                    scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
+                    scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
+                    target_tags=ads_tags,
+                    system_type=system_type,
+                    rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
+                    max_inner_attempts=breathing_max_inner_attempts,
+                )
+                operators.append(breathing_ads)
+                name_map["breathing_ads"] = len(operators) - 1
 
         if uses_surface(system_type) and n_slab > 0:
-            slide: InPlaneSlideMutation = InPlaneSlideMutation(
-                blmin,
-                n_to_optimize,
-                surface_normal_axis=surface_normal_axis,
-                system_type=system_type,
-                rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
-                max_inner_attempts=in_plane_slide_max_inner_attempts,
-                max_displacement=max(
-                    in_plane_slide_max_displacement, default_max_displacement
-                ),
-            )
-            operators.append(slide)
-            name_map["in_plane_slide"] = len(operators) - 1
+            if not use_partition_tags:
+                slide: InPlaneSlideMutation = InPlaneSlideMutation(
+                    blmin,
+                    n_to_optimize,
+                    surface_normal_axis=surface_normal_axis,
+                    system_type=system_type,
+                    rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
+                    max_inner_attempts=in_plane_slide_max_inner_attempts,
+                    max_displacement=max(
+                        in_plane_slide_max_displacement, default_max_displacement
+                    ),
+                )
+                operators.append(slide)
+                name_map["in_plane_slide"] = len(operators) - 1
             if use_partition_tags:
                 # For adsorbate systems, create core-only and adsorbate-only variants
                 # Core-only in-plane slide (target core tag=0)
@@ -912,20 +1042,36 @@ def create_mutation_operators(
                 operators.append(slide_core)
                 name_map["in_plane_slide_core"] = len(operators) - 1
                 # Adsorbate-only in-plane slide (target adsorbate tag=1)
-                slide_ads: InPlaneSlideMutation = InPlaneSlideMutation(
-                    blmin,
-                    n_to_optimize,
-                    surface_normal_axis=surface_normal_axis,
-                    system_type=system_type,
-                    rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
-                    max_inner_attempts=in_plane_slide_max_inner_attempts,
-                    max_displacement=max(
-                        in_plane_slide_max_displacement, default_max_displacement
-                    ),
-                    target_tags=[1],
-                )
-                operators.append(slide_ads)
-                name_map["in_plane_slide_ads"] = len(operators) - 1
+                if ads_tags:
+                    slide_ads: InPlaneSlideMutation = InPlaneSlideMutation(
+                        blmin,
+                        n_to_optimize,
+                        surface_normal_axis=surface_normal_axis,
+                        system_type=system_type,
+                        rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
+                        max_inner_attempts=in_plane_slide_max_inner_attempts,
+                        max_displacement=max(
+                            in_plane_slide_max_displacement, default_max_displacement
+                        ),
+                        target_tags=ads_tags,
+                    )
+                    operators.append(slide_ads)
+                    name_map["in_plane_slide_ads"] = len(operators) - 1
+
+        if use_partition_tags and adsorbate_definition is not None:
+            from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
+
+            reposition = FragmentRepositionMutation(
+                blmin,
+                n_to_optimize,
+                system_type=system_type,
+                adsorbate_definition=adsorbate_definition,
+                fragment_templates=adsorbate_fragment_template,
+                cluster_adsorbate_config=cluster_adsorbate_config,
+                rng=create_child_rng(rng) if rng is not None else None,  # type: ignore[arg-type]
+            )
+            operators.append(reposition)
+            name_map["fragment_reposition"] = len(operators) - 1
     return operators, name_map
 
 
@@ -963,7 +1109,7 @@ def update_mutation_weights(
         if name and name in operator_weights:
             weights.append(operator_weights[name])
         else:
-            weights.append(0.0)
+            weights.append(_effective_operator_weight(name, operator_weights, name_map))
 
     s = float(sum(weights))
     if s > 0.0:

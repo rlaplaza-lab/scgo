@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pt5 on graphite: GO + TS via ``run_go_ts``.
 
-``system_type="surface_cluster"`` — supported Pt5 cluster on the preset graphite slab (no
-separate adsorbate fragment).
+``system_type="surface_cluster"`` — supported Pt5 cluster on the preset graphite slab
+(no ``adsorbates``).
 """
 
 from __future__ import annotations
@@ -27,13 +27,12 @@ SLAB_LAYERS = 3
 
 
 def _build_go_params(surface_config) -> dict:
-    """Load GO preset, then apply surface-specific knobs for this run."""
     go_params = get_torchsim_ga_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
     )
-    go_params["connectivity_factor"] = 1.8  # override default
+    go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
         niter=NITER,
         population_size=POPULATION_SIZE,
@@ -42,34 +41,22 @@ def _build_go_params(surface_config) -> dict:
 
 
 def _build_ts_params(surface_config) -> dict:
-    """Load TS preset, then tweak max pair budget.
-
-    Preset defaults keep NEB endpoint alignment on (``neb_align_endpoints``) with
-    surface MIC + lattice-compatible PBC alignment (``neb_surface_cell_remap``,
-    ``neb_surface_lattice_rotation``, ``neb_surface_max_lattice_shift``) before
-    path interpolation.
-    """
     ts_params = get_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
     )
     ts_params["max_pairs"] = MAX_PAIRS
-    ts_params["connectivity_factor"] = 1.8  # override default
+    ts_params["connectivity_factor"] = 1.8
     return ts_params
 
 
 def main() -> None:
-    surface_config = make_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        structure_connectivity_factor=1.8,
-    )
-    go_params = _build_go_params(surface_config)
-    ts_params = _build_ts_params(surface_config)
+    surface_config = make_graphite_surface_config(slab_layers=SLAB_LAYERS)
     run_go_ts(
         [ELEMENT] * N_ATOMS,
-        go_params=go_params,
-        ts_params=ts_params,
+        go_params=_build_go_params(surface_config),
+        ts_params=_build_ts_params(surface_config),
         seed=SEED,
         output_root=DEFAULT_OUTPUT_ROOT,
         output_stem=OUTPUT_STEM,

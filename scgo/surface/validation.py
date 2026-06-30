@@ -7,6 +7,7 @@ import json
 import numpy as np
 from ase import Atoms
 
+from scgo.cluster_adsorbate.validation import validate_adsorbate_fragment_integrity
 from scgo.database.metadata import get_metadata
 from scgo.initialization.geometry_helpers import (
     _find_connected_components,
@@ -321,8 +322,10 @@ def validate_supported_cluster_deposit(
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     penetration_tolerance: float = _BINDING_PENETRATION_TOLERANCE_A,
     n_core_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> tuple[bool, str]:
     """Validate a combined slab + supported mobile cluster (full cluster, not the fragment only).
 
@@ -359,8 +362,12 @@ def validate_supported_cluster_deposit(
             nominal slab top along ``surface_normal_axis``.
         n_core_mobile: Atoms in the mobile slice belonging to the cluster core (prefix).
             When ``None``, all mobile atoms are treated as core (``surface_cluster``).
+        adsorbate_fragment_lengths: Optional ordered lengths for adsorbate fragments
+            within the mobile adsorbate suffix.
         allow_cluster_fragmentation: Allow multiple disconnected core-bearing subgroups.
         allow_adsorbate_surface_detachment: Allow adsorbate-only subgroups on the slab.
+        enforce_adsorbate_subgraph_integrity: Require each adsorbate fragment to
+            remain internally connected.
 
     Returns:
         ``(True, "")`` if valid, else ``(False, message)``.
@@ -402,6 +409,18 @@ def validate_supported_cluster_deposit(
             "Adsorbate penetrates below nominal slab top along surface normal "
             f"(min coord={min_c:.3f} Å, slab_top={slab_top:.3f} Å)",
         )
+
+    if enforce_adsorbate_subgraph_integrity and adsorbate_fragment_lengths:
+        ok, msg = validate_adsorbate_fragment_integrity(
+            combined,
+            n_slab=n_slab,
+            n_core_mobile=n_core_eff,
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+            connectivity_factor=connectivity_factor,
+            use_mic=use_mic,
+        )
+        if not ok:
+            return False, msg
 
     return _validate_mobile_connectivity_policy(
         combined,

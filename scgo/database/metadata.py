@@ -221,6 +221,7 @@ def mark_final_minima_in_db(
     dbs_touched: set[str] = set()
     details: dict[str, int] = {}
 
+    updates_by_db: dict[str, list[dict[str, Any]]] = {}
     for info in final_minima_info:
         atoms = info.get("atoms")
         rank = info.get("rank")
@@ -250,24 +251,37 @@ def mark_final_minima_in_db(
             )
             continue
 
-        fid = str(final_id)
-
         for db_path in db_files:
-            try:
-                with (
-                    get_connection(db_path) as db,
-                    retry_transaction(
-                        db,
-                        operation_name="mark_final_minima",
-                    ) as conn,
-                ):
-                    kvp = SYSTEMS_JSON_COLUMN
-                    select_cols = f"id, energy, {kvp}"
+            db_key = str(db_path)
+            updates_by_db.setdefault(db_key, []).append(
+                {
+                    "run_id": run_id,
+                    "trial_id": trial,
+                    "rank": rank,
+                    "final_written": final_written,
+                    "final_id": str(final_id),
+                }
+            )
+
+    for db_key, db_updates in updates_by_db.items():
+        db_path = Path(db_key)
+        try:
+            with (
+                get_connection(db_path) as db,
+                retry_transaction(
+                    db,
+                    operation_name="mark_final_minima",
+                ) as conn,
+            ):
+                kvp = SYSTEMS_JSON_COLUMN
+                select_cols = f"id, energy, {kvp}"
+                rows_updated_this_db = 0
+                for update in db_updates:
                     row = _match_row_by_stored_final_id(
                         conn,
                         kvp=kvp,
                         select_cols=select_cols,
-                        final_id=fid,
+                        final_id=update["final_id"],
                     )
                     if row is None:
                         continue
@@ -278,6 +292,12 @@ def mark_final_minima_in_db(
                         existing = json.loads(kv_col) if kv_col else {}
                     except (json.JSONDecodeError, TypeError, ValueError):
                         existing = {}
+
+                    run_id = update["run_id"]
+                    trial = update["trial_id"]
+                    rank = update["rank"]
+                    final_written = update["final_written"]
+                    fid = update["final_id"]
 
                     if run_id is not None:
                         existing["run_id"] = run_id
@@ -303,21 +323,22 @@ def mark_final_minima_in_db(
                         f"UPDATE systems SET {kvp} = ? WHERE id = ?",
                         (json.dumps(existing), row_id),
                     )
+                    rows_updated_this_db += 1
 
+                if rows_updated_this_db > 0:
                     conn.commit()
-
-                    total_rows_updated += 1
-                    dbs_touched.add(str(db_path))
-                    details[str(db_path)] = details.get(str(db_path), 0) + 1
-            except (
-                sqlite3.DatabaseError,
-                sqlite3.OperationalError,
-                OSError,
-                json.JSONDecodeError,
-                ValueError,
-            ) as e:
-                logger.warning(f"mark_final_minima_in_db: failed for {db_path}: {e}")
-                continue
+                    total_rows_updated += rows_updated_this_db
+                    dbs_touched.add(db_key)
+                    details[db_key] = details.get(db_key, 0) + rows_updated_this_db
+        except (
+            sqlite3.DatabaseError,
+            sqlite3.OperationalError,
+            OSError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as e:
+            logger.warning(f"mark_final_minima_in_db: failed for {db_path}: {e}")
+            continue
 
     return {
         "dbs_touched": len(dbs_touched),
