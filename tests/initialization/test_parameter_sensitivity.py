@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from scgo.initialization import create_initial_cluster, is_cluster_connected
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from tests.test_utils import (
     LARGE_SIZES,
     MEDIUM_SIZES,
@@ -42,10 +43,17 @@ class TestParameterSensitivity:
             )
             # Should always produce connected clusters with proper connectivity factor
             assert len(atoms) == 8
-            assert_cluster_valid(atoms, comp)
+            assert_cluster_valid(atoms, comp, connectivity_factor=connectivity_factor)
         except ValueError as e:
-            # Accept validation failures as an expected outcome for extreme parameters
-            if "Validation failed" in str(e):
+            msg = str(e)
+            # At the GA steric floor, bond length equals the clash limit; random
+            # placement may fail to find a valid configuration for larger clusters.
+            if "Validation failed" in msg:
+                return
+            if (
+                connectivity_factor <= BLMIN_RATIO_DEFAULT
+                and "Could not place all" in msg
+            ):
                 return
             raise
 

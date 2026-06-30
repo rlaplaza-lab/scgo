@@ -9,9 +9,10 @@ from ase.calculators.emt import EMT
 
 import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms import ga_go
+from scgo.algorithms.ga_common import update_mutation_weights
 from scgo.database import get_connection
 from scgo.database.metadata import get_metadata
-from scgo.utils.rng_helpers import create_child_rng, ensure_rng
+from scgo.utils.rng_helpers import create_child_rng, ensure_rng, offspring_rng_triple
 from tests.test_utils import MockRelaxer
 
 
@@ -381,8 +382,6 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
 
 def test_update_mutation_weights_uses_passed_rng():
     """OperationSelector must use the passed RNG for deterministic operator choice."""
-    from scgo.algorithms.ga_common import update_mutation_weights
-    from scgo.utils.rng_helpers import offspring_rng_triple
 
     class _StubOp:
         def __init__(self, name):

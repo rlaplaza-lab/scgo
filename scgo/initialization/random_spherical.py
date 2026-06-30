@@ -302,31 +302,48 @@ def _compute_effective_placement_params(
     return effective_scaling, effective_min_distance
 
 
-def _effective_connectivity_for_retry(
+def _raise_if_connectivity_below_steric_floor(
     connectivity_factor: float,
-    retry_attempt: int,
-    max_retries: int,
-) -> float:
-    """Relax connectivity threshold on later outer retries for tight parameters."""
-    ratio = retry_attempt / max(1, max_retries - 1)
-    if connectivity_factor < CONNECTIVITY_FACTOR:
-        return (
-            connectivity_factor
-            + ratio * (CONNECTIVITY_FACTOR - connectivity_factor) * 0.6
+    steric_floor: float,
+) -> None:
+    """Reject parameter combinations that cannot yield a connected, clash-free cluster."""
+    if connectivity_factor + 1e-9 < steric_floor:
+        raise ValueError(
+            f"connectivity_factor ({connectivity_factor}) must be >= steric floor "
+            f"({steric_floor}) when GA blmin enforcement is active: bonded pairs "
+            f"need distance <= connectivity_factor*(r_i+r_j) and >= "
+            f"steric_floor*(r_i+r_j). Increase connectivity_factor or pass "
+            f"blmin_ratio=None to disable the GA steric floor."
         )
-    return connectivity_factor
 
 
 def _effective_placement_scaling_for_retry(
     placement_radius_scaling: float,
     retry_attempt: int,
     max_retries: int,
+    *,
+    steric_floor: float,
 ) -> float:
-    """Widen placement shell on later outer retries for tight parameters."""
-    ratio = retry_attempt / max(1, max_retries - 1)
-    if placement_radius_scaling < PLACEMENT_RADIUS_SCALING_DEFAULT:
-        return placement_radius_scaling * (1.0 + 0.5 * ratio)
-    return placement_radius_scaling
+    """Widen the placement shell on outer retries using the inner-attempt curve."""
+    retry_ratio = retry_attempt / max(1, max_retries - 1)
+    effective_scaling, _ = _compute_effective_placement_params(
+        retry_ratio,
+        steric_floor,
+        placement_radius_scaling,
+        steric_floor=steric_floor,
+    )
+    return effective_scaling
+
+
+def _sample_connectivity_anchored_position(
+    anchor_pos: np.ndarray,
+    bond_distance: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return a uniform random point on the sphere of radius ``bond_distance``."""
+    direction = rng.standard_normal(3)
+    direction /= np.linalg.norm(direction)
+    return anchor_pos + direction * bond_distance
 
 
 def _apply_growth_order_strategy(
@@ -435,14 +452,15 @@ def random_spherical(
         return Atoms()
 
     steric_floor = resolve_steric_floor(min_distance_factor, blmin_ratio)
+    _raise_if_connectivity_below_steric_floor(connectivity_factor, steric_floor)
 
     # Retry logic for connectivity validation
     for retry_attempt in range(max_connectivity_retries):
-        effective_cf = _effective_connectivity_for_retry(
-            connectivity_factor, retry_attempt, max_connectivity_retries
-        )
         effective_prs = _effective_placement_scaling_for_retry(
-            placement_radius_scaling, retry_attempt, max_connectivity_retries
+            placement_radius_scaling,
+            retry_attempt,
+            max_connectivity_retries,
+            steric_floor=steric_floor,
         )
 
         new_atoms = Atoms()
@@ -454,7 +472,7 @@ def random_spherical(
             min_distance_factor=steric_floor,
             placement_radius_scaling=effective_prs,
             rng=rng,
-            connectivity_factor=effective_cf,
+            connectivity_factor=connectivity_factor,
             steric_floor=steric_floor,
         )
 
@@ -480,11 +498,11 @@ def random_spherical(
             continue  # Try again with different random placement
 
         if len(final_atoms) > 2 and not is_cluster_connected(
-            final_atoms, effective_cf, use_mic=False
+            final_atoms, connectivity_factor, use_mic=False
         ):
             if retry_attempt == max_connectivity_retries - 1:
                 diagnostics = get_structure_diagnostics(
-                    final_atoms, steric_floor, effective_cf, use_mic=False
+                    final_atoms, steric_floor, connectivity_factor, use_mic=False
                 )
                 error_msg = format_placement_error_message(
                     context=f"create connected cluster after {max_connectivity_retries} attempts",
@@ -505,7 +523,7 @@ def random_spherical(
             final_atoms,
             composition=None,
             min_distance_factor=steric_floor,
-            connectivity_factor=effective_cf,
+            connectivity_factor=connectivity_factor,
             sort_atoms=False,
             raise_on_failure=False,
             source="random_spherical",
@@ -516,7 +534,7 @@ def random_spherical(
                     final_atoms,
                     composition=None,
                     min_distance_factor=steric_floor,
-                    connectivity_factor=effective_cf,
+                    connectivity_factor=connectivity_factor,
                     sort_atoms=False,
                     raise_on_failure=True,
                     source="random_spherical",
@@ -713,11 +731,14 @@ def _add_atoms_to_cluster_iteratively(
         first_symbol = atoms_to_add.pop(0)
         new_atoms.append(Atom(first_symbol, np.array([0.0, 0.0, 0.0])))
 
-    # Use batch placement for clusters with ≥4 atoms, single-atom for smaller clusters
+    # Use batch placement for clusters with ≥4 atoms unless connectivity is as
+    # tight as the steric floor (bond length fixed at blmin); then anchor-based
+    # single-atom growth is more reliable than convex-hull batch placement.
     max_attempts_per_atom = MAX_PLACEMENT_ATTEMPTS_PER_ATOM
+    steric_reference = steric_floor if steric_floor is not None else min_distance_factor
+    tight_connectivity = connectivity_factor <= steric_reference * (1.0 + 1e-6)
 
-    # Single-atom placement mode for clusters with <4 atoms
-    if len(new_atoms) < 4:
+    if len(new_atoms) < 4 or tight_connectivity:
         return _add_atoms_single_mode(
             new_atoms,
             atoms_to_add,
@@ -792,13 +813,23 @@ def _add_atoms_single_mode(
             if n_current > 0:
                 center = new_atoms.get_center_of_mass()
 
-                # Special handling for 2-atom clusters
+                # Special handling for 2-atom clusters: bond length must respect
+                # both the steric floor and connectivity_factor (not raw r_i+r_j).
                 if is_two_atom_cluster and n_current == 1:
                     existing_radius = covalent_radii[new_atoms.numbers[0]]
-                    bond_distance = existing_radius + atom_radius
-                    direction = rng.standard_normal(3)
-                    direction /= np.linalg.norm(direction)
-                    candidate_pos = center + direction * bond_distance
+                    bond_distance, _, _ = compute_bond_distance_params(
+                        existing_radius,
+                        atom_radius,
+                        connectivity_factor,
+                        min_distance_factor,
+                        placement_radius_scaling,
+                        effective_min_distance=effective_min_distance,
+                        effective_scaling=effective_scaling,
+                    )
+                    anchor_pos = current_positions[0]
+                    candidate_pos = _sample_connectivity_anchored_position(
+                        anchor_pos, bond_distance, rng
+                    )
                 elif n_current == 1:
                     existing_radius = covalent_radii[new_atoms.numbers[0]]
                     base_extent = existing_radius
@@ -848,11 +879,23 @@ def _add_atoms_single_mode(
                         connectivity_factor=connectivity_factor,
                     )
                     if not candidates:
-                        # Fallback to spherical if batch generation failed
-                        center = new_atoms.get_center_of_mass()
-                        direction = rng.standard_normal(3)
-                        direction /= np.linalg.norm(direction)
-                        candidate_pos = center + direction * bond_distance
+                        # Convex hull needs >=4 atoms; anchor on an existing atom so
+                        # bond_distance is measured from a real neighbour, not the COM.
+                        anchor_idx = int(rng.integers(n_current))
+                        anchor_pos = current_positions[anchor_idx]
+                        anchor_radius = covalent_radii[new_atoms.numbers[anchor_idx]]
+                        anchor_bond_distance, _, _ = compute_bond_distance_params(
+                            anchor_radius,
+                            atom_radius,
+                            connectivity_factor,
+                            min_distance_factor,
+                            placement_radius_scaling,
+                            effective_min_distance=effective_min_distance,
+                            effective_scaling=effective_scaling,
+                        )
+                        candidate_pos = _sample_connectivity_anchored_position(
+                            anchor_pos, anchor_bond_distance, rng
+                        )
                     else:
                         candidate_pos = candidates[0]
 

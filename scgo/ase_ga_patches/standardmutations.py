@@ -1507,7 +1507,8 @@ class BreathingMutation(OffspringCreator):
 
         # Calculate minimum required scale to avoid clashes
         lower_bound = np.max(required_condensed / distances)
-        return max(self.scale_min, lower_bound)
+        # pdist ratios can sit on the blmin threshold; atoms_too_close needs slack.
+        return max(self.scale_min, lower_bound * (1.0 + 1e-6))
 
     def _candidate_scales(self, positions, atomic_numbers, slab):
         feasible_lower = self._minimum_feasible_scale(positions, atomic_numbers)
