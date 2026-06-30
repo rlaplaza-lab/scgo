@@ -50,6 +50,7 @@ Contents
 
    installation
    quickstart
+   parameters
 
 .. toctree::
    :maxdepth: 2
