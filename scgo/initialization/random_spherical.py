@@ -302,6 +302,33 @@ def _compute_effective_placement_params(
     return effective_scaling, effective_min_distance
 
 
+def _effective_connectivity_for_retry(
+    connectivity_factor: float,
+    retry_attempt: int,
+    max_retries: int,
+) -> float:
+    """Relax connectivity threshold on later outer retries for tight parameters."""
+    ratio = retry_attempt / max(1, max_retries - 1)
+    if connectivity_factor < CONNECTIVITY_FACTOR:
+        return (
+            connectivity_factor
+            + ratio * (CONNECTIVITY_FACTOR - connectivity_factor) * 0.6
+        )
+    return connectivity_factor
+
+
+def _effective_placement_scaling_for_retry(
+    placement_radius_scaling: float,
+    retry_attempt: int,
+    max_retries: int,
+) -> float:
+    """Widen placement shell on later outer retries for tight parameters."""
+    ratio = retry_attempt / max(1, max_retries - 1)
+    if placement_radius_scaling < PLACEMENT_RADIUS_SCALING_DEFAULT:
+        return placement_radius_scaling * (1.0 + 0.5 * ratio)
+    return placement_radius_scaling
+
+
 def _apply_growth_order_strategy(
     atoms_to_add: list[str],
     strategy: int,
@@ -411,6 +438,13 @@ def random_spherical(
 
     # Retry logic for connectivity validation
     for retry_attempt in range(max_connectivity_retries):
+        effective_cf = _effective_connectivity_for_retry(
+            connectivity_factor, retry_attempt, max_connectivity_retries
+        )
+        effective_prs = _effective_placement_scaling_for_retry(
+            placement_radius_scaling, retry_attempt, max_connectivity_retries
+        )
+
         new_atoms = Atoms()
         new_atoms.set_cell([cell_side, cell_side, cell_side])
 
@@ -418,9 +452,9 @@ def random_spherical(
             base_atoms=new_atoms,
             atoms_to_add=composition,
             min_distance_factor=steric_floor,
-            placement_radius_scaling=placement_radius_scaling,
+            placement_radius_scaling=effective_prs,
             rng=rng,
-            connectivity_factor=connectivity_factor,
+            connectivity_factor=effective_cf,
             steric_floor=steric_floor,
         )
 
@@ -446,11 +480,11 @@ def random_spherical(
             continue  # Try again with different random placement
 
         if len(final_atoms) > 2 and not is_cluster_connected(
-            final_atoms, connectivity_factor, use_mic=False
+            final_atoms, effective_cf, use_mic=False
         ):
             if retry_attempt == max_connectivity_retries - 1:
                 diagnostics = get_structure_diagnostics(
-                    final_atoms, steric_floor, connectivity_factor, use_mic=False
+                    final_atoms, steric_floor, effective_cf, use_mic=False
                 )
                 error_msg = format_placement_error_message(
                     context=f"create connected cluster after {max_connectivity_retries} attempts",
@@ -471,7 +505,7 @@ def random_spherical(
             final_atoms,
             composition=None,
             min_distance_factor=steric_floor,
-            connectivity_factor=connectivity_factor,
+            connectivity_factor=effective_cf,
             sort_atoms=False,
             raise_on_failure=False,
             source="random_spherical",
@@ -482,7 +516,7 @@ def random_spherical(
                     final_atoms,
                     composition=None,
                     min_distance_factor=steric_floor,
-                    connectivity_factor=connectivity_factor,
+                    connectivity_factor=effective_cf,
                     sort_atoms=False,
                     raise_on_failure=True,
                     source="random_spherical",

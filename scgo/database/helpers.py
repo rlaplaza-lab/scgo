@@ -265,8 +265,14 @@ def setup_database(
                 f"Failed to vacuum database before opening DataConnection: {e}"
             )
     finally:
-        # Clean up PrepareDB (ASE manages connection cleanup)
+        # Clean up PrepareDB explicitly to avoid unclosed SQLite connections
         if db is not None:
+            conn_holder = getattr(db, "c", None)
+            if conn_holder is not None and hasattr(conn_holder, "__exit__"):
+                with contextlib.suppress(
+                    sqlite3.OperationalError, AttributeError, RuntimeError
+                ):
+                    conn_holder.__exit__(None, None, None)
             try:
                 del db
             except (AttributeError, RuntimeError) as e:

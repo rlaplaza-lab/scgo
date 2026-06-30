@@ -12,6 +12,7 @@ These tests check:
 """
 
 import numpy as np
+import pytest
 from ase import Atoms
 from ase_ga.utilities import (
     atoms_too_close,
@@ -395,6 +396,17 @@ class TestBreathingBoundedCandidates:
         )
         pos = atoms.get_positions()
         num = atoms.get_atomic_numbers()
+        cm = pos.mean(axis=0)
+        compress = 1.0
+        while compress >= 0.5:
+            trial_pos = cm + compress * (pos - cm)
+            if mut._minimum_feasible_scale(trial_pos, num) > mut.scale_max:
+                atoms.set_positions(trial_pos)
+                pos = trial_pos
+                break
+            compress -= 0.02
+        else:
+            pytest.fail("Could not synthesize a cluster requiring relief expansion")
         feasible_lower = mut._minimum_feasible_scale(pos, num)
         assert feasible_lower > mut.scale_max
         scales = mut._candidate_scales(pos, num, atoms[:0])

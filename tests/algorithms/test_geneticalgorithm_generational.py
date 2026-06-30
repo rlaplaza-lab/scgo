@@ -377,3 +377,34 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
             np.diag(row.get_cell()) / 2.0,
             atol=0.75,
         )
+
+
+def test_update_mutation_weights_uses_passed_rng():
+    """OperationSelector must use the passed RNG for deterministic operator choice."""
+    from scgo.algorithms.ga_common import update_mutation_weights
+    from scgo.utils.rng_helpers import offspring_rng_triple
+
+    class _StubOp:
+        def __init__(self, name):
+            self.name = name
+
+        def mutate(self, atoms):
+            return atoms
+
+    ops = [_StubOp("a"), _StubOp("b"), _StubOp("c")]
+    name_map = {"a": 0, "b": 1, "c": 2}
+    adaptive = {
+        "operator_weights": {"a": 0.2, "b": 0.3, "c": 0.5},
+        "rattle_strength": 0.5,
+        "rattle_prop": 0.5,
+    }
+    task_seed = 424242
+    _, _, decision_rng = offspring_rng_triple(task_seed)
+    selector = update_mutation_weights(ops, name_map, adaptive, rng=decision_rng)
+    indices = [selector.__get_index__() for _ in range(5)]
+    _, _, decision_rng_repeat = offspring_rng_triple(task_seed)
+    selector_repeat = update_mutation_weights(
+        ops, name_map, adaptive, rng=decision_rng_repeat
+    )
+    indices_repeat = [selector_repeat.__get_index__() for _ in range(5)]
+    assert indices == indices_repeat

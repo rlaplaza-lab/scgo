@@ -228,6 +228,7 @@ def _build_offspring_worker(
         operators_list=local_ops,
         name_map=ctx.name_map,
         adaptive_config=ctx.adaptive_config,
+        rng=decision_rng,
     )
     operator_setup_s = perf_counter() - setup_t0
     crossover_t0 = perf_counter()

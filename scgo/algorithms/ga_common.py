@@ -1092,6 +1092,7 @@ def update_mutation_weights(
     operators_list: list,
     name_map: dict[str, int],
     adaptive_config: dict,
+    rng: Generator | None = None,
 ) -> OperationSelector:
     """Update operator weights without recreating operators.
 
@@ -1138,6 +1139,8 @@ def update_mutation_weights(
         if "anisotropic_rattle_prop" in adaptive_config:
             anisotropic_op.rattle_prop = adaptive_config["anisotropic_rattle_prop"]
 
+    if rng is not None:
+        return OperationSelector(weights, operators_list, rng=rng)
     return OperationSelector(weights, operators_list)
 
 
