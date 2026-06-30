@@ -1092,7 +1092,7 @@ def update_mutation_weights(
     operators_list: list,
     name_map: dict[str, int],
     adaptive_config: dict,
-    rng: Generator | None = None,
+    rng: Generator,
 ) -> OperationSelector:
     """Update operator weights without recreating operators.
 
@@ -1100,6 +1100,8 @@ def update_mutation_weights(
         operators_list: List of operator instances.
         name_map: Mapping from operator names to list indices.
         adaptive_config: Config dict with operator_weights.
+        rng: Explicit RNG for reproducible operator selection. Required so
+            serial and parallel offspring paths never fall back to global state.
 
     Returns:
         Updated OperationSelector with new weights.
@@ -1139,9 +1141,7 @@ def update_mutation_weights(
         if "anisotropic_rattle_prop" in adaptive_config:
             anisotropic_op.rattle_prop = adaptive_config["anisotropic_rattle_prop"]
 
-    if rng is not None:
-        return OperationSelector(weights, operators_list, rng=rng)
-    return OperationSelector(weights, operators_list)
+    return OperationSelector(weights, operators_list, rng=rng)
 
 
 def create_structure_comparator(

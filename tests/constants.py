@@ -7,6 +7,10 @@ across test files and make it easier to adjust test parameters globally.
 # Random seed configurations for reproducibility testing
 REPRODUCIBILITY_SEEDS = [42, 123, 456, 789, 1001, 2022, 3033, 4044, 5055, 6066]
 
+# Strict floating-point tolerances for deterministic reproducibility assertions
+REPRODUCIBILITY_RTOL = 1e-10
+REPRODUCIBILITY_ATOL = 1e-12
+
 # Cluster size configurations
 SMALL_SIZES = [4, 6, 8, 10]
 MEDIUM_SIZES = [15, 20, 25, 30]

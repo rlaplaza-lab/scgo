@@ -61,7 +61,7 @@ def test_adsorbate_operator_selector_assigns_weight_to_partitioned_ops() -> None
         adsorbate_fragment_template=[tmpl[-2:]],
     )
     adaptive = get_adaptive_mutation_config(comp, use_adaptive=True)
-    selector = update_mutation_weights(ops, name_map, adaptive)
+    selector = update_mutation_weights(ops, name_map, adaptive, rng=default_rng(0))
     assert selector.rho[name_map["flattening_core"]] > 0.0
     assert selector.rho[name_map["fragment_reposition"]] > 0.0
 

@@ -20,6 +20,7 @@ from scgo.runner_api import (
     build_two_element_compositions,
 )
 from scgo.utils.run_helpers import initialize_params
+from tests.constants import REPRODUCIBILITY_ATOL, REPRODUCIBILITY_RTOL
 from tests.test_utils import (
     assert_exported_minima_xyz_equal,
     assert_minima_lists_equal,
@@ -141,7 +142,6 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
             assert "trial_id" in atoms_from_file.info["provenance"]
 
 
-@pytest.mark.skip(reason="Flaky - GA produces non-deterministic results across runs")
 @pytest.mark.integration
 def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
     """End-to-end GA workflow is repeatable when re-run with the same seed.
@@ -202,7 +202,12 @@ def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
     with isolated_workflow_cwd(out_b):
         results2 = _run_once(out_b.resolve())
 
-    assert_minima_lists_equal(results1, results2)
+    assert_minima_lists_equal(
+        results1,
+        results2,
+        rtol=REPRODUCIBILITY_RTOL,
+        atol=REPRODUCIBILITY_ATOL,
+    )
 
     for output_dir in (out_a, out_b):
         assert output_dir.is_dir()
@@ -222,6 +227,8 @@ def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
     assert_exported_minima_xyz_equal(
         out_a / "final_unique_minima",
         out_b / "final_unique_minima",
+        rtol=REPRODUCIBILITY_RTOL,
+        atol=REPRODUCIBILITY_ATOL,
     )
 
 
@@ -270,7 +277,12 @@ def test_full_workflow_parallel_offspring_reproducible(tmp_path):
     with isolated_workflow_cwd(out_parallel):
         results_parallel = _run_once(out_parallel.resolve(), n_jobs_offspring=2)
 
-    assert_minima_lists_equal(results_serial, results_parallel)
+    assert_minima_lists_equal(
+        results_serial,
+        results_parallel,
+        rtol=REPRODUCIBILITY_RTOL,
+        atol=REPRODUCIBILITY_ATOL,
+    )
 
 
 def test_multi_trial_campaign(tmp_path, rng):

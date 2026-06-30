@@ -795,6 +795,7 @@ def ga_go(
         operators_list=operators_list,
         name_map=name_map,
         adaptive_config=adaptive_config,
+        rng=rng,
     )
     # Use user-provided mutation_probability when adaptive mutations are disabled
     current_mutation_probability = (
@@ -1139,6 +1140,7 @@ def ga_go(
                     operators_list=operators_list,
                     name_map=name_map,
                     adaptive_config=adaptive_config,
+                    rng=rng,
                 )
                 current_mutation_probability = adaptive_config["mutation_probability"]
 

@@ -12,6 +12,7 @@ from ase.optimize import FIRE, LBFGS
 
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
+from scgo.algorithms.ga_common import update_mutation_weights
 from scgo.database import close_data_connection
 from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.minima_search import run_trials, scgo
@@ -23,6 +24,7 @@ from scgo.runner_api import (
     build_two_element_compositions,
 )
 from scgo.utils.helpers import auto_niter
+from tests.constants import REPRODUCIBILITY_ATOL, REPRODUCIBILITY_RTOL
 from tests.test_utils import (
     MockRelaxer,
     compare_minima_lists,
@@ -77,7 +79,9 @@ def test_algorithm_reproducibility(tmp_path, algorithm, seed, kwargs):
         kwargs,
     )
 
-    assert compare_minima_lists(minima1, minima2)
+    assert compare_minima_lists(
+        minima1, minima2, rtol=REPRODUCIBILITY_RTOL, atol=REPRODUCIBILITY_ATOL
+    )
 
 
 def test_rng_in_params_raises_error(tmp_path, rng):
@@ -237,7 +241,115 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
             **kwargs,
         )
 
-    assert compare_minima_lists(minima_single, minima_multi)
+    assert compare_minima_lists(
+        minima_single,
+        minima_multi,
+        rtol=REPRODUCIBILITY_RTOL,
+        atol=REPRODUCIBILITY_ATOL,
+    )
+
+
+def test_ga_offspring_serial_vs_parallel_reproducible(tmp_path):
+    """TorchSim GA must match for serial vs parallel offspring with the same seed."""
+    import os
+
+    if (os.cpu_count() or 1) < 2:
+        pytest.skip("Requires >=2 CPUs to validate parallel offspring behavior")
+
+    from tests.test_utils import isolated_workflow_cwd
+
+    composition = ["Pt"] * 4
+    seed = 161803
+    kwargs = {
+        "composition": composition,
+        "calculator": EMT(),
+        "relaxer": MockRelaxer(max_steps=1),
+        "niter": 1,
+        "population_size": 3,
+        "offspring_fraction": 0.34,
+        "niter_local_relaxation": 2,
+        "batch_size": None,
+        "verbosity": 0,
+        "previous_search_glob": ".__scgo_no_prior_runs__/**/*.db",
+        "use_adaptive_mutations": False,
+        "mutation_probability": 0.3,
+        "n_jobs_population_init": 1,
+    }
+
+    with isolated_workflow_cwd(tmp_path / "offspring_serial"):
+        minima_serial = ga_go(
+            output_dir=str(tmp_path / "offspring_serial"),
+            rng=np.random.default_rng(seed),
+            n_jobs_offspring=1,
+            **kwargs,
+        )
+
+    with isolated_workflow_cwd(tmp_path / "offspring_parallel"):
+        minima_parallel = ga_go(
+            output_dir=str(tmp_path / "offspring_parallel"),
+            rng=np.random.default_rng(seed),
+            n_jobs_offspring=2,
+            **kwargs,
+        )
+
+    assert compare_minima_lists(
+        minima_serial,
+        minima_parallel,
+        rtol=REPRODUCIBILITY_RTOL,
+        atol=REPRODUCIBILITY_ATOL,
+    )
+
+
+def test_update_mutation_weights_requires_explicit_rng():
+    """OperationSelector creation must not fall back to unseeded global RNG state."""
+
+    class _StubOp:
+        def __init__(self, name):
+            self.name = name
+
+        def mutate(self, atoms):
+            return atoms
+
+    ops = [_StubOp("a"), _StubOp("b")]
+    name_map = {"a": 0, "b": 1}
+    adaptive = {
+        "operator_weights": {"a": 0.5, "b": 0.5},
+        "rattle_strength": 0.5,
+        "rattle_prop": 0.5,
+    }
+    with pytest.raises(TypeError):
+        update_mutation_weights(ops, name_map, adaptive)  # type: ignore[call-arg]
+
+
+def test_update_mutation_weights_operator_selection_reproducible():
+    """OperationSelector must use the passed RNG for deterministic operator choice."""
+    from scgo.utils.rng_helpers import offspring_rng_triple
+
+    class _StubOp:
+        def __init__(self, name):
+            self.name = name
+
+        def mutate(self, atoms):
+            return atoms
+
+    ops = [_StubOp("a"), _StubOp("b"), _StubOp("c")]
+    name_map = {"a": 0, "b": 1, "c": 2}
+    adaptive = {
+        "operator_weights": {"a": 0.2, "b": 0.3, "c": 0.5},
+        "rattle_strength": 0.5,
+        "rattle_prop": 0.5,
+    }
+    task_seed = 424242
+    _, _, decision_rng = offspring_rng_triple(task_seed)
+    selector = update_mutation_weights(ops, name_map, adaptive, rng=decision_rng)
+    indices = [selector.__get_index__() for _ in range(8)]
+    _, _, decision_rng_repeat = offspring_rng_triple(task_seed)
+    selector_repeat = update_mutation_weights(
+        ops, name_map, adaptive, rng=decision_rng_repeat
+    )
+    indices_repeat = [selector_repeat.__get_index__() for _ in range(8)]
+    assert indices == indices_repeat
+    assert len(set(indices)) > 1, "Expected multiple operators to be selected"
 
 
 def test_full_stack_smoke(tmp_path, rng):
@@ -921,7 +1033,12 @@ def test_ga_multiprocess_reproducibility_smoke(tmp_path):
         **common_kwargs,
     )
 
-    assert compare_minima_lists(minima_single, minima_multi)
+    assert compare_minima_lists(
+        minima_single,
+        minima_multi,
+        rtol=REPRODUCIBILITY_RTOL,
+        atol=REPRODUCIBILITY_ATOL,
+    )
     for energy, atoms in minima_multi:
         assert np.isfinite(energy)
         assert isinstance(atoms, Atoms)
