@@ -17,9 +17,12 @@ from pathlib import Path
 
 from ase import Atoms
 
-from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
-from scgo.runner_api import run_go_ts
-from scgo.surface import make_graphite_surface_config
+from scgo import (
+    get_torchsim_ga_params,
+    get_ts_search_params,
+    make_graphite_surface_config,
+    run_go_ts,
+)
 
 COMPOSITION = ["Pt", "Pt", "Pt", "Pt", "Pt"]
 SEED = 42

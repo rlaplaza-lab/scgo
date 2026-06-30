@@ -79,6 +79,7 @@ from scgo.surface import (
     SurfaceSystemConfig,
     adsorption_energy,
     make_graphite_surface_config,
+    make_surface_config,
 )
 
 # Utilities
@@ -93,7 +94,7 @@ from scgo.utils.logging import (
 )
 from scgo.utils.rng_helpers import get_child_rng_or_none
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def __dir__() -> list[str]:
@@ -129,6 +130,7 @@ __all__ = [
     "SurfaceSystemConfig",
     "adsorption_energy",
     "make_graphite_surface_config",
+    "make_surface_config",
     # Cluster + adsorbate
     "ClusterAdsorbateConfig",
     "attach_fix_bond_lengths",

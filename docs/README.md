@@ -35,7 +35,7 @@ The PDF will be available in `build/latex/scgo.pdf`.
   - `api/` — API reference documentation (auto-generated from docstrings)
   - `index.rst` — Main documentation index
   - `installation.rst` — Installation instructions
-  - `quickstart.rst` — Quick start guide with working examples (includes NEB endpoint alignment)
+  - `quickstart.rst` — Quick start guide with working examples
   - `conf.py` — Sphinx configuration
   - `requirements.txt` — Documentation build requirements
   - `Makefile` — Sphinx build automation (invoked via `docs/Makefile`)

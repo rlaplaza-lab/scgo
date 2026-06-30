@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
-from scgo.runner_api import run_go_ts
-from scgo.surface import make_graphite_surface_config
+from scgo import (
+    get_torchsim_ga_params,
+    get_ts_search_params,
+    make_graphite_surface_config,
+    run_go_ts,
+)
 
 N_ATOMS = 5
 ELEMENT = "Pt"

@@ -380,7 +380,7 @@ results = run_go(
 )
 ```
 
-**Algorithm selection** (mobile atom count): 1–2 → simple (plain `gas_cluster` only); 3 → basin hopping; 4+ → genetic algorithm. Adsorbate system types skip `simple` (two-atom mobile regions use GA). For basin hopping and surface adsorbate runs, `scgo` builds hierarchical initial structures from `adsorbate_fragment_template` and reads `adsorbate_definition` / `cluster_adsorbate_config` from `go_params`; init-only keys (fragment template, placement glob, etc.) are not forwarded to the algorithm entry point.
+**Algorithm selection** (mobile atom count): 1–2 → simple (plain `gas_cluster` only); 3 → basin hopping; 4+ → genetic algorithm. Adsorbate system types skip `simple` (two-atom mobile regions use GA). For `*_adsorbate` types, pass core-only `composition` and `adsorbates=` on the `run_*` call; SCGO builds fragment templates and hierarchical initial structures internally.
 
 #### `run_go_campaign(compositions, ..., system_type=...)`
 
@@ -440,7 +440,7 @@ Benchmarks comparing MACE vs UMA on the same GA structure can use [`get_uma_ga_b
 ### Advanced / internals
 
 - `from scgo.runner_api import _run_go_trials`, `_run_go_campaign_compositions`, `build_one_element_compositions`, `build_two_element_compositions`, …
-- `from scgo.surface import make_surface_config` for arbitrary ASE slabs (preset graphite: `make_graphite_surface_config`)
+- `from scgo import make_graphite_surface_config, make_surface_config` for preset graphite or custom ASE slabs
 - `from scgo.cluster_adsorbate import ClusterAdsorbateConfig, place_fragment_on_cluster` — adsorbate placement; see `docs/source/api/cluster_adsorbate.rst`
 - `from scgo.initialization.atomic_radii import build_blmin` — covalent-radius clash tables for GA and placement
 - Low-level `scgo(...)` / `run_trials(...)`: pass `system_type` in `global_optimizer_kwargs` (required for `scgo`; `run_trials` defaults missing values to `"gas_cluster"`)

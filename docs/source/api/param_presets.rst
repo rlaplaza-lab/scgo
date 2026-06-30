@@ -8,7 +8,7 @@ Transition-state presets (:func:`~scgo.param_presets.get_ts_search_params`) set
 ``neb_interpolation_mic``, ``neb_surface_cell_remap``, and
 ``neb_surface_lattice_rotation`` to ``True``, and ``neb_surface_max_lattice_shift``
 to ``1``, so NEB bands start from lattice-compatible aligned endpoints. See
-:doc:`/quickstart` (NEB endpoint alignment).
+:doc:`/parameters` (Transition State Search).
 
 GO presets from :func:`~scgo.param_presets.get_default_params` and TS presets from
 :func:`~scgo.param_presets.get_ts_search_params` also include

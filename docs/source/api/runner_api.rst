@@ -31,5 +31,7 @@ Workflow functions
      log_go_ts_summary,
      resolve_workflow_seed,
      parse_composition_arg,
+     build_one_element_compositions,
+     build_two_element_compositions,
    :undoc-members:
    :show-inheritance:

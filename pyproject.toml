@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scgo"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A modern Python package for global optimization of atomic clusters using ASE with Basin Hopping and Genetic Algorithms. Features clean code, comprehensive testing, and support for multiple energy calculators."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -65,6 +65,9 @@ dev = [
 
 [tool.setuptools]
 packages = { find = {} }
+
+[tool.setuptools.dynamic]
+version = { attr = "scgo.__version__" }
 
 [tool.ruff]
 line-length = 88

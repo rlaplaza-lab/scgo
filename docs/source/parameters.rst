@@ -48,6 +48,14 @@ Set these via `ts_params`.
      - Max optimization steps for NEB.
    * - ``neb_align_endpoints``
      - Align endpoints before NEB interpolation. (Default: ``True``)
+   * - ``neb_interpolation_mic``
+     - Use minimum-image convention during NEB interpolation. Default ``False`` for gas types; ``True`` for surface types (forced by policy).
+   * - ``neb_surface_cell_remap``
+     - Remap product slab cell to match reactant before surface NEB alignment. Default ``False`` for gas; ``True`` for surface types.
+   * - ``neb_surface_lattice_rotation``
+     - Allow compatible lattice rotation when aligning surface NEB endpoints. Default ``False`` for gas; ``True`` for surface types.
+   * - ``neb_surface_max_lattice_shift``
+     - Maximum lattice-vector shift (in cells) during surface endpoint alignment. Default ``1`` for all system types.
 
 System & Calculator
 -------------------
