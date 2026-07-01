@@ -16,6 +16,22 @@ from scgo.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _open_ase_db_backend(backend) -> None:
+    """Open a persistent ASE DB backend connection for the current scope.
+
+    ASE's ``managed_connection()`` creates ephemeral SQLite handles when
+    ``backend.connection`` is ``None``. Entering the backend context keeps a
+    single connection for all subsequent operations and allows reliable cleanup
+    via :func:`close_data_connection`.
+    """
+    if backend is None:
+        return
+    if getattr(backend, "connection", None) is not None:
+        return
+    if hasattr(backend, "__enter__"):
+        backend.__enter__()
+
+
 def apply_sqlite_pragmas(
     conn: sqlite3.Connection,
     *,
@@ -85,10 +101,12 @@ def get_connection(
 
     da = DataConnection(db_path)
 
+    _open_ase_db_backend(getattr(da, "c", None))
+
     # Fail fast: ensure JSON1 is available since many DB helpers use json_extract.
-    # Raise a clear error here rather than allowing downstream queries to fail
-    # with cryptic sqlite OperationalErrors.
-    _ensure_sqlite_json1(db_path)
+    _ensure_sqlite_json1(
+        conn=getattr(getattr(da, "c", None), "connection", None),
+    )
 
     # Apply busy_timeout to ASE's active connection.
     _apply_busy_timeout(da, busy_timeout)
@@ -105,7 +123,6 @@ def get_connection(
     try:
         yield da
     finally:
-        # Explicit cleanup to avoid file handle leaks
         close_data_connection(da)
 
 
@@ -134,13 +151,16 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
     if da is None:
         return
 
-    try:
-        if hasattr(da, "c") and da.c is not None and hasattr(da.c, "__exit__"):
-            if hasattr(da.c, "connection") and da.c.connection is None:
-                return
+    backend = getattr(da, "c", None)
+    if backend is None:
+        return
 
-            # SQLite3Database doesn't have close(), but has __exit__ for cleanup
-            da.c.__exit__(None, None, None)
+    conn = getattr(backend, "connection", None)
+    if conn is None:
+        return
+
+    try:
+        backend.__exit__(None, None, None)
     except (
         sqlite3.OperationalError,
         sqlite3.DatabaseError,
@@ -149,18 +169,52 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
     ) as e:
         if log_errors:
             logger.debug(f"Error closing database connection: {e}")
+        with contextlib.suppress(sqlite3.OperationalError, sqlite3.DatabaseError):
+            conn.close()
+        backend.connection = None
 
 
-def _ensure_sqlite_json1(db_path: str) -> None:
+def _run_sqlite(
+    db_path: str | Path,
+    callback,
+    *,
+    timeout: float = 30.0,
+    commit: bool = True,
+) -> None:
+    """Run *callback(conn)* on a short-lived SQLite connection with explicit close."""
+    conn = sqlite3.connect(str(db_path), timeout=timeout)
+    try:
+        callback(conn)
+        if commit:
+            conn.commit()
+    finally:
+        with contextlib.suppress(sqlite3.OperationalError, sqlite3.DatabaseError):
+            conn.close()
+
+
+def _ensure_sqlite_json1(
+    db_path: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> None:
     """Ensure the SQLite JSON1 extension is available for this database file.
 
     Raises RuntimeError with a helpful message if JSON functions (e.g. json_extract)
     are not available on the underlying SQLite build.
     """
     try:
-        with sqlite3.connect(db_path, timeout=5.0) as tmp_conn:
-            cur = tmp_conn.execute("SELECT json_extract('{\"a\": 1}', '$.a')")
+        if conn is not None:
+            cur = conn.execute("SELECT json_extract('{\"a\": 1}', '$.a')")
             _ = cur.fetchone()
+            return
+        if db_path is None:
+            raise ValueError("db_path is required when conn is not provided")
+
+        def _probe(active_conn: sqlite3.Connection) -> None:
+            cur = active_conn.execute("SELECT json_extract('{\"a\": 1}', '$.a')")
+            _ = cur.fetchone()
+
+        _run_sqlite(db_path, _probe, timeout=5.0)
     except sqlite3.OperationalError as e:
         raise RuntimeError(
             "SQLite JSON1 extension is required but not available. "

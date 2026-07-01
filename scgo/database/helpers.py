@@ -15,10 +15,12 @@ from pathlib import Path
 import numpy as np
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
-from ase_ga.data import DataConnection, PrepareDB
+from ase.db import connect as ase_db_connect
+from ase_ga.data import DataConnection
 
 from scgo.constants import PENALTY_ENERGY
 from scgo.database.connection import (
+    _run_sqlite,
     apply_sqlite_pragmas,
     close_data_connection,
     get_connection,
@@ -29,9 +31,8 @@ from scgo.database.exceptions import DatabaseSetupError
 from scgo.database.metadata import add_metadata, get_metadata
 from scgo.database.registry import get_registry
 from scgo.database.schema import (
-    CURRENT_SCHEMA_VERSION,
     is_scgo_database,
-    set_schema_version,
+    stamp_scgo_database,
 )
 from scgo.database.streaming import _iter_relaxed_minima_from_da
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock, retry_with_backoff
@@ -50,7 +51,10 @@ logger = get_logger(__name__)
 
 
 def _ensure_database_indices(
-    db_path: str, *, enable_expression_indexes: bool = False
+    db_path: str,
+    *,
+    enable_expression_indexes: bool = False,
+    enable_wal_mode: bool = False,
 ) -> None:
     """Create SQLite indices for performance.
 
@@ -62,14 +66,16 @@ def _ensure_database_indices(
         db_path: Path to the database file
     """
     try:
-        with sqlite3.connect(db_path, timeout=30.0) as conn:
-            # Index on energy column for sorting/filtering
+
+        def _create_indices(conn: sqlite3.Connection) -> None:
+            apply_sqlite_pragmas(
+                conn,
+                wal_mode=enable_wal_mode,
+                busy_timeout=30000,
+                cache_size_mb=64,
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_energy ON systems(energy)")
-
-            # Index on id for faster lookups
             conn.execute("CREATE INDEX IF NOT EXISTS idx_id ON systems(id)")
-
-            # Index on unique_id if it exists (ASE GA tracking)
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_unique_id ON systems(unique_id)"
@@ -93,11 +99,17 @@ def _ensure_database_indices(
                         f"ON systems(json_extract({json_col}, '$.final_unique_minimum'))"
                     )
 
-            conn.commit()
-            logger.debug(f"Database indices created for {db_path}")
+        _run_sqlite(db_path, _create_indices)
+        logger.debug(f"Database indices created for {db_path}")
     except sqlite3.OperationalError as e:
-        # Log but don't fail - indices are optional optimizations
-        logger.debug(f"Could not create all indices on {db_path}: {e}")
+        if enable_wal_mode:
+            logger.warning(
+                "Failed to enable WAL mode for %s: %s. Continuing with default mode.",
+                db_path,
+                e,
+            )
+        else:
+            logger.debug(f"Could not create all indices on {db_path}: {e}")
     except OSError as e:
         logger.warning(f"Unexpected error creating indices on {db_path}: {e}")
 
@@ -105,34 +117,17 @@ def _ensure_database_indices(
 def _write_scgo_metadata(da: DataConnection, db_file: str) -> None:
     """Write minimal SCGO metadata (best-effort).
 
-    Primary path uses ASE ``managed_connection`` via :func:`set_schema_version`.
-    If that path fails and the file is still not marked SCGO, open SQLite
-    directly once to create ``scgo_metadata`` (same keys).
+    Uses direct SQLite writes so setup does not rely on ephemeral ASE
+    ``managed_connection`` handles before the GA opens ``with da.c:``.
     """
+    _ = da  # retained for call-site compatibility
     with contextlib.suppress(
-        sqlite3.DatabaseError, sqlite3.OperationalError, ValueError
+        sqlite3.DatabaseError,
+        sqlite3.OperationalError,
+        OSError,
+        ValueError,
     ):
-        set_schema_version(da, CURRENT_SCHEMA_VERSION)
-
-    if is_scgo_database(db_file):
-        return
-
-    try:
-        with sqlite3.connect(db_file, timeout=5.0) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS scgo_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('created_by', ?)",
-                ("scgo",),
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('schema_version', ?)",
-                (str(CURRENT_SCHEMA_VERSION),),
-            )
-            conn.commit()
-    except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
-        logger.debug("Failed direct sqlite metadata write for %s: %s", db_file, e)
+        stamp_scgo_database(db_file)
 
 
 def _trial_id_from_output_dir(base_path: Path) -> int | None:
@@ -241,64 +236,41 @@ def setup_database(
             logger.warning(f"Failed to remove database {db_file}: {e}")
 
     all_atom_numbers = [int(num) for num in atoms_template.get_atomic_numbers()]
-    db = None
-    try:
-        db = PrepareDB(
-            db_file_name=db_file,
-            simulation_cell=atoms_template,
-            stoichiometry=all_atom_numbers,
+
+    with ase_db_connect(db_file) as prep_db:
+        prep_db.write(
+            atoms_template,
+            data={"stoichiometry": all_atom_numbers},
+            simulation_cell=True,
         )
 
         if initial_population is not None:
             for candidate in initial_population:
-                db.add_unrelaxed_candidate(candidate)
+                gaid = prep_db.write(
+                    candidate,
+                    origin="StartingCandidateUnrelaxed",
+                    relaxed=0,
+                    generation=0,
+                    extinct=0,
+                )
+                prep_db.update(gaid, gaid=gaid)
+                candidate.info["confid"] = gaid
         elif initial_candidate is not None:
-            db.add_unrelaxed_candidate(initial_candidate)
-
-        # Close PrepareDB to avoid SQLite locking issues
-        try:
-            # Vacuum the database to flush any pending writes
-            # Note: ASE's SQLite3Database manages commits internally
-            db.c.vacuum()
-        except (AttributeError, sqlite3.OperationalError) as e:
-            logger.debug(
-                f"Failed to vacuum database before opening DataConnection: {e}"
+            gaid = prep_db.write(
+                initial_candidate,
+                origin="StartingCandidateUnrelaxed",
+                relaxed=0,
+                generation=0,
+                extinct=0,
             )
-    finally:
-        # Clean up PrepareDB explicitly to avoid unclosed SQLite connections
-        if db is not None:
-            conn_holder = getattr(db, "c", None)
-            if conn_holder is not None and hasattr(conn_holder, "__exit__"):
-                with contextlib.suppress(
-                    sqlite3.OperationalError, AttributeError, RuntimeError
-                ):
-                    conn_holder.__exit__(None, None, None)
-            try:
-                del db
-            except (AttributeError, RuntimeError) as e:
-                logger.debug(f"Error cleaning up PrepareDB connection: {e}")
+            prep_db.update(gaid, gaid=gaid)
+            initial_candidate.info["confid"] = gaid
+
+        with contextlib.suppress(AttributeError, sqlite3.OperationalError):
+            prep_db.vacuum()
 
     # Opening DataConnection uses retry_on_lock below; do not rename or probe-lock
     # the SQLite file (unsafe on shared HPC filesystems and other writers).
-
-    try:
-        with sqlite3.connect(db_file, timeout=30.0) as conn:
-            apply_sqlite_pragmas(
-                conn,
-                wal_mode=enable_wal_mode,
-                busy_timeout=30000,
-                cache_size_mb=64,
-            )
-            conn.commit()
-    except sqlite3.OperationalError as e:
-        if enable_wal_mode:
-            logger.warning(
-                "Failed to enable WAL mode for %s: %s. Continuing with default mode.",
-                db_file,
-                e,
-            )
-        else:
-            logger.debug("Non-WAL PRAGMA setup skipped for %s: %s", db_file, e)
 
     # Open DataConnection with centralized retry-on-lock semantics
     try:
@@ -316,7 +288,9 @@ def setup_database(
 
         # Create performance indices (base + optional JSON expression indexes)
         _ensure_database_indices(
-            db_file, enable_expression_indexes=enable_expression_indexes
+            db_file,
+            enable_expression_indexes=enable_expression_indexes,
+            enable_wal_mode=enable_wal_mode,
         )
 
         db_path_obj = Path(db_file)

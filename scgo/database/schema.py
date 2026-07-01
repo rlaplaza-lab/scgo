@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ase_ga.data import DataConnection
 
+from scgo.database.connection import _run_sqlite
 from scgo.database.exceptions import DatabaseMigrationError
 from scgo.utils.logging import get_logger
 
@@ -157,7 +158,8 @@ def stamp_scgo_database(
     """
     ver = schema_version if schema_version is not None else CURRENT_SCHEMA_VERSION
     path = str(db_path)
-    with sqlite3.connect(path, timeout=30.0) as conn:
+
+    def _stamp(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS scgo_metadata (
@@ -173,4 +175,5 @@ def stamp_scgo_database(
             "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('schema_version', ?)",
             (str(ver),),
         )
-        conn.commit()
+
+    _run_sqlite(path, _stamp)
