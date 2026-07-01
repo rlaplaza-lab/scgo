@@ -14,7 +14,7 @@ from scgo.param_presets import (
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
-from scgo.utils.run_helpers import prepare_algorithm_kwargs
+from scgo.utils.run_helpers import initialize_ts_params, prepare_algorithm_kwargs
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 
 
@@ -87,6 +87,16 @@ def test_coerce_sparse_ts_params_falls_back_to_per_system_defaults(system_type):
     assert kwargs["torchsim_params"]["max_steps"] == defaults["torchsim_max_steps"]
     assert "torchsim_fmax" not in kwargs
     assert "torchsim_max_steps" not in kwargs
+
+
+def test_initialize_ts_params_then_coerce_matches_full_preset():
+    initialized = initialize_ts_params(
+        {"calculator": "EMT", "use_torchsim": False},
+        system_type="gas_cluster",
+    )
+    kwargs = coerce_ts_params_to_runner_kwargs(initialized, system_type="gas_cluster")
+    assert kwargs["params"]["calculator"] == "EMT"
+    assert kwargs["use_torchsim"] is False
 
 
 def test_ts_search_params_accepts_seed():

@@ -146,7 +146,12 @@ def get_ts_defaults(system_type: SystemType) -> dict[str, Any]:
 
 
 def get_default_params() -> dict[str, Any]:
-    """Return the default SCGO parameter dictionary."""
+    """Return the default SCGO parameter dictionary for global optimization.
+
+    Suitable for ``run_go`` / ``run_go_ts`` as ``params`` / ``go_params``; pass
+    as-is or override keys (omitted keys are filled via
+    :func:`scgo.utils.run_helpers.initialize_params`).
+    """
     return {
         "validate_with_hessian": False,
         "calculator": "MACE",
@@ -229,11 +234,11 @@ def get_minimal_ga_params(
     seed: int | None = None,
     model_name: str | None = None,
 ) -> dict[str, Any]:
-    """Return compact GA-focused parameters (merged with defaults).
+    """Return compact GA-focused parameters derived from defaults.
 
     Uses sequential population init and offspring work (``n_jobs_*`` set to 1) so
-    runners stay easy to reason about; merge with :func:`initialize_params` to
-    fill other keys from :func:`get_default_params`.
+    runners stay easy to reason about. Pass as-is to ``run_*`` or override keys;
+    omitted keys are filled via :func:`scgo.utils.run_helpers.initialize_params`.
     """
     params = get_default_params()
 
@@ -262,38 +267,37 @@ def get_minimal_ga_params(
 
 
 def get_testing_params() -> dict[str, Any]:
-    """Return fast, low-cost parameters for tests (EMT, fewer iterations)."""
-    return {
-        "validate_with_hessian": False,
-        "calculator": "EMT",
-        "seed": None,  # Will be overridden by function parameter
-        "connectivity_factor": 1.4,
-        "optimizer_params": {
-            "simple": {
-                "optimizer": "FIRE",
-                "fmax": 0.05,
-                "niter": 1,
-                "niter_local_relaxation": 2,
-                "system_type": "gas_cluster",
-            },
-            "bh": {
-                "optimizer": "FIRE",
-                "niter": 5,
-                "dr": 0.2,
-                "niter_local_relaxation": 2,
-                "system_type": "gas_cluster",
-            },
-            "ga": {
-                "optimizer": "FIRE",
-                "population_size": 5,
-                "offspring_fraction": 0.5,
-                "niter": 2,
-                "niter_local_relaxation": 2,
-                "n_jobs_population_init": -2,  # Parallel for tests/benchmarks
-                "system_type": "gas_cluster",
-            },
-        },
-    }
+    """Return fast, low-cost parameters for tests (EMT, fewer iterations).
+
+    Complete preset based on :func:`get_default_params`; pass as-is to ``run_*``
+    or override keys (omitted keys are filled via
+    :func:`scgo.utils.run_helpers.initialize_params`).
+    """
+    params = get_default_params()
+    params["calculator"] = "EMT"
+    params["calculator_kwargs"] = {}
+    params["optimizer_params"]["simple"].update(
+        {
+            "niter": 1,
+            "niter_local_relaxation": 2,
+        }
+    )
+    params["optimizer_params"]["bh"].update(
+        {
+            "niter": 5,
+            "niter_local_relaxation": 2,
+        }
+    )
+    params["optimizer_params"]["ga"].update(
+        {
+            "population_size": 5,
+            "offspring_fraction": 0.5,
+            "niter": 2,
+            "niter_local_relaxation": 2,
+            "n_jobs_population_init": -2,
+        }
+    )
+    return params
 
 
 def _get_base_ga_benchmark_params(seed: int) -> dict[str, Any]:
@@ -352,8 +356,9 @@ def get_uma_ga_benchmark_params(
     Tuned for regression and profiling alongside the MACE TorchSim benchmark preset
     (:func:`get_torchsim_ga_params`): fixed local relaxation budget from the base
     preset (200 steps, not ``"auto"``), with autobatching and ``expected_max_atoms=600``
-    for stable GPU memory behaviour. For general UMA runs with default GA
-    ``"auto"`` local steps, use :func:`get_default_uma_params` instead.
+    for stable GPU memory behaviour. Pass as-is to ``run_*`` or override keys.
+    For general UMA runs with default GA ``"auto"`` local steps, use
+    :func:`get_default_uma_params` instead.
     """
     params = _get_base_ga_benchmark_params(seed)
     params["calculator"] = "UMA"
@@ -375,12 +380,12 @@ def get_uma_ga_benchmark_params(
 def get_default_uma_params() -> dict[str, Any]:
     """Default SCGO parameters using the UMA calculator (fairchem-core).
 
-    For typical campaigns with default GA settings: ``niter_local_relaxation`` is
-    ``"auto"`` and the TorchSim relaxer uses 250 max steps in that case. Autobatcher
-    and memory-probe defaults follow :class:`TorchSimBatchRelaxer` (``autobatcher``
-    None: CUDA on, CPU off). Use :func:`get_uma_ga_benchmark_params` when you need
-    the same structure as the MACE benchmark preset (fixed local steps, explicit
-    autobatcher/expected_max_atoms).
+    Pass as-is to ``run_*`` or override keys. For typical campaigns with default
+    GA settings: ``niter_local_relaxation`` is ``"auto"`` and the TorchSim relaxer
+    uses 250 max steps in that case. Autobatcher and memory-probe defaults follow
+    :class:`TorchSimBatchRelaxer` (``autobatcher`` None: CUDA on, CPU off). Use
+    :func:`get_uma_ga_benchmark_params` when you need the same structure as the MACE
+    benchmark preset (fixed local steps, explicit autobatcher/expected_max_atoms).
     """
     params = get_default_params()
     params["calculator"] = "UMA"
@@ -411,7 +416,8 @@ def get_torchsim_ga_params(
     """Return GO params using TorchSim relaxer (requires ``scgo[mace]``).
 
     Mirrors :func:`get_ts_search_params` call style by requiring ``system_type``
-    and accepting ``surface_config`` / ``seed`` explicitly.
+    and accepting ``surface_config`` / ``seed`` explicitly. Pass as-is to ``run_*``
+    or override keys.
     When ``model_name`` is set, it is written to ``calculator_kwargs`` and the
     :class:`~scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer` uses the
     same MACE model name as the ASE calculator.
@@ -469,8 +475,9 @@ def get_diversity_params(
 ) -> dict[str, Any]:
     """Return params for diversity-based optimization (reference DB, intervals).
 
-    ``reference_db_glob`` must match at least one database with reference
-    structures when you run; there is no runtime check that the glob is non-empty.
+    Pass as-is to ``run_*`` or override keys. ``reference_db_glob`` must match at
+    least one database with reference structures when you run; there is no runtime
+    check that the glob is non-empty.
     """
     params = get_default_params()
     params["fitness_strategy"] = "diversity"
@@ -487,10 +494,10 @@ def get_diversity_params(
 def get_high_energy_params() -> dict[str, Any]:
     """Return params that bias exploration toward high-energy structures.
 
-    Sets top-level ``fitness_strategy`` to ``high_energy`` (used by BH and GA).
-    Basin hopping additionally uses a higher temperature. GA hyperparameters are
-    otherwise unchanged—override ``optimizer_params['ga']`` if you need stronger
-    exploration there.
+    Pass as-is to ``run_*`` or override keys. Sets top-level ``fitness_strategy``
+    to ``high_energy`` (used by BH and GA). Basin hopping additionally uses a
+    higher temperature. GA hyperparameters are otherwise unchanged—override
+    ``optimizer_params['ga']`` if you need stronger exploration there.
     """
     params = get_default_params()
     params["fitness_strategy"] = "high_energy"
@@ -513,6 +520,10 @@ def get_ts_search_params(
     seed: int | None = None,
 ) -> dict[str, Any]:
     """TS-only settings (NEB, calculator, pairing). Not merged with GO defaults.
+
+    Suitable for ``run_ts_search`` / ``run_go_ts`` as ``ts_params``; pass as-is or
+    override keys (omitted keys are filled via
+    :func:`scgo.utils.run_helpers.initialize_ts_params`).
 
     For EMT or other non-TorchSim calculators, set ``use_torchsim=False`` on the
     returned dict before running.

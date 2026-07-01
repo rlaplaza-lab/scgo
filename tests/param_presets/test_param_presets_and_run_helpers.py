@@ -8,16 +8,23 @@ import pytest
 
 from scgo.param_presets import (
     get_default_params,
+    get_diversity_params,
+    get_high_energy_params,
     get_minimal_ga_params,
     get_testing_params,
+    get_ts_search_params,
+    get_uma_ga_benchmark_params,
 )
 from scgo.utils.run_helpers import (
     _get_calculators,
     _normalize_optimizer_class,
     _resolve_fitness_strategy,
+    diff_param_overrides,
     get_calculator_class,
     initialize_params,
+    initialize_ts_params,
     log_configuration,
+    log_params_resolution,
     resolve_auto_params,
     resolve_diversity_params,
     validate_algorithm_params,
@@ -123,14 +130,108 @@ def test_validate_algorithm_params_accepts_surface_config(caplog):
 def test_get_testing_params_is_lightweight():
     """get_testing_params should favour EMT and very small iteration counts."""
     params = get_testing_params()
+    defaults = get_default_params()
 
     assert params["calculator"] == "EMT"
+    assert params["validate_with_hessian"] == defaults["validate_with_hessian"]
+    assert params["tag_final_minima"] == defaults["tag_final_minima"]
     bh = params["optimizer_params"]["bh"]
     ga = params["optimizer_params"]["ga"]
 
     assert bh["niter"] <= 5
     assert ga["population_size"] <= 10
     assert ga["niter"] <= 5
+
+
+def test_get_testing_params_merges_like_defaults():
+    """Sparse overrides on get_testing_params still deep-merge with defaults."""
+    merged = initialize_params({"calculator": "EMT"})
+    testing = get_testing_params()
+    assert set(testing.keys()) == set(get_default_params().keys())
+    assert merged["optimizer_params"]["ga"]["vacuum"] == get_default_params()[
+        "optimizer_params"
+    ]["ga"]["vacuum"]
+
+
+def test_initialize_ts_params_sparse_merge():
+    """Sparse TS dicts deep-merge onto get_ts_search_params defaults."""
+    merged = initialize_ts_params(
+        {"calculator": "EMT", "neb_n_images": 7},
+        system_type="gas_cluster",
+    )
+    base = initialize_ts_params(None, system_type="gas_cluster")
+    assert merged["calculator"] == "EMT"
+    assert merged["neb_n_images"] == 7
+    assert merged["neb_fmax"] == base["neb_fmax"]
+    assert merged["energy_gap_threshold"] == base["energy_gap_threshold"]
+
+
+def test_initialize_ts_params_calculator_kwargs_deep_merge():
+    user = {
+        "calculator_kwargs": {"model_name": "mace_mp_small"},
+    }
+    merged = initialize_ts_params(user, system_type="gas_cluster")
+    assert merged["calculator_kwargs"]["model_name"] == "mace_mp_small"
+
+
+def test_diff_param_overrides_nested_paths():
+    base = get_default_params()
+    merged = initialize_params({"optimizer_params": {"ga": {"niter": 5}}})
+    overrides = diff_param_overrides(base, merged)
+    assert "optimizer_params.ga.niter" in overrides
+    assert overrides["optimizer_params.ga.niter"] == 5
+
+
+def test_log_params_resolution_logs_overrides(caplog):
+    caplog.set_level(logging.INFO)
+    user = {"calculator": "EMT"}
+    merged = initialize_params(user)
+    log_params_resolution(
+        "SCGO",
+        source_label="get_default_params()",
+        user_params=user,
+        merged=merged,
+        base=get_default_params(),
+        verbosity=1,
+    )
+    assert any("merged user overrides" in rec.message for rec in caplog.records)
+    assert any("calculator" in rec.message for rec in caplog.records)
+
+
+def test_log_params_resolution_no_user_dict(caplog):
+    caplog.set_level(logging.INFO)
+    merged = get_default_params()
+    log_params_resolution(
+        "SCGO",
+        source_label="get_default_params()",
+        user_params=None,
+        merged=merged,
+        base=merged,
+        verbosity=1,
+    )
+    assert any("no user overrides" in rec.message for rec in caplog.records)
+
+
+def test_get_high_energy_params_sets_fitness_strategy():
+    params = get_high_energy_params()
+    assert params["fitness_strategy"] == "high_energy"
+    assert params["optimizer_params"]["ga"]["population_size"] == "auto"
+
+
+def test_get_diversity_params_sets_reference_db():
+    params = get_diversity_params(reference_db_glob="Pt*_searches/**/*.db")
+    assert params["fitness_strategy"] == "diversity"
+    assert params["diversity_reference_db"] == "Pt*_searches/**/*.db"
+
+
+def test_get_uma_ga_benchmark_params_structure():
+    fairchem = pytest.importorskip("fairchem")
+    if not hasattr(fairchem, "core"):
+        pytest.skip("fairchem.core not available")
+    params = get_uma_ga_benchmark_params(seed=7)
+    assert params["calculator"] == "UMA"
+    assert params["seed"] == 7
+    assert params["optimizer_params"]["ga"]["relaxer"] is not None
 
 
 class TestResolveAutoParams:

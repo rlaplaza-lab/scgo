@@ -15,7 +15,8 @@ import numpy as np
 from ase.calculators.emt import EMT
 
 from scgo.constants import BOLTZMANN_K_EV_PER_K, SURFACE_GA_MIN_LOCAL_RELAX_STEPS
-from scgo.param_presets import get_default_params
+from scgo.param_presets import get_default_params, get_ts_search_params
+from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     SystemType,
     get_system_policy,
@@ -73,6 +74,106 @@ def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
         return default_params
 
     return deep_merge_dicts(default_params, params)
+
+
+def initialize_ts_params(
+    ts_params: dict[str, Any] | None,
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    go_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Initialize and merge TS params with :func:`get_ts_search_params` defaults.
+
+    When ``go_params`` is provided, calculator settings are aligned with the
+    merged GO dict unless overridden in ``ts_params``.
+    """
+    resolved_surface = surface_config
+    if ts_params is not None:
+        ts_sc = ts_params.get("surface_config")
+        if ts_sc is not None:
+            resolved_surface = resolved_surface or ts_sc
+    if go_params is not None and resolved_surface is None:
+        go_sc = go_params.get("surface_config")
+        if go_sc is not None:
+            resolved_surface = go_sc
+
+    calc = "MACE"
+    calc_kwargs: dict[str, Any] | None = None
+    if go_params is not None:
+        calc = str(go_params.get("calculator", "MACE"))
+        ck = go_params.get("calculator_kwargs")
+        if ck:
+            calc_kwargs = dict(ck)
+    elif ts_params is not None:
+        if "calculator" in ts_params:
+            calc = str(ts_params["calculator"])
+        ck = ts_params.get("calculator_kwargs")
+        if ck:
+            calc_kwargs = dict(ck)
+
+    base = get_ts_search_params(
+        calculator=calc,
+        calculator_kwargs=calc_kwargs,
+        system_type=system_type,
+        surface_config=resolved_surface,
+    )
+    if ts_params is None:
+        return base
+    return deep_merge_dicts(base, ts_params)
+
+
+def diff_param_overrides(
+    base: dict[str, Any],
+    merged: dict[str, Any],
+    *,
+    prefix: str = "",
+) -> dict[str, Any]:
+    """Return flat ``path -> value`` entries where ``merged`` differs from ``base``."""
+    overrides: dict[str, Any] = {}
+    for key in set(base) | set(merged):
+        path = key if not prefix else f"{prefix}.{key}"
+        base_val = base.get(key)
+        merged_val = merged.get(key)
+        if isinstance(base_val, dict) and isinstance(merged_val, dict):
+            overrides.update(
+                diff_param_overrides(base_val, merged_val, prefix=path)
+            )
+        elif base_val != merged_val:
+            overrides[path] = merged_val
+    return overrides
+
+
+def log_params_resolution(
+    context: str,
+    *,
+    source_label: str,
+    user_params: dict[str, Any] | None,
+    merged: dict[str, Any],
+    base: dict[str, Any],
+    verbosity: int,
+) -> None:
+    """Log how user params were merged onto preset defaults."""
+    logger = get_logger(__name__)
+    if verbosity < 1:
+        return
+    if user_params is None:
+        logger.info("%s params: using %s (no user overrides)", context, source_label)
+        return
+    overrides = diff_param_overrides(base, merged)
+    if overrides:
+        logger.info(
+            "%s params: merged user overrides on top of %s: %s",
+            context,
+            source_label,
+            overrides,
+        )
+    else:
+        logger.info(
+            "%s params: using %s (user dict matched defaults)",
+            context,
+            source_label,
+        )
 
 
 def get_calculator_class(calculator_name: str) -> type:
@@ -427,6 +528,60 @@ def prepare_algorithm_kwargs(
     return base_kwargs
 
 
+def log_ts_configuration(
+    ts_params: dict[str, Any],
+    coerced_kwargs: dict[str, Any],
+    *,
+    verbosity: int,
+    user_params: dict[str, Any] | None = None,
+    base: dict[str, Any] | None = None,
+) -> None:
+    """Log resolved transition-state search configuration."""
+    logger = get_logger(__name__)
+    if verbosity < 1:
+        return
+
+    if base is not None:
+        log_params_resolution(
+            "TS",
+            source_label="get_ts_search_params()",
+            user_params=user_params,
+            merged=ts_params,
+            base=base,
+            verbosity=verbosity,
+        )
+
+    calc_params = coerced_kwargs.get("params") or {}
+    logger.info(
+        "TS config: calculator=%s calculator_kwargs=%s",
+        calc_params.get("calculator"),
+        calc_params.get("calculator_kwargs", {}),
+    )
+    for key in (
+        "max_pairs",
+        "energy_gap_threshold",
+        "similarity_tolerance",
+        "similarity_pair_cor_max",
+        "connectivity_factor",
+        "dedupe_minima",
+        "minima_energy_tolerance",
+        "use_torchsim",
+        "use_parallel_neb",
+        "neb_align_endpoints",
+        "neb_interpolation_mic",
+        "neb_n_images",
+        "neb_spring_constant",
+        "neb_fmax",
+        "neb_steps",
+        "neb_climb",
+        "neb_perturb_sigma",
+        "neb_interpolation_method",
+        "neb_tangent_method",
+    ):
+        if key in coerced_kwargs and coerced_kwargs[key] is not None:
+            logger.info("TS config: %s=%s", key, coerced_kwargs[key])
+
+
 def log_configuration(
     params: dict[str, Any],
     chosen_go: str,
@@ -435,6 +590,9 @@ def log_configuration(
     n_atoms: int,
     global_optimizer_kwargs: dict[str, Any],
     verbosity: int,
+    *,
+    user_params: dict[str, Any] | None = None,
+    params_base: dict[str, Any] | None = None,
 ) -> None:
     """Log final configuration.
 
@@ -446,11 +604,22 @@ def log_configuration(
         n_atoms: Number of atoms.
         global_optimizer_kwargs: Resolved algorithm parameters.
         verbosity: Logging verbosity level.
+        user_params: Original user dict before merge (for provenance logging).
+        params_base: Base defaults used for merge (defaults to ``get_default_params()``).
     """
     logger = get_logger(__name__)
 
     if verbosity < 1:
         return
+
+    log_params_resolution(
+        "SCGO",
+        source_label="get_default_params()",
+        user_params=user_params,
+        merged=params,
+        base=params_base if params_base is not None else get_default_params(),
+        verbosity=verbosity,
+    )
 
     logger.info(
         "SCGO config: composition=%s atoms=%d algorithm=%s calculator=%s",

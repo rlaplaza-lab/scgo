@@ -17,13 +17,12 @@ def coerce_ts_params_to_runner_kwargs(
     system_type: SystemType,
     surface_config: Any | None = None,
 ) -> dict[str, Any]:
-    """Map ``get_ts_search_params`` output to ``run_transition_state_search`` kwargs.
+    """Map initialized ``get_ts_search_params`` output to runner kwargs.
 
-    Missing NEB knobs (``neb_align_endpoints``, ``neb_interpolation_mic``, image
-    counts, fmax, steps, ...) fall back to the per-system-type defaults in
-    :data:`scgo.param_presets.TS_DEFAULTS_BY_SYSTEM_TYPE`, so a sparse
-    user-built dict still gets policy-coherent values without relying on the
-    runner's silent override.
+    Expects a fully initialized flat TS dict (see
+    :func:`scgo.utils.run_helpers.initialize_ts_params`). Missing NEB knobs still
+    fall back to per-system defaults in
+    :data:`scgo.param_presets.TS_DEFAULTS_BY_SYSTEM_TYPE` as a safety net.
     """
     if ts_params is None:
         raise ValueError(
