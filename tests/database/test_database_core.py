@@ -699,9 +699,7 @@ class TestRobustness:
             assert isinstance(db.get_all_relaxed_candidates(), list)
 
     @pytest.mark.slow
-    def test_no_file_handle_leak_many_connections(
-        self, tmp_path, pt2_atoms, monkeypatch
-    ):
+    def test_no_file_handle_leak_many_connections(self, tmp_path, pt2_atoms):
         initial_fd_count = _count_open_files()
         if initial_fd_count < 0:
             pytest.skip("Cannot count file descriptors on this system")
@@ -718,30 +716,13 @@ class TestRobustness:
                 _ = db.get_all_relaxed_candidates()
 
         gc.collect()
-        # Make polling deterministic in CI by monkeypatching fd counter to return
-        # the initial value so the polling loop exits immediately.
-        monkeypatch.setattr(
-            "tests.database.test_database_core._count_open_files",
-            lambda: initial_fd_count,
-        )
-
-        # Poll until file descriptor counts drop below threshold, calling gc to
-        # encourage cleanup. Timeout after 1s.
-        import time as time_module
-
-        start_time = time_module.time()
-        while time_module.time() - start_time < 1.0:
-            current_fd = _count_open_files()
-            if current_fd >= 0 and (current_fd - initial_fd_count) < 20:
-                break
-            gc.collect()
-            time_module.sleep(0.05)
 
         final_fd_count = _count_open_files()
         fd_increase = final_fd_count - initial_fd_count
         assert fd_increase < 20
 
     @pytest.mark.slow
+    @pytest.mark.xdist_group(name="no_nested_pool")
     def test_concurrent_write_stress(self, tmp_path, pt2_atoms):
         with _setup_test_db(
             tmp_path,
@@ -754,7 +735,7 @@ class TestRobustness:
         gc.collect()  # Ensure connection released before workers start
 
         db_file = tmp_path / "concurrent.db"
-        n_workers = 4
+        n_workers = 2
         n_structures = 10
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -763,30 +744,12 @@ class TestRobustness:
                 for wid in range(n_workers)
             ]
 
-            results = []
-            for future in as_completed(futures):
-                try:
-                    results.append(future.result())
-                except Exception:
-                    results.append((False, -1))
+            results = [future.result() for future in as_completed(futures)]
 
-        failures = [r for r in results if not r[0]]
-        # Allow occasional worker crashes under parallel CI / fork pressure.
-        max_failures = 3
-        assert len(failures) <= max_failures, f"Too many worker failures: {failures}"
+        assert all(r[0] for r in results), f"Worker failures: {results}"
 
-        # SCGO stores GA relaxed state in JSON (key_value_pairs/metadata), not in
-        # ASE's top-level relaxed= column, so DataConnection.get_all_relaxed_candidates()
-        # is empty for these databases. Count via the same SQL path as production.
         n_relaxed = count_database_structures(db_file)
-        successful_workers = n_workers - len(failures)
-        expected_min = int(successful_workers * n_structures * 0.9)
-        if n_relaxed == 0 and len(failures) == 0:
-            pytest.skip(
-                "All workers reported success but no relaxed rows found "
-                "(possible subprocess/filesystem isolation issue)"
-            )
-        assert n_relaxed >= expected_min
+        assert n_relaxed == n_workers * n_structures
 
     def test_setup_database_wal_mode(self, tmp_path, pt2_atoms):
         with _setup_test_db(

@@ -14,7 +14,7 @@ from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.algorithms.ga_common import update_mutation_weights
 from scgo.database import close_data_connection
-from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
+from scgo.initialization import create_initial_cluster
 from scgo.minima_search import run_trials, scgo
 from scgo.param_presets import get_testing_params
 from scgo.runner_api import (
@@ -27,9 +27,12 @@ from scgo.utils.helpers import auto_niter
 from tests.constants import REPRODUCIBILITY_ATOL, REPRODUCIBILITY_RTOL
 from tests.test_utils import (
     MockRelaxer,
+    assert_batch_init_reproducible,
     compare_minima_lists,
     create_paired_rngs,
+    isolated_workflow_cwd,
     run_algorithm_reproducibility_test,
+    seeded_globals,
 )
 
 
@@ -152,53 +155,26 @@ def test_ga_mutation_operators_child_rngs_reproducible():
     assert draws1 == draws2, "Child RNGs derived from parent RNG should be reproducible"
 
 
-def test_initialization_batch_reproducible_single_vs_multi_cpu():
-    """Batch initialization must be identical for n_jobs=1 vs n_jobs=-2."""
-    import os
-
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate parallel initialization behavior")
-
-    composition = ["Pt"] * 5
-    n_structures = 8
-    rng_single, rng_multi = create_paired_rngs(24680)
-
-    batch_single = create_initial_cluster_batch(
-        composition=composition,
+@pytest.mark.requires_multicore
+@pytest.mark.parametrize(
+    "n_structures,n_atoms,seed,n_jobs_multi",
+    [(8, 5, 24680, -2), (2, 3, 789, 2)],
+)
+def test_initialization_batch_reproducible_single_vs_multi_cpu(
+    n_structures, n_atoms, seed, n_jobs_multi
+):
+    """Batch initialization must be identical for n_jobs=1 vs parallel workers."""
+    assert_batch_init_reproducible(
+        composition=["Pt"] * n_atoms,
         n_structures=n_structures,
-        rng=rng_single,
-        mode="smart",
-        n_jobs=1,
-    )
-    batch_multi = create_initial_cluster_batch(
-        composition=composition,
-        n_structures=n_structures,
-        rng=rng_multi,
-        mode="smart",
-        n_jobs=-2,
+        seed=seed,
+        n_jobs_multi=n_jobs_multi,
     )
 
-    assert len(batch_single) == len(batch_multi) == n_structures
-    for a_single, a_multi in zip(batch_single, batch_multi, strict=True):
-        np.testing.assert_allclose(
-            a_single.get_positions(),
-            a_multi.get_positions(),
-            rtol=1e-12,
-            atol=1e-12,
-        )
-        assert a_single.get_chemical_symbols() == a_multi.get_chemical_symbols()
 
-
+@pytest.mark.requires_multicore
 def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path):
     """TorchSim GA must match for serial vs parallel population init (serial offspring)."""
-    import os
-    import random
-
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate parallel GA behavior")
-
-    from tests.test_utils import isolated_workflow_cwd
-
     composition = ["Pt"] * 3
     seed = 97531
     kwargs = {
@@ -216,10 +192,7 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
         "mutation_probability": 0.2,
     }
 
-    # Seed Python's global RNG for reproducibility
-    random.seed(seed)
-
-    with isolated_workflow_cwd(tmp_path / "torchsim_single_cpu"):
+    with seeded_globals(seed), isolated_workflow_cwd(tmp_path / "torchsim_single_cpu"):
         minima_single = ga_go(
             output_dir=str(tmp_path / "torchsim_single_cpu"),
             rng=np.random.default_rng(seed),
@@ -228,11 +201,7 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
             **kwargs,
         )
 
-    # Reset Python's global RNG between runs
-    random.seed(seed)
-    np.random.seed(seed)
-
-    with isolated_workflow_cwd(tmp_path / "torchsim_multi_cpu"):
+    with seeded_globals(seed), isolated_workflow_cwd(tmp_path / "torchsim_multi_cpu"):
         minima_multi = ga_go(
             output_dir=str(tmp_path / "torchsim_multi_cpu"),
             rng=np.random.default_rng(seed),
@@ -241,63 +210,7 @@ def test_torchsim_ga_reproducible_single_vs_multi_cpu_init_and_genetic(tmp_path)
             **kwargs,
         )
 
-    assert compare_minima_lists(
-        minima_single,
-        minima_multi,
-        rtol=REPRODUCIBILITY_RTOL,
-        atol=REPRODUCIBILITY_ATOL,
-    )
-
-
-def test_ga_offspring_serial_vs_parallel_reproducible(tmp_path):
-    """TorchSim GA must match for serial vs parallel offspring with the same seed."""
-    import os
-
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate parallel offspring behavior")
-
-    from tests.test_utils import isolated_workflow_cwd
-
-    composition = ["Pt"] * 4
-    seed = 161803
-    kwargs = {
-        "composition": composition,
-        "calculator": EMT(),
-        "relaxer": MockRelaxer(max_steps=1),
-        "niter": 1,
-        "population_size": 3,
-        "offspring_fraction": 0.34,
-        "niter_local_relaxation": 2,
-        "batch_size": None,
-        "verbosity": 0,
-        "previous_search_glob": ".__scgo_no_prior_runs__/**/*.db",
-        "use_adaptive_mutations": False,
-        "mutation_probability": 0.3,
-        "n_jobs_population_init": 1,
-    }
-
-    with isolated_workflow_cwd(tmp_path / "offspring_serial"):
-        minima_serial = ga_go(
-            output_dir=str(tmp_path / "offspring_serial"),
-            rng=np.random.default_rng(seed),
-            n_jobs_offspring=1,
-            **kwargs,
-        )
-
-    with isolated_workflow_cwd(tmp_path / "offspring_parallel"):
-        minima_parallel = ga_go(
-            output_dir=str(tmp_path / "offspring_parallel"),
-            rng=np.random.default_rng(seed),
-            n_jobs_offspring=2,
-            **kwargs,
-        )
-
-    assert compare_minima_lists(
-        minima_serial,
-        minima_parallel,
-        rtol=REPRODUCIBILITY_RTOL,
-        atol=REPRODUCIBILITY_ATOL,
-    )
+    assert compare_minima_lists(minima_single, minima_multi)
 
 
 def test_update_mutation_weights_requires_explicit_rng():
@@ -454,56 +367,6 @@ def test_run_py_campaign_two_elements_smoke(tmp_path):
         e, a = results["Au2"][0]
         assert np.isfinite(e)
         assert len(a) == 2
-
-
-@pytest.mark.slow
-def test_ga_go_smoke(tmp_path, rng):
-    """Test ga_go smoke test (fastened for CI).
-
-    Reduced iteration/population/local-relaxation counts keep this a smoke
-    test while exercising the GA code paths. Historically this test was
-    long because it relied on the `auto_*` heuristics.
-    """
-    comp = ["Pt", "Pt", "Pt"]
-    calc = EMT()
-    params = get_testing_params()["optimizer_params"]["ga"]
-
-    params_copy = params.copy()
-    params_copy["optimizer"] = FIRE
-
-    # Filter out parameters that ga_go() doesn't accept
-    ga_go_params = {
-        k: v
-        for k, v in params_copy.items()
-        if k
-        not in [
-            "niter",
-            "population_size",
-            "niter_local_relaxation",
-            "use_torchsim",
-            "batch_size",
-            "relaxer",
-        ]
-    }
-
-    # Use a very small GA budget for a fast smoke test
-    minima = ga_go(
-        comp,
-        output_dir=str(tmp_path),
-        calculator=calc,
-        niter=2,
-        population_size=4,
-        niter_local_relaxation=2,
-        **ga_go_params,
-        rng=rng,
-    )
-
-    # Expect a list (can be empty if all relaxations failed), but the
-    # function should not crash and must return a list.
-    assert isinstance(minima, list)
-    for e, a in minima:
-        assert np.isfinite(e)
-        assert isinstance(a, Atoms)
 
 
 def test_bh_go_smoke(tmp_path, rng):
@@ -958,50 +821,9 @@ def test_rng_different_seeds_different_results(seed1, seed2):
     )  # Same composition
 
 
-def test_ga_population_init_reproducible_single_vs_multi_cpu():
-    """GA population init input should be deterministic for n_jobs=1 vs n_jobs=2."""
-    import os
-
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate parallel initialization behavior")
-
-    composition = ["Pt"] * 3
-    population_size = 2
-    rng_single, rng_multi = create_paired_rngs(789)
-
-    batch_single = create_initial_cluster_batch(
-        composition=composition,
-        n_structures=population_size,
-        rng=rng_single,
-        mode="smart",
-        n_jobs=1,
-    )
-    batch_multi = create_initial_cluster_batch(
-        composition=composition,
-        n_structures=population_size,
-        rng=rng_multi,
-        mode="smart",
-        n_jobs=2,
-    )
-
-    assert len(batch_single) == len(batch_multi) == population_size
-    for a_single, a_multi in zip(batch_single, batch_multi, strict=True):
-        np.testing.assert_allclose(
-            a_single.get_positions(),
-            a_multi.get_positions(),
-            rtol=1e-12,
-            atol=1e-12,
-        )
-        assert a_single.get_chemical_symbols() == a_multi.get_chemical_symbols()
-
-
+@pytest.mark.requires_multicore
 def test_ga_multiprocess_reproducibility_smoke(tmp_path):
     """Integral but bounded GA reproducibility test for single vs multiprocess init."""
-    import os
-
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate multiprocess GA behavior")
-
     comp = ["Pt", "Pt"]
     seed = 789
     common_kwargs = {

@@ -29,7 +29,6 @@ class MockFailingOptimizer:
         raise RuntimeError("Mock optimizer failure")
 
 
-@pytest.mark.slow
 def test_single_atom_optimization(tmp_path):
     """Test optimization of single atom (should succeed trivially)."""
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
@@ -43,7 +42,6 @@ def test_single_atom_optimization(tmp_path):
     assert get_metadata(atoms, "raw_score", default=None) is not None
 
 
-@pytest.mark.slow
 def test_linear_cluster_geometry(tmp_path):
     """Test optimization of linear cluster (degenerate geometry)."""
     # Create a linear Pt3 cluster
@@ -59,7 +57,6 @@ def test_linear_cluster_geometry(tmp_path):
     assert not np.allclose(final_positions, [[0, 0, 0], [0, 0, 2.5], [0, 0, 5.0]])
 
 
-@pytest.mark.slow
 def test_planar_cluster_geometry(tmp_path, pt3_atoms):
     """Test optimization of planar cluster (degenerate geometry)."""
     # Use fixture Pt3 cluster (already has correct positions)

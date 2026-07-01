@@ -1,5 +1,4 @@
 import math
-import os
 import pickle
 
 import numpy as np
@@ -11,8 +10,7 @@ import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms import ga_go
 from scgo.database import get_connection
 from scgo.database.metadata import get_metadata
-from scgo.utils.rng_helpers import create_child_rng, ensure_rng
-from tests.test_utils import MockRelaxer
+from tests.test_utils import MockRelaxer, assert_serial_parallel_offspring_equal
 
 
 def test_ga_go_generational_smoke(tmp_path, rng):
@@ -129,37 +127,19 @@ def test_ga_go_parallel_offspring_deterministic(tmp_path):
         "clean": True,
         "previous_search_glob": ".__scgo_no_prior_runs__/**/*.db",
     }
-    minima_single = ga_go(
-        output_dir=str(tmp_path / "torchsim_single_worker"),
-        rng=create_child_rng(ensure_rng(1234)),
-        n_jobs_offspring=1,
-        **kwargs,
+    assert_serial_parallel_offspring_equal(
+        tmp_path,
+        seed=1234,
+        ga_kwargs=kwargs,
+        rtol=0.0,
+        atol=1e-12,
+        output_suffix_serial="torchsim_single_worker",
+        output_suffix_parallel="torchsim_parallel_worker",
     )
-    minima_parallel = ga_go(
-        output_dir=str(tmp_path / "torchsim_parallel_worker"),
-        rng=create_child_rng(ensure_rng(1234)),
-        n_jobs_offspring=2,
-        **kwargs,
-    )
-    assert len(minima_single) == len(minima_parallel)
-    energies_single = [float(e) for e, _ in minima_single]
-    energies_parallel = [float(e) for e, _ in minima_parallel]
-    np.testing.assert_allclose(energies_single, energies_parallel, atol=1e-12, rtol=0.0)
-    for (_, a_single), (_, a_parallel) in zip(
-        minima_single, minima_parallel, strict=True
-    ):
-        np.testing.assert_allclose(
-            a_single.get_positions(),
-            a_parallel.get_positions(),
-            atol=1e-12,
-            rtol=0.0,
-        )
 
 
+@pytest.mark.requires_multicore
 def test_ga_go_parallel_offspring_deterministic_adaptive_pt4(tmp_path):
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate parallel offspring behavior")
-
     calc = EMT()
     kwargs = {
         "composition": ["Pt"] * 4,
@@ -175,23 +155,15 @@ def test_ga_go_parallel_offspring_deterministic_adaptive_pt4(tmp_path):
         "clean": True,
         "previous_search_glob": ".__scgo_no_prior_runs__/**/*.db",
     }
-    minima_single = ga_go(
-        output_dir=str(tmp_path / "adaptive_single_worker"),
-        rng=create_child_rng(ensure_rng(271828)),
-        n_jobs_offspring=1,
-        **kwargs,
+    assert_serial_parallel_offspring_equal(
+        tmp_path,
+        seed=271828,
+        ga_kwargs=kwargs,
+        rtol=0.0,
+        atol=1e-12,
+        output_suffix_serial="adaptive_single_worker",
+        output_suffix_parallel="adaptive_parallel_worker",
     )
-    minima_parallel = ga_go(
-        output_dir=str(tmp_path / "adaptive_parallel_worker"),
-        rng=create_child_rng(ensure_rng(271828)),
-        n_jobs_offspring=2,
-        **kwargs,
-    )
-    assert len(minima_single) == len(minima_parallel)
-    for (e_single, _), (e_parallel, _) in zip(
-        minima_single, minima_parallel, strict=True
-    ):
-        np.testing.assert_allclose(e_single, e_parallel, atol=1e-12, rtol=0.0)
 
 
 class _RecordingRelaxer:
@@ -372,8 +344,12 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
         bbox_center = 0.5 * (
             row.get_positions().min(axis=0) + row.get_positions().max(axis=0)
         )
+        cell_half = np.diag(row.get_cell()) / 2.0
+        # MockRelaxer does not reproduce ASE centering exactly; allow a small fraction
+        # of the cell half-width (tighter than the previous 0.75 Å blanket tolerance).
+        cell_tol = max(0.5, 0.06 * float(np.mean(cell_half)))
         np.testing.assert_allclose(
             bbox_center,
-            np.diag(row.get_cell()) / 2.0,
-            atol=0.75,
+            cell_half,
+            atol=cell_tol,
         )

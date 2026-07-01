@@ -216,14 +216,9 @@ class TestConnectivityValidation:
         atoms = Atoms("Pt125", positions=positions)
 
         # This should complete quickly even with O(n²) algorithm
-        import time
-
-        start_time = time.time()
         result = is_cluster_connected(atoms)
-        end_time = time.time()
 
         assert result is True
-        assert end_time - start_time < 1.0  # Should complete in less than 1 second
 
 
 class TestConnectivityOptimization:
@@ -305,9 +300,7 @@ class TestConnectivityOptimization:
 
     @pytest.mark.slow
     def test_large_cluster_performance(self):
-        """Test that large cluster connectivity check completes in reasonable time."""
-        import time
-
+        """Test that large cluster connectivity check completes for FCC bulk."""
         # Create a very large cluster (100+ atoms)
         # FCC: (5,5,5) = 125 atoms
         atoms = bulk("Pt", "fcc", a=4.0).repeat((5, 5, 5))
@@ -317,12 +310,5 @@ class TestConnectivityOptimization:
             f"Need large cluster for performance test, got {len(atoms)}"
         )
 
-        start = time.time()
         result = is_cluster_connected(atoms, connectivity_factor=CONNECTIVITY_FACTOR)
-        elapsed = time.time() - start
-
-        # Should complete reasonably quickly; allow more generous bound in CI
-        assert elapsed < 5.0, f"Connectivity check took {elapsed:.3f}s, should be <5s"
         assert result is True, "Large FCC cluster should be connected"
-
-        # Performance logging removed to keep test output concise

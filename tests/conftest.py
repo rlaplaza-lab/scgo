@@ -15,6 +15,8 @@ from tests.test_utils import setup_test_atoms
 def pytest_runtest_setup(item):
     if item.get_closest_marker("requires_cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA not available")
+    if item.get_closest_marker("requires_multicore") and (os.cpu_count() or 1) < 2:
+        pytest.skip("Requires >=2 CPUs")
 
 
 def skip_uma_in_github_actions(allow_module_level: bool = False):

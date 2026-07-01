@@ -233,13 +233,10 @@ def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
 
 
 @pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.requires_multicore
 def test_full_workflow_parallel_offspring_reproducible(tmp_path):
     """Serial vs parallel offspring produce identical workflow results for a fixed seed."""
-    import os
-
-    if (os.cpu_count() or 1) < 2:
-        pytest.skip("Requires >=2 CPUs to validate parallel offspring behavior")
-
     composition = ["Pt", "Pt", "Pt", "Pt"]
     seed = 161803
     base_params = get_testing_params()

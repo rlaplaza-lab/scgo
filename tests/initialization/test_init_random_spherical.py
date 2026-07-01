@@ -52,10 +52,10 @@ class TestRandomSphericalInitialization:
         assert np.allclose(c[0, 0], side)
         assert np.allclose(c[1, 1], side)
         assert np.allclose(c[2, 2], side)
-        # ensure the cluster is centered in the cell (COM near origin).
+        # Cluster COM should lie near the cell center for cubic placement.
         com = atoms.get_center_of_mass()
         half = side / 2.0
-        assert np.allclose(com, [half, half, half], atol=1.0)
+        assert np.allclose(com, [half, half, half], atol=0.5)
 
     def test_random_spherical_placement_failure(self, rng):
         """Test that placement failure raises appropriate error."""

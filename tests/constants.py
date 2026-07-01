@@ -11,6 +11,10 @@ REPRODUCIBILITY_SEEDS = [42, 123, 456, 789, 1001, 2022, 3033, 4044, 5055, 6066]
 REPRODUCIBILITY_RTOL = 1e-10
 REPRODUCIBILITY_ATOL = 1e-12
 
+# Looser tolerances for smoke tests with real EMT relaxations (float noise)
+SMOKE_RTOL = 1e-5
+SMOKE_ATOL = 1e-8
+
 # Cluster size configurations
 SMALL_SIZES = [4, 6, 8, 10]
 MEDIUM_SIZES = [15, 20, 25, 30]

@@ -736,8 +736,9 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
         similarity_tolerance=1e-4,
     )
 
-    # Ensure results returned (success *not* guaranteed under conservative retry policy).
+    # Results must be reported for each requested pair.
     assert isinstance(results, list)
+    assert len(results) == 1
 
     successful = [
         r
@@ -798,8 +799,8 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
         similarity_tolerance=1e-4,
     )
 
-    # Ensure results returned
     assert isinstance(results2, list)
+    assert len(results2) == 1
 
     successful2 = [
         r

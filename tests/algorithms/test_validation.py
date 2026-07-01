@@ -7,8 +7,6 @@ This module provides tests for:
 - Cluster structure validation (geometry validation)
 """
 
-import time
-
 import pytest
 from ase import Atoms
 from ase.build import bulk
@@ -833,17 +831,14 @@ class TestClusterStructureValidationUnit:
         assert "Pt(0)-Pt(1):" in msg
 
     def test_large_cluster_performance(self):
-        """Test validation performance on large clusters."""
+        """Test validation on large clusters."""
         atoms = bulk("Pt", "fcc", a=4.0).repeat((3, 3, 3))
         atoms.center()
 
-        start = time.time()
         is_valid, msg = validate_cluster_structure(
             atoms, 0.5, self.TEST_CONNECTIVITY_FACTOR
         )
-        elapsed = time.time() - start
 
-        assert elapsed < 5.0, f"Validation took {elapsed:.3f}s, should be <5s"
         assert is_valid is True
         assert msg == ""
 

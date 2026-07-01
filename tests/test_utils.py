@@ -15,6 +15,10 @@ import tests.constants as _tc
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_PAIR_COR_CUM_DIFF
 
 # Re-exported for `from tests.test_utils import ...` (single source: _tc).
+REPRODUCIBILITY_RTOL = _tc.REPRODUCIBILITY_RTOL
+REPRODUCIBILITY_ATOL = _tc.REPRODUCIBILITY_ATOL
+SMOKE_RTOL = _tc.SMOKE_RTOL
+SMOKE_ATOL = _tc.SMOKE_ATOL
 REPRODUCIBILITY_SEEDS = _tc.REPRODUCIBILITY_SEEDS
 SMALL_SIZES = _tc.SMALL_SIZES
 MEDIUM_SIZES = _tc.MEDIUM_SIZES
@@ -73,6 +77,84 @@ def create_paired_rngs(seed: int):
     return np.random.default_rng(seed), np.random.default_rng(seed)
 
 
+def assert_serial_parallel_offspring_equal(
+    tmp_path: Any,
+    *,
+    seed: int,
+    ga_kwargs: dict[str, Any],
+    rtol: float = REPRODUCIBILITY_RTOL,
+    atol: float = REPRODUCIBILITY_ATOL,
+    n_jobs_parallel: int = 2,
+    output_suffix_serial: str = "offspring_serial",
+    output_suffix_parallel: str = "offspring_parallel",
+) -> None:
+    """Assert GA offspring are identical for serial vs parallel workers (fixed seed)."""
+    from scgo.algorithms import ga_go
+    from scgo.utils.rng_helpers import create_child_rng, ensure_rng
+
+    def _child_rng():
+        return create_child_rng(ensure_rng(seed))
+
+    with isolated_workflow_cwd(tmp_path / output_suffix_serial):
+        minima_serial = ga_go(
+            output_dir=str(tmp_path / output_suffix_serial),
+            rng=_child_rng(),
+            n_jobs_offspring=1,
+            **ga_kwargs,
+        )
+
+    with isolated_workflow_cwd(tmp_path / output_suffix_parallel):
+        minima_parallel = ga_go(
+            output_dir=str(tmp_path / output_suffix_parallel),
+            rng=_child_rng(),
+            n_jobs_offspring=n_jobs_parallel,
+            **ga_kwargs,
+        )
+
+    assert compare_minima_lists(minima_serial, minima_parallel, rtol=rtol, atol=atol), (
+        "Serial and parallel offspring must match for fixed seed"
+    )
+
+
+def assert_batch_init_reproducible(
+    *,
+    composition: list[str],
+    n_structures: int,
+    seed: int,
+    n_jobs_multi: int,
+    mode: str = "smart",
+) -> None:
+    """Assert batch initialization is identical for n_jobs=1 vs parallel workers."""
+    from scgo.initialization import create_initial_cluster_batch
+
+    rng_single, rng_multi = create_paired_rngs(seed)
+
+    batch_single = create_initial_cluster_batch(
+        composition=composition,
+        n_structures=n_structures,
+        rng=rng_single,
+        mode=mode,
+        n_jobs=1,
+    )
+    batch_multi = create_initial_cluster_batch(
+        composition=composition,
+        n_structures=n_structures,
+        rng=rng_multi,
+        mode=mode,
+        n_jobs=n_jobs_multi,
+    )
+
+    assert len(batch_single) == len(batch_multi) == n_structures
+    for a_single, a_multi in zip(batch_single, batch_multi, strict=True):
+        np.testing.assert_allclose(
+            a_single.get_positions(),
+            a_multi.get_positions(),
+            rtol=REPRODUCIBILITY_RTOL,
+            atol=REPRODUCIBILITY_ATOL,
+        )
+        assert a_single.get_chemical_symbols() == a_multi.get_chemical_symbols()
+
+
 @contextmanager
 def isolated_workflow_cwd(run_dir: Path) -> Iterator[Path]:
     """Run a workflow from an empty directory so seed discovery ignores repo dbs."""
@@ -85,10 +167,35 @@ def isolated_workflow_cwd(run_dir: Path) -> Iterator[Path]:
         os.chdir(previous)
 
 
+@contextmanager
+def seeded_globals(seed: int) -> Iterator[None]:
+    """Seed Python and NumPy global RNGs; restore prior state on exit.
+
+    Use only when ASE optimizers or legacy code paths consume global RNG state.
+    Prefer explicit ``rng=`` arguments everywhere else.
+    """
+    import random
+
+    py_state = random.getstate()
+    np_state = np.random.get_state()
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        random.setstate(py_state)
+        np.random.set_state(np_state)
+
+
 _MINIMUM_XYZ_RANK_RE = re.compile(r"_minimum_(\d+)_")
 
 
-def compare_minima_lists(minima1, minima2, rtol=1e-5, atol=1e-8):
+def compare_minima_lists(
+    minima1,
+    minima2,
+    rtol=REPRODUCIBILITY_RTOL,
+    atol=REPRODUCIBILITY_ATOL,
+):
     """Compare two lists of minima (energy, atoms) tuples.
 
     Args:
@@ -126,8 +233,8 @@ def assert_minima_lists_equal(
     minima1,
     minima2,
     *,
-    rtol: float = 1e-5,
-    atol: float = 1e-8,
+    rtol: float = REPRODUCIBILITY_RTOL,
+    atol: float = REPRODUCIBILITY_ATOL,
 ) -> None:
     """Assert two minima lists match within floating-point tolerance."""
     assert len(minima1) == len(minima2), (
@@ -171,8 +278,8 @@ def assert_exported_minima_xyz_equal(
     directory_a: Path,
     directory_b: Path,
     *,
-    rtol: float = 1e-5,
-    atol: float = 1e-8,
+    rtol: float = REPRODUCIBILITY_RTOL,
+    atol: float = REPRODUCIBILITY_ATOL,
 ) -> None:
     """Assert exported minima XYZ files match by minimum rank."""
     from ase.io import read
@@ -318,62 +425,52 @@ def run_algorithm_reproducibility_test(
         ...     {"niter": 3, "dr": 0.2, "temperature": 0.01}
         ... )
     """
-    import random
-
     from scgo.algorithms import ga_go
     from scgo.initialization import create_initial_cluster
 
-    # For full reproducibility, seed both Python's built-in random and NumPy's random.
-    # This is necessary because some ASE components (e.g., optimizers) may use
-    # Python's global random state internally. This is a documented workaround.
-    random.seed(seed)
-    np.random.seed(seed)
-
     is_ga_function = algorithm_func is ga_go
 
-    rng1, _ = create_paired_rngs(seed)
-    if is_ga_function:
-        with isolated_workflow_cwd(tmp_path / output_suffix_1):
+    with seeded_globals(seed):
+        rng1, _ = create_paired_rngs(seed)
+        if is_ga_function:
+            with isolated_workflow_cwd(tmp_path / output_suffix_1):
+                minima1 = algorithm_func(
+                    composition,
+                    calculator=EMT(),
+                    output_dir=str(tmp_path / output_suffix_1),
+                    rng=rng1,
+                    **algorithm_params,
+                )
+        else:
+            atoms1 = create_initial_cluster(composition, rng=rng1)
+            atoms1.calc = EMT()
             minima1 = algorithm_func(
-                composition,
-                calculator=EMT(),
+                atoms1,
                 output_dir=str(tmp_path / output_suffix_1),
                 rng=rng1,
                 **algorithm_params,
             )
-    else:
-        atoms1 = create_initial_cluster(composition, rng=rng1)
-        atoms1.calc = EMT()
-        minima1 = algorithm_func(
-            atoms1,
-            output_dir=str(tmp_path / output_suffix_1),
-            rng=rng1,
-            **algorithm_params,
-        )
 
-    # Reset Python's global RNG; run 1 may have consumed it via ASE optimizers.
-    random.seed(seed)
-    np.random.seed(seed)
-
-    _, rng2 = create_paired_rngs(seed)
-    if is_ga_function:
-        with isolated_workflow_cwd(tmp_path / output_suffix_2):
+    with seeded_globals(seed):
+        _, rng2 = create_paired_rngs(seed)
+        if is_ga_function:
+            with isolated_workflow_cwd(tmp_path / output_suffix_2):
+                minima2 = algorithm_func(
+                    composition,
+                    calculator=EMT(),
+                    output_dir=str(tmp_path / output_suffix_2),
+                    rng=rng2,
+                    **algorithm_params,
+                )
+        else:
+            atoms2 = create_initial_cluster(composition, rng=rng2)
+            atoms2.calc = EMT()
             minima2 = algorithm_func(
-                composition,
-                calculator=EMT(),
+                atoms2,
                 output_dir=str(tmp_path / output_suffix_2),
                 rng=rng2,
                 **algorithm_params,
             )
-    else:
-        atoms2 = create_initial_cluster(composition, rng=rng2)
-        atoms2.calc = EMT()
-        minima2 = algorithm_func(
-            atoms2,
-            output_dir=str(tmp_path / output_suffix_2),
-            rng=rng2,
-            **algorithm_params,
-        )
 
     return minima1, minima2
 

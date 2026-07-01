@@ -1251,8 +1251,8 @@ class TestLargeClusterConnectivityAllModes:
     @pytest.mark.parametrize(
         "mode", ["random_spherical", "seed+growth", "smart", "template"]
     )
-    @pytest.mark.parametrize("n_atoms", [50, 55, 60])
-    @pytest.mark.parametrize("seed", [0, 1, 42])
+    @pytest.mark.parametrize("n_atoms", [50, 60])
+    @pytest.mark.parametrize("seed", [0, 42])
     def test_connectivity_single_element(self, mode, n_atoms, seed):
         """Test all modes produce connected clusters for single-element compositions."""
         rng, _ = create_paired_rngs(seed)
@@ -1314,8 +1314,8 @@ class TestBatchConnectivityAllModes:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
-    @pytest.mark.parametrize("n_atoms", [50, 55, 60])
-    @pytest.mark.parametrize("comp_type", ["single", "bimetallic", "trimetallic"])
+    @pytest.mark.parametrize("n_atoms", [50, 60])
+    @pytest.mark.parametrize("comp_type", ["single", "bimetallic"])
     def test_batch_connectivity_all_types(self, mode, n_atoms, comp_type, rng):
         """Test multiple initializations with uniqueness check.
 

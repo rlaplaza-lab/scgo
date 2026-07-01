@@ -29,6 +29,7 @@ from scgo.runner_api import (
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import get_system_policy
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
+from tests.test_utils import isolated_workflow_cwd
 
 
 def _emt_ts_gasc() -> dict:
@@ -197,15 +198,30 @@ def test_parse_composition_arg_zero_count():
         parse_composition_arg("AuPt0")
 
 
-def test_seed_in_params_respected():
+def test_seed_in_params_respected(tmp_path):
     params = get_testing_params()
     params["seed"] = 12345
 
     comp = ["Pt", "Pt"]  # Pt2 small test
 
-    # Run twice with same params (no explicit seed argument) -> results deterministic
-    res1 = _run_go_trials(comp, "gas_cluster", params=params, verbosity=0)
-    res2 = _run_go_trials(comp, "gas_cluster", params=params, verbosity=0)
+    with isolated_workflow_cwd(tmp_path / "run_a"):
+        res1 = _run_go_trials(
+            comp,
+            "gas_cluster",
+            params=params,
+            verbosity=0,
+            output_dir=str(tmp_path / "run_a"),
+            clean=True,
+        )
+    with isolated_workflow_cwd(tmp_path / "run_b"):
+        res2 = _run_go_trials(
+            comp,
+            "gas_cluster",
+            params=params,
+            verbosity=0,
+            output_dir=str(tmp_path / "run_b"),
+            clean=True,
+        )
 
     # Compare basic properties - energies should be very close and compositions identical
     assert len(res1) == len(res2)
@@ -218,18 +234,29 @@ def test_seed_in_params_respected():
         assert np.array_equal(a1.get_pbc(), a2.get_pbc())
 
 
-def test_campaign_respects_params_seed():
+def test_campaign_respects_params_seed(tmp_path):
     params = get_testing_params()
     params["seed"] = 54321
 
-    # Run a tiny campaign (Pt2 only) twice and ensure deterministic results
     comps = build_one_element_compositions("Pt", 2, 2)
-    res_a = _run_go_campaign_compositions(
-        comps, "gas_cluster", params=params, verbosity=0
-    )
-    res_b = _run_go_campaign_compositions(
-        comps, "gas_cluster", params=params, verbosity=0
-    )
+    with isolated_workflow_cwd(tmp_path / "campaign_a"):
+        res_a = _run_go_campaign_compositions(
+            comps,
+            "gas_cluster",
+            params=params,
+            verbosity=0,
+            output_dir=str(tmp_path / "campaign_a"),
+            clean=True,
+        )
+    with isolated_workflow_cwd(tmp_path / "campaign_b"):
+        res_b = _run_go_campaign_compositions(
+            comps,
+            "gas_cluster",
+            params=params,
+            verbosity=0,
+            output_dir=str(tmp_path / "campaign_b"),
+            clean=True,
+        )
 
     assert res_a == res_b
 

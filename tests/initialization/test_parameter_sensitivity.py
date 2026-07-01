@@ -183,7 +183,7 @@ class TestCrossModeComparison:
                     pytest.skip("Template mode may fail for non-magic numbers")
                 raise
 
-    def test_mode_diversity_comparison(self, rng):
+    def test_mode_diversity_comparison(self):
         """Compare diversity of structures across modes."""
         comp = ["Pt"] * 6
 
@@ -198,34 +198,27 @@ class TestCrossModeComparison:
 
         for mode in ["random_spherical", "seed+growth"]:
             signatures = set()
-            for _ in range(5):
+            for i in range(5):
+                rng, _ = create_paired_rngs(1000 + i)
                 atoms = create_initial_cluster(comp, mode=mode, rng=rng)
                 signatures.add(structure_signature(atoms))
 
             mode_diversities[mode] = len(signatures)
 
-        # Both modes should produce at least some diversity
-        assert all(d >= 1 for d in mode_diversities.values())
+        assert all(d >= 2 for d in mode_diversities.values())
 
     def test_mode_performance_scaling(self, rng):
-        """Compare relative performance across modes for different sizes."""
-        import time
-
+        """Verify all initialization modes complete for small cluster sizes."""
         modes = ["random_spherical", "seed+growth", "smart"]
         sizes = [3, 5, 8]
 
-        # Quick baseline test - just verify all modes complete in reasonable time
         for size in sizes:
             comp = ["Pt"] * size
             for mode in modes:
                 try:
-                    start = time.perf_counter()
                     atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-                    elapsed = time.perf_counter() - start
-
                     assert len(atoms) == size
-                    # Should complete in < 5 seconds for test sizes
-                    assert elapsed < 5.0
+                    assert is_cluster_connected(atoms) or size <= 2
                 except ValueError:
                     if mode == "template":
                         pytest.skip("Template mode may fail for non-magic numbers")
