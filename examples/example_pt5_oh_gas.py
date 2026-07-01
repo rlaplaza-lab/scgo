@@ -22,7 +22,7 @@ from ase import Atoms
 
 from scgo import get_torchsim_ga_params, get_ts_search_params, run_go_ts
 
-COMPOSITION = ["Pt", "Pt", "Pt", "Pt", "Pt"]
+COMPOSITION = "Pt5"
 SEED = 42
 SYSTEM_TYPE = "gas_cluster_adsorbate"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
@@ -46,7 +46,6 @@ def _build_go_params() -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    # Optional: strict template restore after mutations (default False uses tag-rigid GA)
     go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 
@@ -64,6 +63,7 @@ def main() -> None:
         go_params=_build_go_params(),
         ts_params=_build_ts_params(),
         seed=SEED,
+        verbosity=1,
         output_root=DEFAULT_OUTPUT_ROOT,
         output_stem=OUTPUT_STEM,
         system_type=SYSTEM_TYPE,

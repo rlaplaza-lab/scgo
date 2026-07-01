@@ -18,13 +18,14 @@ from pathlib import Path
 from ase import Atoms
 
 from scgo import (
+    SurfaceSystemConfig,
     get_torchsim_ga_params,
     get_ts_search_params,
     make_graphite_surface_config,
     run_go_ts,
 )
 
-COMPOSITION = ["Pt", "Pt", "Pt", "Pt", "Pt"]
+COMPOSITION = "Pt5"
 SEED = 42
 SYSTEM_TYPE = "surface_cluster_adsorbate"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
@@ -40,7 +41,7 @@ ADSORBATES = [
 ]
 
 
-def _build_go_params(surface_config) -> dict:
+def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
     go_params = get_torchsim_ga_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
@@ -57,7 +58,7 @@ def _build_go_params(surface_config) -> dict:
     return go_params
 
 
-def _build_ts_params(surface_config) -> dict:
+def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
     ts_params = get_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
@@ -78,6 +79,7 @@ def main() -> None:
         go_params=_build_go_params(surface_config),
         ts_params=_build_ts_params(surface_config),
         seed=SEED,
+        verbosity=1,
         output_root=DEFAULT_OUTPUT_ROOT,
         output_stem=OUTPUT_STEM,
         surface_config=surface_config,

@@ -3,6 +3,10 @@
 
 ``system_type="surface_cluster"`` — supported Pt5 cluster on the preset graphite slab
 (no ``adsorbates``).
+
+Requires ``scgo[mace]``. Pass the same ``surface_config`` to the preset builders
+and ``run_go_ts`` (values must agree when both are set). See
+``docs/source/parameters.rst`` (*Parameter resolution*) for merge rules.
 """
 
 from __future__ import annotations
@@ -10,14 +14,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from scgo import (
+    SurfaceSystemConfig,
     get_torchsim_ga_params,
     get_ts_search_params,
     make_graphite_surface_config,
     run_go_ts,
 )
 
-N_ATOMS = 5
-ELEMENT = "Pt"
+COMPOSITION = "Pt5"
 SEED = 42
 SYSTEM_TYPE = "surface_cluster"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
@@ -29,7 +33,7 @@ MAX_PAIRS = 10
 SLAB_LAYERS = 3
 
 
-def _build_go_params(surface_config) -> dict:
+def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
     go_params = get_torchsim_ga_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
@@ -45,7 +49,7 @@ def _build_go_params(surface_config) -> dict:
     return go_params
 
 
-def _build_ts_params(surface_config) -> dict:
+def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
     ts_params = get_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
@@ -59,10 +63,11 @@ def _build_ts_params(surface_config) -> dict:
 def main() -> None:
     surface_config = make_graphite_surface_config(slab_layers=SLAB_LAYERS)
     run_go_ts(
-        [ELEMENT] * N_ATOMS,
+        COMPOSITION,
         go_params=_build_go_params(surface_config),
         ts_params=_build_ts_params(surface_config),
         seed=SEED,
+        verbosity=1,
         output_root=DEFAULT_OUTPUT_ROOT,
         output_stem=OUTPUT_STEM,
         surface_config=surface_config,
