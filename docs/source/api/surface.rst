@@ -6,7 +6,7 @@ Slab configuration, deposition, and validation for supported-cluster runs.
 Deposition and adsorbate initialization
 ---------------------------------------
 
-:class:`~scgo.surface.deposition.create_deposited_cluster` builds initial
+:func:`~scgo.surface.deposition.create_deposited_cluster` builds initial
 structures for ``surface_cluster`` and ``surface_cluster_adsorbate``:
 
 - **Plain cluster** — gas-phase seed, then rotate/translate above the slab with

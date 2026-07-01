@@ -1,11 +1,11 @@
 API Reference
-============
+=============
 
 High-level functions for running global optimization and transition state searches.
 
-----------
+--------------
 Main Functions
-----------
+--------------
 
 **Single composition:**
 
@@ -47,9 +47,9 @@ All functions accept:
 
 See :doc:`/parameters` (*Parameter resolution*) for merge rules and logging behaviour.
 
-----------
+-----------------
 Complete Examples
-----------
+-----------------
 
 **Gas-phase cluster optimization:**
 
@@ -151,28 +151,28 @@ Complete Examples
    )
    # results is dict[formula, list[(energy, Atoms)]]
 
-----------
+-----------------
 Utility Functions
-----------
+-----------------
 
 .. list-table::
    :widths: 40 60
    :header-rows: 1
 
    * - ``build_one_element_compositions(element, min_atoms, max_atoms)``
-     - Create list like ["Pt3", "Pt4", "Pt5"]
+     - Symbol lists for mono-element size scans (e.g. ``[["Pt", "Pt"], ["Pt", "Pt", "Pt"]]``)
    * - ``build_two_element_compositions(el1, el2, min_atoms, max_atoms)``
-     - Create all combinations like ["AuPt", "Au2Pt", ...]
-   * - ``parse_composition_arg(composition)``
-     - Convert string/list/Atoms to symbol list
+     - Symbol lists for bimetallic size scans (all ``el1``/``el2`` splits per atom count)
+   * - ``parse_composition_arg(comp_str)``
+     - Parse a compact formula (``"Pt5"``) or comma-separated symbols (``"Pt,Pt,Au"``)
    * - ``resolve_workflow_seed(run_seed, go_params_seed, ts_params_seed)``
      - Ensure seed consistency across params
    * - ``log_go_ts_summary(summary, verbosity)``
      - Print summary of a GO+TS run
 
-----------
+--------------------
 Timing and Profiling
-----------
+--------------------
 
 Configure timing in ``params`` / ``go_params`` only (``optimizer_params['ga']`` or ``bh``):
 
@@ -183,9 +183,9 @@ For TS, set ``write_timing_json`` in ``ts_params`` when needed.
 
 See :mod:`scgo.utils.timing_report` for the JSON layout.
 
-----------
+----------------
 Module Reference
-----------
+----------------
 
 .. automodule:: scgo.runner_api
    :members:

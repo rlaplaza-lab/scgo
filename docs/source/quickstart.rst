@@ -25,9 +25,9 @@ You must specify one of four system types:
 
 For surface types, you need a ``surface_config``. For adsorbate types, you need ``adsorbates``.
 
-----------
+-----------
 Gas Cluster
-----------
+-----------
 
 Optimize a simple cluster in vacuum.
 
@@ -148,9 +148,9 @@ Do not use ``n_relax_top_slab_layers`` together with ``n_fix_bottom_slab_layers`
        system_type="surface_cluster",
    )
 
-----------
+---------------
 With Adsorbates
-----------
+---------------
 
 Add adsorbate molecules (OH, CO, etc.) to your cluster.
 
@@ -192,7 +192,7 @@ Add adsorbate molecules (OH, CO, etc.) to your cluster.
    )
 
 Defining Custom Adsorbates
-~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Any ASE ``Atoms`` object is a valid adsorbate fragment. The GA will:
 
@@ -227,9 +227,9 @@ Any ASE ``Atoms`` object is a valid adsorbate fragment. The GA will:
        adsorbates=oh,
    )
 
---------------
+--------------------
 Surface + Adsorbates
---------------
+--------------------
 
 Combine surface and adsorbates.
 

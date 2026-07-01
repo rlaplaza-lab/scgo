@@ -3,9 +3,9 @@ All Parameters
 
 This page lists all parameters you can use in SCGO. For preset functions and their defaults, see :doc:`/api/param_presets`.
 
-----------
+--------------------
 Parameter resolution
-----------
+--------------------
 
 All high-level ``run_*`` functions share the same contract:
 
@@ -53,9 +53,9 @@ All high-level ``run_*`` functions share the same contract:
        seed=7,
    )
 
-----------
+-------------
 GO Parameters
-----------
+-------------
 
 Passed as ``params`` or ``go_params`` to ``run_go``, ``run_go_campaign``, ``run_go_ts``, etc.
 
@@ -237,9 +237,9 @@ Passed as ``params`` or ``go_params`` to ``run_go``, ``run_go_campaign``, ``run_
      - ``None``
      - Optional ``n_top`` for comparator
 
-----------
+-------------
 TS Parameters
-----------
+-------------
 
 Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``, etc. Sparse dicts are merged with :func:`~scgo.param_presets.get_ts_search_params` defaults at run time.
 
@@ -339,9 +339,9 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
 - ``neb_surface_lattice_rotation=True``
 - ``neb_surface_max_lattice_shift=1``
 
-----------
+--------------
 Surface Config
-----------
+--------------
 
 .. list-table::
    :widths: 25 10 65
@@ -387,9 +387,9 @@ Surface Config
 .. note::
    Use only one of the layer options, not both. See :doc:`/api/surface` for the full ``SurfaceSystemConfig`` field list.
 
-----------
+----------------
 Adsorbate Config
-----------
+----------------
 
 .. list-table::
    :widths: 25 10 65

@@ -136,9 +136,7 @@ def diff_param_overrides(
         base_val = base.get(key)
         merged_val = merged.get(key)
         if isinstance(base_val, dict) and isinstance(merged_val, dict):
-            overrides.update(
-                diff_param_overrides(base_val, merged_val, prefix=path)
-            )
+            overrides.update(diff_param_overrides(base_val, merged_val, prefix=path))
         elif base_val != merged_val:
             overrides[path] = merged_val
     return overrides

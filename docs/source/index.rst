@@ -34,7 +34,7 @@ Quick Start
 
    from scgo import run_go
    from scgo.param_presets import get_testing_params
-   
+
    results = run_go(
        ["Pt"] * 4,
        params=get_testing_params(),

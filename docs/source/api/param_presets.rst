@@ -19,9 +19,9 @@ Both follow the same contract documented in :doc:`/parameters` (section *Paramet
 
 At ``verbosity >= 1``, runners log the defaults source and which user keys overrode them.
 
-----------
+----------------
 Preset Functions
-----------
+----------------
 
 Use these preset functions to get started quickly.
 
@@ -59,9 +59,9 @@ Use these preset functions to get started quickly.
    * - ``get_ts_defaults(system_type)``
      - Return NEB knob defaults for a given system type
 
-----------
+----------------------------
 Preset effects (vs defaults)
-----------
+----------------------------
 
 .. list-table::
    :widths: 35 65
@@ -88,23 +88,23 @@ Preset effects (vs defaults)
    * - ``get_ts_search_params()``
      - Full flat TS dict for one ``system_type`` (NEB knobs from :func:`~scgo.param_presets.get_ts_defaults`); baseline for TS merge
 
-----------
+-------------------
 Parameter reference
-----------
+-------------------
 
 See :doc:`/parameters` for the full GO, TS, surface, and adsorbate parameter tables.
 
-----------
+----------------
 Available Models
-----------
+----------------
 
 **MACE models:** ``"mace_matpes_0"``, ``"mace_mp_small"``, ``"mace_mpa_medium"``, ``"mace_off_small"``
 
 **UMA models:** ``"uma-s-1p2"``, ``"uma-s-1p1"``, ``"uma-m-1p1"``
 
-----------
+--------------
 Usage Examples
-----------
+--------------
 
 **Start from a preset:**
 
@@ -156,9 +156,9 @@ Usage Examples
 
 See :doc:`/quickstart` for complete workflow examples and :doc:`/parameters` for the full parameter list.
 
-----------
+----------------
 Module Reference
-----------
+----------------
 
 .. automodule:: scgo.param_presets
    :members:

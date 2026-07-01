@@ -12,7 +12,6 @@ from scgo.param_presets import (
     get_high_energy_params,
     get_minimal_ga_params,
     get_testing_params,
-    get_ts_search_params,
     get_uma_ga_benchmark_params,
 )
 from scgo.utils.run_helpers import (
@@ -148,9 +147,10 @@ def test_get_testing_params_merges_like_defaults():
     merged = initialize_params({"calculator": "EMT"})
     testing = get_testing_params()
     assert set(testing.keys()) == set(get_default_params().keys())
-    assert merged["optimizer_params"]["ga"]["vacuum"] == get_default_params()[
-        "optimizer_params"
-    ]["ga"]["vacuum"]
+    assert (
+        merged["optimizer_params"]["ga"]["vacuum"]
+        == get_default_params()["optimizer_params"]["ga"]["vacuum"]
+    )
 
 
 def test_initialize_ts_params_sparse_merge():

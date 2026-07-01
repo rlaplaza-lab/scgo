@@ -1405,9 +1405,7 @@ def run_ts_search(
     ts_mat = _resolve_ts_params(
         ts_params, system_type=st, surface_config=surface_config
     )
-    ts_base = initialize_ts_params(
-        None, system_type=st, surface_config=surface_config
-    )
+    ts_base = initialize_ts_params(None, system_type=st, surface_config=surface_config)
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     merged = _coerce_ts_for_runner(
         ts_mat, fn_name="run_ts_search", system_type=st, surface_config=surface_config
@@ -1461,9 +1459,7 @@ def run_ts_campaign(
     ts_mat = _resolve_ts_params(
         ts_params, system_type=st, surface_config=surface_config
     )
-    ts_base = initialize_ts_params(
-        None, system_type=st, surface_config=surface_config
-    )
+    ts_base = initialize_ts_params(None, system_type=st, surface_config=surface_config)
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     ts_kwargs = _coerce_ts_for_runner(
         ts_mat, fn_name="run_ts_campaign", system_type=st, surface_config=surface_config
