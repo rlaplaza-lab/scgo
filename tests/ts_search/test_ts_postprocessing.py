@@ -380,21 +380,22 @@ def test_integrate_ts_to_database_forwards_endpoint_provenance(monkeypatch, tmp_
 
 def test_add_ts_to_database_returns_false_on_write_error(monkeypatch, tmp_path, caplog):
     import sqlite3
+    from contextlib import contextmanager
 
     from scgo.ts_search.ts_network import add_ts_to_database
 
-    # Simulate DB write failure inside DataConnection.add_relaxed_candidate
-    # (add_ts_to_database uses DataConnection directly, not get_connection)
-    class FakeDataConnection:
-        def __init__(self, path):
-            self.path = path
+    # Simulate DB write failure inside DataConnection.add_relaxed_candidate.
+    @contextmanager
+    def fake_get_connection(db_file, **kwargs):
+        class FakeDataConnection:
+            def add_relaxed_candidate(self, atoms):
+                raise sqlite3.OperationalError("simulated write lock")
 
-        def add_relaxed_candidate(self, atoms):
-            raise sqlite3.OperationalError("simulated write lock")
+        yield FakeDataConnection()
 
     monkeypatch.setattr(
-        "scgo.ts_search.ts_network.DataConnection",
-        FakeDataConnection,
+        "scgo.ts_search.ts_network.get_connection",
+        fake_get_connection,
     )
 
     # Ensure the file exists so the function proceeds to DB write logic

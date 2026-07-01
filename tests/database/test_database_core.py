@@ -722,6 +722,44 @@ class TestRobustness:
         assert fd_increase < 20
 
     @pytest.mark.slow
+    def test_add_ts_to_database_no_file_handle_leak(self, tmp_path, pt2_atoms):
+        from scgo.ts_search.ts_network import add_ts_to_database
+        from tests.test_utils import mark_test_minima_as_final
+
+        with _setup_test_db(
+            tmp_path,
+            "ts_leak.db",
+            pt2_atoms,
+            initial_candidate=pt2_atoms,
+        ) as (_da, db_path):
+            pass
+
+        mark_test_minima_as_final(db_path)
+
+        initial_fd_count = _count_open_files()
+        if initial_fd_count < 0:
+            pytest.skip("Cannot count file descriptors on this system")
+
+        ts = pt2_atoms.copy()
+        ts.info.setdefault("key_value_pairs", {})["raw_score"] = -0.5
+
+        for i in range(50):
+            assert add_ts_to_database(
+                ts_structure=ts,
+                ts_energy=0.5,
+                minima_idx_1=0,
+                minima_idx_2=1,
+                db_file=str(db_path),
+                pair_id=f"{i}_1",
+                barrier_height=0.1,
+            )
+
+        gc.collect()
+
+        fd_increase = _count_open_files() - initial_fd_count
+        assert fd_increase < 20
+
+    @pytest.mark.slow
     @pytest.mark.xdist_group(name="no_nested_pool")
     def test_concurrent_write_stress(self, tmp_path, pt2_atoms):
         with _setup_test_db(

@@ -12,8 +12,8 @@ from collections import deque
 from typing import Any, cast
 
 from ase import Atoms
-from ase_ga.data import DataConnection
 
+from scgo.database import get_connection
 from scgo.database.metadata import add_metadata, get_metadata, persist_provenance
 from scgo.database.sync import retry_with_backoff
 from scgo.ts_search.transition_state import minima_provenance_dict
@@ -123,45 +123,45 @@ def add_ts_to_database(
         )
 
     try:
-        da = DataConnection(db_file)
-        ts_atoms = ts_structure.copy()
-        ts_atoms.calc = None
-        if "tags" in ts_atoms.arrays:
-            del ts_atoms.arrays["tags"]
+        with get_connection(db_file) as da:
+            ts_atoms = ts_structure.copy()
+            ts_atoms.calc = None
+            if "tags" in ts_atoms.arrays:
+                del ts_atoms.arrays["tags"]
 
-        _stamp_ts_metadata(
-            ts_atoms,
-            ts_energy=ts_energy,
-            minima_idx_1=minima_idx_1,
-            minima_idx_2=minima_idx_2,
-            pair_id=pair_id,
-            barrier_height=barrier_height,
-            neb_converged=neb_converged,
-            canonical_ts=canonical_ts,
-            endpoint_provenance=endpoint_provenance,
-        )
+            _stamp_ts_metadata(
+                ts_atoms,
+                ts_energy=ts_energy,
+                minima_idx_1=minima_idx_1,
+                minima_idx_2=minima_idx_2,
+                pair_id=pair_id,
+                barrier_height=barrier_height,
+                neb_converged=neb_converged,
+                canonical_ts=canonical_ts,
+                endpoint_provenance=endpoint_provenance,
+            )
 
-        run_id_src = get_metadata(ts_atoms, "run_id")
-        trial_src = get_metadata(ts_atoms, "trial_id")
-        if run_id_src is not None or trial_src is not None:
-            persist_provenance(ts_atoms, run_id=run_id_src, trial_id=trial_src)
+            run_id_src = get_metadata(ts_atoms, "run_id")
+            trial_src = get_metadata(ts_atoms, "trial_id")
+            if run_id_src is not None or trial_src is not None:
+                persist_provenance(ts_atoms, run_id=run_id_src, trial_id=trial_src)
 
-        def _add() -> bool:
-            ts_db_atoms = ts_atoms.copy()
-            with contextlib.suppress(AttributeError, TypeError, RuntimeError):
-                ts_db_atoms.center()
-            if "tags" in ts_db_atoms.arrays:
-                del ts_db_atoms.arrays["tags"]
-            da.add_relaxed_candidate(ts_db_atoms)
-            return True
+            def _add() -> bool:
+                ts_db_atoms = ts_atoms.copy()
+                with contextlib.suppress(AttributeError, TypeError, RuntimeError):
+                    ts_db_atoms.center()
+                if "tags" in ts_db_atoms.arrays:
+                    del ts_db_atoms.arrays["tags"]
+                da.add_relaxed_candidate(ts_db_atoms)
+                return True
 
-        retry_with_backoff(
-            _add,
-            max_retries=5,
-            initial_delay=0.05,
-            backoff_factor=2.0,
-            exception_types=(sqlite3.OperationalError, OSError),
-        )
+            retry_with_backoff(
+                _add,
+                max_retries=5,
+                initial_delay=0.05,
+                backoff_factor=2.0,
+                exception_types=(sqlite3.OperationalError, OSError),
+            )
 
         logger.info(
             "Added TS %s (E=%.6f eV) to DB (minima %s–%s)",

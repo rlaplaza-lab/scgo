@@ -73,6 +73,7 @@ def test_rebuild_and_invalidate(tmp_path):
 
 
 def test_setup_database_registers_registry(tmp_path, pt2_atoms):
+    from scgo.database import close_data_connection
     from scgo.database.helpers import setup_database
     from scgo.database.registry import clear_registry_cache, get_registry
 
@@ -82,21 +83,27 @@ def test_setup_database_registers_registry(tmp_path, pt2_atoms):
     reg.clear()
 
     # Create DB via setup_database (should auto-register)
-    setup_database(tmp_path, "auto_register.db", pt2_atoms, initial_candidate=pt2_atoms)
-    db_path = tmp_path / "auto_register.db"
+    da = setup_database(
+        tmp_path, "auto_register.db", pt2_atoms, initial_candidate=pt2_atoms
+    )
+    try:
+        db_path = tmp_path / "auto_register.db"
 
-    entries = reg.get_all_databases()
-    assert any(Path(p).resolve() == db_path.resolve() for p in entries)
+        entries = reg.get_all_databases()
+        assert any(Path(p).resolve() == db_path.resolve() for p in entries)
 
-    entry = reg.get_database_entry(db_path)
-    assert entry is not None
-    # composition_str should be canonical 'Pt2'
-    assert entry.get("composition_str") == "Pt2"
+        entry = reg.get_database_entry(db_path)
+        assert entry is not None
+        # composition_str should be canonical 'Pt2'
+        assert entry.get("composition_str") == "Pt2"
+    finally:
+        close_data_connection(da)
 
 
 def test_setup_database_registers_search_level_registry(tmp_path):
     """DB under trial_*/ inside *_searches is registered only at the search root."""
 
+    from scgo.database import close_data_connection
     from scgo.database.helpers import setup_database
     from scgo.database.registry import clear_registry_cache, get_registry
 
@@ -114,20 +121,23 @@ def test_setup_database_registers_search_level_registry(tmp_path):
     from tests.test_utils import create_test_atoms
 
     pt6 = create_test_atoms(["Pt"] * 6)
-    setup_database(str(run_dir), "ga_go.db", pt6, initial_candidate=pt6)
-    db_path = run_dir / "ga_go.db"
+    da = setup_database(str(run_dir), "ga_go.db", pt6, initial_candidate=pt6)
+    try:
+        db_path = run_dir / "ga_go.db"
 
-    # No per-trial registry file when under *_searches
-    trial_entries = get_registry(run_dir).get_all_databases()
-    assert trial_entries == []
+        # No per-trial registry file when under *_searches
+        trial_entries = get_registry(run_dir).get_all_databases()
+        assert trial_entries == []
 
-    search_reg = get_registry(search_dir)
-    search_entries = search_reg.get_all_databases()
-    assert any(Path(p).resolve() == db_path.resolve() for p in search_entries)
+        search_reg = get_registry(search_dir)
+        search_entries = search_reg.get_all_databases()
+        assert any(Path(p).resolve() == db_path.resolve() for p in search_entries)
 
-    entry = search_reg.get_database_entry(db_path)
-    assert entry is not None
-    assert entry.get("trial_id") == 1
+        entry = search_reg.get_database_entry(db_path)
+        assert entry is not None
+        assert entry.get("trial_id") == 1
+    finally:
+        close_data_connection(da)
 
 
 def test_create_preparedb_registers_registry(tmp_path, pt2_atoms):

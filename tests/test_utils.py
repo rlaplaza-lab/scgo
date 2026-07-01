@@ -542,9 +542,9 @@ def mark_test_minima_as_final(db_path: Path | str) -> None:
     # Use ASE db.update() so number_key_values and other index tables stay in sync
     import ase.db
 
-    conn = ase.db.connect(str(db_path))
-    for row in conn.select(relaxed=1):
-        conn.update(row.id, final_unique_minimum=1, final_rank=1)
+    with ase.db.connect(str(db_path)) as conn:
+        for row in conn.select(relaxed=1):
+            conn.update(row.id, final_unique_minimum=1, final_rank=1)
 
     from scgo.database.schema import stamp_scgo_database
 
