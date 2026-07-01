@@ -36,7 +36,7 @@ jobs:
       - name: Read package version
         id: version
         run: |
-          VERSION=$(python -c "import pathlib, re; print(re.search(r'^version = \"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text(), re.M).group(1))")
+          VERSION=$(python -c "import pathlib, re; m=re.search(r'^__version__ = \"([^\"]+)\"', pathlib.Path('scgo/__init__.py').read_text(), re.M); assert m, 'scgo.__version__ not found'; print(m.group(1))")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing scgo $VERSION to ${{ github.event.inputs.target }}"
 
