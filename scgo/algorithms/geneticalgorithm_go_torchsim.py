@@ -78,7 +78,10 @@ from scgo.system_types import (
     validate_structure_for_system_type,
     validate_system_type_settings,
 )
-from scgo.utils.fitness_strategies import FitnessStrategy, validate_fitness_strategy
+from scgo.utils.fitness_strategies import (
+    FitnessStrategy,
+    ensure_fitness_strategy_resolved,
+)
 from scgo.utils.helpers import extract_minima_from_database
 from scgo.utils.logging import get_logger, should_show_progress
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
@@ -677,9 +680,9 @@ def ga_go(
         )
 
     # Validate and normalize fitness strategy (coerce to Enum)
-    validate_fitness_strategy(fitness_strategy)
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    fitness_strategy = FitnessStrategy(
+        ensure_fitness_strategy_resolved(fitness_strategy)
+    )
 
     if batch_size is not None and batch_size <= 0:
         batch_size = None

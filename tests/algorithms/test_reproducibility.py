@@ -24,6 +24,7 @@ from scgo.runner_api import (
     build_two_element_compositions,
 )
 from scgo.utils.helpers import auto_niter
+from scgo.utils.run_helpers import prepare_algorithm_kwargs
 from tests.constants import REPRODUCIBILITY_ATOL, REPRODUCIBILITY_RTOL
 from tests.test_utils import (
     MockRelaxer,
@@ -269,7 +270,13 @@ def test_full_stack_smoke(tmp_path, rng):
     comp = ["Pt", "Pt", "Pt", "Pt"]
     outdir = str(tmp_path / "campaign")
     params = get_testing_params()
-    optimizer_kwargs = params["optimizer_params"]["bh"].copy()
+    optimizer_kwargs = prepare_algorithm_kwargs(
+        algo_params=params["optimizer_params"]["bh"],
+        params=params,
+        composition=comp,
+        chosen_go="bh",
+        system_type="gas_cluster",
+    )
     # Convert optimizer string to class if needed
     if isinstance(optimizer_kwargs.get("optimizer"), str):
         from ase.optimize import FIRE
@@ -374,16 +381,21 @@ def test_bh_go_smoke(tmp_path, rng):
     comp = ["Pt", "Pt", "Pt"]
     atoms = create_initial_cluster(comp, rng=rng)
     atoms.calc = EMT()
-    params = get_testing_params()["optimizer_params"]["bh"]
-
-    params_copy = params.copy()
-    params_copy["optimizer"] = FIRE
+    params = get_testing_params()
+    optimizer_kwargs = prepare_algorithm_kwargs(
+        algo_params=params["optimizer_params"]["bh"],
+        params=params,
+        composition=comp,
+        chosen_go="bh",
+        system_type="gas_cluster",
+    )
+    optimizer_kwargs["optimizer"] = FIRE
 
     minima = bh_go(
         atoms,
         output_dir=str(tmp_path),
         niter=auto_niter(comp),
-        **{k: v for k, v in params_copy.items() if k not in ["niter"]},
+        **{k: v for k, v in optimizer_kwargs.items() if k not in ["niter"]},
         rng=rng,
     )
 

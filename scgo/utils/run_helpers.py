@@ -22,7 +22,7 @@ from scgo.system_types import (
     get_system_policy,
     validate_system_type_settings,
 )
-from scgo.utils.fitness_strategies import validate_fitness_strategy
+from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
     auto_niter,
     auto_niter_local_relaxation,
@@ -379,14 +379,10 @@ def _resolve_fitness_strategy(
         ValueError: If fitness strategy is invalid.
     """
     top_level_fitness_strategy = params.get("fitness_strategy", "low_energy")
-    validate_fitness_strategy(top_level_fitness_strategy)
-
-    algo_fitness_strategy = algo_params.get("fitness_strategy")
-    if algo_fitness_strategy is None:
-        return top_level_fitness_strategy  # Inherit from top-level
-
-    validate_fitness_strategy(algo_fitness_strategy)
-    return algo_fitness_strategy
+    return resolve_fitness_strategy(
+        algo_params.get("fitness_strategy"),
+        inherit_from=top_level_fitness_strategy,
+    )
 
 
 def resolve_diversity_params(

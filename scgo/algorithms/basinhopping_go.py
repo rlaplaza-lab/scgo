@@ -50,9 +50,9 @@ from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
+    ensure_fitness_strategy_resolved,
     get_fitness_from_atoms,
     set_fitness_in_atoms,
-    validate_fitness_strategy,
 )
 from scgo.utils.helpers import (
     _create_energy_bins,
@@ -312,9 +312,9 @@ def bh_go(
     logger = get_logger(__name__)
 
     # Validate and setup fitness strategy
-    validate_fitness_strategy(fitness_strategy)
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    fitness_strategy = FitnessStrategy(
+        ensure_fitness_strategy_resolved(fitness_strategy)
+    )
 
     # Create comparator for diversity calculations and deduplication
     comparator = PureInteratomicDistanceComparator(

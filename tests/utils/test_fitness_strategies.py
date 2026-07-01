@@ -10,7 +10,9 @@ from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
+    ensure_fitness_strategy_resolved,
     get_fitness_from_atoms,
+    resolve_fitness_strategy,
     set_fitness_in_atoms,
     validate_fitness_strategy,
 )
@@ -42,6 +44,20 @@ def test_validate_fitness_strategy_invalid():
 
     with pytest.raises(ValueError):
         validate_fitness_strategy("")
+
+
+def test_resolve_fitness_strategy_inherits_from_top_level():
+    """Preset None should inherit from the top-level strategy."""
+    assert resolve_fitness_strategy(None, inherit_from="high_energy") == "high_energy"
+    assert (
+        resolve_fitness_strategy("diversity", inherit_from="low_energy") == "diversity"
+    )
+
+
+def test_ensure_fitness_strategy_resolved_rejects_none():
+    """Unresolved preset sentinels must fail at algorithm boundaries."""
+    with pytest.raises(ValueError, match="cannot be None"):
+        ensure_fitness_strategy_resolved(None)
 
 
 def test_calculate_fitness_low_energy():

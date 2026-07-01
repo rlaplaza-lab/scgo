@@ -47,6 +47,34 @@ def validate_fitness_strategy(strategy: str) -> None:
     validate_in_choices("fitness_strategy", strategy, valid_strategies)
 
 
+_UNRESOLVED_FITNESS_STRATEGY_MSG = (
+    "fitness_strategy cannot be None. "
+    "Resolve preset inheritance with prepare_algorithm_kwargs() or "
+    "resolve_fitness_strategy()."
+)
+
+
+def ensure_fitness_strategy_resolved(strategy: str | None) -> str:
+    """Require a concrete fitness strategy at algorithm and orchestration boundaries."""
+    if strategy is None:
+        raise ValueError(_UNRESOLVED_FITNESS_STRATEGY_MSG)
+    validate_fitness_strategy(strategy)
+    return strategy
+
+
+def resolve_fitness_strategy(
+    strategy: str | None,
+    *,
+    inherit_from: str = "low_energy",
+) -> str:
+    """Resolve fitness strategy, honoring preset None = inherit semantics."""
+    if strategy is None:
+        validate_fitness_strategy(inherit_from)
+        return inherit_from
+    validate_fitness_strategy(strategy)
+    return strategy
+
+
 def calculate_fitness(
     energy: float,
     atoms: Atoms,

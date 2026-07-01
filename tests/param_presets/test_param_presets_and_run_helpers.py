@@ -384,6 +384,15 @@ class TestResolveFitnessStrategy:
 
         assert strategy == "high_energy"
 
+    def test_resolve_fitness_strategy_none_inherits_from_top_level(self):
+        """Preset None in optimizer_params should inherit from top-level."""
+        algo_params = {"fitness_strategy": None}
+        params = {"fitness_strategy": "high_energy"}
+
+        strategy = _resolve_fitness_strategy(algo_params, params)
+
+        assert strategy == "high_energy"
+
     def test_resolve_fitness_strategy_algorithm_override(self):
         """Test _resolve_fitness_strategy uses algorithm-specific override."""
         algo_params = {"fitness_strategy": "diversity"}

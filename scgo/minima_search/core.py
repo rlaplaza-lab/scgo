@@ -41,6 +41,7 @@ from scgo.system_types import (
     validate_adsorbate_definition,
     validate_system_type_settings,
 )
+from scgo.utils.fitness_strategies import ensure_fitness_strategy_resolved
 from scgo.utils.helpers import (
     adsorbate_primary_cell_shift,
     apply_primary_cell_shift,
@@ -437,6 +438,10 @@ def scgo(
     optimizer_kwargs = filter_dict_keys(
         global_optimizer_kwargs, {"n_trials", "run_id", "clean"}
     )
+    if "fitness_strategy" in optimizer_kwargs:
+        optimizer_kwargs["fitness_strategy"] = ensure_fitness_strategy_resolved(
+            optimizer_kwargs["fitness_strategy"]
+        )
     system_type = optimizer_kwargs.get("system_type")
     if not isinstance(system_type, str):
         raise ValueError(
