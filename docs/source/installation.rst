@@ -103,6 +103,40 @@ DB/GA tuning knobs:
 - ``ga_fast_prefilter_enabled=True`` (default) for low-cost clash rejection
   before full structural validation.
 
+HPC and shared filesystems
+--------------------------
+
+When running on Slurm clusters or network filesystems (Lustre, GPFS, NFS):
+
+**SQLite**
+
+SCGO keeps WAL mode off by default (fewer ``-wal``/``-shm`` issues on shared
+filesystems). Prefer writing active ``*.db`` files under job-local scratch
+(``$SLURM_TMPDIR`` or site-specific scratch) when you can, then copying results
+back to project storage.
+
+**Parallel jobs**
+
+SCGO creates unique ``run_<timestamp>_<microseconds>`` folders, so jobs sharing
+a parent output directory usually write different database files. Lock contention
+is still possible if jobs touch the same ``*.db`` (for example, reusing an
+explicit ``run_id`` or output path) or if shared filesystems serialize lock
+files. For high parallelism, prefer one output directory per job.
+
+**Registry**
+
+Discovery may write ``.scgo_db_registry.json`` and ``.scgo_db_registry.lock``
+(with ``flock`` on Linux) for fast database listing. When your run lives under a
+directory whose name ends in ``_searches``, the index is kept at that parent
+only (not beside every ``trial_*`` folder). If your filesystem does not honor
+``flock``, use separate output directories per job or avoid parallel registry
+updates.
+
+**Logging**
+
+Batch-friendly defaults suppress noisy third-party loggers. For local debugging,
+set ``SCGO_LOCAL_DEV=1`` or call ``configure_logging(..., hpc_mode=False)``.
+
 Publishing releases
 -------------------
 
