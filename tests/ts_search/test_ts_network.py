@@ -77,7 +77,7 @@ def test_save_ts_network_metadata(sample_ts_results):
         )
 
         assert os.path.exists(output_path)
-        assert "ts_network_metadata_Cu3.json" in output_path
+        assert "ts_network_metadata.json" in output_path
 
         with open(output_path) as f:
             metadata = json.load(f)
@@ -380,7 +380,7 @@ def test_build_connectivity_graph_from_final_unique_ts():
         ],
     }
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = os.path.join(tmpdir, "final_unique_ts_summary_Cu3.json")
+        path = os.path.join(tmpdir, "final_unique_ts_summary.json")
         with open(path, "w") as f:
             json.dump(summary, f, indent=2)
         graph = build_connectivity_graph_from_final_unique_ts(path)

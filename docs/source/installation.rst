@@ -83,25 +83,25 @@ Parallel jobs and output directories
 
 SCGO generates unique run folders (``run_YYYYMMDD_HHMMSS_ffffff``), so parallel
 jobs launched from the same parent output directory usually write to different
-``*.db`` files. This means log lines like ``Using cached results for: ...`` are
-normally in-process cache hits, not a lock by themselves.
+``*.db`` files. Log lines like ``Using cached results for: ...`` are normally
+in-process cache hits, not a lock by themselves.
 
-However, SQLite can still serialize writes when two jobs touch the same database
-file (for example, reusing the same explicit ``run_id`` or output path), and
-shared filesystems may add contention for registry lock files. For large
-parallel campaigns, prefer one output directory per job (or job-local scratch,
-then copy results back) to minimize lock waits.
+SQLite can still serialize writes when two jobs touch the same database file
+(for example, reusing the same explicit ``run_id`` or output path), and shared
+filesystems may add contention for registry lock files. For large parallel
+campaigns, prefer one output directory per job (or job-local scratch, then copy
+results back).
 
-For performance-sensitive GA/BH runs on local storage, you can enable optional
-DB/GA tuning knobs:
+For performance-sensitive GA/BH runs on local storage, optional DB/GA tuning
+knobs:
 
-- ``db_enable_expression_indexes=True`` to add JSON expression indexes used by
-  SCGO metadata filtering/sorting paths.
+- ``db_enable_expression_indexes=True`` — JSON expression indexes for metadata
+  filtering/sorting paths.
 - ``ga_adaptive_retry_enabled=True`` (default) with
-  ``ga_retry_floor_multiplier``/``ga_retry_ceiling_multiplier`` to bound retry
+  ``ga_retry_floor_multiplier``/``ga_retry_ceiling_multiplier`` — bound retry
   budgets without hard-capping exploration.
-- ``ga_fast_prefilter_enabled=True`` (default) for low-cost clash rejection
-  before full structural validation.
+- ``ga_fast_prefilter_enabled=True`` (default) — low-cost clash rejection before
+  full structural validation.
 
 HPC and shared filesystems
 --------------------------
@@ -114,14 +114,6 @@ SCGO keeps WAL mode off by default (fewer ``-wal``/``-shm`` issues on shared
 filesystems). Prefer writing active ``*.db`` files under job-local scratch
 (``$SLURM_TMPDIR`` or site-specific scratch) when you can, then copying results
 back to project storage.
-
-**Parallel jobs**
-
-SCGO creates unique ``run_<timestamp>_<microseconds>`` folders, so jobs sharing
-a parent output directory usually write different database files. Lock contention
-is still possible if jobs touch the same ``*.db`` (for example, reusing an
-explicit ``run_id`` or output path) or if shared filesystems serialize lock
-files. For high parallelism, prefer one output directory per job.
 
 **Registry**
 

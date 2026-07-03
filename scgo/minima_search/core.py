@@ -61,6 +61,10 @@ from scgo.utils.run_tracking import (
     ensure_run_id,
     save_run_metadata,
 )
+from scgo.utils.timing_report import (
+    build_run_timing_document,
+    write_run_timing_file,
+)
 from scgo.utils.ts_provenance import ts_output_provenance
 from scgo.utils.validation import validate_composition
 
@@ -217,6 +221,10 @@ _INIT_ONLY_OPTIMIZER_KWARGS = frozenset(
 )
 
 
+def _write_timing_json_enabled(global_optimizer_kwargs: dict[str, Any]) -> bool:
+    return bool(global_optimizer_kwargs.get("write_timing_json", False))
+
+
 def _optimizer_kwargs_for_algorithm_call(
     optimizer_kwargs: dict[str, Any],
     *,
@@ -363,6 +371,8 @@ def scgo(
     verbosity: int = 1,
     run_id: str | None = None,
     clean: bool = False,
+    timing_output_dir: str | None = None,
+    timing_collector: list[dict[str, Any]] | None = None,
 ) -> list[tuple[float, Atoms]]:
     """Run a single global optimization trial for a fixed composition.
 
@@ -436,8 +446,14 @@ def scgo(
             f"Must be one of {list(_ALGORITHM_REGISTRY.keys())}"
         )
     optimizer_kwargs = filter_dict_keys(
-        global_optimizer_kwargs, {"n_trials", "run_id", "clean"}
+        global_optimizer_kwargs,
+        {"n_trials", "run_id", "clean", "timing_output_dir", "timing_collector"},
     )
+    timing_kwargs: dict[str, Any] = {}
+    if timing_output_dir is not None:
+        timing_kwargs["timing_output_dir"] = timing_output_dir
+    if timing_collector is not None:
+        timing_kwargs["timing_collector"] = timing_collector
     if "fitness_strategy" in optimizer_kwargs:
         optimizer_kwargs["fitness_strategy"] = ensure_fitness_strategy_resolved(
             optimizer_kwargs["fitness_strategy"]
@@ -482,7 +498,7 @@ def scgo(
         all_minima = _select_and_run_ga(
             composition=composition,
             output_dir=output_dir,
-            optimizer_kwargs=optimizer_kwargs,
+            optimizer_kwargs={**optimizer_kwargs, **timing_kwargs},
             calculator=calculator_for_global_optimization,
             rng=rng,
             verbosity=verbosity,
@@ -557,6 +573,7 @@ def scgo(
             run_id=run_id,
             clean=clean,
             **algo_kwargs,
+            **timing_kwargs,
         )
 
     if not all_minima:
@@ -695,6 +712,8 @@ def run_trials(
                 )
 
     all_raw_minima = []
+    write_timing = _write_timing_json_enabled(global_optimizer_kwargs)
+    trial_timing_payloads: list[dict[str, Any]] = []
 
     for trial_idx in range(n_trials):
         trial_rng = create_child_rng(rng)
@@ -702,6 +721,7 @@ def run_trials(
         trial_dir = os.path.join(run_output_dir, f"trial_{trial_idx + 1}")
         logger.info(f"Running trial {trial_idx + 1}/{n_trials}")
 
+        trial_collector: list[dict[str, Any]] = []
         trial_results = scgo(
             composition=composition,
             global_optimizer=global_optimizer,
@@ -713,10 +733,26 @@ def run_trials(
             verbosity=verbosity,
             run_id=run_id,
             clean=clean,
+            timing_output_dir=(
+                run_output_dir if write_timing and n_trials == 1 else None
+            ),
+            timing_collector=trial_collector if write_timing else None,
         )
+
+        if trial_collector:
+            trial_timing_payloads.extend(trial_collector)
 
         if trial_results:
             all_raw_minima.extend(trial_results)
+
+    if write_timing and n_trials > 1 and trial_timing_payloads:
+        write_run_timing_file(
+            run_output_dir,
+            build_run_timing_document(
+                run_id=run_id,
+                trial_payloads=trial_timing_payloads,
+            ),
+        )
 
     # Combine all results (previous + current) before deduplication
     if previous_minima:
@@ -945,6 +981,9 @@ def _write_results_summary(
         run_counts[run_id_from_atoms] += 1
 
     summary = ts_output_provenance()
+    timing_relpath = f"{run_id}/timing.json" if run_id else None
+    if run_id and not os.path.isfile(os.path.join(output_dir, run_id, "timing.json")):
+        timing_relpath = None
     summary.update(
         {
             "composition": composition_str,
@@ -953,6 +992,7 @@ def _write_results_summary(
             "current_run_id": run_id,
             "params": params,
             "run_metadata_relpath": (f"{run_id}/metadata.json" if run_id else None),
+            "run_timing_relpath": timing_relpath,
         }
     )
 

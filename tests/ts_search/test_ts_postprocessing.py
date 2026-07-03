@@ -41,7 +41,7 @@ def test_write_final_unique_ts_dedup(tmp_path):
     ]
 
     composition = ["Pt", "Pt"]
-    out = str(tmp_path / "ts_results_Pt2")
+    out = str(tmp_path / "Pt2_ts_results")
     os.makedirs(out, exist_ok=True)
 
     summary = write_final_unique_ts(ts_results, out, composition, energy_tolerance=0.05)
@@ -56,7 +56,7 @@ def test_write_final_unique_ts_dedup(tmp_path):
     assert final_dir.exists()
 
     # JSON summary file exists
-    json_path = final_dir / "final_unique_ts_summary_Pt2.json"
+    json_path = final_dir / "final_unique_ts_summary.json"
     assert json_path.exists()
     with open(json_path) as f:
         data = json.load(f)
@@ -77,7 +77,7 @@ def test_write_final_unique_ts_keeps_similar_ts_across_different_pairs(tmp_path)
     ]
 
     composition = ["Pt", "Pt"]
-    out = str(tmp_path / "ts_results_Pt2")
+    out = str(tmp_path / "Pt2_ts_results")
     os.makedirs(out, exist_ok=True)
 
     summary = write_final_unique_ts(ts_results, out, composition, energy_tolerance=0.05)
@@ -94,7 +94,7 @@ def test_write_final_unique_ts_keeps_similar_ts_across_different_pairs(tmp_path)
     xyz_files = list(final_dir.glob("*.xyz"))
     assert len(xyz_files) == 1
     assert xyz_files[0].name == "Pt2_ts_01.xyz"
-    json_path = final_dir / "final_unique_ts_summary_Pt2.json"
+    json_path = final_dir / "final_unique_ts_summary.json"
     assert json_path.exists()
     with open(json_path) as f:
         data = json.load(f)
@@ -136,7 +136,7 @@ def test_write_final_unique_ts_ignores_fixed_slab_atom_differences(tmp_path):
         },
     ]
 
-    out = str(tmp_path / "ts_results_Pt4")
+    out = str(tmp_path / "Pt4_ts_results")
     os.makedirs(out, exist_ok=True)
     summary = write_final_unique_ts(ts_results, out, ["Pt", "Pt", "Pt", "Pt"])
     assert len(summary) == 1
@@ -160,7 +160,7 @@ def test_write_final_unique_ts_surface_aware_keeps_absolute_positions(tmp_path):
             "barrier_height": 0.2,
         }
     ]
-    out = str(tmp_path / "ts_results_surface")
+    out = str(tmp_path / "Pt3_ts_results")
     os.makedirs(out, exist_ok=True)
     write_final_unique_ts(
         ts_results,
@@ -200,7 +200,7 @@ def test_write_final_unique_ts_rejects_malformed_pair_id(tmp_path):
             pair_id="bad_pair", raw_score=-0.5, ts_energy=0.5, barrier_height=0.2
         )
     ]
-    out = str(tmp_path / "ts_results_Pt2")
+    out = str(tmp_path / "Pt2_ts_results")
     os.makedirs(out, exist_ok=True)
     with pytest.raises(ValueError):
         write_final_unique_ts(ts_results, out, ["Pt", "Pt"])
@@ -593,8 +593,8 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
         lambda *a, **k: None,
     )
 
-    # Create a fake DB file under tmp_path/run_* so tagging finds it
-    run_dir = tmp_path / "run_0001"
+    # Create a fake DB file under searches/run_* so tagging finds it
+    run_dir = tmp_path / "Pt2_searches" / "run_0001"
     run_dir.mkdir(parents=True)
     db_path = run_dir / "candidates.db"
     db_path.write_text("")
@@ -841,7 +841,7 @@ def test_run_transition_state_search_rejects_buried_surface_ts(monkeypatch, tmp_
 
 
 def test_final_unique_ts_and_network_statistics_consistent(tmp_path):
-    """Ensure `ts_search_summary`, `ts_network_metadata` and `final_unique_ts` are present
+    """Ensure `results_summary`, `ts_network_metadata` and `final_unique_ts` are present
     and that `statistics` are consistent when successful TS exist.
     """
     from scgo.ts_search.transition_state_io import (
@@ -871,7 +871,7 @@ def test_final_unique_ts_and_network_statistics_consistent(tmp_path):
     ]
 
     composition = ["Pt", "Pt"]
-    out = str(tmp_path / "ts_results_Pt2")
+    out = str(tmp_path / "Pt2_ts_results")
     os.makedirs(out, exist_ok=True)
 
     # Write summary, network metadata and unique TS outputs
@@ -888,7 +888,7 @@ def test_final_unique_ts_and_network_statistics_consistent(tmp_path):
         net = json.load(f)
 
     final_summary_path = os.path.join(
-        out, "final_unique_ts", "final_unique_ts_summary_Pt2.json"
+        out, "final_unique_ts", "final_unique_ts_summary.json"
     )
     assert os.path.exists(final_summary_path)
     with open(final_summary_path) as f:

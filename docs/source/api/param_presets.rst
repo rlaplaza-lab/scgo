@@ -6,18 +6,9 @@ This page explains the parameter presets available in SCGO and what each paramet
 Overview
 --------
 
-SCGO has two types of parameter dictionaries:
-
-- **GO parameters** (``params`` or ``go_params``): for global optimization
-- **TS parameters** (``ts_params``): for transition state searches
-
-Both follow the same contract documented in :doc:`/parameters` (section *Parameter resolution*):
-
-- ``None`` → full safe defaults from presets
-- Partial dict → deep-merged at run time (GO via :func:`~scgo.utils.run_helpers.initialize_params`, TS via :func:`~scgo.utils.run_helpers.initialize_ts_params`)
-- Preset builders return complete starting dicts; edit keys then pass to ``run_*``
-
-At ``verbosity >= 1``, runners log the defaults source and which user keys overrode them.
+SCGO has two parameter dict types: **GO** (``params`` / ``go_params``) and **TS**
+(``ts_params``). Merge rules, logging, and override behaviour are in
+:doc:`/parameters` (*Parameter resolution*).
 
 ----------------
 Preset Functions
@@ -57,7 +48,7 @@ Use these preset functions to get started quickly.
    * - ``get_ts_search_params(calculator, calculator_kwargs, *, system_type, surface_config, seed)``
      - TS-only settings (NEB, calculator, pairing). Requires ``system_type``. For surfaces, also requires ``surface_config``. Default calculator is ``"MACE"``.
    * - ``get_ts_defaults(system_type)``
-     - Return NEB knob defaults for a given system type
+     - NEB knob defaults for one system type (used internally by :func:`~scgo.param_presets.get_ts_search_params`; prefer ``get_ts_search_params`` in user code)
 
 ----------------------------
 Preset effects (vs defaults)

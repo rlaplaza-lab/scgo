@@ -57,6 +57,7 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
     )
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["connectivity_factor"] = 1.8
+    ts_params["write_timing_json"] = True
     return ts_params
 
 

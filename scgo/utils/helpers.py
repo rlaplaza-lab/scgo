@@ -170,6 +170,27 @@ def canonicalize_storage_frame(
     atoms.positions = atoms.get_positions() + (cell_center - com)
 
 
+def canonicalize_relaxed_for_storage(
+    atoms: Atoms,
+    *,
+    surface_mode: bool = False,
+    n_slab: int = 0,
+) -> None:
+    """Normalize relaxed structures immediately before GA database persistence.
+
+    Gas clusters use ``atoms.center()`` so the cluster bounding box sits at the
+    cell midpoint, matching :func:`perform_local_relaxation`. Slab+adsorbate
+    systems use :func:`canonicalize_storage_frame` with ``pbc_aware=True`` to
+    place the adsorbate in the primary cell without recentring the slab.
+    """
+    if surface_mode and n_slab > 0:
+        canonicalize_storage_frame(atoms, pbc_aware=True, center=False, n_slab=n_slab)
+        return
+    if np.any(atoms.get_pbc()):
+        atoms.wrap()
+    atoms.center()
+
+
 def perform_local_relaxation(
     atoms: Atoms,
     calculator: Calculator,
@@ -191,8 +212,9 @@ def perform_local_relaxation(
         steps: The maximum number of optimization steps to perform.
         logfile: Optional path to a file for logging optimizer output.
         trajectory: Optional path to a file for saving the optimization trajectory.
-        center_after_relax: If True (default), call ``atoms.center()`` after relaxation.
-            Use False for slab+adsorbate systems.
+        center_after_relax: If True (default), call
+            :func:`canonicalize_relaxed_for_storage` after relaxation. Use False
+            for slab+adsorbate systems.
 
     Returns:
         The potential energy of the relaxed structure. Returns penalty energy if relaxation fails.
@@ -218,10 +240,10 @@ def perform_local_relaxation(
         dyn.run(fmax=fmax, steps=steps)
         energy = atoms.get_potential_energy()
         forces = ensure_float64_forces(atoms)
-        if np.any(atoms.get_pbc()):
-            atoms.wrap()
         if center_after_relax:
-            atoms.center()
+            canonicalize_relaxed_for_storage(atoms)
+        elif np.any(atoms.get_pbc()):
+            atoms.wrap()
 
         from scgo.database.metadata import add_metadata
 

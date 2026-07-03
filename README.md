@@ -51,10 +51,12 @@ results = run_go(
 | Multi-composition GO | `run_go_campaign` | [Quick start — Campaigns](https://scgo.readthedocs.io/en/latest/quickstart.html#campaigns) |
 | TS from existing minima | `run_ts_search` | [Quick start — Transition States](https://scgo.readthedocs.io/en/latest/quickstart.html#transition-states) |
 | GO then TS | `run_go_ts` | [Quick start — Transition States](https://scgo.readthedocs.io/en/latest/quickstart.html#transition-states) |
+| Multi-composition TS | `run_ts_campaign` | [Quick start — Campaigns](https://scgo.readthedocs.io/en/latest/quickstart.html#campaigns) |
+| Multi-composition GO+TS | `run_go_ts_campaign` | [Quick start — Campaigns](https://scgo.readthedocs.io/en/latest/quickstart.html#campaigns) |
 
 Pass one of four `system_type` values on every run: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, or `surface_cluster_adsorbate`. See [system types](https://scgo.readthedocs.io/en/latest/api/system_types.html) for when to use each.
 
-Output is written under `{formula}_searches/` (databases, XYZ minima, JSON summaries). See [output files](https://scgo.readthedocs.io/en/latest/quickstart.html#output-files) and [parameters](https://scgo.readthedocs.io/en/latest/parameters.html) for presets and tuning.
+Output layout depends on the runner: `run_go` writes directly to `{formula}_searches/` (default in the current directory); combined and TS workflows use a **campaign root** with sibling `{formula}_searches/` and `{formula}_ts_results/` subdirectories. See [output directories](https://scgo.readthedocs.io/en/latest/quickstart.html#output-directories) and [output files](https://scgo.readthedocs.io/en/latest/quickstart.html#output-files).
 
 ## Examples
 

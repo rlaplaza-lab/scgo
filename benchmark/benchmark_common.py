@@ -26,6 +26,7 @@ from scgo.utils.comparators import (
     PureInteratomicDistanceComparator as InteratomicDistanceComparator,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.timing_report import flatten_run_timing_payload, load_run_timing_payload
 
 logger = get_logger(__name__)
 
@@ -179,7 +180,7 @@ def load_latest_ga_profile(
     output_dir: str | Path,
     cluster_formula: str,
 ) -> dict | None:
-    """Load ``timing.json`` from the latest run."""
+    """Load ``timing.json`` from the latest run (run dir, then legacy trial path)."""
     root = Path(output_dir)
     run_dirs = sorted(
         (root / f"{cluster_formula}_searches").glob("run_*"),
@@ -188,14 +189,10 @@ def load_latest_ga_profile(
     if not run_dirs:
         return None
     latest = run_dirs[-1]
-    trial_dir = latest / "trial_1"
-    profile_path = trial_dir / "timing.json"
-    if not profile_path.exists():
+    payload = load_run_timing_payload(str(latest))
+    if payload is None:
         return None
-    try:
-        return json.loads(profile_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    return flatten_run_timing_payload(payload)
 
 
 def format_ga_profile_lines(
@@ -211,7 +208,9 @@ def format_ga_profile_lines(
     if "local_relaxation_s" in timings:
         relax = float(timings.get("local_relaxation_s", 0.0))
     elif "relax_batch_s" in timings:
-        relax = float(timings.get("relax_batch_s", 0.0))
+        from scgo.utils.timing_report import ga_relax_seconds_from_timings
+
+        relax = ga_relax_seconds_from_timings(timings)
     else:
         relax = float(timings.get("initial_local_relaxation_s", 0.0)) + float(
             timings.get("offspring_local_relaxation_s", 0.0)

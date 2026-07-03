@@ -7,14 +7,14 @@ This directory contains the Sphinx documentation source for SCGO (Simple Cluster
 ### Prerequisites
 
 - Python 3.12+
-- SCGO installed (`pip install "scgo[mace]"` from PyPI, or `pip install -e .` from the repository root for development)
+- SCGO installed (`pip install -e ".[mace]"` from the repository root, or `pip install "scgo[mace]"` from PyPI)
 - Documentation dependencies: `pip install -r source/requirements.txt` (from this `docs/` directory)
 
 ### Building HTML
 
 ```bash
 # From repository root
-pip install -e .
+pip install -e ".[mace]"
 pip install -r docs/source/requirements.txt
 cd docs && make html
 ```

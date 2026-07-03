@@ -42,7 +42,7 @@ def test_full_workflow_cu4_mace_database_persistence():
 
         # Step 1: Create minima database for Cu4 with MACE
         # =================================================
-        run_dir = tmpdir_path / "run_20260203_150000"
+        run_dir = tmpdir_path / "Cu4_searches" / "run_20260203_150000"
         run_dir.mkdir(parents=True)
 
         db_path = run_dir / "candidates.db"
@@ -100,7 +100,7 @@ def test_full_workflow_cu4_mace_database_persistence():
         # Step 2: Load and verify minima
         # ==============================
         minima = load_minima_by_composition(
-            tmpdir, composition=["Cu", "Cu", "Cu", "Cu"]
+            str(tmpdir_path / "Cu4_searches"), composition=["Cu", "Cu", "Cu", "Cu"]
         )
         assert "Cu4" in minima
         assert len(minima["Cu4"]) == 4
@@ -266,10 +266,10 @@ def test_full_workflow_cu4_mace_database_persistence():
 
         # Step 4: Verify output files exist
         # ==================================
-        ts_result_dir = tmpdir_path / "ts_results_Cu4"
+        ts_result_dir = tmpdir_path / "Cu4_ts_results"
         assert ts_result_dir.exists()
 
-        summary_file = ts_result_dir / "ts_search_summary_Cu4.json"
+        summary_file = ts_result_dir / "results_summary.json"
         assert summary_file.exists()
 
         with open(summary_file) as f:
@@ -313,7 +313,7 @@ def test_full_workflow_cu4_mace_database_persistence():
 
         # Step 6: Verify network metadata (must be present)
         # ==========================================
-        network_file = ts_result_dir / "ts_network_metadata_Cu4.json"
+        network_file = ts_result_dir / "ts_network_metadata.json"
         assert network_file.exists(), "Expected TS network metadata file to exist"
         with open(network_file) as f:
             network_meta = json.load(f)
@@ -357,7 +357,7 @@ def test_full_workflow_cu4_mace_database_persistence():
         # Verify TS entries (if any unique TS were written) by matching TS energies
         ts_entries = []
         final_ts_summary = (
-            ts_result_dir / "final_unique_ts" / "final_unique_ts_summary_Cu4.json"
+            ts_result_dir / "final_unique_ts" / "final_unique_ts_summary.json"
         )
         assert final_ts_summary.exists(), (
             "Expected final_unique_ts summary to be present"
@@ -466,9 +466,10 @@ def test_ts_search_reproducibility_with_mace():
 
         # Helper to run TS search
         def run_ts_workflow(run_name):
-            run_dir = tmpdir_path / run_name
-            run_dir.mkdir(parents=True)
-            db_path = run_dir / "candidates.db"
+            campaign_root = tmpdir_path / run_name
+            searches_dir = campaign_root / "Cu4_searches" / "run_20260203_150000"
+            searches_dir.mkdir(parents=True)
+            db_path = searches_dir / "candidates.db"
 
             # Create deterministic Cu4 database
             db = create_preparedb(Atoms("Cu4"), db_path, population_size=50)
@@ -498,6 +499,8 @@ def test_ts_search_reproducibility_with_mace():
                 a.info["key_value_pairs"]["raw_score"] = -a.get_potential_energy()
                 da.add_relaxed_step(a)
 
+            mark_test_minima_as_final(db_path)
+
             # Run TS search with fixed parameters
             ts_params = {
                 "calculator": "MACE",
@@ -516,7 +519,7 @@ def test_ts_search_reproducibility_with_mace():
             ts_results = run_transition_state_search(
                 composition=["Cu", "Cu", "Cu", "Cu"],
                 system_type="gas_cluster",
-                output_dir=run_dir,
+                output_dir=str(campaign_root),
                 params=ts_params,
                 verbosity=0,
                 max_pairs=1,  # Single pair for reproducibility test

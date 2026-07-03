@@ -14,7 +14,7 @@ Per [`benchmark_common.py`](benchmark_common.py), campaign outputs go under:
 - `benchmark/results/` — gas-phase Pt sweeps default here (subfolders per formula/backend/model).
 - `benchmark/results/pt_surface_graphite/` — [`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py) default root.
 
-Each run creates `Formula_searches` trees under the chosen output directory, consistent with other SCGO GO campaigns.
+Each GO run creates `{Formula}_searches` trees under the chosen output directory. TS runs add sibling `{Formula}_ts_results` directories with the same run-oriented layout.
 
 ## Entry points
 
@@ -22,6 +22,7 @@ Each run creates `Formula_searches` trees under the chosen output directory, con
 |--------|---------|
 | [`benchmark_Pt.py`](benchmark_Pt.py) | Gas-phase `Pt4`–`Pt11` recovery vs reference minima; CLI and pytest hooks. |
 | [`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py) | Same size sweep for Pt on the bundled graphite surface (`make_graphite_surface_config`). |
+| [`benchmark_parallel_neb.py`](benchmark_parallel_neb.py) | Serial vs parallel NEB wall-time comparison on existing Pt5 minima. |
 
 Run with:
 

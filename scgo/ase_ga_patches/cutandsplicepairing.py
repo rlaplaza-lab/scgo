@@ -166,7 +166,8 @@ class CutAndSplicePairing(OffspringCreator):
     def __init__(self, slab, n_top, blmin, number_of_variable_cell_vectors=0,
                  p1=1, p2=0.05, minfrac=None, cellbounds=None,
                  test_dist_to_slab=True, use_tags=False, target_tags=None, rng=None,
-                 verbose=False, system_type="gas_cluster"):
+                 verbose=False, system_type="gas_cluster",
+                 max_pairing_attempts: int | None = None):
 
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
@@ -191,6 +192,9 @@ class CutAndSplicePairing(OffspringCreator):
                 "'surface_cluster' or 'surface_cluster_adsorbate'."
             )
         self.system_type = system_type
+        if max_pairing_attempts is None:
+            max_pairing_attempts = 150 if not uses_surface(system_type) else 1000
+        self.max_pairing_attempts = int(max_pairing_attempts)
 
         self.scaling_volume = None
         self.descriptor = "CutAndSplicePairing"
@@ -389,7 +393,7 @@ class CutAndSplicePairing(OffspringCreator):
             assert np.allclose(cell1[i], cell2[i]), (err % i, cell1, cell2)
 
         counter = 0
-        maxcount = 1000
+        maxcount = self.max_pairing_attempts
         a1_copy = a1.copy()
         a2_copy = a2.copy()
         self.last_attempt_count = 0

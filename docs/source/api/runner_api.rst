@@ -44,16 +44,46 @@ All functions accept:
 - ``surface_config``: required for surface system types; must agree across run argument and preset dicts when both are set
 - ``adsorbates``: ASE Atoms or list of Atoms, required for adsorbate system types
 - ``verbosity``: 0=quiet, 1=normal (logs parameter merge provenance and resolved settings), 2+=verbose
-- ``output_dir`` / ``output_root`` / ``output_stem``: control output locations
 
 See :doc:`/parameters` (*Parameter resolution*) for merge rules and logging behaviour.
+
+------------------
+Output directories
+------------------
+
+``output_dir`` semantics differ by runner. Full table and directory-tree examples:
+:doc:`/quickstart` (*Output directories*).
+
+.. list-table::
+   :widths: 22 28 50
+   :header-rows: 1
+
+   * - Runner
+     - ``output_dir`` is
+     - Also accepts
+   * - ``run_go``
+     - ``{formula}_searches/`` directory itself
+     - —
+   * - ``run_go_campaign``
+     - Campaign parent → ``{parent}/{formula}_searches/``
+     - —
+   * - ``run_go_ts``
+     - Campaign root → ``{root}/{formula}_searches/`` + ``{root}/{formula}_ts_results/``
+     - ``output_root``, ``output_stem``
+   * - ``run_go_ts_campaign``
+     - Campaign parent → ``{parent}/{formula}_campaign/…``
+     - ``output_root``, ``output_stem``
+   * - ``run_ts_search``
+     - Campaign root (or existing ``*_searches/`` — parent inferred)
+     - ``searches_dir``
+   * - ``run_ts_campaign``
+     - Shared campaign root for all compositions
+     - —
 
 -----------------
 Complete Examples
 -----------------
 
-**Gas-phase cluster optimization:**
-
 .. code-block:: python
 
    from scgo import run_go
@@ -65,92 +95,8 @@ Complete Examples
        seed=42,
        system_type="gas_cluster",
    )
-   # results: list of (energy, Atoms) tuples
 
-**Surface cluster:**
-
-.. code-block:: python
-
-   from scgo import run_go, make_graphite_surface_config
-   from scgo.param_presets import get_testing_params
-
-   surface_config = make_graphite_surface_config(slab_layers=3)
-
-   results = run_go(
-       "Pt5",
-       params=get_testing_params(),
-       seed=42,
-       surface_config=surface_config,
-       system_type="surface_cluster",
-   )
-
-**With adsorbates:**
-
-.. code-block:: python
-
-   from ase import Atoms
-   from scgo import run_go
-   from scgo.param_presets import get_testing_params
-
-   oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
-
-   results = run_go(
-       "Pt5",
-       params=get_testing_params(),
-       seed=42,
-       system_type="gas_cluster_adsorbate",
-       adsorbates=oh,
-   )
-
-**GO + TS combined:**
-
-.. code-block:: python
-
-   from scgo import run_go_ts, make_graphite_surface_config
-   from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
-
-   surface_config = make_graphite_surface_config(slab_layers=3)
-
-   go_params = get_torchsim_ga_params(
-       system_type="surface_cluster",
-       surface_config=surface_config,
-       seed=42,
-   )
-
-   ts_params = get_ts_search_params(
-       system_type="surface_cluster",
-       surface_config=surface_config,
-       seed=42,
-   )
-   ts_params["max_pairs"] = 10
-
-   summary = run_go_ts(
-       "Pt5",
-       go_params=go_params,
-       ts_params=ts_params,
-       seed=42,
-       surface_config=surface_config,
-       system_type="surface_cluster",
-   )
-
-**Campaign (multiple compositions):**
-
-.. code-block:: python
-
-   from scgo import run_go_campaign
-   from scgo.param_presets import get_testing_params
-   from scgo.runner_api import build_one_element_compositions
-
-   # Pt2, Pt3, Pt4, Pt5, Pt6
-   compositions = build_one_element_compositions("Pt", min_atoms=2, max_atoms=6)
-
-   results = run_go_campaign(
-       compositions,
-       params=get_testing_params(),
-       seed=42,
-       system_type="gas_cluster",
-   )
-   # results is dict[formula, list[(energy, Atoms)]]
+See :doc:`/quickstart` for surface, adsorbate, TS, campaign, and output-layout examples.
 
 -----------------
 Utility Functions
@@ -168,7 +114,7 @@ Utility Functions
      - Parse a compact formula (``"Pt5"``) or comma-separated symbols (``"Pt,Pt,Au"``)
    * - ``resolve_workflow_seed(run_seed, go_params_seed, ts_params_seed)``
      - Ensure seed consistency across params
-   * - ``log_go_ts_summary(summary, verbosity)``
+   * - ``log_go_ts_summary(logger, summary, *, wall_time_s=None)``
      - Print summary of a GO+TS run
 
 --------------------
@@ -177,7 +123,7 @@ Timing and Profiling
 
 Configure timing in ``params`` / ``go_params`` only (``optimizer_params['ga']`` or ``bh``):
 
-- ``write_timing_json=True``: write ``timing.json`` under each trial directory
+- ``write_timing_json=True``: write ``timing.json`` under each run directory (alongside ``metadata.json``)
 - ``detailed_timing=True``: add ``per_generation`` rows (requires ``write_timing_json=True``)
 
 For TS, set ``write_timing_json`` in ``ts_params`` when needed.

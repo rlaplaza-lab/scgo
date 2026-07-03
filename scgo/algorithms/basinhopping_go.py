@@ -197,6 +197,8 @@ def bh_go(
     adsorbate_definition: AdsorbateDefinition | None = None,
     write_timing_json: bool = False,
     detailed_timing: bool = False,
+    timing_output_dir: str | None = None,
+    timing_collector: list[dict[str, Any]] | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
@@ -223,10 +225,13 @@ def bh_go(
         move_strategy: Strategy for selecting atoms to move ('random', 'highest_force', 'lowest_force').
         temperature: Temperature for Metropolis criterion (eV), governing acceptance
             of structures based on fitness differences.
-        write_timing_json: Optional ``timing.json`` under ``output_dir``.
+        write_timing_json: Optional ``timing.json`` (see ``timing_output_dir``).
             Set in ``optimizer_params['bh']`` inside ``params``/``go_params``.
         detailed_timing: Per-iteration split rows in JSON when ``write_timing_json``
             is set.
+        timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``
+            when ``run_trials`` is not used).
+        timing_collector: Optional list appended with the timing payload after the run.
         deduplicate: If True (default), filter to structurally unique minima.
         energy_tolerance: Energy difference (eV) below which structures are considered duplicates.
         comparator_tol: Tolerance for interatomic distance comparator.
@@ -404,7 +409,13 @@ def bh_go(
                 }
                 if per_iteration is not None:
                     out["per_iteration"] = per_iteration
-                write_timing_file(output_dir, out)
+                if timing_collector is not None:
+                    timing_collector.append(out)
+                if write_timing_json:
+                    if timing_output_dir is not None:
+                        write_timing_file(timing_output_dir, out)
+                    elif timing_collector is None:
+                        write_timing_file(output_dir, out)
 
         a_current = retry_with_backoff(
             da.get_an_unrelaxed_candidate,

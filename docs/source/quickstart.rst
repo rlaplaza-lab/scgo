@@ -93,6 +93,8 @@ Use the built-in graphite surface or create your own slab.
        system_type="surface_cluster",
    )
 
+Use :func:`~scgo.adsorption_energy` to compare adsorption energies on a slab.
+
 **Using a custom slab:**
 
 .. code-block:: python
@@ -232,6 +234,9 @@ Any ASE ``Atoms`` object is a valid adsorbate fragment. The GA will:
        adsorbates=oh,
    )
 
+Use :func:`~scgo.is_true_minimum` or :func:`~scgo.perform_local_relaxation` to
+validate or re-relax candidates outside a full GO run.
+
 --------------------
 Surface + Adsorbates
 --------------------
@@ -261,6 +266,34 @@ Transition States
 ------------------
 
 Find transition states between optimized structures.
+
+**TS from existing minima** (after a prior ``run_go`` or manual GO output):
+
+.. code-block:: python
+
+   from scgo import run_ts_search
+   from scgo.param_presets import get_ts_search_params
+
+   ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
+   ts_params["max_pairs"] = 10
+
+   # Campaign root: reads Pt5_searches/, writes Pt5_ts_results/ as sibling
+   results = run_ts_search(
+       "Pt5",
+       ts_params=ts_params,
+       seed=42,
+       output_dir="results/pt5_gas_mace",
+       system_type="gas_cluster",
+   )
+
+   # Or pass the searches directory directly (parent becomes campaign root)
+   results = run_ts_search(
+       "Pt5",
+       ts_params=ts_params,
+       seed=42,
+       searches_dir="results/pt5_gas_mace/Pt5_searches",
+       system_type="gas_cluster",
+   )
 
 **GO + TS combined:**
 
@@ -318,7 +351,11 @@ Find transition states between optimized structures.
 Campaigns
 ------------
 
-Run multiple compositions in one call.
+Run multiple compositions in one call. Composition builders
+(``build_one_element_compositions``, ``build_two_element_compositions``) live in
+``scgo.runner_api``, not the top-level ``scgo`` package.
+
+**Global optimization:**
 
 .. code-block:: python
 
@@ -360,18 +397,154 @@ for multi-element atom ordering and placement behaviour.
        system_type="gas_cluster",
    )
 
+**TS from existing minima** (each formula needs a prior ``{formula}_searches/`` tree):
+
+.. code-block:: python
+
+   from scgo import run_ts_campaign
+   from scgo.param_presets import get_ts_search_params
+   from scgo.runner_api import build_one_element_compositions
+
+   compositions = build_one_element_compositions("Pt", min_atoms=4, max_atoms=6)
+
+   results = run_ts_campaign(
+       compositions,
+       ts_params=get_ts_search_params(system_type="gas_cluster", seed=42),
+       seed=42,
+       output_dir="benchmark/results",  # shared campaign root
+       system_type="gas_cluster",
+   )
+
+**GO + TS for multiple compositions:**
+
+.. code-block:: python
+
+   from scgo import run_go_ts_campaign
+   from scgo.param_presets import get_testing_params, get_ts_search_params
+   from scgo.runner_api import build_one_element_compositions
+
+   compositions = build_one_element_compositions("Pt", min_atoms=4, max_atoms=5)
+
+   results = run_go_ts_campaign(
+       compositions,
+       go_params=get_testing_params(),
+       ts_params=get_ts_search_params(system_type="gas_cluster", seed=42),
+       seed=42,
+       output_dir="benchmark/results",
+       system_type="gas_cluster",
+   )
+
+See :doc:`/api/runner_api` for full signatures.
+
+--------------------
+Output directories
+--------------------
+
+``output_dir`` means different things depending on the runner. See also
+:doc:`/api/runner_api`.
+
+.. list-table::
+   :widths: 22 28 50
+   :header-rows: 1
+
+   * - Runner
+     - ``output_dir`` is
+     - Default when omitted
+   * - ``run_go``
+     - The ``{formula}_searches/`` directory itself
+     - ``{formula}_searches/`` in the current working directory
+   * - ``run_go_campaign``
+     - Campaign parent; each composition → ``{parent}/{formula}_searches/``
+     - Each composition → ``{formula}_searches/`` in CWD (no shared parent)
+   * - ``run_go_ts``
+     - Campaign root → ``{root}/{formula}_searches/`` and ``{root}/{formula}_ts_results/``
+     - ``{formula}_campaign/`` in CWD
+   * - ``run_go_ts_campaign``
+     - Campaign parent; each composition → ``{parent}/{formula}_campaign/…``
+     - ``scgo_runs/go_ts_campaign_{calc}/``
+   * - ``run_ts_search``
+     - Campaign root (or an existing ``*_searches/`` path — parent is inferred)
+     - CWD; minima from ``{formula}_searches/``, TS to ``{formula}_ts_results/``
+   * - ``run_ts_campaign``
+     - Shared campaign root for all compositions
+     - CWD per composition
+
+``output_root`` and ``output_stem`` (``run_go_ts`` / ``run_go_ts_campaign`` only):
+when ``output_dir`` is omitted, the default root is
+``{output_root or ./scgo_runs}/{output_stem or formula}_{calculator_slug}/``
+(for example ``examples/results/pt5_gas_mace/``).
+
+``searches_dir`` (``run_ts_search`` only): explicit path to a GO searches
+directory; the campaign root becomes ``searches_dir.parent``.
+
+**Example — ``run_go_ts`` with ``output_root`` / ``output_stem``:**
+
+.. code-block:: text
+
+   results/pt5_gas_mace/
+   ├── Pt5_searches/
+   │   ├── run_20260703_120000_123456/
+   │   │   ├── metadata.json
+   │   │   └── trial_0/ga_go.db
+   │   ├── results_summary.json
+   │   └── final_unique_minima/
+   └── Pt5_ts_results/
+       ├── run_20260703_130000_654321/
+       │   └── pair_0_1/neb_0_1_metadata.json
+       ├── results_summary.json
+       ├── ts_network_metadata.json
+       └── final_unique_ts/
+
+**Example — ``run_go_campaign`` with ``output_dir="benchmark/results"``:**
+
+.. code-block:: text
+
+   benchmark/results/
+   ├── Pt4_searches/
+   ├── Pt5_searches/
+   └── Pt6_searches/
+
 ------------------
 Output Files
 ------------------
 
-All runs create a ``{formula}_searches/`` directory containing:
+Global optimization writes under a ``{formula}_searches/`` tree (location
+depends on the runner — see *Output directories* above):
 
-- ``run_<date>/trial_<N>/``: Individual optimization runs
-  - ``ga_go.db`` or ``bh_go.db``: Database of candidate structures
+- ``run_<timestamp>_<microseconds>/``: One independent run
+  - ``metadata.json``: Resolved optimizer settings and trial metadata
+  - ``timing.json``: Optional timing sidecar (``write_timing_json=True``)
+  - ``trial_<N>/``: Trial artifacts
+  - ``ga_go.db``, ``bh_go.db``, or ``simple_go.db``: Candidate database;
+    algorithm is chosen automatically (see :doc:`/parameters`)
 - ``results_summary.json``: Summary of all minima found
 - ``final_unique_minima/``: XYZ files of the best structures
 
-Transition state runs add a ``ts_results_{formula}/`` folder with TS geometries.
+Transition state runs write a sibling ``{formula}_ts_results/`` tree:
+
+- ``run_<timestamp>_<microseconds>/pair_<i>_<j>/``: Per-pair NEB artifacts
+  (TS/endpoints, trajectory, ``neb_{pair_id}_metadata.json``)
+- ``results_summary.json``: Summary of all NEB runs
+- ``ts_network_metadata.json``: Connectivity graph between minima
+- ``final_unique_ts/``: Deduplicated TS geometries
+- ``final_unique_ts/final_unique_ts_summary.json``: Dedup export summary
+
+-----------------------
+Reading prior results
+-----------------------
+
+To reload minima from completed searches without re-running GO:
+
+.. code-block:: python
+
+   from scgo import load_previous_run_results, SCGODatabaseManager
+
+   minima = load_previous_run_results("Pt5_searches")
+   # Or browse databases with context-manager cleanup:
+   with SCGODatabaseManager(base_dir="Pt5_searches") as manager:
+       refs = manager.load_reference_structures("**/*.db", composition=["Pt"] * 5)
+
+See :mod:`scgo.database` for HPC-oriented database access patterns.
 
 ----------
 Parameters

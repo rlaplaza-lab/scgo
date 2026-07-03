@@ -65,7 +65,7 @@ def load_minima_by_composition(
         each sorted by energy (lowest first). Returns empty dict if no minima found.
 
     Example:
-        >>> minima = load_minima_by_composition("Pt3_ts_searches", ["Pt", "Pt", "Pt"])
+        >>> minima = load_minima_by_composition("Pt3_searches", ["Pt", "Pt", "Pt"])
         >>> list(minima.keys())
         ['Pt3']
     """
@@ -273,13 +273,16 @@ def save_transition_state_results(
     output_dir: str,
     composition: list[str],
     run_context: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> str:
-    """Save all transition state results to a summary JSON file.
+    """Save all transition state results to ``results_summary.json``.
 
     Args:
         ts_results: List of result dictionaries from find_transition_state().
-        output_dir: Directory where summary will be saved.
+        output_dir: TS results root directory where summary will be saved.
         composition: List of atomic symbols for the composition.
+        run_context: Optional NEB/search context merged into the summary.
+        run_id: Optional run ID for the current TS search invocation.
 
     Returns:
         Path to saved summary file.
@@ -298,6 +301,16 @@ def save_transition_state_results(
             "num_total_pairs": len(ts_results),
             "num_successful": sum(1 for r in ts_results if r["status"] == "success"),
             "num_converged": sum(1 for r in ts_results if r["neb_converged"]),
+            "current_run_id": run_id,
+            "run_metadata_relpath": (
+                f"{run_id}/metadata.json" if run_id is not None else None
+            ),
+            "run_timing_relpath": (
+                f"{run_id}/timing.json"
+                if run_id is not None
+                and os.path.isfile(os.path.join(output_dir, run_id, "timing.json"))
+                else None
+            ),
             "results": [],
         }
     )
@@ -328,7 +341,7 @@ def save_transition_state_results(
     # Keep statistics aligned with ts_network metadata output.
     summary["statistics"] = compute_ts_statistics(ts_results)
 
-    summary_path = os.path.join(output_dir, f"ts_search_summary_{formula}.json")
+    summary_path = os.path.join(output_dir, "results_summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -449,9 +462,7 @@ def write_final_unique_ts(
 
     if not candidates:
         # Write empty summary
-        summary_path = os.path.join(
-            final_dir, f"final_unique_ts_summary_{formula}.json"
-        )
+        summary_path = os.path.join(final_dir, "final_unique_ts_summary.json")
         empty_data: dict[str, Any] = ts_output_provenance(extra=run_context or {})
         empty_data.update({"formula": formula, "unique_ts": []})
         if minima_base_dir is not None:
@@ -554,7 +565,7 @@ def write_final_unique_ts(
         serial_item = {k: v for k, v in item.items() if k != "_atoms_obj"}
         serializable_summary.append(serial_item)
 
-    summary_path = os.path.join(final_dir, f"final_unique_ts_summary_{formula}.json")
+    summary_path = os.path.join(final_dir, "final_unique_ts_summary.json")
     summary_data: dict[str, Any] = ts_output_provenance(extra=run_context or {})
     summary_data.update({"formula": formula, "unique_ts": serializable_summary})
     if minima_base_dir is not None:

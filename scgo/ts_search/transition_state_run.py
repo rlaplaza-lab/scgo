@@ -41,8 +41,10 @@ from scgo.utils.helpers import (
     validate_pair_id,
 )
 from scgo.utils.logging import configure_logging, get_logger
+from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import cleanup_torch_cuda, get_calculator_class
+from scgo.utils.run_tracking import generate_run_id, save_run_metadata
 from scgo.utils.timing_report import (
     log_timing_summary,
     sum_neb_seconds_from_ts_results,
@@ -83,7 +85,7 @@ def _run_serial_neb_search(
     pairs: list[tuple[int, int]],
     minima: list[tuple[float, Any]],
     *,
-    result_dir: Path,
+    run_dir: Path,
     calculator_class: Any,
     calculator_kwargs: dict[str, Any],
     surface_config: SurfaceSystemConfig | None,
@@ -125,6 +127,8 @@ def _run_serial_neb_search(
         energy_i, atoms_i = minima[i]
         energy_j, atoms_j = minima[j]
         pair_id = f"{i}_{j}"
+        pair_dir = run_dir / f"pair_{pair_id}"
+        pair_dir.mkdir(parents=True, exist_ok=True)
 
         if verbosity >= 1:
             logger.info("[%d/%d] Finding TS for pair %s", idx, len(pairs), pair_id)
@@ -191,7 +195,7 @@ def _run_serial_neb_search(
                 react_ep,
                 prod_ep,
                 calculator if not use_torchsim else None,
-                output_dir=str(result_dir),
+                output_dir=str(pair_dir),
                 pair_id=pair_id,
                 rng=rng,
                 n_images=neb_n_images,
@@ -253,7 +257,7 @@ def _run_serial_neb_search(
 
         attach_minima_traceability(result, minima, i, j)
         ts_results.append(result)
-        save_neb_result(result, str(result_dir), pair_id)
+        save_neb_result(result, str(pair_dir), pair_id)
 
         if not use_torchsim and calculator is not None:
             del calculator
@@ -372,6 +376,7 @@ def run_transition_state_search(
     composition: list[str],
     system_type: SystemType,
     output_dir: str | Path | None = None,
+    searches_dir: str | Path | None = None,
     params: dict | None = None,
     seed: int | None = None,
     verbosity: int = 1,
@@ -421,8 +426,12 @@ def run_transition_state_search(
             core-only symbols plus ``adsorbates=``; the runner supplies the full
             mobile composition here. For surface types without explicit adsorbate
             blocks, this is the supported cluster on the slab.
-        output_dir: Base directory containing run_*/ subdirectories with
-            previous optimization results. If None, uses ``{formula}_searches``.
+        output_dir: Campaign root directory. TS results are written to
+            ``{formula}_ts_results/`` as a sibling of ``{formula}_searches/``.
+            If None, uses the current working directory.
+        searches_dir: Optional explicit path to the GO searches directory
+            (``{formula}_searches/``). When set, minima are loaded from here
+            instead of ``{output_dir}/{formula}_searches``.
         params: Dictionary of run parameters including:
             - "calculator": Calculator name (e.g., "MACE", "EMT"). Required.
             - "calculator_kwargs": Optional kwargs for calculator initialization.
@@ -519,10 +528,10 @@ def run_transition_state_search(
         else get_cluster_formula(composition)
     )
     formula = get_cluster_formula(composition)
-    ts_output_dir = (
-        str(Path(output_dir))
-        if output_dir is not None
-        else str(Path(f"{path_key_formula}_searches"))
+    campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
+        output_dir,
+        path_key_formula,
+        searches_dir=searches_dir,
     )
 
     if params is None:
@@ -546,7 +555,7 @@ def run_transition_state_search(
         logger.info(f"Loading minima for composition {formula}")
 
     minima_by_formula = load_minima_by_composition(
-        ts_output_dir, composition, prefer_final_unique=True
+        str(minima_dir), composition, prefer_final_unique=True
     )
 
     if neb_steps in ("auto", None):
@@ -583,7 +592,7 @@ def run_transition_state_search(
         )
 
     if not minima_by_formula:
-        logger.error(f"No minima found in {ts_output_dir}")
+        logger.error(f"No minima found in {minima_dir}")
         cleanup_torch_cuda(logger=logger)
         return []
 
@@ -643,8 +652,20 @@ def run_transition_state_search(
     if verbosity >= 1:
         logger.info(f"Selected {len(pairs)} structure pairs for TS search")
 
-    result_dir = Path(ts_output_dir) / f"ts_results_{formula}"
-    result_dir.mkdir(parents=True, exist_ok=True)
+    ts_results_root.mkdir(parents=True, exist_ok=True)
+    run_id = generate_run_id()
+    run_dir = ts_results_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    save_run_metadata(
+        str(run_dir),
+        run_id,
+        metadata={
+            "composition": list(composition),
+            "formula": formula,
+            "params": run_context,
+        },
+    )
 
     t_ts0 = perf_counter()
     parallel_meta: dict[str, float] = {}
@@ -652,7 +673,7 @@ def run_transition_state_search(
         ts_results, parallel_meta = run_parallel_neb_search(
             pairs,
             minima,
-            result_dir=result_dir,
+            run_dir=run_dir,
             surface_config=surface_config,
             rng=rng,
             neb_n_images=neb_n_images,
@@ -684,7 +705,7 @@ def run_transition_state_search(
         ts_results = _run_serial_neb_search(
             pairs,
             minima,
-            result_dir=result_dir,
+            run_dir=run_dir,
             calculator_class=calculator_class,
             calculator_kwargs=calculator_kwargs,
             surface_config=surface_config,
@@ -734,7 +755,7 @@ def run_transition_state_search(
     )
     if write_timing_json:
         write_timing_file(
-            str(result_dir),
+            str(run_dir),
             {
                 "backend": "ts_search",
                 "timings_s": ts_rollup,
@@ -761,43 +782,44 @@ def run_transition_state_search(
 
     save_transition_state_results(
         ts_results,
-        str(result_dir),
+        str(ts_results_root),
         composition,
         run_context=run_context,
+        run_id=run_id,
     )
 
     save_ts_network_metadata(
         ts_results,
-        str(result_dir),
+        str(ts_results_root),
         composition,
         minima_count=len(minima),
         minima=minima,
-        minima_base_dir=ts_output_dir,
+        minima_base_dir=str(minima_dir),
         run_context=run_context,
     )
 
     if dedupe_ts or tag_ts_in_db:
         unique_ts = write_final_unique_ts(
             ts_results,
-            str(result_dir),
+            str(ts_results_root),
             composition,
             energy_tolerance=ts_energy_tolerance,
             minima=minima,
-            minima_base_dir=ts_output_dir,
+            minima_base_dir=str(minima_dir),
             run_context=run_context,
             surface_aware=system_policy.uses_surface,
             n_slab=neb_n_slab if neb_n_slab > 0 else None,
         )
 
         if tag_ts_in_db and unique_ts:
-            tag_unique_ts_in_databases(unique_ts, minima, ts_output_dir)
+            tag_unique_ts_in_databases(unique_ts, minima, str(minima_dir))
 
     if verbosity >= 1:
         num_success = sum(1 for r in ts_results if r.get("status") == "success")
         logger.info(
             f"TS search complete for {formula}: {len(ts_results)} result(s) ({num_success} successful)."
         )
-        logger.info(f"Results written to: {result_dir}")
+        logger.info(f"Results written to: {ts_results_root}")
 
     cleanup_torch_cuda(logger=logger)
 
@@ -896,8 +918,10 @@ def run_transition_state_campaign(
 ) -> dict[str, list[dict[str, Any]]]:
     """Run :func:`run_transition_state_search` for multiple compositions in sequence.
 
-    Minima are read from ``{output_dir}/{formula}_searches`` (or just
-    ``{formula}_searches`` when ``output_dir`` is None). Extra search/NEB
+    ``output_dir`` is the campaign root. Minima are read from
+    ``{output_dir}/{formula}_searches`` (or ``{formula}_searches`` under the
+    current working directory when ``output_dir`` is None). TS results are
+    written to sibling ``{formula}_ts_results/`` directories. Extra search/NEB
     arguments are forwarded via ``ts_kwargs``. Failures for one composition never
     abort the whole campaign — they are logged and that formula gets an empty
     result list.
@@ -910,17 +934,17 @@ def run_transition_state_campaign(
 
     for composition in compositions:
         formula = get_cluster_formula(composition)
-        comp_output_dir = (
-            str(Path(output_dir) / f"{formula}_searches")
+        campaign_root = (
+            str(Path(output_dir).expanduser().resolve())
             if output_dir is not None
-            else f"{formula}_searches"
+            else None
         )
         if verbosity >= 1:
             logger.info("Running TS search campaign for %s", formula)
 
         results = run_transition_state_search(
             composition,
-            output_dir=comp_output_dir,
+            output_dir=campaign_root,
             params=params,
             seed=seed,
             verbosity=verbosity,

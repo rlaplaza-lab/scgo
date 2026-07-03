@@ -46,11 +46,12 @@ def test_emulate_run_pt4_6_orca_lowe_and_ts_search(tmp_path):
 
     for comp in compositions:
         formula = get_cluster_formula(comp)
-        output_dir = tmp_path / f"{formula}_searches"
+        searches_dir = tmp_path / f"{formula}_searches"
+        ts_root = tmp_path / f"{formula}_ts_results"
 
         results = run_transition_state_search(
             comp,
-            output_dir=output_dir,
+            output_dir=tmp_path,
             params={"calculator": "EMT"},
             seed=42,
             verbosity=0,
@@ -64,7 +65,15 @@ def test_emulate_run_pt4_6_orca_lowe_and_ts_search(tmp_path):
         assert isinstance(results, list)
         assert 0 < len(results) <= 10
 
-        final_dir = output_dir / f"ts_results_{formula}" / "final_unique_ts"
+        assert searches_dir.exists()
+        assert ts_root.exists()
+        assert (searches_dir / "results_summary.json").exists()
+        assert (ts_root / "results_summary.json").exists()
+        run_dirs = list(ts_root.glob("run_*"))
+        assert len(run_dirs) == 1
+        assert list(run_dirs[0].glob("pair_*"))
+
+        final_dir = ts_root / "final_unique_ts"
         assert final_dir.exists()
-        summary_file = final_dir / f"final_unique_ts_summary_{formula}.json"
+        summary_file = final_dir / "final_unique_ts_summary.json"
         assert summary_file.exists()

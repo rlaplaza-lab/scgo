@@ -925,10 +925,10 @@ def _run_go_ts_pipeline(
     """Run global optimization then transition-state search; return a compact run summary.
 
     ``go_params`` is the same global-optimization dict as ``run_go`` / ``run_go_ts``'s
-    ``go_params=``. Minima are written under ``output_path / f"{formula}_searches"`` so
-    :func:`~scgo.ts_search.transition_state_run.run_transition_state_search` can
-    load them. ``adsorbate_definition`` (when provided) is forwarded to TS search
-    so endpoint alignment can use explicit core/adsorbate block sizes.
+    ``go_params=``. Minima are written under ``output_path / f"{formula}_searches"``;
+    TS results are written to sibling ``output_path / f"{formula}_ts_results"``.
+    ``adsorbate_definition`` (when provided) is forwarded to TS search so endpoint
+    alignment can use explicit core/adsorbate block sizes.
     For high-level entry points see :mod:`scgo.runner_api`.
     """
     configure_logging(verbosity)
@@ -943,7 +943,8 @@ def _run_go_ts_pipeline(
         else Path(f"{formula}_campaign")
     )
     output_path.mkdir(parents=True, exist_ok=True)
-    ts_base_dir = output_path / f"{formula}_searches"
+    searches_dir = output_path / f"{formula}_searches"
+    ts_results_dir = output_path / f"{formula}_ts_results"
 
     pipeline_t0 = perf_counter()
     merged_ga = go_params
@@ -960,7 +961,7 @@ def _run_go_ts_pipeline(
             params=merged_ga,
             seed=seed,
             verbosity=verbosity,
-            output_dir=str(ts_base_dir),
+            output_dir=str(searches_dir),
             calculator_for_global_optimization=calculator_for_global_optimization,
             params_already_merged=True,
         )
@@ -1002,7 +1003,7 @@ def _run_go_ts_pipeline(
 
     ts_results = run_transition_state_search(
         composition,
-        output_dir=ts_base_dir,
+        output_dir=output_path,
         seed=seed,
         verbosity=verbosity,
         write_timing_json=write_ts_json,
@@ -1032,7 +1033,8 @@ def _run_go_ts_pipeline(
     return {
         "formula": formula,
         "output_dir": output_path,
-        "ts_base_dir": ts_base_dir,
+        "searches_dir": searches_dir,
+        "ts_results_dir": ts_results_dir,
         "minima_by_formula": minima_by_formula,
         "ts_results": ts_results,
         "ts_success_count": ts_success,
@@ -1397,6 +1399,7 @@ def run_ts_search(
     *,
     ts_params: dict[str, Any] | None = None,
     output_dir: str | Path | None = None,
+    searches_dir: str | Path | None = None,
     seed: int | None = None,
     verbosity: int = 1,
     surface_config: SurfaceSystemConfig | None = None,
@@ -1404,6 +1407,14 @@ def run_ts_search(
     adsorbates: AdsorbatesInput | None = None,
     log_summary: bool = True,
 ) -> list[dict[str, Any]]:
+    """Run transition-state search for one composition.
+
+    ``output_dir`` is the campaign root. Minima are loaded from
+    ``{formula}_searches/`` (or from ``searches_dir`` when provided). TS
+    artifacts are written to sibling ``{formula}_ts_results/`` with
+    ``run_*/pair_*/`` subdirectories. If ``output_dir`` points at an existing
+    ``*_searches`` directory, its parent is treated as the campaign root.
+    """
     st, _, ads_def, _, comp = _prepare_run_context(
         composition,
         system_type=system_type,
@@ -1436,6 +1447,7 @@ def run_ts_search(
     results = _ts_search(
         comp,
         output_dir=out_path,
+        searches_dir=_resolved_path(searches_dir),
         seed=eff_seed,
         verbosity=verbosity,
         adsorbate_definition=ads_def,

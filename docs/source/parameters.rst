@@ -59,6 +59,14 @@ GO Parameters
 
 Passed as ``params`` or ``go_params`` to ``run_go``, ``run_go_campaign``, ``run_go_ts``, etc.
 
+**Algorithm selection**
+
+Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically:
+
+- ``gas_cluster`` only, ≤2 mobile atoms → ``simple`` (``simple_go.db``)
+- 3 atoms → Basin Hopping (``bh_go.db``)
+- ≥4 atoms, or any surface/adsorbate type → Genetic Algorithm (``ga_go.db``)
+
 **Top-Level:**
 
 .. list-table::

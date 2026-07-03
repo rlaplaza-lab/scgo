@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import time
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -274,6 +276,25 @@ def _load_default_fairchem_model(
     )
 
 
+def _steps_taken_from_optimize_state(state: Any) -> int | None:
+    """Best-effort extraction of optimizer steps from a TorchSim state object."""
+    for attr in ("n_steps", "step", "steps"):
+        val = getattr(state, attr, None)
+        if val is None:
+            continue
+        try:
+            if hasattr(val, "detach"):
+                val = val.detach().cpu()
+            if hasattr(val, "max"):
+                return int(val.max().item())
+            if hasattr(val, "__len__") and len(val) > 0:
+                return int(max(int(v) for v in val))
+            return int(val)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 @dataclass(eq=False)
 class TorchSimBatchRelaxer:
     """Batched relaxer that offloads geometry optimization to :func:`torch_sim.optimize`.
@@ -417,6 +438,7 @@ class TorchSimBatchRelaxer:
 
         # Store device string for cache key (e.g., "cuda" or "cpu")
         self._device_str = str(self.device).split(":")[0]
+        self.last_batch_relax_steps: list[int] = []
 
         self._runner_kwargs = dict(self.runner_kwargs or {})
 
@@ -634,6 +656,18 @@ class TorchSimBatchRelaxer:
         if self.max_memory_scaler is None:
             self._persist_autobatcher_scaler(max_atoms_in_batch)
 
+        batch_steps = _steps_taken_from_optimize_state(state)
+        self.last_batch_relax_steps = (
+            [batch_steps] * len(atoms_list) if batch_steps is not None else []
+        )
+        if batch_steps is not None and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "TorchSim relax_batch: %d structures, steps_taken=%d (max_steps=%s)",
+                len(atoms_list),
+                batch_steps,
+                runner_kwargs.get("max_steps", self.max_steps),
+            )
+
         energies_tensor = getattr(state, "energy", None)
         if energies_tensor is None:
             raise RuntimeError("TorchSim optimize did not return energy information")
@@ -687,6 +721,8 @@ class TorchSimBatchRelaxer:
                 potential_energy=energy,
                 raw_score=-energy,
             )
+            if batch_steps is not None:
+                update_metadata(relaxed, relaxation_steps=batch_steps)
             results.append((energy, relaxed))
         return results
 

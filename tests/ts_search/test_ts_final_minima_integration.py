@@ -102,7 +102,7 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
     results = run_transition_state_search(
         ["Pt"],
         system_type="gas_cluster",
-        output_dir=str(formula_dir),
+        output_dir=str(base),
         params=params,
         verbosity=0,
         max_pairs=None,

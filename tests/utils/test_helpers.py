@@ -13,6 +13,7 @@ from scgo.utils.helpers import (
     auto_niter_local_relaxation,
     auto_niter_ts,
     auto_population_size,
+    canonicalize_relaxed_for_storage,
     canonicalize_storage_frame,
     compute_final_id,
     ensure_final_id,
@@ -443,6 +444,43 @@ class TestCanonicalizeStorageFrame:
         canonicalize_storage_frame(atoms, center=False)
         after = atoms.get_center_of_mass()
         np.testing.assert_allclose(after, before, atol=1e-8)
+
+
+class TestCanonicalizeRelaxedForStorage:
+    """Post-relaxation frame used by GA persistence and ASE local relaxation."""
+
+    def test_gas_cluster_bbox_centered_in_cell(self):
+        atoms = Atoms(
+            "Pt3",
+            positions=[[7.0, 7.2, 8.0], [8.5, 7.5, 7.3], [7.8, 8.1, 7.9]],
+            cell=[15.58, 15.58, 15.58],
+            pbc=False,
+        )
+        canonicalize_relaxed_for_storage(atoms)
+        bbox_center = 0.5 * (
+            atoms.get_positions().min(axis=0) + atoms.get_positions().max(axis=0)
+        )
+        np.testing.assert_allclose(
+            bbox_center,
+            np.diag(atoms.cell) / 2.0,
+            atol=1e-8,
+        )
+
+    def test_slab_adsorbate_uses_primary_cell_shift_not_centering(self):
+        cell = [[10.0, 0, 0], [0, 10.0, 0], [0, 0, 15.0]]
+        atoms = Atoms(
+            ["Pt", "Pt"],
+            positions=[[1.0, 5.0, 2.0], [12.0, 5.0, 3.0]],
+            cell=cell,
+            pbc=[True, True, False],
+        )
+        slab_z_before = atoms.positions[0, 2]
+        canonicalize_relaxed_for_storage(atoms, surface_mode=True, n_slab=1)
+        scaled = atoms.get_scaled_positions(wrap=False)[1:]
+        ads_com = np.average(scaled, axis=0, weights=atoms.get_masses()[1:])
+        assert 0 <= ads_com[0] < 1
+        assert 0 <= ads_com[1] < 1
+        assert atoms.positions[0, 2] == pytest.approx(slab_z_before)
 
 
 class TestCanonicalizeSlabAdsorbateFrame:

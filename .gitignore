@@ -24,6 +24,7 @@ examples/logs/
 
 # Search result directories
 *_searches/
+*_ts_results/
 orca_calcs/
 out_dir/
 results_summary.json

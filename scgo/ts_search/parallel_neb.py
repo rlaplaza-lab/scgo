@@ -244,7 +244,7 @@ def run_parallel_neb_search(
     pairs: list[tuple[int, int]],
     minima: list[tuple[float, Atoms]],
     *,
-    result_dir: Path,
+    run_dir: Path,
     surface_config: SurfaceSystemConfig | None,
     rng: np.random.Generator | None,
     neb_n_images: int,
@@ -398,7 +398,10 @@ def run_parallel_neb_search(
 
         i, j = pairs[idx]
         attach_minima_traceability(result, minima, i, j)
-        save_neb_result(result, str(result_dir), result["pair_id"])
+        pair_id = str(result["pair_id"])
+        pair_dir = run_dir / f"pair_{pair_id}"
+        pair_dir.mkdir(parents=True, exist_ok=True)
+        save_neb_result(result, str(pair_dir), pair_id)
         result["timings_s"] = {
             "total_wall_s": wall_each,
             "neb_optimization_s": neb_each,

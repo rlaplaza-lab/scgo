@@ -83,12 +83,20 @@ from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     ensure_fitness_strategy_resolved,
 )
-from scgo.utils.helpers import extract_minima_from_database
+from scgo.utils.helpers import (
+    canonicalize_relaxed_for_storage,
+    extract_minima_from_database,
+)
 from scgo.utils.logging import get_logger, should_show_progress
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.rng_helpers import ensure_rng_or_create, offspring_rng_triple
-from scgo.utils.timing_report import log_timing_summary, write_timing_file
+from scgo.utils.timing_report import (
+    cpu_non_relax_seconds_from_timings,
+    ga_relax_seconds_from_timings,
+    log_timing_summary,
+    write_timing_file,
+)
 from scgo.utils.torchsim_policy import is_ml_calculator
 from scgo.utils.validation import validate_composition
 
@@ -352,6 +360,29 @@ def _torchsim_prepare_relaxed_copy(
     return c
 
 
+def _record_relax_batch_steps(
+    relaxer: TorchSimBatchRelaxer,
+    profiling: dict[str, float] | None,
+    counters: dict[str, int] | None,
+    n_structures: int,
+) -> None:
+    steps_list = getattr(relaxer, "last_batch_relax_steps", None) or []
+    if not steps_list or profiling is None:
+        return
+    step_val = steps_list[0]
+    profiling["relax_steps_sum"] = profiling.get("relax_steps_sum", 0.0) + float(
+        step_val * n_structures
+    )
+    profiling["relax_steps_max"] = max(
+        float(profiling.get("relax_steps_max", 0.0)), float(step_val)
+    )
+    if counters is not None:
+        counters["relax_batches"] = counters.get("relax_batches", 0) + 1
+        counters["relax_structures"] = counters.get("relax_structures", 0) + int(
+            n_structures
+        )
+
+
 def _relax_unrelaxed_candidates(
     da: DataConnection,
     relaxer: TorchSimBatchRelaxer,
@@ -365,6 +396,7 @@ def _relax_unrelaxed_candidates(
     n_slab: int = 0,
     system_type: SystemType = "gas_cluster",
     profiling: dict[str, float] | None = None,
+    counters: dict[str, int] | None = None,
     composition: list[str] | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
@@ -427,6 +459,7 @@ def _relax_unrelaxed_candidates(
         profiling["relax_batch_s"] = profiling.get("relax_batch_s", 0.0) + (
             perf_counter() - t0
         )
+    _record_relax_batch_steps(relaxer, profiling, counters, len(batch))
     if len(relaxed_results) != len(batch):
         raise RuntimeError("TorchSim relaxer returned mismatched batch size")
 
@@ -454,6 +487,11 @@ def _relax_unrelaxed_candidates(
                         adsorbate_definition,
                         system_type,
                     )
+                canonicalize_relaxed_for_storage(
+                    original,
+                    surface_mode=surface_mode,
+                    n_slab=n_slab,
+                )
                 validation_error: str | None = None
                 try:
                     validate_structure_for_system_type(
@@ -595,6 +633,8 @@ def ga_go(
     system_type: SystemType = "gas_cluster",
     write_timing_json: bool = False,
     detailed_timing: bool = False,
+    timing_output_dir: str | None = None,
+    timing_collector: list[dict[str, Any]] | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
@@ -637,10 +677,13 @@ def ga_go(
         diversity_max_references: Maximum number of reference structures to load (for performance).
         diversity_update_interval: Number of generations between reference updates (for diversity strategy).
         surface_config: Optional slab + adsorbate configuration for surface GA runs.
-        write_timing_json: If True, write ``timing.json`` under ``output_dir``.
+        write_timing_json: If True, write ``timing.json`` (see ``timing_output_dir``).
             Set in ``optimizer_params['ga']`` inside ``go_params``/``params``.
         detailed_timing: If True, include ``per_generation`` rows in ``timing.json``.
             Requires ``write_timing_json=True``.
+        timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``).
+            ``run_trials`` sets this to the run directory alongside ``metadata.json``.
+        timing_collector: Optional list appended with the timing payload after the run.
     """
     logger = get_logger(__name__)
     profile_t0 = perf_counter()
@@ -811,6 +854,7 @@ def ga_go(
     comp_mic = bool(surface_config.comparator_use_mic) if surface_mode else False
     comp = create_structure_comparator(n_to_optimize, energy_tolerance, mic=comp_mic)
 
+    t0_batch_build = perf_counter()
     if surface_mode:
         assert slab_ref is not None
         start_generator = SurfaceClusterStartGenerator(
@@ -842,6 +886,9 @@ def ga_go(
             adsorbate_fragment_template=adsorbate_fragment_template,
             cluster_adsorbate_config=cluster_adsorbate_config,
         )
+    profile_timings["initial_population_batch_build_s"] = (
+        perf_counter() - t0_batch_build
+    )
     t0 = perf_counter()
     initial_population = [
         start_generator.get_new_candidate() for _ in range(population_size)
@@ -904,47 +951,48 @@ def ga_go(
             cand.info["confid"] = gaid
 
         t0 = perf_counter()
-        for cand in initial_population:
-            if adsorbate_definition is None and not surface_mode:
-                cand = reorder_cluster_to_composition(cand, list(composition))
-            maybe_apply_mobile_core_ads_tags(
-                cand,
-                n_slab,
-                composition,
-                adsorbate_definition,
-                system_type,
-            )
-            if freeze_adsorbate_internal_geometry:
-                enforce_frozen_adsorbate_geometry(
+        with da.c:
+            for cand in initial_population:
+                if adsorbate_definition is None and not surface_mode:
+                    cand = reorder_cluster_to_composition(cand, list(composition))
+                maybe_apply_mobile_core_ads_tags(
                     cand,
-                    n_slab=n_slab,
-                    adsorbate_definition=adsorbate_definition,
-                    fragment_templates=adsorbate_fragment_template,
+                    n_slab,
+                    composition,
+                    adsorbate_definition,
+                    system_type,
                 )
-            try:
-                validate_structure_for_system_type(
-                    cand,
-                    system_type=system_type,
-                    surface_config=surface_config,
-                    n_slab=n_slab,
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                if freeze_adsorbate_internal_geometry:
+                    enforce_frozen_adsorbate_geometry(
+                        cand,
+                        n_slab=n_slab,
+                        adsorbate_definition=adsorbate_definition,
+                        fragment_templates=adsorbate_fragment_template,
+                    )
+                try:
+                    validate_structure_for_system_type(
+                        cand,
+                        system_type=system_type,
+                        surface_config=surface_config,
+                        n_slab=n_slab,
+                        adsorbate_definition=adsorbate_definition,
+                        connectivity_factor=connectivity_factor,
+                        allow_cluster_fragmentation=allow_cluster_fragmentation,
+                        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    )
+                except ValueError as exc:
+                    initial_discarded_count += 1
+                    logger.warning(
+                        "Discarding disconnected initial candidate before DB insert: %s",
+                        exc,
+                    )
+                    continue
+                database_retry(
+                    lambda _cand=cand: _insert_unrelaxed(_cand),
+                    config=RetryConfig(max_retries=5),
+                    operation_name="insert_unrelaxed_candidate",
                 )
-            except ValueError as exc:
-                initial_discarded_count += 1
-                logger.warning(
-                    "Discarding disconnected initial candidate before DB insert: %s",
-                    exc,
-                )
-                continue
-            database_retry(
-                lambda _cand=cand: _insert_unrelaxed(_cand),
-                config=RetryConfig(max_retries=5),
-                operation_name="insert_unrelaxed_candidate",
-            )
         profile_timings["initial_unrelaxed_insert_s"] = perf_counter() - t0
 
         # Helper to write a relaxed batch into the database under a single connection
@@ -963,6 +1011,11 @@ def ga_go(
                         composition,
                         adsorbate_definition,
                         system_type,
+                    )
+                    canonicalize_relaxed_for_storage(
+                        original,
+                        surface_mode=surface_mode,
+                        n_slab=n_slab,
                     )
                     validation_error: str | None = None
                     try:
@@ -1048,6 +1101,9 @@ def ga_go(
                 ]
             )
             t0_relax += perf_counter() - t_start
+            _record_relax_batch_steps(
+                relaxer, profile_timings, profile_counters, len(batch)
+            )
             if len(relaxed_results) != len(batch):
                 raise RuntimeError("TorchSim relaxer returned mismatched batch size")
 
@@ -1306,6 +1362,7 @@ def ga_go(
                             worker_failure_types_gen,
                         )
 
+                pending_inserts: list[tuple[Atoms, str]] = []
                 for idx in range(len(jobs)):
                     if created >= n_offspring:
                         break
@@ -1322,16 +1379,20 @@ def ga_go(
                             retry_failure_reasons_gen.get(reason, 0) + 1
                         )
                         continue
+                    pending_inserts.append((child, result["desc"]))
+                if pending_inserts:
                     t0 = perf_counter()
-                    database_retry(
-                        lambda _a3=child, _desc=result["desc"]: (
-                            da.add_unrelaxed_candidate(_a3, description=_desc)
-                        ),
-                        config=RetryConfig(max_retries=5),
-                        operation_name="add_unrelaxed_offspring",
-                    )
+                    with da.c:
+                        for child, desc in pending_inserts:
+                            database_retry(
+                                lambda _a3=child, _desc=desc: (
+                                    da.add_unrelaxed_candidate(_a3, description=_desc)
+                                ),
+                                config=RetryConfig(max_retries=5),
+                                operation_name="add_unrelaxed_offspring",
+                            )
+                            created += 1
                     t_db_unrelaxed_gen += perf_counter() - t0
-                    created += 1
             generation_acceptance = created / max(attempts, 1)
             recent_acceptance_ratios.append(generation_acceptance)
             profile_counters["offspring_attempts_total"] += attempts
@@ -1396,6 +1457,7 @@ def ga_go(
                 n_slab=n_slab,
                 system_type=system_type,
                 profiling=profile_timings,
+                counters=profile_counters,
                 composition=composition,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
@@ -1506,6 +1568,7 @@ def ga_go(
             n_slab=n_slab,
             system_type=system_type,
             profiling=profile_timings,
+            counters=profile_counters,
             composition=composition,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
@@ -1542,21 +1605,27 @@ def ga_go(
             logger=logger,
         )
         profile_timings["total_wall_s"] = perf_counter() - profile_t0
-        profile_timings["cpu_non_relax_s"] = max(
-            0.0,
-            profile_timings["total_wall_s"] - profile_timings.get("relax_batch_s", 0.0),
+        relax_total = ga_relax_seconds_from_timings(profile_timings)
+        profile_timings["relax_total_s"] = relax_total
+        profile_timings["cpu_non_relax_s"] = cpu_non_relax_seconds_from_timings(
+            profile_timings
         )
         log_timing_summary(logger, "torchsim_ga", profile_timings, verbosity=verbosity)
+        out_payload: dict[str, Any] = {
+            "backend": "torchsim_ga",
+            "timings_s": profile_timings,
+            "counters": profile_counters,
+            "retry_failures": profile_retry_failures,
+        }
+        if per_generation is not None:
+            out_payload["per_generation"] = per_generation
+        if timing_collector is not None:
+            timing_collector.append(out_payload)
         if write_timing_json:
-            out_payload: dict[str, Any] = {
-                "backend": "torchsim_ga",
-                "timings_s": profile_timings,
-                "counters": profile_counters,
-                "retry_failures": profile_retry_failures,
-            }
-            if per_generation is not None:
-                out_payload["per_generation"] = per_generation
-            write_timing_file(output_dir, out_payload)
+            if timing_output_dir is not None:
+                write_timing_file(timing_output_dir, out_payload)
+            elif timing_collector is None:
+                write_timing_file(output_dir, out_payload)
 
         return all_minima
 

@@ -43,6 +43,7 @@ def _build_go_params() -> dict:
 def _build_ts_params() -> dict:
     ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
     ts_params["max_pairs"] = MAX_PAIRS
+    ts_params["write_timing_json"] = True
     return ts_params
 
 

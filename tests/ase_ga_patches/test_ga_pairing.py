@@ -114,8 +114,29 @@ def test_cut_and_splice_constructor_rejects_legacy_randomstate():
         )
 
 
+def test_cut_and_splice_gas_cluster_uses_lower_pairing_attempt_cap():
+    pairing = CutAndSplicePairing(
+        slab=Atoms(),
+        n_top=5,
+        blmin={},
+        system_type="gas_cluster",
+        rng=np.random.default_rng(0),
+    )
+    assert pairing.max_pairing_attempts == 150
+
+
+def test_cut_and_splice_surface_keeps_high_pairing_attempt_cap():
+    pairing = CutAndSplicePairing(
+        slab=Atoms("C", positions=[[0, 0, 0]], cell=[10, 10, 10], pbc=True),
+        n_top=5,
+        blmin={},
+        system_type="surface_cluster",
+        rng=np.random.default_rng(0),
+    )
+    assert pairing.max_pairing_attempts == 1000
+
+
 def test_cut_and_splice_target_tags_keeps_non_target_groups():
-    # Core atoms (tag 0) plus one adsorbate atom (tag 1).
     p1 = Atoms(
         symbols=["Co", "Co", "Co", "O"],
         positions=[

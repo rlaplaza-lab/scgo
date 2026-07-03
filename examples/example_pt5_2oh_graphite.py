@@ -69,6 +69,7 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
     ts_params["neb_n_images"] = 7
     ts_params["neb_steps"] = 800
     ts_params["connectivity_factor"] = 1.8
+    ts_params["write_timing_json"] = True
     return ts_params
 
 

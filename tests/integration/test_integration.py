@@ -547,6 +547,33 @@ def test_output_directory_creation(tmp_path, rng):
         assert xyz_file.name.endswith(".xyz")
 
 
+@pytest.mark.integration
+def test_write_timing_json_at_run_level(tmp_path, rng):
+    """Timing JSON is written alongside metadata.json, not under trial_1/."""
+    output_dir = str(tmp_path / "timing_output")
+    run_trials(
+        composition=["Pt", "Pt"],
+        global_optimizer="bh",
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 1,
+            "write_timing_json": True,
+        },
+        n_trials=1,
+        output_dir=output_dir,
+        calculator_for_global_optimization=EMT(),
+        validate_with_hessian=False,
+        rng=rng,
+    )
+    from scgo.utils.run_tracking import get_run_directories
+
+    run_dir = get_run_directories(output_dir)[0]
+    run_timing = os.path.join(run_dir, "timing.json")
+    trial_timing = os.path.join(run_dir, "trial_1", "timing.json")
+    assert os.path.isfile(run_timing)
+    assert not os.path.isfile(trial_timing)
+
+
 @pytest.mark.slow
 @pytest.mark.integration
 def test_bh_high_energy_strategy(tmp_path, rng):

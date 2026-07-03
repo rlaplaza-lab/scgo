@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scgo"
 dynamic = ["version"]
-description = "A modern Python package for global optimization of atomic clusters using ASE with Basin Hopping and Genetic Algorithms. Features clean code, comprehensive testing, and support for multiple energy calculators."
+description = "Global optimization of atomic clusters using ASE with Basin Hopping and Genetic Algorithms, MLIP calculators (MACE, UMA), surface/adsorbate workflows, and NEB transition-state search."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

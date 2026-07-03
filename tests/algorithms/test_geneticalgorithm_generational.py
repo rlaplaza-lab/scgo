@@ -344,12 +344,8 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
         bbox_center = 0.5 * (
             row.get_positions().min(axis=0) + row.get_positions().max(axis=0)
         )
-        cell_half = np.diag(row.get_cell()) / 2.0
-        # MockRelaxer does not reproduce ASE centering exactly; allow a small fraction
-        # of the cell half-width (tighter than the previous 0.75 Å blanket tolerance).
-        cell_tol = max(0.5, 0.06 * float(np.mean(cell_half)))
         np.testing.assert_allclose(
             bbox_center,
-            cell_half,
-            atol=cell_tol,
+            np.diag(row.get_cell()) / 2.0,
+            atol=1e-6,
         )

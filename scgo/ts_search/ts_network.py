@@ -323,7 +323,7 @@ def save_ts_network_metadata(
     minima_base_dir: str | None = None,
     run_context: dict[str, Any] | None = None,
 ) -> str:
-    """Write ``ts_network_metadata_<formula>.json`` (edges, barriers, optional provenance)."""
+    """Write ``ts_network_metadata.json`` (edges, barriers, optional provenance)."""
     os.makedirs(output_dir, exist_ok=True)
 
     formula = get_cluster_formula(composition)
@@ -416,7 +416,7 @@ def save_ts_network_metadata(
         network["minima_base_dir"] = minima_base_dir
 
     # Save network metadata
-    network_path = os.path.join(output_dir, f"ts_network_metadata_{formula}.json")
+    network_path = os.path.join(output_dir, "ts_network_metadata.json")
     with open(network_path, "w") as f:
         json.dump(network, f, indent=2)
 
@@ -467,7 +467,7 @@ def build_connectivity_graph(
 def build_connectivity_graph_from_final_unique_ts(
     final_unique_ts_summary_file: str,
 ) -> dict[str, Any]:
-    """Build connectivity graph from ``final_unique_ts_summary_*.json``.
+    """Build connectivity graph from ``final_unique_ts_summary.json``.
 
     Requires schema entries with ``connected_edges``.
     """

@@ -29,9 +29,10 @@ from tests.test_utils import create_preparedb, mark_test_minima_as_final
 @pytest.fixture
 def mock_database_dir():
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create a run directory
-        run_dir = Path(tmpdir) / "run_20260101_120000"
-        run_dir.mkdir()
+        # Create a searches directory with a run subdirectory
+        searches_dir = Path(tmpdir) / "Cu2_searches"
+        run_dir = searches_dir / "run_20260101_120000"
+        run_dir.mkdir(parents=True)
 
         # Create database with Cu2 structures (EMT supports Cu)
         # Use ASE-GA compatible format
@@ -91,7 +92,8 @@ def mock_database_dir():
 
 
 def test_load_minima_by_composition(mock_database_dir):
-    minima = load_minima_by_composition(mock_database_dir, composition=["Cu", "Cu"])
+    searches_dir = Path(mock_database_dir) / "Cu2_searches"
+    minima = load_minima_by_composition(str(searches_dir), composition=["Cu", "Cu"])
 
     assert "Cu2" in minima
     assert len(minima["Cu2"]) == 3
@@ -140,7 +142,7 @@ def test_save_transition_state_results():
         save_transition_state_results(ts_results, tmpdir, composition=["Cu", "Cu"])
 
         # Check summary file created
-        summary_path = Path(tmpdir) / "ts_search_summary_Cu2.json"
+        summary_path = Path(tmpdir) / "results_summary.json"
         assert summary_path.exists()
 
         # Check content
@@ -192,11 +194,17 @@ def test_run_transition_state_search_full(mock_database_dir):
         assert "neb_converged" in result
 
     # Check output files created
-    result_dir = Path(mock_database_dir) / "ts_results_Cu2"
+    result_dir = Path(mock_database_dir) / "Cu2_ts_results"
     assert result_dir.exists()
     # Should have summary file
-    summary_file = result_dir / "ts_search_summary_Cu2.json"
+    summary_file = result_dir / "results_summary.json"
     assert summary_file.exists()
+    assert (result_dir / "ts_network_metadata.json").exists()
+    assert (result_dir / "final_unique_ts" / "final_unique_ts_summary.json").exists()
+    run_dirs = list(result_dir.glob("run_*"))
+    assert len(run_dirs) == 1
+    pair_dirs = list(run_dirs[0].glob("pair_*"))
+    assert len(pair_dirs) >= 1
 
 
 @pytest.mark.slow
@@ -568,6 +576,8 @@ def test_run_transition_state_campaign_detects_searches_dir():
             ] = -a.get_potential_energy()
             da.add_relaxed_step(a)
 
+        mark_test_minima_as_final(db_path)
+
         params = {"calculator": "EMT"}
         ts_kwargs = {
             "max_pairs": 1,
@@ -587,6 +597,13 @@ def test_run_transition_state_campaign_detects_searches_dir():
 
         assert "Cu2" in results
         assert isinstance(results["Cu2"], list)
+
+        ts_results_dir = Path(tmpdir) / "Cu2_ts_results"
+        assert ts_results_dir.exists()
+        assert (ts_results_dir / "results_summary.json").exists()
+        run_dirs = list(ts_results_dir.glob("run_*"))
+        assert len(run_dirs) == 1
+        assert list(run_dirs[0].glob("pair_*"))
 
 
 def test_run_transition_state_search_linear_interpolation(mock_database_dir):
@@ -684,7 +701,7 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
 
     # Helper to create a run dir with a DB named <db_name>
     def _make_db(db_name: str):
-        run_dir = tmp_path / "run_20260101_120000" / "trial_1"
+        run_dir = tmp_path / "Pt2_searches" / "run_20260101_120000" / "trial_1"
         run_dir.mkdir(parents=True, exist_ok=True)
         db_path = run_dir / db_name
 
@@ -928,7 +945,7 @@ def test_run_transition_state_search_auto_tags_mixed_db_formats(tmp_path):
 
     # Helper to create a run dir containing a DB with two relaxed minima
     def _make_db(db_name: str):
-        run_dir = tmp_path / "run_20260102_120000" / "trial_1"
+        run_dir = tmp_path / "Pt2_searches" / "run_20260102_120000" / "trial_1"
         run_dir.mkdir(parents=True, exist_ok=True)
         db_path = run_dir / db_name
 
