@@ -515,15 +515,13 @@ depends on the runner — see *Output directories* above):
   - ``metadata.json``: Resolved optimizer settings and trial metadata
   - ``timing.json``: Optional timing sidecar (``write_timing_json=True``)
   - ``trial_<N>/``: Trial artifacts
-  - ``ga_go.db``, ``bh_go.db``, or ``simple_go.db``: Candidate database;
-    algorithm is chosen automatically (see :doc:`/parameters`)
+  - ``ga_go.db``, ``bh_go.db``, or ``simple_go.db``: Candidate database (algorithm chosen automatically; see :doc:`/parameters`)
 - ``results_summary.json``: Summary of all minima found
 - ``final_unique_minima/``: XYZ files of the best structures
 
 Transition state runs write a sibling ``{formula}_ts_results/`` tree:
 
-- ``run_<timestamp>_<microseconds>/pair_<i>_<j>/``: Per-pair NEB artifacts
-  (TS/endpoints, trajectory, ``neb_{pair_id}_metadata.json``)
+- ``run_<timestamp>_<microseconds>/pair_<i>_<j>/``: Per-pair NEB artifacts (TS/endpoints, trajectory, ``neb_{pair_id}_metadata.json``)
 - ``results_summary.json``: Summary of all NEB runs
 - ``ts_network_metadata.json``: Connectivity graph between minima
 - ``final_unique_ts/``: Deduplicated TS geometries
