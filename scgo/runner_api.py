@@ -925,8 +925,9 @@ def _run_go_ts_pipeline(
     """Run global optimization then transition-state search; return a compact run summary.
 
     ``go_params`` is the same global-optimization dict as ``run_go`` / ``run_go_ts``'s
-    ``go_params=``. Minima are written under ``output_path / f"{formula}_searches"``;
-    TS results are written to sibling ``output_path / f"{formula}_ts_results"``.
+    ``go_params=``. Minima and TS artifacts are sibling ``{formula}_searches/`` and
+    ``{formula}_ts_results/`` directories under ``output_path`` (see
+    :mod:`scgo.utils.output_paths`).
     ``adsorbate_definition`` (when provided) is forwarded to TS search so endpoint
     alignment can use explicit core/adsorbate block sizes.
     For high-level entry points see :mod:`scgo.runner_api`.

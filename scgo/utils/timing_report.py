@@ -118,20 +118,9 @@ def resolve_run_timing_path(run_dir: str) -> str:
     return os.path.join(run_dir, TIMING_JSON_FILENAME)
 
 
-def legacy_trial_timing_path(run_dir: str, trial_id: int = 1) -> str:
-    return os.path.join(run_dir, f"trial_{trial_id}", TIMING_JSON_FILENAME)
-
-
-def load_run_timing_payload(
-    run_dir: str,
-    *,
-    trial_id: int = 1,
-) -> dict[str, Any] | None:
-    """Load timing from run dir, falling back to legacy ``trial_*/timing.json``."""
-    payload = read_timing_file(resolve_run_timing_path(run_dir))
-    if payload is not None:
-        return payload
-    return read_timing_file(legacy_trial_timing_path(run_dir, trial_id))
+def load_run_timing_payload(run_dir: str) -> dict[str, Any] | None:
+    """Load ``timing.json`` from a run directory."""
+    return read_timing_file(resolve_run_timing_path(run_dir))
 
 
 def flatten_run_timing_payload(payload: dict[str, Any]) -> dict[str, Any]:

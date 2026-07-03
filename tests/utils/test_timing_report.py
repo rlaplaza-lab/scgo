@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from scgo.utils.timing_report import (
@@ -41,20 +40,16 @@ def test_multi_trial_timing_document(tmp_path: Path):
     assert single == payloads[0]
 
 
-def test_load_run_timing_fallback(tmp_path: Path):
+def test_load_run_timing_payload(tmp_path: Path):
     run_dir = tmp_path / "run_001"
-    trial_dir = run_dir / "trial_1"
-    trial_dir.mkdir(parents=True)
-    legacy = {"backend": "torchsim_ga", "timings_s": {"total_wall_s": 3.0}}
-    (trial_dir / "timing.json").write_text(json.dumps(legacy), encoding="utf-8")
+    run_dir.mkdir(parents=True)
 
-    loaded = load_run_timing_payload(str(run_dir))
-    assert loaded is not None
-    assert flatten_run_timing_payload(loaded)["timings_s"]["total_wall_s"] == 3.0
+    assert load_run_timing_payload(str(run_dir)) is None
 
     write_run_timing_file(
         str(run_dir), {"backend": "x", "timings_s": {"total_wall_s": 9.0}}
     )
-    loaded_run = load_run_timing_payload(str(run_dir))
-    assert loaded_run is not None
-    assert loaded_run["timings_s"]["total_wall_s"] == 9.0
+    loaded = load_run_timing_payload(str(run_dir))
+    assert loaded is not None
+    assert loaded["timings_s"]["total_wall_s"] == 9.0
+    assert flatten_run_timing_payload(loaded)["timings_s"]["total_wall_s"] == 9.0

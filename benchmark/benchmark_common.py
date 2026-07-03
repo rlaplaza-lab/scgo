@@ -26,6 +26,7 @@ from scgo.utils.comparators import (
     PureInteratomicDistanceComparator as InteratomicDistanceComparator,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.output_paths import formula_searches_dir
 from scgo.utils.timing_report import flatten_run_timing_payload, load_run_timing_payload
 
 logger = get_logger(__name__)
@@ -180,10 +181,10 @@ def load_latest_ga_profile(
     output_dir: str | Path,
     cluster_formula: str,
 ) -> dict | None:
-    """Load ``timing.json`` from the latest run (run dir, then legacy trial path)."""
+    """Load ``timing.json`` from the latest run directory."""
     root = Path(output_dir)
     run_dirs = sorted(
-        (root / f"{cluster_formula}_searches").glob("run_*"),
+        formula_searches_dir(root, cluster_formula).glob("run_*"),
         key=lambda p: p.name,
     )
     if not run_dirs:

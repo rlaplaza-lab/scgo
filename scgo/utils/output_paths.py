@@ -17,8 +17,6 @@ def formula_ts_results_dir(root: str | Path, formula: str) -> Path:
 
 def resolve_campaign_root(
     output_dir: str | Path | None,
-    *,
-    formula: str | None = None,
 ) -> Path:
     """Resolve campaign root from ``output_dir``.
 
@@ -26,7 +24,6 @@ def resolve_campaign_root(
     When ``output_dir`` ends with ``_searches``, use its parent as the
     campaign root. Otherwise treat ``output_dir`` as the campaign root.
     """
-    _ = formula  # reserved for future path disambiguation
     if output_dir is None:
         return Path.cwd().resolve()
     candidate = Path(output_dir).expanduser().resolve()
