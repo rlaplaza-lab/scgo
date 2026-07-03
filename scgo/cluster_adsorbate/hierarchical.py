@@ -14,6 +14,7 @@ from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.initialization import create_initial_cluster
+from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 
 if TYPE_CHECKING:
     from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
@@ -23,28 +24,6 @@ def _stamp_site_metadata(combined: Atoms, site_types: list[str]) -> None:
     if site_types:
         combined.info["adsorbate_site_types_json"] = json.dumps(site_types)
         combined.info["adsorbate_site_type"] = site_types[-1]
-
-
-def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -> Atoms:
-    """Reorder generated cluster atoms to match requested symbol sequence."""
-    desired = list(composition)
-    current = cluster.get_chemical_symbols()
-    if current == desired:
-        return cluster
-
-    by_symbol: dict[str, list[int]] = {}
-    for idx, sym in enumerate(current):
-        by_symbol.setdefault(sym, []).append(idx)
-
-    selection: list[int] = []
-    for sym in desired:
-        matching = by_symbol.get(sym)
-        if not matching:
-            raise ValueError(
-                "Generated cluster symbols do not match requested composition."
-            )
-        selection.append(matching.pop(0))
-    return cluster[selection].copy()
 
 
 def build_adsorbate_only_cluster(

@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 
 import numpy as np
 from ase import Atom, Atoms
-from ase.data import covalent_radii
+from ase.data import atomic_masses, atomic_numbers, covalent_radii
 from scipy.spatial import KDTree
 
 from scgo.utils.helpers import get_composition_counts
@@ -33,7 +33,6 @@ from .geometry_helpers import (
 from .initialization_config import (
     BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
-    GROWTH_ORDER_STRATEGY_COUNT,
     KDTREE_THRESHOLD,
     MAX_CONNECTIVITY_RETRIES,
     MAX_CONSECUTIVE_FAILURES,
@@ -120,6 +119,20 @@ def _growth_order_alternating(
         if i < len(element_groups[element])
     ]
     return result
+
+
+def _atomic_mass(symbol: str) -> float:
+    return float(atomic_masses[atomic_numbers[symbol]])
+
+
+def _growth_order_by_mass(
+    atoms_to_add: list[str], rng: np.random.Generator
+) -> list[str]:
+    """Order atoms by descending ASE atomic mass (heavier atoms placed first)."""
+    del rng  # stable mass ordering; signature matches other growth strategies
+    indexed = [(sym, idx, _atomic_mass(sym)) for idx, sym in enumerate(atoms_to_add)]
+    indexed.sort(key=lambda item: (-item[2], item[1]))
+    return [sym for sym, _, _ in indexed]
 
 
 def _growth_order_by_size(
@@ -521,10 +534,10 @@ def random_spherical(
 
         validated_atoms, is_valid, _ = validate_cluster(
             final_atoms,
-            composition=None,
+            composition=composition,
             min_distance_factor=steric_floor,
             connectivity_factor=connectivity_factor,
-            sort_atoms=False,
+            sort_atoms=True,
             raise_on_failure=False,
             source="random_spherical",
         )
@@ -532,10 +545,10 @@ def random_spherical(
             if retry_attempt == max_connectivity_retries - 1:
                 validate_cluster(
                     final_atoms,
-                    composition=None,
+                    composition=composition,
                     min_distance_factor=steric_floor,
                     connectivity_factor=connectivity_factor,
-                    sort_atoms=False,
+                    sort_atoms=True,
                     raise_on_failure=True,
                     source="random_spherical",
                 )
@@ -623,14 +636,7 @@ def grow_from_seed(
         base_atoms.center()
         return base_atoms
 
-    growth_order_strategy = rng.integers(0, GROWTH_ORDER_STRATEGY_COUNT)
-    atoms_to_add = _apply_growth_order_strategy(
-        atoms_to_add,
-        growth_order_strategy,
-        rng,
-        base_composition=base_composition,
-        target_composition=target_composition,
-    )
+    atoms_to_add = _growth_order_by_mass(atoms_to_add, rng)
 
     steric_floor = resolve_steric_floor(min_distance_factor, blmin_ratio)
 
@@ -660,10 +666,10 @@ def grow_from_seed(
 
         validated_atoms, is_valid, _ = validate_cluster(
             final_atoms,
-            composition=None,
+            composition=target_composition,
             min_distance_factor=steric_floor,
             connectivity_factor=connectivity_factor,
-            sort_atoms=False,
+            sort_atoms=True,
             raise_on_failure=False,
             source="grow_from_seed",
         )
@@ -713,8 +719,7 @@ def _add_atoms_to_cluster_iteratively(
         return base_atoms.copy()
 
     atoms = base_atoms.copy()
-    atoms_to_add = list(atoms_to_add)
-    rng.shuffle(atoms_to_add)
+    atoms_to_add = _growth_order_by_mass(list(atoms_to_add), rng)
 
     new_atoms = atoms.copy()
 

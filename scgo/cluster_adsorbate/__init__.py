@@ -11,7 +11,6 @@ from scgo.cluster_adsorbate.constraints import (
 from scgo.cluster_adsorbate.hierarchical import (
     build_adsorbate_only_cluster,
     build_hierarchical_core_fragment_cluster,
-    reorder_cluster_to_composition,
 )
 from scgo.cluster_adsorbate.placement import (
     blmin_for_core_and_fragment,
@@ -19,6 +18,7 @@ from scgo.cluster_adsorbate.placement import (
 )
 from scgo.cluster_adsorbate.relax import relax_metal_cluster_with_adsorbate
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
+from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 
 
 def __getattr__(name: str):

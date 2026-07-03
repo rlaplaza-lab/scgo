@@ -67,6 +67,7 @@ from scgo.database.metadata import (
 )
 from scgo.initialization import compute_cell_side
 from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
@@ -904,6 +905,8 @@ def ga_go(
 
         t0 = perf_counter()
         for cand in initial_population:
+            if adsorbate_definition is None and not surface_mode:
+                cand = reorder_cluster_to_composition(cand, list(composition))
             maybe_apply_mobile_core_ads_tags(
                 cand,
                 n_slab,

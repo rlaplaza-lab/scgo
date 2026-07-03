@@ -491,6 +491,38 @@ def test_run_go_campaign_requires_system_type():
         run_go_campaign(["Pt2"], params=None, verbosity=0)
 
 
+def test_run_go_campaign_skips_failed_composition(monkeypatch, tmp_path):
+    """A single composition failure should not abort the whole campaign."""
+    from unittest.mock import MagicMock
+
+    called: list[list[str]] = []
+
+    def fake_trials(composition, system_type, params, **kwargs):
+        called.append(list(composition))
+        if composition == ["Pt", "Pt"]:
+            raise ValueError("init failed")
+        return []
+
+    monkeypatch.setattr("scgo.runner_api._run_go_trials", fake_trials)
+    monkeypatch.setattr(
+        "scgo.runner_api.get_calculator_class",
+        lambda name: lambda **kwargs: MagicMock(),
+    )
+
+    results = run_go_campaign(
+        [["Pt", "Pt"], ["Au", "Au"]],
+        params=get_testing_params(),
+        seed=0,
+        verbosity=0,
+        system_type="gas_cluster",
+        output_dir=tmp_path,
+        clean=True,
+    )
+    assert called == [["Pt", "Pt"], ["Au", "Au"]]
+    assert results["Pt2"] == []
+    assert "Au2" in results
+
+
 def test_run_ts_search_normalizes_composition(monkeypatch):
     captured: dict[str, list] = {}
 

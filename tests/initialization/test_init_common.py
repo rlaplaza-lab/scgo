@@ -35,6 +35,8 @@ from scgo.initialization.geometry_helpers import (
     analyze_disconnection,
     clear_convex_hull_cache,
     get_largest_facets,
+    reorder_cluster_to_composition,
+    validate_cluster,
     validate_cluster_structure,
 )
 from scgo.initialization.initialization_config import (
@@ -45,7 +47,10 @@ from scgo.initialization.initializers import (
     _boltzmann_sample,
     _find_smaller_candidates,
 )
-from scgo.initialization.random_spherical import _add_atoms_to_cluster_iteratively
+from scgo.initialization.random_spherical import (
+    _add_atoms_to_cluster_iteratively,
+    _growth_order_by_mass,
+)
 from scgo.initialization.seed_combiners import (
     _is_valid_placement,
 )
@@ -749,6 +754,63 @@ class TestBoltzmannSample:
         energy, sampled = _boltzmann_sample(candidates, rng)
         assert sampled.get_chemical_formula() == "Pt3"
         assert energy in [1.0, 1.5, 2.0]
+
+    def test_permuted_order_same_formula_succeeds(self, rng):
+        """Permuted atom order with identical composition counts must be allowed."""
+        atoms_a = Atoms(
+            ["Co", "Pt", "Co", "Co"],
+            positions=[[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]],
+        )
+        atoms_b = Atoms(
+            ["Co", "Co", "Co", "Pt"],
+            positions=[[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]],
+        )
+        candidates = [(-10.0, atoms_a), (-8.0, atoms_b)]
+        result = _boltzmann_sample(candidates, rng)
+        assert result is not None
+
+
+class TestReorderClusterToComposition:
+    """Tests for composition-canonical atom ordering."""
+
+    def test_reorders_permuted_symbols(self):
+        atoms = Atoms(
+            ["O", "Ir", "O", "O"],
+            positions=[[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]],
+        )
+        composition = ["Ir", "O", "O", "O"]
+        reordered = reorder_cluster_to_composition(atoms, composition)
+        assert reordered.get_chemical_symbols() == composition
+
+    def test_validate_cluster_canonicalizes_to_composition(self):
+        atoms = Atoms(
+            ["Pt", "Au", "Pt"],
+            positions=[[0, 0, 0], [1, 0, 0], [2, 0, 0]],
+        )
+        composition = ["Au", "Pt", "Pt"]
+        validated, ok, err = validate_cluster(
+            atoms,
+            composition=composition,
+            sort_atoms=True,
+            check_clashes=False,
+            check_connectivity=False,
+        )
+        assert ok and err == ""
+        assert validated.get_chemical_symbols() == composition
+
+
+class TestGrowthOrderByMass:
+    """Tests for heavy-atom-first placement order."""
+
+    def test_heavier_elements_first(self, rng):
+        ordered = _growth_order_by_mass(["O", "Ir", "O", "Ru", "O"], rng)
+        assert ordered[:2] == ["Ir", "Ru"]
+        assert ordered[2:] == ["O", "O", "O"]
+
+    def test_iro4_initializes_with_mass_first_growth(self, rng):
+        composition = ["Ir", "O", "O", "O"]
+        atoms = create_initial_cluster(composition, rng=rng)
+        assert atoms.get_chemical_symbols() == composition
 
 
 class TestLoadDbCandidates:

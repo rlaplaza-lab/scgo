@@ -7,6 +7,7 @@ particularly using convex hull analysis to guide growth strategies.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 
 import numpy as np
 from ase import Atoms
@@ -1400,6 +1401,32 @@ def validate_cluster_structure(
     return True, ""
 
 
+def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -> Atoms:
+    """Reorder cluster atoms to match the campaign composition symbol sequence.
+
+    GA cut-and-splice pairing requires identical per-index atomic numbers across
+    parents, so all structures for a given composition must share the same order.
+    """
+    desired = list(composition)
+    current = cluster.get_chemical_symbols()
+    if current == desired:
+        return cluster
+
+    by_symbol: dict[str, list[int]] = {}
+    for idx, sym in enumerate(current):
+        by_symbol.setdefault(sym, []).append(idx)
+
+    selection: list[int] = []
+    for sym in desired:
+        matching = by_symbol.get(sym)
+        if not matching:
+            raise ValueError(
+                "Generated cluster symbols do not match requested composition."
+            )
+        selection.append(matching.pop(0))
+    return cluster[selection].copy()
+
+
 def validate_cluster(
     atoms: Atoms,
     composition: list[str] | None = None,
@@ -1427,13 +1454,15 @@ def validate_cluster(
         check_clashes: Whether to check for atomic clashes (default: True)
         check_connectivity: Whether to check connectivity. If None, auto-detects
                           based on atom count (>2 atoms)
-        sort_atoms: Whether to sort atoms by element symbol (default: True)
+        sort_atoms: When True and ``composition`` is set, reorder atoms to match
+            the composition list (required for GA pairing). When True without
+            ``composition``, fall back to alphabetical element sort.
         raise_on_failure: Whether to raise ValueError on validation failure
         source: Context string for error messages (e.g., "template", "seed+growth")
 
     Returns:
         Tuple of (validated_atoms, is_valid, error_message). If is_valid is True,
-        error_message is empty. validated_atoms may be sorted if sort_atoms=True.
+        error_message is empty. validated_atoms may be reordered if sort_atoms=True.
 
     Raises:
         ValueError: If raise_on_failure=True and validation fails
@@ -1460,9 +1489,12 @@ def validate_cluster(
             raise ValueError(error_msg)
         return atoms, False, error_msg
 
-    # Sort atoms by element if requested
+    # Canonicalize atom order for GA-compatible pairing
     if sort_atoms:
-        atoms = _sort_atoms_by_element(atoms)
+        if composition is not None:
+            atoms = reorder_cluster_to_composition(atoms, composition)
+        else:
+            atoms = _sort_atoms_by_element(atoms)
 
     # Validate structure (clashes and connectivity)
     if check_clashes or check_connectivity:

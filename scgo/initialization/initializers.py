@@ -142,13 +142,14 @@ def _boltzmann_sample(
         energy, atoms = candidates[0]
         return energy, atoms.copy()
 
-    # Verify all candidates have the same composition
-    first_symbols = tuple(candidates[0][1].get_chemical_symbols())
+    # Verify all candidates have the same composition (counts, not atom order)
+    first_counts = get_composition_counts(candidates[0][1].get_chemical_symbols())
     for _energy, atoms in candidates[1:]:
-        if tuple(atoms.get_chemical_symbols()) != first_symbols:
+        if get_composition_counts(atoms.get_chemical_symbols()) != first_counts:
             raise ValueError(
                 "All candidates must have the same composition for Boltzmann sampling. "
-                f"Found {first_symbols} vs {tuple(atoms.get_chemical_symbols())}"
+                f"Found {first_counts} vs "
+                f"{get_composition_counts(atoms.get_chemical_symbols())}"
             )
 
     energies = np.array([e for e, _ in candidates])
@@ -1220,7 +1221,7 @@ def _generate_single_structure_internal(
             composition=composition,
             min_distance_factor=min_distance_factor,
             connectivity_factor=connectivity_factor,
-            sort_atoms=False,
+            sort_atoms=True,
             raise_on_failure=True,
             source="random_spherical",
         )

@@ -895,7 +895,13 @@ def _run_go_campaign_compositions(
                     error_details.append("Output directory does not exist")
 
             logger.error(" | ".join(error_details), exc_info=(verbosity >= 2))
-            raise
+            all_results[formula_str] = []
+            if verbosity >= 1:
+                logger.warning(
+                    f"Skipping {formula_str} and continuing campaign "
+                    f"({i + 1}/{num_compositions})"
+                )
+            continue
 
     # Best-effort: drop shared calculator reference and free CUDA memory to avoid
     # fragmentation when campaigns are run sequentially in the same process.

@@ -44,6 +44,22 @@ def _precompute_seeds(
     return candidates_by_formula, valid_combinations
 
 
+def test_batch_multi_element_has_consistent_atom_order(rng):
+    """All batch structures must share atom order for GA pairing."""
+    composition = ["Co", "Co", "Co", "Pt"]
+    batch = create_initial_cluster_batch(
+        composition=composition,
+        n_structures=10,
+        rng=rng,
+        mode="smart",
+        n_jobs=1,
+    )
+    assert len(batch) == 10
+    reference_numbers = batch[0].numbers
+    for atoms in batch[1:]:
+        assert (atoms.numbers == reference_numbers).all()
+
+
 @pytest.mark.slow
 def test_batch_allocation_metropolis(rng):
     """Test that batch allocation uses Metropolis algorithm for diversity."""
