@@ -1082,18 +1082,9 @@ def create_initial_cluster(
             attempts fail.
         vacuum: extra padding for the generated simulation cell.
         previous_search_glob: glob pattern to find database files.
-        mode: how to create the initial cluster. Can be one of:
-            - "smart": (default) uses Metropolis allocation to distribute structures
-              across templates, seed+growth, and random_spherical based on availability.
-              Ensures all templates are sampled while maintaining diversity.
-            - "seed+growth": grow from a smaller, low-energy candidate from
-              previous searches using convex-hull-based placement. Falls back to
-              ``random_spherical`` if no suitable seed is found or if all growth
-              attempts fail.
-            - "random_spherical": places atoms randomly within a sphere using
-              the same distance/connectivity parameters and validation logic.
-            - "template": force use of template structures (icosahedral,
-              decahedral, octahedral) if available.
+        mode: Initialization strategy: ``smart`` (default Metropolis mix of
+            templates, seed+growth, and random_spherical), ``seed+growth``,
+            ``random_spherical``, or ``template``.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold. Defaults to ``CONNECTIVITY_FACTOR`` (1.4).
         rng: numpy ``Generator`` providing all randomness for this call.

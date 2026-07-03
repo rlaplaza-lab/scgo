@@ -34,7 +34,7 @@ deposition:
        target size.
 
 Atom ordering (multi-element GA)
-------------------------------
+--------------------------------
 
 Genetic-algorithm cut-and-splice crossover requires parents to share identical
 per-index atomic numbers (``a1.numbers == a2.numbers``), not merely the same
@@ -59,7 +59,7 @@ Placement order and diversity
 
 For ``random_spherical`` and seed growth, atoms are added one at a time. The
 order is sampled on each attempt (mass-biased by default, exploratory otherwise);
-see :doc:`/api/initialization`.
+see :mod:`scgo.initialization.initialization_config`.
 
 - **Mass-biased** (default ~65% of attempts): heavier element groups are placed
   first (ASE atomic masses); order within each element group is shuffled. This

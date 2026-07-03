@@ -147,9 +147,7 @@ def _growth_order_by_mass(
     result: list[str] = []
     for mass in mass_tiers:
         tier_elements = [
-            element
-            for element in element_groups
-            if mass_by_element[element] == mass
+            element for element in element_groups if mass_by_element[element] == mass
         ]
         rng.shuffle(tier_elements)
         for element in tier_elements:
