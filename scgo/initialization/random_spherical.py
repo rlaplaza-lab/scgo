@@ -456,9 +456,9 @@ def random_spherical(
     connectivity enforcement. For each retry attempt the algorithm slightly
     relaxes the effective placement radius and distance thresholds within the
     user-specified bounds to improve the chance of finding a valid connected
-    configuration. A final validation step (when enabled via
-    :mod:`initialization_config`) reuses the same logic to guard against
-    clashes and disconnected clusters.
+    configuration. Placement order is sampled on each attempt (mass-biased by
+    default, exploratory otherwise); see
+    :mod:`scgo.initialization.initialization_config`.
 
     When ``blmin_ratio`` is set (default: ``BLMIN_RATIO_DEFAULT``), placement
     and final validation enforce the same steric floor used by GA operators
@@ -481,7 +481,8 @@ def random_spherical(
             validation fails.
         blmin_ratio: GA-compatible steric floor (covalent-radius scale). ``None``
             disables the extra floor beyond ``min_distance_factor``.
-        rng: Optional numpy ``Generator`` for reproducible randomness.
+        rng: Numpy ``Generator`` supplying all randomness for this call
+            (placement order, coordinates, retries).
 
     Returns:
         An :class:`ase.Atoms` instance with the randomly placed cluster.

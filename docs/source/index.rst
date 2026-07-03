@@ -58,6 +58,7 @@ Contents
    :caption: API Reference
 
    api/runner_api
+   api/initialization
    api/surface
    api/cluster_adsorbate
    api/param_presets

@@ -82,7 +82,8 @@ Passed as ``params`` or ``go_params`` to ``run_go``, ``run_go_campaign``, ``run_
      - Glob pattern for reference DBs (for diversity mode)
    * - ``connectivity_factor``
      - ``1.4``
-     - How connected atoms must be (multiplier on covalent radii)
+     - Connectivity threshold (covalent radii multiplier) for initialization
+       validation and post-operator GA checks; see :doc:`/api/initialization`
    * - ``allow_cluster_fragmentation``
      - ``False``
      - Allow cluster to split (surface only)
@@ -375,8 +376,9 @@ Surface Config
      - (optional)
      - Extra vacuum for cluster init on slab
    * - ``init_mode``
-     - (optional)
-     - Surface deposition init mode
+     - ``"smart"``
+     - Surface cluster init mode: ``smart``, ``seed+growth``, ``random_spherical``,
+       or ``template`` (see :doc:`/api/initialization`)
    * - ``max_placement_attempts``
      - (optional)
      - Max cluster placement attempts on slab

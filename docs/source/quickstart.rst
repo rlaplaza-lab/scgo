@@ -48,6 +48,11 @@ Optimize a simple cluster in vacuum.
    for energy, atoms in results:
        print(f"Energy: {energy:.4f} eV, Formula: {atoms.get_chemical_formula()}")
 
+For multi-element clusters (bimetallics, oxides), atom order follows the
+composition list you pass in so GA crossover can pair structures safely.
+Initialization favours placing heavier elements first while keeping diversity
+across the population. Details: :doc:`/api/initialization`.
+
 **Production run with MACE:**
 
 .. code-block:: python
@@ -331,6 +336,11 @@ Run multiple compositions in one call.
        system_type="gas_cluster",
    )
    # results is dict[formula, list[(energy, Atoms)]]
+
+Failed compositions (e.g. initialization ``ValueError`` on extreme
+stoichiometries) are logged, recorded as empty lists in the returned dict, and
+skipped so the rest of the campaign continues. See :doc:`/api/initialization`
+for multi-element atom ordering and placement behaviour.
 
 **Binary compositions:**
 

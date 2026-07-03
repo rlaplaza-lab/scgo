@@ -1,10 +1,18 @@
 """Cluster initialization package.
 
+Builds starting structures for global optimization and surface deposition.
+
 Main entry points:
-- create_initial_cluster: Main initialization function (smart mode by default)
-- random_spherical: Random spherical placement
-- combine_and_grow: Seed combination and growth
-- generate_template_structure: Generate icosahedral/decahedral/octahedral templates
+- create_initial_cluster / create_initial_cluster_batch: strategy selection
+  (``smart`` mode by default) with composition-canonical atom ordering for GA
+- random_spherical / grow_from_seed: iterative placement with mass-biased growth
+  order (probabilistic) and connectivity validation
+- combine_and_grow: seed combination and growth
+- generate_template_structure: icosahedral / decahedral / octahedral templates
+
+All randomness is threaded through ``numpy.random.Generator`` arguments.
+See ``docs/source/api/initialization.rst`` for modes, ordering, and
+reproducibility.
 """
 
 from __future__ import annotations

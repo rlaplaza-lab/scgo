@@ -1138,7 +1138,13 @@ def run_go_campaign(
     adsorbates: AdsorbatesInput | None = None,
     log_summary: bool = True,
 ) -> dict[str, list[tuple[float, Atoms]]]:
-    """Run global optimization for multiple compositions."""
+    """Run global optimization for multiple compositions.
+
+    Each composition gets a reproducible sub-seed derived from ``seed`` /
+    ``params['seed']``. If a composition fails (``ValueError``, ``RuntimeError``,
+    I/O, or database errors), the error is logged, that formula maps to an empty
+    list, and remaining compositions continue.
+    """
     st = _require_system_type(system_type, "run_go_campaign")
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     if params is not None:

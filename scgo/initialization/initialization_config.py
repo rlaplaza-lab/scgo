@@ -2,6 +2,12 @@
 
 This module provides named constants for magic numbers scattered throughout
 the initialization system, improving maintainability and documentation.
+
+Notable tunables (library-internal, not GO preset keys):
+
+- ``MASS_FIRST_PLACEMENT_PROB``: fraction of placement attempts that use
+  heavy-element-first growth order; the remainder use exploratory strategies.
+- ``CONNECTIVITY_FACTOR``: default connectivity validation multiplier.
 """
 
 from __future__ import annotations

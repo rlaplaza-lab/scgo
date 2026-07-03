@@ -15,6 +15,7 @@ A compact toolkit for global optimization of atomic clusters using ASE. SCGO pro
 - **Surface workflows** — slab-supported clusters and adsorbates with hull-site placement and tag-aware GA operators
 - **Transition state search** — NEB-based TS search with automated pair selection and PBC-aware endpoint alignment
 - **Flexible API** — high-level runners (`run_go`, `run_go_ts`, …) and low-level control for custom workflows
+- **Reproducible initialization** — composition-canonical atom ordering for multi-element GA runs; mass-biased placement with per-structure RNG threading
 
 ## Install
 

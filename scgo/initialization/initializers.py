@@ -1282,7 +1282,16 @@ def create_initial_cluster_batch(
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     n_jobs: int = 1,
 ) -> list[Atoms]:
-    """Create multiple initial clusters with logarithmic scaling strategy allocation."""
+    """Create multiple initial clusters with deterministic per-structure RNG.
+
+    For ``smart`` mode, uses Metropolis allocation across templates,
+    seed+growth, and random_spherical. Each structure receives an independent
+    seed derived from ``rng`` (``batch_base_seed + index * 7919``), so batch
+    results are reproducible and identical for ``n_jobs=1`` vs parallel workers
+    when the parent ``rng`` state matches.
+
+    Validated structures are reordered to match ``composition`` for GA pairing.
+    """
     if n_structures < 1:
         raise ValueError(f"n_structures must be >= 1, got {n_structures}")
 
