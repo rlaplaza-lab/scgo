@@ -51,6 +51,11 @@ from scgo.ts_search.transition_state_run import (
 )
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import get_logger
+from scgo.utils.output_paths import (
+    resolve_go_campaign_searches_dir,
+    resolve_go_searches_dir,
+    resolve_go_ts_pipeline_paths,
+)
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 
 from scgo.minima_search import run_trials
@@ -603,11 +608,7 @@ def _run_go_trials(
 
     n_atoms = len(composition)
     cluster_formula = get_cluster_formula(composition)
-    main_output_dir = (
-        str(Path(output_dir))
-        if output_dir is not None
-        else f"{cluster_formula}_searches"
-    )
+    main_output_dir = str(resolve_go_searches_dir(output_dir, cluster_formula))
 
     # Algorithm selection: Use simple optimization for 1-2 atoms, BH for 3, GA for larger
     chosen_go = select_scgo_minima_algorithm(n_atoms, system_type)
@@ -847,10 +848,9 @@ def _run_go_campaign_compositions(
             logger.info(f"{'=' * 60}")
 
         comp_seed = int(rng.integers(0, 2**63 - 1))
-        trial_output_dir = (
-            str(Path(output_dir) / f"{formula_str}_searches")
-            if output_dir is not None
-            else None
+        trial_output_dir = resolve_go_campaign_searches_dir(output_dir, formula_str)
+        trial_output_dir_str = (
+            str(trial_output_dir) if trial_output_dir is not None else None
         )
 
         try:
@@ -862,7 +862,7 @@ def _run_go_campaign_compositions(
                 verbosity=verbosity,
                 run_id=run_id,
                 clean=clean,
-                output_dir=trial_output_dir,
+                output_dir=trial_output_dir_str,
                 calculator_for_global_optimization=calculator_for_global_optimization,
                 params_already_merged=True,
             )
@@ -943,8 +943,7 @@ def _run_go_ts_pipeline(
         else Path(f"{formula}_campaign")
     )
     output_path.mkdir(parents=True, exist_ok=True)
-    searches_dir = output_path / f"{formula}_searches"
-    ts_results_dir = output_path / f"{formula}_ts_results"
+    searches_dir, ts_results_dir = resolve_go_ts_pipeline_paths(output_path, formula)
 
     pipeline_t0 = perf_counter()
     merged_ga = go_params

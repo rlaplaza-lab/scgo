@@ -112,7 +112,7 @@ Utility Functions
      - Symbol lists for bimetallic size scans (all ``el1``/``el2`` splits per atom count)
    * - ``parse_composition_arg(comp_str)``
      - Parse a compact formula (``"Pt5"``) or comma-separated symbols (``"Pt,Pt,Au"``)
-   * - ``resolve_workflow_seed(run_seed, go_params_seed, ts_params_seed)``
+   * - ``resolve_workflow_seed(*, seed_kw, go_params, ts_params)``
      - Ensure seed consistency across params
    * - ``log_go_ts_summary(logger, summary, *, wall_time_s=None)``
      - Print summary of a GO+TS run
@@ -128,7 +128,8 @@ Configure timing in ``params`` / ``go_params`` only (``optimizer_params['ga']`` 
 
 For TS, set ``write_timing_json`` in ``ts_params`` when needed.
 
-See :mod:`scgo.utils.timing_report` for the JSON layout.
+See :mod:`scgo.utils.timing_report` for the JSON layout and
+:mod:`scgo.utils.output_paths` for campaign directory helpers.
 
 ----------------
 Module Reference

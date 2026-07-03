@@ -29,6 +29,10 @@ Run with:
 ```bash
 python -m benchmark.benchmark_Pt --help
 python -m benchmark.benchmark_Pt_surface_graphite --help
+python -m benchmark.benchmark_parallel_neb --help
+python -m benchmark.benchmark_parallel_neb \
+    --searches-dir /path/to/results/pt5_gas_mace/Pt5_searches \
+    --max-pairs 5
 ```
 
 From the repository root, ensure the package is on `PYTHONPATH` (editable install) so `import benchmark` resolves.

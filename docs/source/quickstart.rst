@@ -458,7 +458,7 @@ Output directories
      - Each composition → ``{formula}_searches/`` in CWD (no shared parent)
    * - ``run_go_ts``
      - Campaign root → ``{root}/{formula}_searches/`` and ``{root}/{formula}_ts_results/``
-     - ``{formula}_campaign/`` in CWD
+     - ``scgo_runs/{formula}_{calculator_slug}/`` (see ``output_root`` / ``output_stem`` below)
    * - ``run_go_ts_campaign``
      - Campaign parent; each composition → ``{parent}/{formula}_campaign/…``
      - ``scgo_runs/go_ts_campaign_{calc}/``
@@ -485,7 +485,7 @@ directory; the campaign root becomes ``searches_dir.parent``.
    ├── Pt5_searches/
    │   ├── run_20260703_120000_123456/
    │   │   ├── metadata.json
-   │   │   └── trial_0/ga_go.db
+   │   │   └── trial_1/ga_go.db
    │   ├── results_summary.json
    │   └── final_unique_minima/
    └── Pt5_ts_results/
