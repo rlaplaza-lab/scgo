@@ -27,6 +27,7 @@ from tests.test_utils import (
     assert_cluster_valid,
     create_paired_rngs,
     get_structure_signature,
+    positions_equal,
 )
 
 
@@ -58,6 +59,30 @@ def test_batch_multi_element_has_consistent_atom_order(rng):
     reference_numbers = batch[0].numbers
     for atoms in batch[1:]:
         assert (atoms.numbers == reference_numbers).all()
+
+
+def test_batch_multi_element_reproducible():
+    """Batch init with mass-biased placement is reproducible for paired RNGs."""
+    composition = ["Co", "Co", "Co", "Pt"]
+    seed = 42
+    rng1, rng2 = create_paired_rngs(seed)
+    batch1 = create_initial_cluster_batch(
+        composition=composition,
+        n_structures=8,
+        rng=rng1,
+        mode="random_spherical",
+        n_jobs=1,
+    )
+    batch2 = create_initial_cluster_batch(
+        composition=composition,
+        n_structures=8,
+        rng=rng2,
+        mode="random_spherical",
+        n_jobs=1,
+    )
+    assert len(batch1) == len(batch2) == 8
+    for atoms1, atoms2 in zip(batch1, batch2, strict=True):
+        assert positions_equal(atoms1, atoms2)
 
 
 @pytest.mark.slow

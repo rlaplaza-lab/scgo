@@ -50,6 +50,7 @@ from scgo.initialization.initializers import (
 from scgo.initialization.random_spherical import (
     _add_atoms_to_cluster_iteratively,
     _growth_order_by_mass,
+    _sample_atoms_to_add_order,
 )
 from scgo.initialization.seed_combiners import (
     _is_valid_placement,
@@ -802,10 +803,47 @@ class TestReorderClusterToComposition:
 class TestGrowthOrderByMass:
     """Tests for heavy-atom-first placement order."""
 
-    def test_heavier_elements_first(self, rng):
+    def test_heavier_element_groups_first(self, rng):
         ordered = _growth_order_by_mass(["O", "Ir", "O", "Ru", "O"], rng)
-        assert ordered[:2] == ["Ir", "Ru"]
-        assert ordered[2:] == ["O", "O", "O"]
+        heavy_positions = [ordered.index("Ir"), ordered.index("Ru")]
+        oxygen_positions = [i for i, sym in enumerate(ordered) if sym == "O"]
+        assert max(heavy_positions) < min(oxygen_positions)
+
+    def test_sampler_includes_exploratory_orders(self, rng):
+        """Mass bias is probabilistic; some samples should not start with the heaviest element."""
+        starts_with_heavy = 0
+        trials = 200
+        for _ in range(trials):
+            ordered = _sample_atoms_to_add_order(["Co", "Pt", "Co", "Pt"], rng)
+            if ordered[0] == "Pt":
+                starts_with_heavy += 1
+        assert starts_with_heavy < trials
+        assert starts_with_heavy > trials * 0.5
+
+    def test_growth_order_sampler_reproducible(self):
+        seed = 42
+        composition = ["Co", "Pt", "Co", "Pt", "O", "O"]
+        rng1, rng2 = create_paired_rngs(seed)
+        for _ in range(10):
+            order1 = _sample_atoms_to_add_order(composition, rng1)
+            order2 = _sample_atoms_to_add_order(composition, rng2)
+            assert order1 == order2
+
+    def test_growth_order_by_mass_reproducible(self):
+        seed = 7
+        composition = ["O", "Ir", "O", "Ru", "O"]
+        rng1, rng2 = create_paired_rngs(seed)
+        assert _growth_order_by_mass(composition, rng1) == _growth_order_by_mass(
+            composition, rng2
+        )
+
+    def test_random_spherical_multi_element_reproducible(self):
+        seed = 99
+        composition = ["Ir", "O", "O", "O"]
+        rng1, rng2 = create_paired_rngs(seed)
+        atoms1 = create_initial_cluster(composition, rng=rng1, mode="random_spherical")
+        atoms2 = create_initial_cluster(composition, rng=rng2, mode="random_spherical")
+        assert positions_equal(atoms1, atoms2)
 
     def test_iro4_initializes_with_mass_first_growth(self, rng):
         composition = ["Ir", "O", "O", "O"]

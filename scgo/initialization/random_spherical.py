@@ -33,7 +33,9 @@ from .geometry_helpers import (
 from .initialization_config import (
     BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
+    GROWTH_ORDER_STRATEGY_COUNT,
     KDTREE_THRESHOLD,
+    MASS_FIRST_PLACEMENT_PROB,
     MAX_CONNECTIVITY_RETRIES,
     MAX_CONSECUTIVE_FAILURES,
     MAX_PLACEMENT_ATTEMPTS_PER_ATOM,
@@ -128,11 +130,58 @@ def _atomic_mass(symbol: str) -> float:
 def _growth_order_by_mass(
     atoms_to_add: list[str], rng: np.random.Generator
 ) -> list[str]:
-    """Order atoms by descending ASE atomic mass (heavier atoms placed first)."""
-    del rng  # stable mass ordering; signature matches other growth strategies
-    indexed = [(sym, idx, _atomic_mass(sym)) for idx, sym in enumerate(atoms_to_add)]
-    indexed.sort(key=lambda item: (-item[2], item[1]))
-    return [sym for sym, _, _ in indexed]
+    """Place heavier element groups first; shuffle within each element group.
+
+    All randomness is drawn from ``rng`` so callers with paired generators
+    get identical placement orders for the same seed.
+    """
+    element_groups = _group_atoms_by_element(atoms_to_add)
+    if len(element_groups) <= 1:
+        shuffled = list(atoms_to_add)
+        rng.shuffle(shuffled)
+        return shuffled
+
+    mass_by_element = {element: _atomic_mass(element) for element in element_groups}
+    mass_tiers = sorted(set(mass_by_element.values()), reverse=True)
+
+    result: list[str] = []
+    for mass in mass_tiers:
+        tier_elements = [
+            element
+            for element in element_groups
+            if mass_by_element[element] == mass
+        ]
+        rng.shuffle(tier_elements)
+        for element in tier_elements:
+            group = list(element_groups[element])
+            rng.shuffle(group)
+            result.extend(group)
+    return result
+
+
+def _sample_atoms_to_add_order(
+    atoms_to_add: list[str],
+    rng: np.random.Generator,
+    *,
+    base_composition: list[str] | None = None,
+    target_composition: list[str] | None = None,
+) -> list[str]:
+    """Sample a placement order: mass-biased by default, exploratory otherwise.
+
+    Consumes randomness only from ``rng``. Each call advances the generator
+    state, so paired RNGs with the same seed yield identical orders.
+    """
+    if rng.random() < MASS_FIRST_PLACEMENT_PROB:
+        return _growth_order_by_mass(atoms_to_add, rng)
+
+    strategy = int(rng.integers(0, GROWTH_ORDER_STRATEGY_COUNT))
+    return _apply_growth_order_strategy(
+        atoms_to_add,
+        strategy,
+        rng,
+        base_composition=base_composition,
+        target_composition=target_composition,
+    )
 
 
 def _growth_order_by_size(
@@ -479,9 +528,10 @@ def random_spherical(
         new_atoms = Atoms()
         new_atoms.set_cell([cell_side, cell_side, cell_side])
 
+        atoms_to_add = _sample_atoms_to_add_order(list(composition), rng)
         final_atoms = _add_atoms_to_cluster_iteratively(
             base_atoms=new_atoms,
-            atoms_to_add=composition,
+            atoms_to_add=atoms_to_add,
             min_distance_factor=steric_floor,
             placement_radius_scaling=effective_prs,
             rng=rng,
@@ -636,7 +686,12 @@ def grow_from_seed(
         base_atoms.center()
         return base_atoms
 
-    atoms_to_add = _growth_order_by_mass(atoms_to_add, rng)
+    atoms_to_add = _sample_atoms_to_add_order(
+        atoms_to_add,
+        rng,
+        base_composition=base_composition,
+        target_composition=target_composition,
+    )
 
     steric_floor = resolve_steric_floor(min_distance_factor, blmin_ratio)
 
@@ -719,7 +774,7 @@ def _add_atoms_to_cluster_iteratively(
         return base_atoms.copy()
 
     atoms = base_atoms.copy()
-    atoms_to_add = _growth_order_by_mass(list(atoms_to_add), rng)
+    atoms_to_add = list(atoms_to_add)
 
     new_atoms = atoms.copy()
 

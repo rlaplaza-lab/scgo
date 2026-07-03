@@ -24,6 +24,8 @@ BLMIN_RATIO_DEFAULT = 0.7  # Covalent-radius scale for GA/placement clash tables
 MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 PLACEMENT_RADIUS_SCALING_DEFAULT = 1.2
 SEED_CLASH_FACTOR = MIN_DISTANCE_FACTOR_DEFAULT  # Use same factor as random placement
+# Fraction of placements that use mass-biased ordering; remainder uses exploratory strategies.
+MASS_FIRST_PLACEMENT_PROB = 0.65
 
 # Cell and vacuum
 VACUUM_DEFAULT = 10.0
