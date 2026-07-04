@@ -999,7 +999,6 @@ def minima_provenance_dict(minima: list, idx: int) -> dict[str, Any]:
     energy, atoms = minima[idx]
     return {
         "run_id": get_metadata(atoms, "run_id"),
-        "trial_id": get_metadata(atoms, "trial_id"),
         "source_db": get_metadata(atoms, "source_db"),
         "source_db_relpath": get_metadata(atoms, "source_db_relpath"),
         "systems_row_id": get_metadata(atoms, "systems_row_id"),

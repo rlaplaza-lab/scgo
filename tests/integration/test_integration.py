@@ -141,7 +141,7 @@ def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
     """End-to-end GA workflow is repeatable when re-run with the same seed.
 
     Exercises the public runner path (:func:`scgo.runner_api._run_go_trials` →
-    algorithm selection → :func:`scgo.minima_search.run_trials` → per-trial
+    algorithm selection → :func:`scgo.minima_search.run_trials` →
     :func:`scgo.minima_search.scgo` → DB persistence → deduplication →
     ``final_unique_minima`` export). Uses fixed mutation weights (adaptive disabled)
     and relies on explicit NumPy RNG plumbing only (no ``random.seed``).

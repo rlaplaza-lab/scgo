@@ -83,14 +83,13 @@ def load_minima_by_composition(
         base_dir, composition=composition, use_cache=True
     )
 
-    for db_file, run_id, trial_id in db_files_with_run_trial:
+    for db_file, run_id, _trial_id in db_files_with_run_trial:
         try:
             # When prefer_final_unique=True, require_final=True so we only load
             # GO's canonical final unique minima (DB rows tagged final_unique_minimum).
             minima = extract_minima_from_database_file(
                 db_file,
                 run_id=run_id,
-                trial_id=trial_id,
                 require_final=prefer_final_unique,
             )
 
@@ -106,7 +105,7 @@ def load_minima_by_composition(
             if target_formula and formula != target_formula:
                 continue
 
-            # Add to results with run_id and trial_id in provenance
+            # Add to results with run_id in provenance
             if formula not in minima_by_formula:
                 minima_by_formula[formula] = []
 
@@ -115,7 +114,6 @@ def load_minima_by_composition(
                 add_metadata(
                     atoms_copy,
                     run_id=run_id,
-                    trial_id=trial_id,
                     source_db=os.path.basename(db_file),
                     source_db_relpath=_relative_db_path(db_file, base_dir),
                 )

@@ -732,7 +732,7 @@ class TestWriteResultsSummary:
 
         results = [(-10.0, atoms1), (-15.0, atoms2)]
 
-        sample_params = {"global_optimizer": "bh", "n_trials": 2}
+        sample_params = {"global_optimizer": "bh"}
         main_mod._write_results_summary(
             output_dir=output_dir,
             final_minima=results,

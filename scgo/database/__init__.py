@@ -53,7 +53,7 @@ Metadata Management:
 
     from scgo.database.metadata import add_metadata, get_metadata
 
-    add_metadata(atoms, run_id='run_xyz', trial_id=1, fitness_score=0.95)
+    add_metadata(atoms, run_id='run_xyz', fitness_score=0.95)
     run_id = get_metadata(atoms, 'run_id', default='unknown')
 
 """

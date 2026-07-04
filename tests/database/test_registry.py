@@ -32,7 +32,7 @@ def test_database_registry_register_find_and_clear(tmp_path, single_atom):
     all_db = reg.get_all_databases()
     assert any(Path(p).resolve() == dbpath.resolve() for p in all_db)
 
-    # get_database_entry should return metadata including run_id/trial_id
+    # get_database_entry should return metadata including run_id
     entry = reg.get_database_entry(dbpath)
     assert entry is not None
     assert entry.get("run_id") == "run_xyz"
@@ -100,13 +100,13 @@ def test_setup_database_registers_registry(tmp_path, pt2_atoms):
 
 
 def test_setup_database_registers_search_level_registry(tmp_path):
-    """DB under trial_*/ inside *_searches is registered only at the search root."""
+    """DB under run_*/ inside *_searches is registered only at the search root."""
 
     from scgo.database import close_data_connection
     from scgo.database.helpers import setup_database
     from scgo.database.registry import clear_registry_cache, get_registry
 
-    # Build canonical run/trial layout under a search directory
+    # Build canonical run layout under a search directory
     search_dir = tmp_path / "Pt6_searches"
     run_dir = search_dir / "run_000"
     run_dir.mkdir(parents=True)
@@ -116,7 +116,7 @@ def test_setup_database_registers_search_level_registry(tmp_path):
     get_registry(run_dir).clear()
     get_registry(search_dir).clear()
 
-    # Create DB in the trial directory (this is what the optimizer does)
+    # Create DB in the run directory (this is what the optimizer does)
     from tests.test_utils import create_test_atoms
 
     pt6 = create_test_atoms(["Pt"] * 6)

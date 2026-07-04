@@ -11,7 +11,6 @@ def test_run_scgo_tags_final_minima(tmp_path):
     params = get_testing_params()
     # Ensure tagging is enabled
     params["tag_final_minima"] = True
-    params["n_trials"] = 1
     # Run a trivial Pt2 search that completes quickly
     results = _run_go_trials(
         ["Pt", "Pt"],
@@ -28,7 +27,9 @@ def test_run_scgo_tags_final_minima(tmp_path):
     assert len(db_files) > 0, "No database files found"
 
     db_path = db_files[0]
-    expected_run_id = db_path.parents[1].name if len(db_path.parents) >= 2 else None
+    expected_run_id = (
+        db_path.parent.name if db_path.parent.name.startswith("run_") else None
+    )
 
     # Generic final-tag assertion (also asserts final_id presence)
     assert_db_final_row(str(db_path), expected_run_id, expect_final_id=True)
@@ -36,17 +37,15 @@ def test_run_scgo_tags_final_minima(tmp_path):
 
 def test_mark_final_minima_fallback_scans_all_db(tmp_path):
     """Ensure mark_final_minima_in_db will find DB rows even when DB file is not
-    under the usual run_xxx/trial_xxx path by scanning all DBs under base_dir.
+    under the usual run_*/ layout by scanning all DBs under base_dir.
     """
 
     from ase import Atoms
     from ase.db import connect
 
     run_id = "run_test_fallback"
-    trial = 1
 
-    # Create a DB somewhere under tmp_path but not under the canonical
-    # run_xxx/trial_xxx layout so a simple glob won't find it by run/trial
+    # Create a DB somewhere under tmp_path but not under the canonical run_* layout
     dbdir = tmp_path / "dbs"
     dbdir.mkdir()
     dbpath = dbdir / "other.db"
@@ -59,7 +58,6 @@ def test_mark_final_minima_fallback_scans_all_db(tmp_path):
             relaxed=True,
             key_value_pairs={
                 "run_id": run_id,
-                "trial_id": trial,
                 "raw_score": -3.4,
                 "final_id": final_id,
             },
@@ -71,11 +69,11 @@ def test_mark_final_minima_fallback_scans_all_db(tmp_path):
     from scgo.database.registry import get_registry
 
     reg = get_registry(tmp_path)
-    reg.register_database(dbpath, run_id=run_id, trial_id=trial)
+    reg.register_database(dbpath, run_id=run_id)
 
-    # Construct final_minima_info with provenance matching above run/trial
+    # Construct final_minima_info with provenance matching above run
     atoms = pt2.copy()
-    atoms.info["provenance"] = {"run_id": run_id, "trial_id": trial}
+    atoms.info["provenance"] = {"run_id": run_id}
 
     from scgo.database.metadata import mark_final_minima_in_db
 
@@ -103,7 +101,6 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
     from ase.db import connect
 
     run_id = "run_prefers_relaxed"
-    trial = 1
 
     dbpath = tmp_path / "pref.db"
     final_id = "relaxed-fid"
@@ -115,7 +112,6 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
             relaxed=False,
             key_value_pairs={
                 "run_id": run_id,
-                "trial_id": trial,
                 "raw_score": -1.0,
                 "relaxed": False,
                 "final_id": final_id,
@@ -129,7 +125,6 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
             relaxed=True,
             key_value_pairs={
                 "run_id": run_id,
-                "trial_id": trial,
                 "raw_score": -2.0,
                 "relaxed": True,
                 "final_id": final_id,
@@ -139,14 +134,14 @@ def test_mark_final_minima_prefers_relaxed_row(tmp_path):
     stamp_scgo_database(dbpath)
 
     atoms = a2.copy()
-    atoms.info["provenance"] = {"run_id": run_id, "trial_id": trial}
+    atoms.info["provenance"] = {"run_id": run_id}
 
     # Register DB explicitly — strict discovery requires registration or
-    # canonical run_xxx/trial_xxx layout.
+    # canonical run_* layout.
     from scgo.database.registry import get_registry
 
     reg = get_registry(tmp_path)
-    reg.register_database(dbpath, run_id=run_id, trial_id=trial)
+    reg.register_database(dbpath, run_id=run_id)
 
     from scgo.database.metadata import mark_final_minima_in_db
 

@@ -5,7 +5,7 @@ GA/BH: set ``write_timing_json`` and ``detailed_timing`` in
 TS: set ``write_timing_json`` in ``ts_params``.
 
 GO timing is written at **run** level: ``{run_dir}/timing.json`` (alongside
-``metadata.json``). Trial directories hold DB artifacts only.
+``metadata.json`` and the optimizer database).
 """
 
 from __future__ import annotations

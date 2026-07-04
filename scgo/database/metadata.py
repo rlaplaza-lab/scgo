@@ -43,7 +43,7 @@ def add_metadata(
     # Store extra metadata
     metadata.update(extra_metadata)
 
-    # ASE DB persists key_value_pairs; ensure raw_score and run_id / trial_id for DB rows
+    # ASE DB persists key_value_pairs; ensure raw_score and run_id for DB rows
     kv = atoms.info.setdefault("key_value_pairs", {})
     if "raw_score" in extra_metadata:
         kv["raw_score"] = extra_metadata["raw_score"]
