@@ -9,12 +9,25 @@ This directory holds **long-running** scripts that sweep cluster sizes (or surfa
 
 ## Output layout
 
-Per [`benchmark_common.py`](benchmark_common.py), campaign outputs go under:
+Per [`benchmark_common.py`](benchmark_common.py), campaign outputs go under `benchmark/results/`:
 
-- `benchmark/results/` — gas-phase Pt sweeps default here (subfolders per formula/backend/model).
-- `benchmark/results/pt_surface_graphite/` — [`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py) default root.
+- **Gas-phase Pt sweeps** — `benchmark/results/{formula}_{backend}_{model}/` (for example `pt5_mace_mace_matpes_0/`), then per run:
 
-Each GO run creates `{Formula}_searches` trees under the chosen output directory. TS runs add sibling `{Formula}_ts_results` directories with the same run-oriented layout.
+  ```
+  Pt5_searches/
+  ├── run_<timestamp>_<microseconds>/
+  │   ├── metadata.json
+  │   ├── timing.json
+  │   └── ga_go.db
+  ├── results_summary.json
+  └── final_unique_minima/
+  ```
+
+- **Surface Pt-on-graphite** — flat root `benchmark/results/pt_surface_graphite/` ([`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py)), same `{Formula}_searches/` layout as above.
+
+TS runs add sibling `{Formula}_ts_results/` trees with the same run-oriented layout (`run_*/`, `results_summary.json`, deduplicated export); pair artifacts use `pair_*` subdirectories. See [`docs/source/quickstart.rst`](../docs/source/quickstart.rst) (*Output Files*).
+
+Benchmark GA presets enable `write_timing_json` and `detailed_timing` so profiling lines in CLI output match `{run_dir}/timing.json` on disk.
 
 ## Entry points
 
@@ -31,11 +44,19 @@ python -m benchmark.benchmark_Pt --help
 python -m benchmark.benchmark_Pt_surface_graphite --help
 python -m benchmark.benchmark_parallel_neb --help
 python -m benchmark.benchmark_parallel_neb \
-    --searches-dir /path/to/results/pt5_gas_mace/Pt5_searches \
+    --searches-dir /path/to/results/pt5_mace_mace_matpes_0/Pt5_searches \
     --max-pairs 5
 ```
 
 From the repository root, ensure the package is on `PYTHONPATH` (editable install) so `import benchmark` resolves.
+
+## Pytest
+
+[`pytest.ini`](../pytest.ini) excludes `benchmark/` from the default test path (`norecursedirs`). To run MLIP regression hooks:
+
+```bash
+pytest benchmark/ -m slow
+```
 
 ## Environment
 

@@ -15,6 +15,9 @@ from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
+from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
@@ -81,6 +84,10 @@ def build_adsorbate_only_cluster(
         if all_ok:
             _stamp_site_metadata(combined, site_types)
             return combined
+    logger.warning(
+        "build_adsorbate_only_cluster: exceeded max_placement_attempts=%s",
+        max_placement_attempts,
+    )
     return None
 
 
@@ -175,4 +182,8 @@ def build_hierarchical_core_fragment_cluster(
             placement_metadata["site_types"] = ",".join(site_types)
             placement_metadata["site_type"] = site_types[-1]
         return combined
+    logger.warning(
+        "build_hierarchical_core_fragment_cluster: exceeded max_placement_attempts=%s",
+        max_placement_attempts,
+    )
     return None

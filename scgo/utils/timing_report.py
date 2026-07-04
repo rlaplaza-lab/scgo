@@ -15,6 +15,10 @@ import logging
 import os
 from typing import Any
 
+from scgo.utils.logging import get_logger
+
+_logger = get_logger(__name__)
+
 TIMING_JSON_FILENAME = "timing.json"
 RUN_TIMING_SCHEMA_VERSION = 1
 
@@ -41,6 +45,7 @@ def ga_relax_seconds_from_timings(timings: dict[str, float]) -> float:
 
 
 def relax_seconds_from_timings(timings: dict[str, float]) -> float:
+    """Return total relax/NEB wall time inferred from a timing payload."""
     if "go_phase_s" in timings or "ts_neb_sum_s" in timings:
         return float(timings.get("go_phase_s", 0.0)) + float(
             timings.get("ts_neb_sum_s", 0.0)
@@ -61,6 +66,7 @@ def relax_seconds_from_timings(timings: dict[str, float]) -> float:
 
 
 def cpu_non_relax_seconds_from_timings(timings: dict[str, float]) -> float:
+    """Return non-relax CPU wall time (precomputed or total minus relax)."""
     total = float(timings.get("total_wall_s", 0.0))
     if "cpu_non_relax_s" in timings and "initial_relax_batch_s" not in timings:
         return float(timings["cpu_non_relax_s"])
@@ -74,6 +80,7 @@ def log_timing_summary(
     *,
     verbosity: int,
 ) -> None:
+    """Log a one-line timing summary when ``verbosity >= 1``."""
     if verbosity < 1:
         return
     total = float(timings_s.get("total_wall_s", 0.0))
@@ -105,12 +112,14 @@ def write_timing_file(
 
 
 def read_timing_file(path: str) -> dict[str, Any] | None:
+    """Load a timing JSON file; return ``None`` if missing or unreadable."""
     if not os.path.isfile(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
+        _logger.debug("Failed to read timing file %s", path, exc_info=True)
         return None
 
 
@@ -124,28 +133,24 @@ def load_run_timing_payload(run_dir: str) -> dict[str, Any] | None:
 
 
 def flatten_run_timing_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return a single-trial payload for consumers expecting flat GA timing."""
-    if "trials" in payload and isinstance(payload["trials"], list):
-        if len(payload["trials"]) == 1:
-            return dict(payload["trials"][0])
-        if payload["trials"]:
-            return dict(payload["trials"][-1])
+    """Return a flat timing payload (legacy multi-trial documents are rejected)."""
+    if "trials" in payload:
+        raise ValueError(
+            "Multi-trial timing documents are no longer supported; "
+            "expected a flat timing.json at run root."
+        )
     return payload
 
 
 def build_run_timing_document(
     *,
     run_id: str,
-    trial_payloads: list[dict[str, Any]],
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
-    if len(trial_payloads) == 1:
-        return trial_payloads[0]
-    return {
-        "schema_version": RUN_TIMING_SCHEMA_VERSION,
-        "run_id": run_id,
-        "n_trials": len(trial_payloads),
-        "trials": trial_payloads,
-    }
+    """Attach run_id to a single-run timing payload."""
+    out = dict(payload)
+    out.setdefault("run_id", run_id)
+    return out
 
 
 def write_run_timing_file(
@@ -158,6 +163,7 @@ def write_run_timing_file(
 def sum_neb_seconds_from_ts_results(
     ts_results: list[dict[str, Any]],
 ) -> float:
+    """Sum per-pair ``neb_optimization_s`` values from TS result dicts."""
     return sum(
         float((r.get("timings_s") or {}).get("neb_optimization_s", 0.0))
         for r in ts_results

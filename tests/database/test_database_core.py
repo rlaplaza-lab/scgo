@@ -515,27 +515,24 @@ class TestMetadataManagement:
         add_metadata(
             atoms,
             run_id="run_20260204_120000",
-            trial_id=1,
             generation=5,
             fitness=0.95,
         )
 
         assert get_metadata(atoms, "run_id") == "run_20260204_120000"
-        assert get_metadata(atoms, "trial_id") == 1
         assert get_metadata(atoms, "generation") == 5
         assert get_metadata(atoms, "fitness") == pytest.approx(0.95)
 
     def test_get_all_metadata(self):
         atoms = Atoms("Pt3")
-        add_metadata(atoms, run_id="test", trial_id=1)
+        add_metadata(atoms, run_id="test")
 
         all_meta = get_all_metadata(atoms)
         assert "run_id" in all_meta
-        assert "trial_id" in all_meta
 
     def test_update_metadata(self):
         atoms = Atoms("Pt3")
-        add_metadata(atoms, run_id="test", trial_id=1)
+        add_metadata(atoms, run_id="test")
         update_metadata(atoms, generation=10)
 
         assert get_metadata(atoms, "generation") == 10
@@ -545,10 +542,10 @@ class TestMetadataManagement:
         atoms_list = []
         for i in range(5):
             atoms = Atoms("Pt3")
-            add_metadata(atoms, run_id="test", trial_id=i % 2)
+            add_metadata(atoms, run_id=f"run_{i % 2}")
             atoms_list.append(atoms)
 
-        filtered = filter_by_metadata(atoms_list, trial_id=0)
+        filtered = filter_by_metadata(atoms_list, run_id="run_0")
         assert len(filtered) == 3
 
 
@@ -619,7 +616,7 @@ class TestDiscovery:
     """Database discovery."""
 
     def test_discovery_find_databases(self, tmp_path):
-        run_dir = tmp_path / "run_20260204_120000" / "trial_0"
+        run_dir = tmp_path / "run_20260204_120000"
         run_dir.mkdir(parents=True)
 
         atoms = Atoms("Pt3")
@@ -634,7 +631,7 @@ class TestDiscovery:
 
     def test_discovery_filter_by_run(self, tmp_path):
         for run_num in range(2):
-            run_dir = tmp_path / f"run_2026020{run_num}_120000" / "trial_0"
+            run_dir = tmp_path / f"run_2026020{run_num}_120000"
             run_dir.mkdir(parents=True)
 
             atoms = Atoms("Pt3")
@@ -648,7 +645,7 @@ class TestDiscovery:
         assert len(db_files) == 1
 
     def test_discovery_statistics(self, tmp_path):
-        run_dir = tmp_path / "run_20260204_120000" / "trial_0"
+        run_dir = tmp_path / "run_20260204_120000"
         run_dir.mkdir(parents=True)
 
         atoms = Atoms("Pt3")
@@ -664,7 +661,7 @@ class TestDiscovery:
         assert stats["total_databases"] >= 1
 
     def test_find_databases_uncached(self, tmp_path):
-        run_dir = tmp_path / "run_20260204_120000" / "trial_0"
+        run_dir = tmp_path / "run_20260204_120000"
         run_dir.mkdir(parents=True)
 
         atoms = Atoms("Pt3")
@@ -1040,7 +1037,7 @@ class TestDatabaseManagerCaching:
 
     def test_caching_behavior(self, tmp_path, rng):
         """Test result caching and cache invalidation."""
-        run_dir = tmp_path / "run_001" / "trial_1"
+        run_dir = tmp_path / "run_001"
         run_dir.mkdir(parents=True)
         atoms = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.0, 0]])
         da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
@@ -1093,7 +1090,7 @@ class TestDatabaseManagerCaching:
 
     def test_cache_ttl_expiration(self, tmp_path, rng):
         """Test that cache expires after TTL."""
-        run_dir = tmp_path / "run_001" / "trial_1"
+        run_dir = tmp_path / "run_001"
         run_dir.mkdir(parents=True)
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
         da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
@@ -1138,7 +1135,7 @@ class TestDatabaseManagerCaching:
 
     def test_concurrent_manager_access(self, tmp_path, rng):
         """Test thread-safe manager operations."""
-        run_dir = tmp_path / "run_000" / "trial_1"
+        run_dir = tmp_path / "run_000"
         run_dir.mkdir(parents=True)
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
         da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
@@ -1188,7 +1185,7 @@ class TestDatabaseManagerCaching:
     def test_diversity_references_caching(self, tmp_path, rng):
         """Test diversity reference loading with caching."""
         for i in range(3):
-            run_dir = tmp_path / f"run_{i:03d}" / "trial_1"
+            run_dir = tmp_path / f"run_{i:03d}"
             run_dir.mkdir(parents=True)
 
             _ = run_dir / f"ref_{i}.db"
@@ -1208,7 +1205,7 @@ class TestDatabaseManagerCaching:
         manager = SCGODatabaseManager(base_dir=tmp_path, enable_caching=True)
 
         refs1 = manager.load_reference_structures(
-            "run_*/trial_*/ref_*.db",
+            "run_*/ref_*.db",
             composition=["Pt", "Pt", "Pt"],
             max_structures=20,
         )
@@ -1221,7 +1218,7 @@ class TestDatabaseManagerCaching:
         assert all(get_metadata(a, "final_unique_minimum", False) for a in refs1)
 
         refs2 = manager.load_reference_structures(
-            "run_*/trial_*/ref_*.db",
+            "run_*/ref_*.db",
             composition=["Pt", "Pt", "Pt"],
             max_structures=20,
         )
@@ -1229,7 +1226,7 @@ class TestDatabaseManagerCaching:
         assert refs1 is refs2
 
         refs3 = manager.load_reference_structures(
-            "run_*/trial_*/ref_*.db",
+            "run_*/ref_*.db",
             composition=["Pt", "Pt", "Pt"],
             max_structures=20,
             force_reload=True,
@@ -1246,7 +1243,7 @@ class TestDatabaseManagerCaching:
         """
         # Create 4 runs each with a trial containing 3 relaxed structures
         for i in range(4):
-            run_dir = tmp_path / f"run_{i:03d}" / "trial_1"
+            run_dir = tmp_path / f"run_{i:03d}"
             run_dir.mkdir(parents=True)
 
             atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
@@ -1282,7 +1279,7 @@ class TestDatabaseManagerCaching:
     ):
         """Verify the parallel branch uses ProcessPoolExecutor when many DBs present."""
         for i in range(4):
-            run_dir = tmp_path / f"run_{i:03d}" / "trial_1"
+            run_dir = tmp_path / f"run_{i:03d}"
             run_dir.mkdir(parents=True)
 
             atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])

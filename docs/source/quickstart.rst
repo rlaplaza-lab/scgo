@@ -479,21 +479,31 @@ directory; the campaign root becomes ``searches_dir.parent``.
 
 **Example — ``run_go_ts`` with ``output_root`` / ``output_stem``:**
 
+GO and TS use the same campaign layout: ``{formula}_searches/`` and
+``{formula}_ts_results/`` are siblings; each holds ``run_*`` directories,
+campaign-level summaries, and deduplicated exports. GO databases and TS pair
+artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs).
+
 .. code-block:: text
 
    results/pt5_gas_mace/
    ├── Pt5_searches/
    │   ├── run_20260703_120000_123456/
    │   │   ├── metadata.json
-   │   │   └── trial_1/ga_go.db
+   │   │   ├── timing.json              # optional (write_timing_json=True)
+   │   │   └── ga_go.db
    │   ├── results_summary.json
    │   └── final_unique_minima/
    └── Pt5_ts_results/
        ├── run_20260703_130000_654321/
-       │   └── pair_0_1/neb_0_1_metadata.json
+       │   ├── metadata.json
+       │   ├── timing.json              # optional (write_timing_json=True)
+       │   └── pair_0_1/
+       │       └── neb_0_1_metadata.json
        ├── results_summary.json
        ├── ts_network_metadata.json
        └── final_unique_ts/
+           └── final_unique_ts_summary.json
 
 **Example — ``run_go_campaign`` with ``output_dir="benchmark/results"``:**
 
@@ -504,28 +514,62 @@ directory; the campaign root becomes ``searches_dir.parent``.
    ├── Pt5_searches/
    └── Pt6_searches/
 
+**Example — gas-phase MLIP benchmark default** (``benchmark_Pt.py``):
+
+.. code-block:: text
+
+   benchmark/results/
+   └── pt5_mace_mace_matpes_0/
+       └── Pt5_searches/
+           └── run_<timestamp>_<microseconds>/
+
 ------------------
 Output Files
 ------------------
 
-Global optimization writes under a ``{formula}_searches/`` tree (location
-depends on the runner — see *Output directories* above):
+Global optimization and transition-state search use **analogous directory
+hierarchies** under sibling ``{formula}_searches/`` and ``{formula}_ts_results/``
+trees (location depends on the runner — see *Output directories* above). Each
+tree has:
 
-- ``run_<timestamp>_<microseconds>/``: One independent run
-  - ``metadata.json``: Resolved optimizer settings and trial metadata
-  - ``timing.json``: Optional timing sidecar (``write_timing_json=True``)
-  - ``trial_<N>/``: Trial artifacts
-  - ``ga_go.db``, ``bh_go.db``, or ``simple_go.db``: Candidate database (algorithm chosen automatically; see :doc:`/parameters`)
-- ``results_summary.json``: Summary of all minima found
-- ``final_unique_minima/``: XYZ files of the best structures
+- One ``run_<timestamp>_<microseconds>/`` directory per invocation
+- Campaign-level ``results_summary.json`` and a deduplicated export directory
+- Per-run ``metadata.json``, optional ``timing.json``, and optimizer DB at the run root
+- TS pair work units under ``pair_<i>_<j>/`` inside each run
 
-Transition state runs write a sibling ``{formula}_ts_results/`` tree:
+**Global optimization** (``{formula}_searches/``):
 
-- ``run_<timestamp>_<microseconds>/pair_<i>_<j>/``: Per-pair NEB artifacts (TS/endpoints, trajectory, ``neb_{pair_id}_metadata.json``)
-- ``results_summary.json``: Summary of all NEB runs
-- ``ts_network_metadata.json``: Connectivity graph between minima
-- ``final_unique_ts/``: Deduplicated TS geometries
-- ``final_unique_ts/final_unique_ts_summary.json``: Dedup export summary
+.. code-block:: text
+
+   Pt5_searches/
+   ├── run_<timestamp>_<microseconds>/
+   │   ├── metadata.json
+   │   ├── timing.json                 # optional (write_timing_json=True)
+   │   └── ga_go.db                    # or bh_go.db / simple_go.db
+   ├── results_summary.json
+   └── final_unique_minima/            # XYZ files of best structures
+
+Each invocation creates one datetime-tagged ``run_*`` directory. Repeat
+``run_go`` (or a campaign loop) for additional independent runs; results merge
+across runs via database discovery and deduplication.
+
+**Run-level ``timing.json``** — when ``write_timing_json=True``, a flat payload
+is written at ``{run_dir}/timing.json``. See :mod:`scgo.utils.timing_report`.
+
+**Transition state search** (``{formula}_ts_results/``):
+
+.. code-block:: text
+
+   Pt5_ts_results/
+   ├── run_<timestamp>_<microseconds>/
+   │   ├── metadata.json
+   │   ├── timing.json                 # optional (write_timing_json=True)
+   │   └── pair_<i>_<j>/
+   │       └── neb_{i}_{j}_metadata.json   # + trajectory, TS/endpoints
+   ├── results_summary.json
+   ├── ts_network_metadata.json        # connectivity graph between minima
+   └── final_unique_ts/
+       └── final_unique_ts_summary.json
 
 -----------------------
 Reading prior results

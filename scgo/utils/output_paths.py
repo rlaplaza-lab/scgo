@@ -92,7 +92,7 @@ def resolve_go_searches_dir(
     """
     if output_dir is not None:
         return Path(output_dir).expanduser().resolve()
-    return formula_searches_dir(".", formula)
+    return formula_searches_dir(Path.cwd().resolve(), formula)
 
 
 def resolve_go_campaign_searches_dir(

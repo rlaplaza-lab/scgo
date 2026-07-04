@@ -669,6 +669,10 @@ def _grow_from_random_seed(
             connectivity_factor=connectivity_factor,
         )
     except ValueError:
+        logger.debug(
+            "Seed cluster generation failed for composition %s",
+            seed_composition,
+        )
         return None
 
     try:
@@ -683,6 +687,10 @@ def _grow_from_random_seed(
         )
         return result
     except ValueError:
+        logger.debug(
+            "grow_from_seed failed for composition %s",
+            composition,
+        )
         return None
 
 

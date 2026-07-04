@@ -155,31 +155,31 @@ def test_scgo_validations(rng):
     with pytest.raises(ValueError):
         scgo(["Pt"], "invalid_optimizer", {}, "out_dir", rng)
 
-    # Invalid trial id
-    with pytest.raises(ValueError):
-        scgo(["Pt"], "ga", {}, "out_dir", rng, trial_id=0)
+    # Invalid system_type in optimizer kwargs
+    with pytest.raises(ValueError, match="system_type must be set"):
+        from scgo.minima_search import scgo
+
+        scgo(["Pt"], "ga", {}, "out_dir", rng)
 
 
 def test_run_trials_validations(rng):
-    # Use deterministic rng fixture from conftest
+    with pytest.raises(ValueError):
+        run_trials([], "ga", {}, "out", rng)
 
     with pytest.raises(ValueError):
-        run_trials([], "ga", {}, 1, "out", rng)
+        run_trials(["Pt"], 123, {}, "out", rng)
 
     with pytest.raises(ValueError):
-        run_trials(["Pt"], 123, {}, 1, "out", rng)
+        run_trials(["Pt"], "ga", {}, "", rng)
 
     with pytest.raises(ValueError):
-        run_trials(["Pt"], "ga", {}, 0, "out", rng)
+        run_trials(["Pt"], "ga", {}, "out", None)
 
     with pytest.raises(ValueError):
-        run_trials(["Pt"], "ga", {}, 1, "", rng)
+        run_trials(["Pt"], "ga", {}, "out", rng, verbosity=5)
 
-    with pytest.raises(ValueError):
-        run_trials(["Pt"], "ga", {}, 1, "out", None)
-
-    with pytest.raises(ValueError):
-        run_trials(["Pt"], "ga", {}, 1, "out", rng, verbosity=5)
+    with pytest.raises(ValueError, match="system_type must be set"):
+        run_trials(["Pt"], "ga", {}, "out", rng)
 
 
 def test_parse_composition_arg_case_insensitive():

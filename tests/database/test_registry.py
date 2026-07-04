@@ -21,10 +21,10 @@ def test_database_registry_register_find_and_clear(tmp_path, single_atom):
     reg.clear()
 
     # Register DB with explicit metadata
-    reg.register_database(dbpath, composition=["Pt"], run_id="run_xyz", trial_id=1)
+    reg.register_database(dbpath, composition=["Pt"], run_id="run_xyz")
 
     # find_databases should locate the registered DB
-    found = reg.find_databases(run_id="run_xyz", trial_id=1)
+    found = reg.find_databases(run_id="run_xyz")
     assert len(found) == 1
     assert Path(found[0]).resolve() == dbpath.resolve()
 
@@ -36,12 +36,11 @@ def test_database_registry_register_find_and_clear(tmp_path, single_atom):
     entry = reg.get_database_entry(dbpath)
     assert entry is not None
     assert entry.get("run_id") == "run_xyz"
-    assert entry.get("trial_id") == 1
 
     # unregister should remove it
     removed = reg.unregister_database(dbpath)
     assert removed is True
-    assert reg.find_databases(run_id="run_xyz", trial_id=1) == []
+    assert reg.find_databases(run_id="run_xyz") == []
 
 
 def test_rebuild_and_invalidate(tmp_path):
@@ -109,7 +108,7 @@ def test_setup_database_registers_search_level_registry(tmp_path):
 
     # Build canonical run/trial layout under a search directory
     search_dir = tmp_path / "Pt6_searches"
-    run_dir = search_dir / "run_000" / "trial_1"
+    run_dir = search_dir / "run_000"
     run_dir.mkdir(parents=True)
 
     # Ensure fresh registries
@@ -135,7 +134,6 @@ def test_setup_database_registers_search_level_registry(tmp_path):
 
         entry = search_reg.get_database_entry(db_path)
         assert entry is not None
-        assert entry.get("trial_id") == 1
     finally:
         close_data_connection(da)
 
@@ -171,7 +169,7 @@ def test_register_database_best_effort_handles_bad_atoms_template(tmp_path):
     reg.clear()
 
     # Create trial directory and db file path under base
-    trial_dir = tmp_path / "run_1" / "trial_1"
+    trial_dir = tmp_path / "run_1"
     trial_dir.mkdir(parents=True)
     db_path = trial_dir / "ga_go.db"
 
@@ -194,7 +192,6 @@ def test_register_database_best_effort_handles_bad_atoms_template(tmp_path):
     entry = trial_registry.get_database_entry(db_path)
     assert entry is not None
     assert entry.get("path") == str(db_path.resolve().relative_to(trial_dir.resolve()))
-    assert entry.get("trial_id") == 1
 
     # Also ensure the registry under the base tmp_path did not accidentally gain it
     entries = reg.get_all_databases()

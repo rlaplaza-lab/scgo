@@ -12,7 +12,7 @@ from tests.test_utils import create_preparedb
 
 def test_load_single_database_worker_extracts_scgo_db(tmp_path, pt2_atoms):
     """Worker uses extract_minima_from_database_file; DB must be SCGO-stamped."""
-    run_dir = tmp_path / "run_000" / "trial_1"
+    run_dir = tmp_path / "run_000"
     run_dir.mkdir(parents=True)
     db_path = run_dir / "ga_go.db"
 
@@ -34,7 +34,7 @@ def test_load_single_database_worker_extracts_scgo_db(tmp_path, pt2_atoms):
 
     # Call the worker directly (as would be done in ProcessPool) and assert it returns the candidate
     minima = _load_single_database_worker(
-        str(db_path), composition=None, run_id="run_000", trial_id=1
+        str(db_path), composition=None, run_id="run_000"
     )
     assert isinstance(minima, list)
     assert len(minima) == 1

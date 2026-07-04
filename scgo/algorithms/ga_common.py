@@ -1289,6 +1289,8 @@ def setup_diversity_scorer(
     n_to_optimize: int,
     diversity_max_references: int,
     logger,
+    *,
+    base_dir: str,
 ) -> DiversityScorer | None:
     """Setup DiversityScorer for diversity fitness strategy.
 
@@ -1299,6 +1301,7 @@ def setup_diversity_scorer(
         n_to_optimize: Number of atoms to optimize.
         diversity_max_references: Maximum number of reference structures to load.
         logger: Logger instance for logging messages.
+        base_dir: Base directory for resolving reference DB glob patterns.
 
     Returns:
         DiversityScorer instance if fitness_strategy is "diversity", None otherwise.
@@ -1324,9 +1327,7 @@ def setup_diversity_scorer(
 
     if logger.isEnabledFor(logging.INFO):
         logger.info(f"Loading reference structures from: {diversity_reference_db}")
-    # Use current working directory as base_dir since this function doesn't have output_dir
-    # The database manager will search relative to cwd for the glob pattern
-    with SCGODatabaseManager(base_dir=".", enable_caching=True) as db_manager:
+    with SCGODatabaseManager(base_dir=base_dir, enable_caching=True) as db_manager:
         reference_structures: list[Atoms] = db_manager.load_reference_structures(
             db_glob_pattern=diversity_reference_db,
             composition=composition,

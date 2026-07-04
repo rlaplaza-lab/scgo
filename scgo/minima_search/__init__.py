@@ -1,7 +1,7 @@
 """Global optimization to find minima.
 
 This package contains the core workflow for global optimization of atomic
-clusters: single-trial execution, multi-trial orchestration with deduplication,
+clusters: single-run execution, deduplication across datetime-tagged runs,
 Hessian validation, and result persistence.
 """
 

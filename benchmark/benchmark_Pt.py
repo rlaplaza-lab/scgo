@@ -35,6 +35,8 @@ BENCHMARK_BACKEND = os.environ.get("SCGO_BENCHMARK_BACKEND", "mace")
 logger = get_logger(__name__)
 
 
+@pytest.mark.slow
+@pytest.mark.requires_cuda
 @pytest.mark.parametrize(
     "cluster_formula, seed",
     [(c, s) for c in DEFAULT_CLUSTERS for s in BENCHMARK_SEEDS],

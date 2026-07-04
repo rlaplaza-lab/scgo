@@ -130,16 +130,6 @@ def _write_scgo_metadata(da: DataConnection, db_file: str) -> None:
         stamp_scgo_database(db_file)
 
 
-def _trial_id_from_output_dir(base_path: Path) -> int | None:
-    """Parse trial index from a canonical ``trial_<n>`` output directory name."""
-    name = base_path.name
-    if not name.startswith("trial_"):
-        return None
-    with contextlib.suppress(ValueError, IndexError):
-        return int(name.split("_", 1)[1])
-    return None
-
-
 def _register_database_best_effort(
     base_dir: str | Path, db_file: str, atoms_template: Atoms | None, run_id: str | None
 ) -> None:
@@ -163,7 +153,6 @@ def _register_database_best_effort(
             comp_list = None
 
     base_path = Path(base_dir)
-    trial_id = _trial_id_from_output_dir(base_path)
 
     # Determine registry roots - prefer search directory if available
     search_root = next(
@@ -180,7 +169,6 @@ def _register_database_best_effort(
                 Path(db_file),
                 composition=comp_list,
                 run_id=run_id,
-                trial_id=trial_id,
             )
             logger.debug("Registered database in registry root %s: %s", root, db_file)
         except (ValueError, OSError) as _e:
@@ -811,24 +799,13 @@ def load_previous_results_parallel(
                     )
                     continue
 
-            # Scan for trial_*/ directories within this run
-            trial_pattern = os.path.join(run_dir, "trial_*")
-            trial_dirs = sorted(glob.glob(trial_pattern))
+            # Scan for database files directly under this run directory
+            pattern = db_filename if db_filename else "*.db"
+            db_files = glob.glob(os.path.join(run_dir, pattern))
 
-            for trial_dir in trial_dirs:
-                trial_dir_name = os.path.basename(trial_dir)
-                try:
-                    trial_id = int(trial_dir_name.split("_")[1])
-                except (IndexError, ValueError):
-                    trial_id = None
-
-                # Look for database files in this trial directory
-                pattern = db_filename if db_filename else "*.db"
-                db_files = glob.glob(os.path.join(trial_dir, pattern))
-
-                all_db_files.extend(
-                    (db_path, run_id_from_dir, trial_id) for db_path in db_files
-                )
+            all_db_files.extend(
+                (db_path, run_id_from_dir, None) for db_path in db_files
+            )
 
     if not all_db_files:
         logger.info(f"No databases found in {base_output_dir}")

@@ -329,14 +329,12 @@ class TestScgoFunction:
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
             output_dir=output_dir,
             rng=rng,
-            trial_id=5,
             run_id=run_id,
             verbosity=0,
         )
 
         for _, atoms in results:
             assert "provenance" in atoms.info
-            assert atoms.info["provenance"]["trial_id"] == 5
             assert atoms.info["provenance"]["run_id"] == run_id
 
     def test_scgo_empty_composition(self, tmp_path, rng):
@@ -356,9 +354,9 @@ class TestScgoFunction:
 
 
 class TestRunTrials:
-    """Tests for run_trials() function - multi-trial orchestration."""
+    """Tests for run_trials() function - single run orchestration."""
 
-    def test_run_trials_single_trial(self, tmp_path, rng):
+    def test_run_trials_single_run(self, tmp_path, rng):
         """Test run_trials() with single trial."""
         composition = ["Pt", "Pt", "Pt"]
         output_dir = str(tmp_path / "trials_test")
@@ -371,7 +369,6 @@ class TestRunTrials:
                 "niter_local_relaxation": 3,
                 "system_type": "gas_cluster",
             },
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             calculator_for_global_optimization=EMT(),
@@ -382,12 +379,12 @@ class TestRunTrials:
         assert isinstance(results, list)
         assert os.path.exists(output_dir)
 
-    def test_run_trials_multiple_trials(self, tmp_path, rng):
-        """Test run_trials() with multiple trials."""
+    def test_run_trials_creates_db_at_run_root(self, tmp_path, rng):
+        """Test run_trials() places database directly under run_*/."""
         composition = ["Pt", "Pt", "Pt"]
         output_dir = str(tmp_path / "trials_multi")
 
-        results = run_trials(
+        run_trials(
             composition=composition,
             global_optimizer="bh",
             global_optimizer_kwargs={
@@ -395,7 +392,6 @@ class TestRunTrials:
                 "niter_local_relaxation": 3,
                 "system_type": "gas_cluster",
             },
-            n_trials=3,
             output_dir=output_dir,
             rng=rng,
             calculator_for_global_optimization=EMT(),
@@ -403,38 +399,22 @@ class TestRunTrials:
             verbosity=0,
         )
 
-        assert isinstance(results, list)
-        # Should create trial directories
         run_dirs = [d for d in os.listdir(output_dir) if d.startswith("run_")]
-        assert len(run_dirs) > 0
+        assert len(run_dirs) == 1
+        run_dir = os.path.join(output_dir, run_dirs[0])
+        assert os.path.exists(os.path.join(run_dir, "bh_go.db"))
+        assert not os.path.exists(os.path.join(run_dir, "trial_1"))
 
-    def test_run_trials_zero_trials_raises_error(self, tmp_path, rng):
-        """Test run_trials() raises error for zero trials."""
+    def test_run_trials_missing_system_type_raises(self, tmp_path, rng):
+        """Test run_trials() requires system_type in global_optimizer_kwargs."""
         composition = ["Pt", "Pt"]
-        output_dir = str(tmp_path / "trials_zero")
+        output_dir = str(tmp_path / "trials_missing_st")
 
-        with pytest.raises(ValueError, match="n_trials must be positive"):
+        with pytest.raises(ValueError, match="system_type must be set"):
             run_trials(
                 composition=composition,
                 global_optimizer="bh",
-                global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-                n_trials=0,
-                output_dir=output_dir,
-                rng=rng,
-                verbosity=0,
-            )
-
-    def test_run_trials_negative_trials_raises_error(self, tmp_path, rng):
-        """Test run_trials() raises error for negative trials."""
-        composition = ["Pt", "Pt"]
-        output_dir = str(tmp_path / "trials_negative")
-
-        with pytest.raises(ValueError, match="n_trials must be positive"):
-            run_trials(
-                composition=composition,
-                global_optimizer="bh",
-                global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-                n_trials=-1,
+                global_optimizer_kwargs={"niter": 1},
                 output_dir=output_dir,
                 rng=rng,
                 verbosity=0,
@@ -449,7 +429,6 @@ class TestRunTrials:
             composition=composition,
             global_optimizer="simple",
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             validate_with_hessian=False,
@@ -470,7 +449,6 @@ class TestRunTrials:
             composition=composition,
             global_optimizer="simple",
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             run_id=custom_run_id,
@@ -492,7 +470,6 @@ class TestRunTrials:
             composition=composition,
             global_optimizer="simple",
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             validate_with_hessian=False,
@@ -504,7 +481,6 @@ class TestRunTrials:
             composition=composition,
             global_optimizer="simple",
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             clean=True,
@@ -529,7 +505,6 @@ class TestRunTrials:
                 "n_jobs_population_init": -2,  # Parallel for tests
                 "system_type": "gas_cluster",
             },
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             calculator_for_global_optimization=EMT(),
@@ -549,7 +524,6 @@ class TestRunTrials:
             composition=composition,
             global_optimizer="simple",
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             validate_with_hessian=False,
@@ -574,7 +548,6 @@ def _slab_pt_adsorbate_pair(*, mobile_xy=(0.1, 0.1), wrap_x=False):
         add_metadata(
             atoms,
             run_id="run_test",
-            trial_id=1,
             system_type="surface_cluster",
             n_slab_atoms=n_slab,
             raw_score=0.0,
@@ -650,7 +623,6 @@ class TestRunTrialsSurfaceAlignment:
                 "system_type": "surface_cluster",
                 "surface_config": cfg,
             },
-            n_trials=1,
             output_dir=output_dir,
             rng=rng,
             validate_with_hessian=False,
@@ -700,7 +672,6 @@ class TestRunTrialsSurfaceAlignment:
                 "surface_config": cfg,
                 "neb_surface_max_lattice_shift": 2,
             },
-            n_trials=1,
             output_dir=str(tmp_path / "slab_knobs"),
             rng=rng,
             validate_with_hessian=False,
@@ -731,7 +702,6 @@ class TestRunTrialsSurfaceAlignment:
             composition=["Pt", "Pt"],
             global_optimizer="simple",
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-            n_trials=1,
             output_dir=str(tmp_path / "gas_no_align"),
             rng=rng,
             validate_with_hessian=False,

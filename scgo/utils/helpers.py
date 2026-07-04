@@ -319,6 +319,10 @@ def extract_energy_from_atoms(atoms: Atoms) -> float | None:
     try:
         return atoms.get_potential_energy()
     except (RuntimeError, AttributeError):
+        get_logger(__name__).debug(
+            "Could not extract energy from atoms",
+            exc_info=True,
+        )
         return None
 
 
@@ -373,7 +377,7 @@ def get_composition_counts(composition: list[str]) -> Counter[str]:
 
 
 def get_provenance(atoms: Atoms) -> dict[str, Any]:
-    """Get provenance (e.g. ``run_id``, ``trial_id``) from :attr:`Atoms.info` ``metadata``.
+    """Get provenance (e.g. ``run_id``) from :attr:`Atoms.info` ``metadata``.
 
     Returns an empty dict if metadata is not present or atoms.info doesn't exist.
 
@@ -622,10 +626,7 @@ def filter_unique_minima(
 
     sorted_minima: list[tuple[float, Atoms]] = sorted(
         valid_minima,
-        key=lambda item: (
-            get_provenance(item[1]).get("trial_id", float("inf")),
-            item[0],
-        ),
+        key=lambda item: item[0],
     )
 
     # Set up energy binning

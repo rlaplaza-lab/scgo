@@ -40,7 +40,6 @@ def test_get_default_params_structure():
         "fmax_threshold",
         "check_hessian",
         "imag_freq_threshold",
-        "n_trials",
         "optimizer_params",
         "enforce_adsorbate_subgraph_integrity",
     ]:
@@ -503,7 +502,6 @@ class TestLogConfiguration:
         log_configuration(
             params=params,
             chosen_go="bh",
-            n_trials=1,
             cluster_formula="Pt3",
             n_atoms=3,
             global_optimizer_kwargs=optimizer_kwargs,
@@ -524,7 +522,6 @@ class TestLogConfiguration:
         log_configuration(
             params=params,
             chosen_go="bh",
-            n_trials=1,
             cluster_formula="Pt3",
             n_atoms=3,
             global_optimizer_kwargs=optimizer_kwargs,
@@ -533,25 +530,6 @@ class TestLogConfiguration:
 
         # Should not log anything in quiet mode
         assert len(caplog.records) == 0
-
-    def test_log_configuration_multiple_trials(self, caplog):
-        """Test log_configuration logs trial count when > 1."""
-        caplog.set_level(logging.INFO)
-        params = {"calculator": "EMT"}
-        optimizer_kwargs = {"niter": 10}
-
-        log_configuration(
-            params=params,
-            chosen_go="bh",
-            n_trials=5,
-            cluster_formula="Pt3",
-            n_atoms=3,
-            global_optimizer_kwargs=optimizer_kwargs,
-            verbosity=1,
-        )
-
-        log_output = caplog.text
-        assert "5" in log_output or "Trials" in log_output
 
     def test_log_configuration_redacts_relaxer_model_dump(self, caplog):
         """Test log_configuration keeps relaxer logging compact."""
@@ -567,7 +545,6 @@ class TestLogConfiguration:
         log_configuration(
             params=params,
             chosen_go="ga",
-            n_trials=1,
             cluster_formula="Pt3",
             n_atoms=3,
             global_optimizer_kwargs=optimizer_kwargs,

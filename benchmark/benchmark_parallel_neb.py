@@ -8,7 +8,7 @@ twice (serial then parallel) with the same ``max_pairs``, renames each
 Usage::
 
     python -m benchmark.benchmark_parallel_neb \\
-        --searches-dir /path/to/results/pt5_gas_mace/Pt5_searches \\
+        --searches-dir /path/to/results/pt5_mace_mace_matpes_0/Pt5_searches \\
         --max-pairs 5
 """
 
@@ -21,6 +21,12 @@ import time
 from pathlib import Path
 
 from scgo.ts_search.transition_state_run import run_transition_state_search
+from scgo.utils.logging import get_logger
+from scgo.utils.output_paths import formula_ts_results_dir
+
+logger = get_logger(__name__)
+
+PT5_FORMULA = "Pt5"
 
 
 def _run_variant(
@@ -50,8 +56,8 @@ def _run_variant(
         float((r.get("timings_s") or {}).get("neb_optimization_s", 0.0))
         for r in results
     )
-    default_result = campaign_root / "Pt5_ts_results"
-    renamed = campaign_root / f"Pt5_ts_results_{label}"
+    default_result = formula_ts_results_dir(campaign_root, PT5_FORMULA)
+    renamed = default_result.with_name(f"{PT5_FORMULA}_ts_results_{label}")
     if default_result.exists():
         if renamed.exists():
             shutil.rmtree(renamed)
@@ -99,8 +105,7 @@ def main() -> None:
     summary = {"serial": serial, "parallel": parallel}
     out_path = args.searches_dir.parent / "parallel_neb_benchmark.json"
     out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(json.dumps(summary, indent=2))
-    print(f"Wrote {out_path}")
+    logger.info("Wrote parallel NEB benchmark results to %s", out_path)
 
 
 if __name__ == "__main__":

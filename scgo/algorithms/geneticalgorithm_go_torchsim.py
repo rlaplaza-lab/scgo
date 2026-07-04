@@ -790,6 +790,7 @@ def ga_go(
         n_to_optimize=n_to_optimize,
         diversity_max_references=diversity_max_references,
         logger=logger,
+        base_dir=output_dir,
     )
 
     slab_for_pairing = slab_ref if surface_mode else None

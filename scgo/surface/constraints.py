@@ -11,6 +11,9 @@ from scipy.cluster.hierarchy import fclusterdata
 
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.validation import validate_surface_config_slab_prefix
+from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 _LAYER_CLUSTER_THRESHOLD_ANG = 0.4
 
@@ -49,6 +52,10 @@ def _layer_indices_by_clustering(
 
         return {i for i in range(len(positions)) if clusters[i] in selected}
     except Exception:
+        logger.debug(
+            "fclusterdata layer selection failed; using coordinate rounding fallback",
+            exc_info=True,
+        )
         coord_flat = positions[:, axis]
         rounded = np.round(coord_flat, decimals=6)
         unique_vals = np.sort(np.unique(rounded))

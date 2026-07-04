@@ -40,6 +40,7 @@ from tests.test_utils import (
                 "dr": 0.2,
                 "niter_local_relaxation": 2,
                 "temperature": 0.01,
+                "system_type": "gas_cluster",
             },
         ),
         (
@@ -50,7 +51,8 @@ from tests.test_utils import (
                 "niter_local_relaxation": 2,
                 "mutation_probability": 0.3,
                 "vacuum": 8.0,
-                "n_jobs_population_init": 1,  # Serial for tests to avoid fork issues
+                "n_jobs_population_init": 1,
+                "system_type": "gas_cluster",
             },
         ),
     ],
@@ -65,7 +67,6 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
         composition=comp,
         global_optimizer=optimizer,
         global_optimizer_kwargs=opt_kwargs,
-        n_trials=1,
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -89,47 +90,40 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
 
-    trial1_dir = os.path.join(run_dir, "trial_1")
-    assert os.path.exists(trial1_dir)
-    assert not os.path.exists(os.path.join(run_dir, "trial_2"))
+    run_dir = run_dirs[0]
+    assert os.path.exists(run_dir)
     assert os.path.exists(os.path.join(output_dir, "final_unique_minima"))
 
-    # Verify optimizer-specific files
     db_name = f"{optimizer}_go.db"
-    trial1_db = os.path.join(trial1_dir, db_name)
-    assert os.path.exists(trial1_db)
+    db_path = os.path.join(run_dir, db_name)
+    assert os.path.exists(db_path)
 
-    # Verify database integrity
-    for db_path in [trial1_db]:
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = [row[0] for row in cursor.fetchall()]
-            assert "systems" in tables
-            cols = [
-                r[1] for r in cursor.execute("PRAGMA table_info(systems)").fetchall()
-            ]
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [row[0] for row in cursor.fetchall()]
+        assert "systems" in tables
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(systems)").fetchall()]
 
-            # Check for run_id persistence
-            cursor.execute(
-                f"SELECT {'metadata, ' if 'metadata' in cols else ''}key_value_pairs FROM systems LIMIT 5"
-            )
-            rows = cursor.fetchall()
-            found_runid = False
-            for row in rows:
-                import json
+        # Check for run_id persistence
+        cursor.execute(
+            f"SELECT {'metadata, ' if 'metadata' in cols else ''}key_value_pairs FROM systems LIMIT 5"
+        )
+        rows = cursor.fetchall()
+        found_runid = False
+        for row in rows:
+            import json
 
-                meta = json.loads(row[0]) if len(row) > 1 and row[0] else {}
-                kv = json.loads(row[-1]) if row[-1] else {}
-                if meta.get("run_id") or kv.get("run_id"):
-                    found_runid = True
-                    break
-            assert found_runid is True, f"No run_id persisted in {optimizer} DB rows"
+            meta = json.loads(row[0]) if len(row) > 1 and row[0] else {}
+            kv = json.loads(row[-1]) if row[-1] else {}
+            if meta.get("run_id") or kv.get("run_id"):
+                found_runid = True
+                break
+        assert found_runid is True, f"No run_id persisted in {optimizer} DB rows"
 
     # Verify GA-specific logs
     if optimizer == "ga":
-        trial1_log = os.path.join(trial1_dir, "population.log")
-        assert os.path.exists(trial1_log)
+        assert os.path.exists(os.path.join(run_dir, "population.log"))
 
     # Verify XYZ files
     if results:
@@ -139,7 +133,7 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
             atoms_from_file = read(str(xyz_files[0]))
             assert len(atoms_from_file) == 3
             assert "provenance" in atoms_from_file.info
-            assert "trial_id" in atoms_from_file.info["provenance"]
+            # trial_id removed: assert "trial_id" in atoms_from_file.info["provenance"]
 
 
 @pytest.mark.integration
@@ -219,10 +213,8 @@ def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
         assert final_xyz_dir.is_dir()
         assert list(final_xyz_dir.glob("*.xyz")), "expected exported minima XYZ files"
 
-        trial_dir = run_dir / "trial_1"
-        assert trial_dir.is_dir()
-        assert (trial_dir / "ga_go.db").exists()
-        assert not (run_dir / "trial_2").exists()
+        run_dir = Path(run_dirs[0])
+        assert (run_dir / "ga_go.db").exists()
 
     assert_exported_minima_xyz_equal(
         out_a / "final_unique_minima",
@@ -282,12 +274,11 @@ def test_full_workflow_parallel_offspring_reproducible(tmp_path):
     )
 
 
-def test_multi_trial_campaign(tmp_path, rng):
-    """Test multi-trial campaign with unique minima filtering."""
+def test_single_run_campaign(tmp_path, rng):
+    """Test single run creates DB at run root."""
     comp = ["Pt", "Pt"]
-    output_dir = str(tmp_path / "multi_trial")
+    output_dir = str(tmp_path / "single_run")
 
-    # Run 2 BH trials (handled by run_trials now, not internally by bh_go)
     results = run_trials(
         composition=comp,
         global_optimizer="bh",
@@ -296,35 +287,24 @@ def test_multi_trial_campaign(tmp_path, rng):
             "dr": 0.3,
             "niter_local_relaxation": 2,
             "temperature": 0.01,
+            "system_type": "gas_cluster",
         },
-        n_trials=2,  # run_trials handles multiple trials
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Verify results are sorted by energy (lowest first)
     if len(results) > 1:
         energies = [energy for energy, _ in results]
         assert energies == sorted(energies)
 
-    # Verify that run_trials created separate directories for each trial
-    # New structure: run_*/trial_*/
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
-    assert len(run_dirs) > 0
+    assert len(run_dirs) == 1
     run_dir = run_dirs[0]
-
-    for i in range(1, 3):
-        trial_dir = os.path.join(run_dir, f"trial_{i}")
-        assert os.path.exists(trial_dir), (
-            f"Expected trial directory {trial_dir} to exist"
-        )
-        # Check for database file in each trial directory
-        db_file = os.path.join(trial_dir, "bh_go.db")
-        assert os.path.exists(db_file), f"Expected database file {db_file} to exist"
+    assert os.path.exists(os.path.join(run_dir, "bh_go.db"))
 
 
 @pytest.mark.slow
@@ -515,22 +495,25 @@ def test_output_directory_creation(tmp_path, rng):
     results = run_trials(
         composition=comp,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 1},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 1,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Verify directory structure (new structure: run_*/trial_*/)
+    # Verify directory structure (new structure: run_*/)
     assert os.path.exists(output_dir)
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
-    assert os.path.exists(os.path.join(run_dir, "trial_1"))
+    assert os.path.exists(run_dir)
     assert os.path.exists(os.path.join(output_dir, "final_unique_minima"))
 
     # Verify file naming convention
@@ -539,17 +522,16 @@ def test_output_directory_creation(tmp_path, rng):
         xyz_files = list(Path(xyz_dir).glob("*.xyz"))
         assert len(xyz_files) > 0
 
-        # Check naming convention: Pt1_minimum_01_run_{run_id}_trial_{trial_id}.xyz
+        # Check naming convention: Pt1_minimum_01_run_{run_id}.xyz
         xyz_file = xyz_files[0]
         assert "minimum_" in xyz_file.name
         assert "run_" in xyz_file.name
-        assert "trial_" in xyz_file.name
         assert xyz_file.name.endswith(".xyz")
 
 
 @pytest.mark.integration
 def test_write_timing_json_at_run_level(tmp_path, rng):
-    """Timing JSON is written alongside metadata.json, not under trial_1/."""
+    """Timing JSON is written alongside metadata.json at run root."""
     output_dir = str(tmp_path / "timing_output")
     run_trials(
         composition=["Pt", "Pt"],
@@ -558,8 +540,8 @@ def test_write_timing_json_at_run_level(tmp_path, rng):
             "niter": 1,
             "niter_local_relaxation": 1,
             "write_timing_json": True,
+            "system_type": "gas_cluster",
         },
-        n_trials=1,
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -569,9 +551,7 @@ def test_write_timing_json_at_run_level(tmp_path, rng):
 
     run_dir = get_run_directories(output_dir)[0]
     run_timing = os.path.join(run_dir, "timing.json")
-    trial_timing = os.path.join(run_dir, "trial_1", "timing.json")
     assert os.path.isfile(run_timing)
-    assert not os.path.isfile(trial_timing)
 
 
 @pytest.mark.slow

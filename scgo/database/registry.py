@@ -31,7 +31,6 @@ class DatabaseRegistry:
         db_path: Path,
         composition: list[str] | None = None,
         run_id: str | None = None,
-        trial_id: int | None = None,
         metadata: dict | None = None,
     ) -> None:
         """Register a database in the index.
@@ -40,7 +39,6 @@ class DatabaseRegistry:
             db_path: Path to database file
             composition: Composition (e.g., ["Pt", "Pt"])
             run_id: Run identifier
-            trial_id: Trial number
             metadata: Additional metadata to store
         """
         # Build database entry
@@ -62,7 +60,6 @@ class DatabaseRegistry:
             "composition": composition or [],
             "composition_str": self._make_composition_key(composition or []),
             "run_id": run_id,
-            "trial_id": trial_id,
             "metadata": metadata or {},
         }
 
@@ -93,14 +90,12 @@ class DatabaseRegistry:
         self,
         composition: list[str] | None = None,
         run_id: str | None = None,
-        trial_id: int | None = None,
     ) -> list[Path]:
         """Find databases matching criteria.
 
         Args:
             composition: Filter by composition
             run_id: Filter by run ID
-            trial_id: Filter by trial number
 
         Returns:
             List of matching database paths
@@ -113,9 +108,6 @@ class DatabaseRegistry:
                 continue
 
             if run_id and entry["run_id"] != run_id:
-                continue
-
-            if trial_id is not None and entry["trial_id"] != trial_id:
                 continue
 
             db_path = self.base_dir / entry["path"]

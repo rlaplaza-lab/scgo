@@ -32,6 +32,27 @@ All high-level ``run_*`` functions share the same contract:
 
 **Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list of user overrides, then the resolved GO optimizer settings or TS NEB configuration. See :mod:`scgo.utils.run_helpers`.
 
+Verbosity levels (``run_*`` ``verbosity=`` argument):
+
+.. list-table::
+   :widths: 15 85
+   :header-rows: 1
+
+   * - Level
+     - Behaviour
+   * - 0
+     - Warnings and errors only; no progress bars
+   * - 1
+     - Normal operation: parameter merge logs, timing summaries, campaign progress
+   * - 2
+     - DEBUG-level library messages (third-party loggers still suppressed in HPC mode)
+   * - 3
+     - TRACE-level diagnostics (deepest SCGO logging)
+
+Configure the root logger with :func:`~scgo.utils.logging.configure_logging`. Set
+``SCGO_LOCAL_DEV=1`` for milder third-party log suppression during local
+development (see :doc:`/installation`).
+
 **Workflow**
 
 .. code-block:: python
@@ -113,9 +134,6 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``validate_with_hessian``
      - ``False``
      - Run vibrational analysis
-   * - ``n_trials``
-     - ``1``
-     - Number of independent runs
    * - ``tag_final_minima``
      - ``True``
      - Mark final structures in database

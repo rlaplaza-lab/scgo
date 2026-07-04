@@ -583,15 +583,15 @@ class TestCampaignFunctionValidationIntegration:
                 calculator_for_global_optimization=EMT(),
             )
 
-    @pytest.mark.parametrize("n_trials", [-1])
-    def test_run_trials_invalid_n_trials(self, n_trials):
-        """Test run_trials with invalid n_trials."""
-        with pytest.raises((ValueError, TypeError)):
+    def test_run_trials_missing_system_type(self, rng):
+        """Test run_trials requires system_type in global_optimizer_kwargs."""
+        with pytest.raises(ValueError, match="system_type must be set"):
             run_trials(
                 composition=["Pt", "Pt"],
                 global_optimizer="bh",
-                calculator_for_global_optimization=EMT(),
-                n_trials=n_trials,
+                global_optimizer_kwargs={},
+                output_dir="out",
+                rng=rng,
             )
 
     def test_scgo_invalid_composition(self):
@@ -612,15 +612,15 @@ class TestCampaignFunctionValidationIntegration:
                 calculator_for_global_optimization=EMT(),
             )
 
-    @pytest.mark.parametrize("n_trials", [-1])
-    def test_scgo_invalid_n_trials(self, n_trials):
-        """Test scgo with invalid n_trials."""
-        with pytest.raises((ValueError, TypeError)):
+    def test_scgo_missing_system_type(self, rng):
+        """Test scgo requires system_type in global_optimizer_kwargs."""
+        with pytest.raises(ValueError, match="system_type must be set"):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="bh",
-                calculator_for_global_optimization=EMT(),
-                n_trials=n_trials,
+                global_optimizer_kwargs={},
+                output_dir="out",
+                rng=rng,
             )
 
 

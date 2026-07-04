@@ -14,10 +14,10 @@ from tests.test_utils import assert_db_final_row
 def test_ts_search_uses_only_tagged_final_minima(tmp_path):
     base = tmp_path
 
-    # Build run dir structure: Pt_searches/run_test/trial_1/
+    # Build run dir structure: Pt_searches/run_test/
     formula_dir = base / "Pt_searches"
     run_dir = formula_dir / "run_test"
-    trial_dir = run_dir / "trial_1"
+    trial_dir = run_dir
     trial_dir.mkdir(parents=True)
 
     db_path = trial_dir / "ga_go.db"
@@ -66,14 +66,12 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
     atoms_c1 = Atoms("Pt", positions=[[0, 0, 0]])
     atoms_c1.info.setdefault("provenance", {})
     atoms_c1.info["provenance"]["run_id"] = "run_test"
-    atoms_c1.info["provenance"]["trial_id"] = 1
     atoms_c1.info.setdefault("metadata", {})
     atoms_c1.info["metadata"]["confid"] = "c1"
 
     atoms_c2 = Atoms("Pt", positions=[[0, 0, 0]])
     atoms_c2.info.setdefault("provenance", {})
     atoms_c2.info["provenance"]["run_id"] = "run_test"
-    atoms_c2.info["provenance"]["trial_id"] = 1
     atoms_c2.info.setdefault("metadata", {})
     atoms_c2.info["metadata"]["confid"] = "c2"
 
@@ -134,7 +132,7 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
     """TS loader with prefer_final_unique=True must see every tagged final minimum."""
     formula_dir = tmp_path / "Pt2_searches"
     run_dir = formula_dir / "run_loader"
-    trial_dir = run_dir / "trial_1"
+    trial_dir = run_dir
     trial_dir.mkdir(parents=True)
     db_path = trial_dir / "ga_go.db"
 
@@ -161,21 +159,19 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
 
     close_data_connection(da)
     get_registry(formula_dir).register_database(
-        db_path, composition=["Pt", "Pt"], run_id="run_loader", trial_id=1
+        db_path, composition=["Pt", "Pt"], run_id="run_loader"
     )
 
     db_minima = extract_minima_from_database_file(
-        db_path, "run_loader", 1, require_final=False
+        db_path, "run_loader", None, require_final=False
     )
     assert len(db_minima) == len(energies)
 
     final_info = []
     for rank, (energy, atoms) in enumerate(db_minima, start=1):
-        # extract_minima_from_database_file annotates in-memory provenance only;
-        # trial DB rows may lack run_id/trial_id in key_value_pairs.
+        # extract_minima_from_database_file annotates in-memory provenance only.
         for key in ("metadata", "provenance", "key_value_pairs"):
             atoms.info.get(key, {}).pop("run_id", None)
-            atoms.info.get(key, {}).pop("trial_id", None)
         final_info.append(
             {
                 "atoms": atoms,

@@ -1,6 +1,6 @@
 """Core workflow functions for global optimization.
 
-Coordinates trials, manages output, filters results, validates minima.
+Coordinates datetime-tagged runs, manages output, filters results, validates minima.
 """
 
 from __future__ import annotations
@@ -60,10 +60,6 @@ from scgo.utils.run_tracking import (
     RunMetadataJSONEncoder,
     ensure_run_id,
     save_run_metadata,
-)
-from scgo.utils.timing_report import (
-    build_run_timing_document,
-    write_run_timing_file,
 )
 from scgo.utils.ts_provenance import ts_output_provenance
 from scgo.utils.validation import validate_composition
@@ -367,23 +363,21 @@ def scgo(
     output_dir: str,
     rng: np.random.Generator,
     calculator_for_global_optimization: Calculator | None = None,
-    trial_id: int = 1,
     verbosity: int = 1,
     run_id: str | None = None,
     clean: bool = False,
     timing_output_dir: str | None = None,
     timing_collector: list[dict[str, Any]] | None = None,
 ) -> list[tuple[float, Atoms]]:
-    """Run a single global optimization trial for a fixed composition.
+    """Run global optimization for a fixed composition into one run directory.
 
     Args:
         composition: List of atomic symbols.
         global_optimizer: Optimizer name ("simple", "bh", or "ga").
         global_optimizer_kwargs: Optimizer parameters.
-        output_dir: Trial output directory.
+        output_dir: Run output directory (typically ``run_*/``).
         rng: Random number generator.
         calculator_for_global_optimization: ASE calculator.
-        trial_id: Trial identifier.
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
         run_id: Optional run ID.
         clean: Start fresh if True.
@@ -410,9 +404,6 @@ def scgo(
     # RNG must be a numpy Generator (required for deterministic behavior)
     if not isinstance(rng, np.random.Generator):
         raise ValueError("rng must be a numpy.random.Generator")
-
-    if not isinstance(trial_id, int) or trial_id < 1:
-        raise ValueError("trial_id must be a positive integer")
 
     if not isinstance(verbosity, int) or verbosity not in (0, 1, 2, 3):
         raise ValueError("verbosity must be one of 0, 1, 2, or 3")
@@ -447,7 +438,7 @@ def scgo(
         )
     optimizer_kwargs = filter_dict_keys(
         global_optimizer_kwargs,
-        {"n_trials", "run_id", "clean", "timing_output_dir", "timing_collector"},
+        {"run_id", "clean", "timing_output_dir", "timing_collector"},
     )
     timing_kwargs: dict[str, Any] = {}
     if timing_output_dir is not None:
@@ -581,7 +572,7 @@ def scgo(
         return []
 
     for _, atoms_obj in all_minima:
-        add_metadata(atoms_obj, run_id=run_id, trial_id=trial_id)
+        add_metadata(atoms_obj, run_id=run_id)
 
     return all_minima
 
@@ -590,7 +581,6 @@ def run_trials(
     composition: list[str],
     global_optimizer: str,
     global_optimizer_kwargs: dict[str, Any],
-    n_trials: int,
     output_dir: str,
     rng: np.random.Generator,
     calculator_for_global_optimization: Calculator | None = None,
@@ -600,14 +590,13 @@ def run_trials(
     run_id: str | None = None,
     clean: bool = False,
 ) -> list[tuple[float, Atoms]]:
-    """Run multiple global optimization trials, filter and validate results.
+    """Run global optimization once, filter and validate results across runs.
 
     Args:
         composition: List of atomic symbols.
         global_optimizer: Optimizer name (e.g., "bh", "ga").
         global_optimizer_kwargs: Optimizer parameters.
-        n_trials: Number of trials.
-        output_dir: Output directory.
+        output_dir: Searches directory (parent of ``run_*/`` dirs).
         rng: Random number generator.
         calculator_for_global_optimization: ASE calculator.
         validate_with_hessian: Whether to validate with Hessian.
@@ -630,13 +619,10 @@ def run_trials(
         raise ValueError("global_optimizer_kwargs must be a dictionary")
 
     if not isinstance(global_optimizer_kwargs.get("system_type"), str):
-        global_optimizer_kwargs = {
-            **global_optimizer_kwargs,
-            "system_type": "gas_cluster",
-        }
-
-    if not isinstance(n_trials, int) or n_trials <= 0:
-        raise ValueError("n_trials must be positive")
+        raise ValueError(
+            "system_type must be set in global_optimizer_kwargs "
+            "(e.g. 'gas_cluster', 'surface_cluster')."
+        )
 
     if not isinstance(output_dir, str) or not output_dir:
         raise ValueError("output_dir must be a non-empty string")
@@ -675,7 +661,6 @@ def run_trials(
     params = {
         "global_optimizer": global_optimizer,
         "global_optimizer_kwargs": gok_for_metadata,
-        "n_trials": n_trials,
         "validate_with_hessian": validate_with_hessian,
         "verbosity": verbosity,
         "clean": clean,
@@ -713,46 +698,22 @@ def run_trials(
 
     all_raw_minima = []
     write_timing = _write_timing_json_enabled(global_optimizer_kwargs)
-    trial_timing_payloads: list[dict[str, Any]] = []
 
-    for trial_idx in range(n_trials):
-        trial_rng = create_child_rng(rng)
+    run_rng = create_child_rng(rng)
+    logger.info("Running global optimization for run %s", run_id)
 
-        trial_dir = os.path.join(run_output_dir, f"trial_{trial_idx + 1}")
-        logger.info(f"Running trial {trial_idx + 1}/{n_trials}")
-
-        trial_collector: list[dict[str, Any]] = []
-        trial_results = scgo(
-            composition=composition,
-            global_optimizer=global_optimizer,
-            global_optimizer_kwargs=global_optimizer_kwargs,
-            output_dir=trial_dir,
-            rng=trial_rng,
-            calculator_for_global_optimization=calculator_for_global_optimization,
-            trial_id=trial_idx + 1,
-            verbosity=verbosity,
-            run_id=run_id,
-            clean=clean,
-            timing_output_dir=(
-                run_output_dir if write_timing and n_trials == 1 else None
-            ),
-            timing_collector=trial_collector if write_timing else None,
-        )
-
-        if trial_collector:
-            trial_timing_payloads.extend(trial_collector)
-
-        if trial_results:
-            all_raw_minima.extend(trial_results)
-
-    if write_timing and n_trials > 1 and trial_timing_payloads:
-        write_run_timing_file(
-            run_output_dir,
-            build_run_timing_document(
-                run_id=run_id,
-                trial_payloads=trial_timing_payloads,
-            ),
-        )
+    all_raw_minima = scgo(
+        composition=composition,
+        global_optimizer=global_optimizer,
+        global_optimizer_kwargs=global_optimizer_kwargs,
+        output_dir=run_output_dir,
+        rng=run_rng,
+        calculator_for_global_optimization=calculator_for_global_optimization,
+        verbosity=verbosity,
+        run_id=run_id,
+        clean=clean,
+        timing_output_dir=run_output_dir if write_timing else None,
+    )
 
     # Combine all results (previous + current) before deduplication
     if previous_minima:
@@ -768,7 +729,7 @@ def run_trials(
         return []
 
     logger.info(
-        f"All trials complete. Found {len(all_raw_minima)} raw minima from current run."
+        f"Run complete. Found {len(all_raw_minima)} raw minima from current run."
     )
     logger.info("Filtering for unique structures across all runs...")
     surface_cfg = global_optimizer_kwargs.get("surface_config")
@@ -790,7 +751,7 @@ def run_trials(
             f"Validating {len(unique_candidates)} unique candidates to confirm they are true minima...",
         )
 
-        # Ensure validation runs in a separate directory to avoid overwriting trial files
+        # Ensure validation runs in a separate directory to avoid overwriting run files
         if hasattr(calculator_for_global_optimization, "directory"):
             val_dir = os.path.join(output_dir, "validation")
             ensure_directory_exists(val_dir)
@@ -868,14 +829,9 @@ def run_trials(
     written_xyz: set[Path] = set()
     for i, (_energy, atoms) in enumerate(final_minima):
         provenance = get_provenance(atoms)
-        trial_id = provenance.get("trial_id", "N/A")
         atoms_run_id = provenance.get("run_id", run_id)
 
-        # Format: Pt2_minimum_01_run_20260120_003007_trial_1.xyz
-        # (run_id already contains "run_" prefix, so don't add it again)
-        filename = (
-            f"{composition_str}_minimum_{i + 1:02d}_{atoms_run_id}_trial_{trial_id}.xyz"
-        )
+        filename = f"{composition_str}_minimum_{i + 1:02d}_{atoms_run_id}.xyz"
         filepath = os.path.join(final_xyz_dir, filename)
 
         # Match DB rows by pre-alignment geometry (same frame as relaxed candidates).

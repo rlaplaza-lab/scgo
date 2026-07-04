@@ -120,7 +120,7 @@ back to project storage.
 Discovery may write ``.scgo_db_registry.json`` and ``.scgo_db_registry.lock``
 (with ``flock`` on Linux) for fast database listing. When your run lives under a
 directory whose name ends in ``_searches``, the index is kept at that parent
-only (not beside every ``trial_*`` folder). If your filesystem does not honor
+only at the searches root (not in nested work-unit folders). If your filesystem does not honor
 ``flock``, use separate output directories per job or avoid parallel registry
 updates.
 

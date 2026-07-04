@@ -225,7 +225,6 @@ def validate_algorithm_params(
         "bh": {
             "optimizer",
             "fmax",
-            "n_trials",
             "niter",
             "niter_local_relaxation",
             "temperature",
@@ -255,7 +254,6 @@ def validate_algorithm_params(
         "ga": {
             "optimizer",
             "fmax",
-            "n_trials",
             "niter",
             "niter_local_relaxation",
             "population_size",
@@ -482,9 +480,7 @@ def prepare_algorithm_kwargs(
                 f"simple optimizer only supports system_type='gas_cluster', got {system_type!r}."
             )
 
-    base_kwargs = filter_dict_keys(
-        algo_params, {"n_trials", "niter", "population_size"}
-    )
+    base_kwargs = filter_dict_keys(algo_params, {"niter", "population_size"})
     base_kwargs.update(resolved)
     base_kwargs["system_type"] = system_type
     if surface_config is not None:
@@ -579,7 +575,6 @@ def log_ts_configuration(
 def log_configuration(
     params: dict[str, Any],
     chosen_go: str,
-    n_trials: int,
     cluster_formula: str,
     n_atoms: int,
     global_optimizer_kwargs: dict[str, Any],
@@ -593,7 +588,6 @@ def log_configuration(
     Args:
         params: Full parameter dictionary.
         chosen_go: Name of chosen algorithm.
-        n_trials: Number of trials to run.
         cluster_formula: Chemical formula string.
         n_atoms: Number of atoms.
         global_optimizer_kwargs: Resolved algorithm parameters.
@@ -622,8 +616,6 @@ def log_configuration(
         chosen_go.upper(),
         params["calculator"],
     )
-    if n_trials > 1:
-        logger.info("SCGO config: trials=%d", n_trials)
 
     calculator_kwargs = params.get("calculator_kwargs", {})
     if calculator_kwargs:

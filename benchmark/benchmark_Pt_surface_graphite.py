@@ -3,8 +3,9 @@
 
 Mirrors ``benchmark/benchmark_Pt.py`` for a surface system: sweeps Pt cluster
 sizes with one seed, runs SCGO over the range, and logs per-size minima from
-the campaign. Outputs live under ``benchmark/results/pt_surface_graphite/`` (same
-layout as gas-phase benchmarks: ``<Formula>_searches`` per size). See
+the campaign. Outputs live under ``benchmark/results/pt_surface_graphite/`` (flat
+campaign root; gas-phase benchmarks add a ``{formula}_{backend}_{model}/``
+wrapper before ``{Formula}_searches``). See
 ``benchmark.benchmark_common.PT_SURFACE_GRAPHITE_RESULTS_DIR``.
 """
 

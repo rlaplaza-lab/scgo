@@ -701,7 +701,7 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
 
     # Helper to create a run dir with a DB named <db_name>
     def _make_db(db_name: str):
-        run_dir = tmp_path / "Pt2_searches" / "run_20260101_120000" / "trial_1"
+        run_dir = tmp_path / "Pt2_searches" / "run_20260101_120000"
         run_dir.mkdir(parents=True, exist_ok=True)
         db_path = run_dir / db_name
 
@@ -945,7 +945,7 @@ def test_run_transition_state_search_auto_tags_mixed_db_formats(tmp_path):
 
     # Helper to create a run dir containing a DB with two relaxed minima
     def _make_db(db_name: str):
-        run_dir = tmp_path / "Pt2_searches" / "run_20260102_120000" / "trial_1"
+        run_dir = tmp_path / "Pt2_searches" / "run_20260102_120000"
         run_dir.mkdir(parents=True, exist_ok=True)
         db_path = run_dir / db_name
 

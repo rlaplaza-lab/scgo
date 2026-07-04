@@ -17,7 +17,7 @@ def _create_dummy_db(db_path: Path) -> None:
 
 
 def test_get_scgo_metadata_returns_empty_for_non_scgo_db(tmp_path: Path):
-    run_dir = tmp_path / "run_000" / "trial_1"
+    run_dir = tmp_path / "run_000"
     db_path = run_dir / "ga_go.db"
     _create_dummy_db(db_path)
 
@@ -26,7 +26,7 @@ def test_get_scgo_metadata_returns_empty_for_non_scgo_db(tmp_path: Path):
 
 
 def test_find_databases_skips_non_scgo_db(tmp_path: Path):
-    run_dir = tmp_path / "run_000" / "trial_1"
+    run_dir = tmp_path / "run_000"
     db_path = run_dir / "ga_go.db"
     _create_dummy_db(db_path)
 
@@ -38,7 +38,7 @@ def test_find_databases_skips_non_scgo_db(tmp_path: Path):
 
 
 def test_iter_database_minima_skips_non_scgo_db(tmp_path: Path):
-    run_dir = tmp_path / "run_000" / "trial_1"
+    run_dir = tmp_path / "run_000"
     db_path = run_dir / "ga_go.db"
     _create_dummy_db(db_path)
 
@@ -52,7 +52,7 @@ def test_setup_database_marks_scgo_db(tmp_path: Path):
     from scgo.database.connection import close_data_connection
     from scgo.database.helpers import setup_database
 
-    run_dir = tmp_path / "run_000" / "trial_1"
+    run_dir = tmp_path / "run_000"
     template = Atoms(["Pt", "Pt"], positions=[(0, 0, 0), (0, 0, 1)])
 
     da = setup_database(run_dir, "ga_go.db", template, initial_candidate=template)
@@ -71,7 +71,7 @@ def test_find_databases_includes_scgo_db(tmp_path: Path):
 
     from scgo.database.helpers import setup_database
 
-    run_dir = tmp_path / "run_000" / "trial_1"
+    run_dir = tmp_path / "run_000"
     template = Atoms(["Pt", "Pt"], positions=[(0, 0, 0), (0, 0, 1)])
 
     # Create a proper SCGO DB

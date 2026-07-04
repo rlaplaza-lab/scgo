@@ -94,22 +94,22 @@ def test_directory_structure_creation(tmp_path, rng):
     comp = ["Pt", "Pt"]
     output_dir = str(tmp_path / "test_campaign")
 
-    # Run minimal trial with 2 independent trials
+    # Run a single datetime-tagged run
     run_trials(
         composition=comp,
         global_optimizer="bh",
         global_optimizer_kwargs={
             "niter": 1,
             "niter_local_relaxation": 2,
+            "system_type": "gas_cluster",
         },
-        n_trials=2,  # run_trials now handles multiple trials
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Verify directory structure (new structure: run_*/trial_*/)
+    # Verify directory structure (new structure: run_*/)
     assert os.path.exists(output_dir)
 
     # Find run directory (auto-generated run_id)
@@ -118,18 +118,9 @@ def test_directory_structure_creation(tmp_path, rng):
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
-
-    trial1_dir = os.path.join(run_dir, "trial_1")
-    trial2_dir = os.path.join(run_dir, "trial_2")
-    assert os.path.exists(trial1_dir)
-    assert os.path.exists(trial2_dir)
+    assert os.path.exists(run_dir)
     assert os.path.exists(os.path.join(output_dir, "final_unique_minima"))
-
-    # Verify each trial directory contains a single database file
-    trial1_db = os.path.join(trial1_dir, "bh_go.db")
-    trial2_db = os.path.join(trial2_dir, "bh_go.db")
-    assert os.path.exists(trial1_db)
-    assert os.path.exists(trial2_db)
+    assert os.path.exists(os.path.join(run_dir, "bh_go.db"))
 
 
 def test_file_naming_convention(tmp_path, rng):
@@ -141,8 +132,11 @@ def test_file_naming_convention(tmp_path, rng):
     run_trials(
         composition=comp,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 2},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 2,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -154,13 +148,13 @@ def test_file_naming_convention(tmp_path, rng):
     xyz_files = list(Path(xyz_dir).glob("*.xyz"))
     assert len(xyz_files) > 0
 
-    # Check naming convention: Pt2_minimum_01_run_{run_id}_trial_{trial_id}.xyz
+    # Check naming convention: Pt2_minimum_01_run_{run_id}.xyz
     xyz_file = xyz_files[0]
     filename = xyz_file.name
 
     assert "minimum_" in filename
     assert "run_" in filename
-    assert "trial_" in filename
+    assert "minimum_" in filename
     assert filename.endswith(".xyz")
     assert "Pt2" in filename  # Should contain formula
 
@@ -174,21 +168,24 @@ def test_database_file_creation_and_format(tmp_path, rng):
     run_trials(
         composition=comp,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 2},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 2,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Check BH database (new structure: run_*/trial_*/)
+    # Check BH database (new structure: run_*/)
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
-    bh_db_path = os.path.join(run_dir, "trial_1", "bh_go.db")
+    bh_db_path = os.path.join(run_dir, "bh_go.db")
     assert os.path.exists(bh_db_path)
 
     # Verify it's a valid SQLite database
@@ -212,22 +209,22 @@ def test_ga_database_file_creation(tmp_path, rng):
             "niter": 1,
             "population_size": 4,
             "niter_local_relaxation": 2,
-            "n_jobs_population_init": -2,  # Parallel for tests
+            "n_jobs_population_init": -2,
+            "system_type": "gas_cluster",
         },
-        n_trials=1,
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Check GA database (new structure: run_*/trial_*/)
+    # Check GA database (new structure: run_*/)
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
-    ga_db_path = os.path.join(run_dir, "trial_1", "ga_go.db")
+    ga_db_path = os.path.join(run_dir, "ga_go.db")
     assert os.path.exists(ga_db_path)
 
     # Verify it's a valid SQLite database
@@ -238,7 +235,7 @@ def test_ga_database_file_creation(tmp_path, rng):
         assert "systems" in tables
 
     # Check population log file
-    pop_log_path = os.path.join(run_dir, "trial_1", "population.log")
+    pop_log_path = os.path.join(run_dir, "population.log")
     assert os.path.exists(pop_log_path)
 
 
@@ -302,7 +299,7 @@ def test_multiple_xyz_files_generation(tmp_path):
     # Use new filename format with run_id
     run_id = "run_20250124_143022"
     for i, atoms in enumerate(structures):
-        xyz_path = xyz_dir / f"Pt2_minimum_{i + 1:02d}_run_{run_id}_trial_1.xyz"
+        xyz_path = xyz_dir / f"Pt2_minimum_{i + 1:02d}_{run_id}.xyz"
         write(str(xyz_path), atoms, format="xyz")
 
     # Verify all files were created
@@ -313,7 +310,7 @@ def test_multiple_xyz_files_generation(tmp_path):
     for i, xyz_file in enumerate(sorted(xyz_files)):
         assert f"minimum_{i + 1:02d}" in xyz_file.name
         assert "run_" in xyz_file.name
-        assert "trial_1" in xyz_file.name
+        assert run_id in xyz_file.name
 
 
 def test_xyz_file_with_bimetallic_clusters(tmp_path, au2pt2_atoms):
@@ -344,21 +341,24 @@ def test_database_file_size_validation(tmp_path, rng):
     run_trials(
         composition=comp,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 3, "niter_local_relaxation": 5},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 3,
+            "niter_local_relaxation": 5,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Check database file size (new structure: run_*/trial_*/)
+    # Check database file size (new structure: run_*/)
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
-    db_path = os.path.join(run_dir, "trial_1", "bh_go.db")
+    db_path = os.path.join(run_dir, "bh_go.db")
     assert os.path.exists(db_path)
 
     file_size = os.path.getsize(db_path)
@@ -375,8 +375,11 @@ def test_output_directory_permissions(tmp_path, rng):
     run_trials(
         composition=comp,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 2},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 2,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -385,13 +388,13 @@ def test_output_directory_permissions(tmp_path, rng):
 
     # Check that directories are writable
     assert os.access(output_dir, os.W_OK)
-    # Check permissions (new structure: run_*/trial_*/)
+    # Check permissions (new structure: run_*/)
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
     run_dir = run_dirs[0]
-    assert os.access(os.path.join(run_dir, "trial_1"), os.W_OK)
+    assert os.access(run_dir, os.W_OK)
     assert os.access(os.path.join(output_dir, "final_unique_minima"), os.W_OK)
 
 
@@ -424,26 +427,29 @@ def test_empty_results_handling(tmp_path, rng):
     run_trials(
         composition=comp,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 1},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 1,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
     )
 
-    # Directory structure should still be created (new structure: run_*/trial_*/)
+    # Directory structure should still be created (new structure: run_*/)
     assert os.path.exists(output_dir)
     from scgo.utils.run_tracking import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0, "Expected at least one run directory"
     run_dir = run_dirs[0]
-    assert os.path.exists(os.path.join(run_dir, "trial_1"))
+    assert os.path.exists(run_dir)
     assert os.path.exists(os.path.join(output_dir, "final_unique_minima"))
 
     # Database should exist even if empty
-    db_path = os.path.join(run_dir, "trial_1", "bh_go.db")
+    db_path = os.path.join(run_dir, "bh_go.db")
     assert os.path.exists(db_path)
 
 
@@ -458,7 +464,7 @@ def test_final_xyz_is_canonicalized_before_write(tmp_path, rng, monkeypatch):
         cell=[10.0, 10.0, 10.0],
         pbc=False,
     )
-    add_metadata(atoms, raw_score=-1.0, run_id="run_test", trial_id=1)
+    add_metadata(atoms, raw_score=-1.0, run_id="run_test")
 
     def fake_scgo(**kwargs):
         return [(-1.0, atoms.copy())]
@@ -469,8 +475,11 @@ def test_final_xyz_is_canonicalized_before_write(tmp_path, rng, monkeypatch):
     run_trials(
         composition=["Pt", "Pt"],
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 1},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 1,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,

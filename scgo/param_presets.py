@@ -160,7 +160,6 @@ def get_default_params() -> dict[str, Any]:
         "fmax_threshold": 0.05,
         "check_hessian": True,
         "imag_freq_threshold": 50.0,
-        "n_trials": 1,
         "tag_final_minima": True,
         "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
         "allow_cluster_fragmentation": False,

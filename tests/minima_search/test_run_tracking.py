@@ -100,8 +100,11 @@ def test_run_metadata_includes_run_params(tmp_path, rng):
     run_trials(
         composition=["Pt", "Pt", "Pt"],
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 1, "niter_local_relaxation": 1},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 1,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -115,7 +118,6 @@ def test_run_metadata_includes_run_params(tmp_path, rng):
     assert loaded is not None
     assert isinstance(loaded.params, dict)
     assert loaded.params.get("global_optimizer") == "bh"
-    assert loaded.params.get("n_trials") == 1
     assert loaded.params.get("validate_with_hessian") is False
 
 
@@ -238,8 +240,11 @@ def test_result_merging_across_runs(tmp_path, rng):
     results1 = run_trials(
         composition=composition,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 2, "niter_local_relaxation": 5},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 2,
+            "niter_local_relaxation": 5,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -253,8 +258,11 @@ def test_result_merging_across_runs(tmp_path, rng):
     results2 = run_trials(
         composition=composition,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 2, "niter_local_relaxation": 5},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 2,
+            "niter_local_relaxation": 5,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -292,8 +300,11 @@ def test_clean_mode(tmp_path, rng):
     run_trials(
         composition=composition,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 2, "niter_local_relaxation": 5},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 2,
+            "niter_local_relaxation": 5,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -307,8 +318,11 @@ def test_clean_mode(tmp_path, rng):
     results2 = run_trials(
         composition=composition,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 2, "niter_local_relaxation": 5},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 2,
+            "niter_local_relaxation": 5,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -329,8 +343,11 @@ def test_composition_isolation(tmp_path, rng):
     run_trials(
         composition=["Pt", "Pt", "Pt"],
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 2, "niter_local_relaxation": 5},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 2,
+            "niter_local_relaxation": 5,
+            "system_type": "gas_cluster",
+        },
         output_dir=str(tmp_path / "Pt3_searches"),
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -348,8 +365,8 @@ def test_composition_isolation(tmp_path, rng):
             "niter": 1,
             "niter_local_relaxation": 5,
             "population_size": 4,
+            "system_type": "gas_cluster",
         },
-        n_trials=1,
         output_dir=str(tmp_path / "Pt4_searches"),
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -366,8 +383,8 @@ def test_composition_isolation(tmp_path, rng):
     assert pt4_dir.exists()
 
     # Verify databases are separate
-    pt3_db = pt3_dir / "run_20250124_143022" / "trial_1" / "bh_go.db"
-    pt4_db = pt4_dir / "run_20250124_143022" / "trial_1" / "ga_go.db"
+    pt3_db = pt3_dir / "run_20250124_143022" / "bh_go.db"
+    pt4_db = pt4_dir / "run_20250124_143022" / "ga_go.db"
     assert pt3_db.exists() and pt4_db.exists(), (
         "Expected both Pt3 and Pt4 DB files to exist"
     )
@@ -398,8 +415,11 @@ def test_no_duplicates_across_runs(tmp_path):
     _results1 = run_trials(
         composition=composition,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 5, "niter_local_relaxation": 10},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 5,
+            "niter_local_relaxation": 10,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -413,8 +433,11 @@ def test_no_duplicates_across_runs(tmp_path):
     results2 = run_trials(
         composition=composition,
         global_optimizer="bh",
-        global_optimizer_kwargs={"niter": 5, "niter_local_relaxation": 10},
-        n_trials=1,
+        global_optimizer_kwargs={
+            "niter": 5,
+            "niter_local_relaxation": 10,
+            "system_type": "gas_cluster",
+        },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -483,7 +506,6 @@ def test_campaign_run_id_consistency(tmp_path):
         "optimizer_params": {
             "bh": {"niter": 1, "niter_local_relaxation": 2},
         },
-        "n_trials": 1,
     }
 
     campaign_dir = tmp_path / "campaign"

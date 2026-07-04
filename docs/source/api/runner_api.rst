@@ -43,7 +43,7 @@ All functions accept:
 - ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, or ``"surface_cluster_adsorbate"`` (run argument only — not inside preset dicts)
 - ``surface_config``: required for surface system types; must agree across run argument and preset dicts when both are set
 - ``adsorbates``: ASE Atoms or list of Atoms, required for adsorbate system types
-- ``verbosity``: 0=quiet, 1=normal (logs parameter merge provenance and resolved settings), 2+=verbose
+- ``verbosity``: 0=quiet (warnings only), 1=normal (parameter merge and timing summaries), 2=debug (library detail), 3=trace (custom TRACE level for deep diagnostics). Progress bars are shown when ``verbosity >= 1`` (see :func:`~scgo.utils.logging.should_show_progress`).
 
 See :doc:`/parameters` (*Parameter resolution*) for merge rules and logging behaviour.
 

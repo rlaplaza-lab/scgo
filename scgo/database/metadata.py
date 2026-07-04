@@ -24,7 +24,6 @@ _debug_logged_generations: set[int] = set()
 def add_metadata(
     atoms: Atoms,
     run_id: str | None = None,
-    trial_id: int | None = None,
     generation: int | None = None,
     **extra_metadata: Any,
 ) -> None:
@@ -38,8 +37,6 @@ def add_metadata(
     # Store standard metadata
     if run_id is not None:
         metadata["run_id"] = run_id
-    if trial_id is not None:
-        metadata["trial_id"] = trial_id
     if generation is not None:
         metadata["generation"] = generation
 
@@ -52,16 +49,11 @@ def add_metadata(
         kv["raw_score"] = extra_metadata["raw_score"]
     if run_id is not None:
         kv["run_id"] = run_id
-    if trial_id is not None:
-        kv["trial_id"] = trial_id
 
-    # Provenance for run/trial discovery (used by scgo() results and downstream)
-    if run_id is not None or trial_id is not None:
+    # Provenance for run discovery (used by scgo() results and downstream)
+    if run_id is not None:
         prov = atoms.info.setdefault("provenance", {})
-        if run_id is not None:
-            prov["run_id"] = run_id
-        if trial_id is not None:
-            prov["trial_id"] = trial_id
+        prov["run_id"] = run_id
 
     # TS search provenance: minima_source_db, minima_confids, minima_unique_ids,
     # ts_endpoint_provenance (per-endpoint dicts linking TS to GO minima rows).
@@ -172,10 +164,9 @@ def update_metadata(atoms: Atoms, **updates: Any) -> None:
 def persist_provenance(
     atoms: Atoms,
     run_id: str | None = None,
-    trial_id: int | None = None,
 ) -> None:
-    """Persist run/trial provenance to ``atoms.info`` for discovery."""
-    add_metadata(atoms, run_id=run_id, trial_id=trial_id)
+    """Persist run provenance to ``atoms.info`` for discovery."""
+    add_metadata(atoms, run_id=run_id)
 
 
 def filter_by_metadata(
@@ -237,17 +228,16 @@ def mark_final_minima_in_db(
             continue
 
         run_id = get_metadata(atoms, "run_id")
-        trial = get_metadata(atoms, "trial_id")
 
         if db_paths:
             db_files = [Path(p) for p in db_paths]
         else:
-            db_files = discovery.find_databases(run_id=run_id, trial_id=trial)
+            db_files = discovery.find_databases(run_id=run_id)
 
         if not db_files:
             logger.warning(
                 "mark_final_minima_in_db: no databases found for "
-                f"run={run_id} trial={trial} — check output layout, registry, or pass db_paths"
+                f"run={run_id} — check output layout, registry, or pass db_paths"
             )
             continue
 
@@ -256,7 +246,6 @@ def mark_final_minima_in_db(
             updates_by_db.setdefault(db_key, []).append(
                 {
                     "run_id": run_id,
-                    "trial_id": trial,
                     "rank": rank,
                     "final_written": final_written,
                     "final_id": str(final_id),
@@ -294,15 +283,12 @@ def mark_final_minima_in_db(
                         existing = {}
 
                     run_id = update["run_id"]
-                    trial = update["trial_id"]
                     rank = update["rank"]
                     final_written = update["final_written"]
                     fid = update["final_id"]
 
                     if run_id is not None:
                         existing["run_id"] = run_id
-                    if trial is not None:
-                        existing.setdefault("trial_id", trial)
 
                     fw_val = (
                         os.path.basename(str(final_written))

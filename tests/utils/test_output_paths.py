@@ -72,7 +72,7 @@ def test_resolve_go_searches_dir_explicit(tmp_path):
 
 def test_resolve_go_searches_dir_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    assert resolve_go_searches_dir(None, "Pt5") == Path("Pt5_searches")
+    assert resolve_go_searches_dir(None, "Pt5") == (tmp_path / "Pt5_searches").resolve()
 
 
 def test_resolve_go_campaign_searches_dir(tmp_path):
@@ -91,3 +91,23 @@ def test_resolve_go_ts_pipeline_paths(tmp_path):
     searches, ts = resolve_go_ts_pipeline_paths(campaign, "Pt5")
     assert searches == campaign / "Pt5_searches"
     assert ts == campaign / "Pt5_ts_results"
+
+
+def test_resolve_campaign_root_none_uses_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert resolve_campaign_root(None) == tmp_path.resolve()
+
+
+def test_resolve_campaign_root_plain_campaign_path(tmp_path):
+    campaign = tmp_path / "benchmark" / "results"
+    campaign.mkdir(parents=True)
+    assert resolve_campaign_root(campaign) == campaign.resolve()
+
+
+def test_resolve_ts_campaign_paths_from_campaign_root(tmp_path):
+    campaign_root = tmp_path / "pt5_mace_mace_matpes_0"
+    campaign_root.mkdir(parents=True)
+    campaign, minima, ts = resolve_ts_campaign_paths(campaign_root, "Pt5")
+    assert campaign == campaign_root.resolve()
+    assert minima == campaign_root / "Pt5_searches"
+    assert ts == campaign_root / "Pt5_ts_results"

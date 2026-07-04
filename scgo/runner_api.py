@@ -397,7 +397,10 @@ def _default_go_ts_output_path(
     root = output_root if output_root is not None else Path.cwd() / "scgo_runs"
     p = Path(root).expanduser().resolve()
     stem = output_stem or get_cluster_formula(composition)
-    return (p / f"{stem}_{_calculator_slug_from_go_params(go_params)}").resolve()
+    path = (p / f"{stem}_{_calculator_slug_from_go_params(go_params)}").resolve()
+    if output_root is None:
+        _LOGGER.info("No output_dir provided; using default campaign root %s", path)
+    return path
 
 
 def _log_completion(kind: str, *, elapsed_s: float, details: str) -> None:
@@ -577,11 +580,6 @@ def _run_go_trials(
 
     validate_composition(composition, allow_empty=False, allow_tuple=False)
 
-    # Capture user intent for n_trials before defaults are merged
-    user_n_trials = params.get("n_trials") if params else None
-    user_params = None if params_already_merged else params
-    params_base = get_default_params()
-
     # Initialize and merge params with defaults
     if not params_already_merged:
         params = initialize_params(params)
@@ -626,17 +624,11 @@ def _run_go_trials(
     # Extract algorithm-specific parameters without mutation
     algo_params = params["optimizer_params"].get(chosen_go, {})
 
+    user_params = None if params_already_merged else params
+    params_base = get_default_params()
+
     # Validate algorithm-specific parameters
     validate_algorithm_params(algo_params, chosen_go, verbosity)
-
-    # Determine n_trials: use user value if provided, otherwise use smart default
-    # (params["n_trials"] contains the static default of 1, which we override for BH)
-    if user_n_trials is not None:
-        n_trials_param = user_n_trials
-    else:
-        n_trials_param = 10 if chosen_go == "bh" else 1
-        # Update params for consistent logging
-        params["n_trials"] = n_trials_param
 
     # Get calculator kwargs if provided
     calculator_kwargs = params.get("calculator_kwargs", {})
@@ -659,7 +651,6 @@ def _run_go_trials(
         "fmax_threshold",
         "check_hessian",
         "imag_freq_threshold",
-        "n_trials",
         "optimizer_params",
         "fitness_strategy",
         "diversity_reference_db",
@@ -687,7 +678,6 @@ def _run_go_trials(
     log_configuration(
         params=params,
         chosen_go=chosen_go,
-        n_trials=n_trials_param,
         cluster_formula=cluster_formula,
         n_atoms=n_atoms,
         global_optimizer_kwargs=global_optimizer_kwargs,
@@ -700,7 +690,6 @@ def _run_go_trials(
         composition=composition,
         global_optimizer=chosen_go,
         global_optimizer_kwargs=global_optimizer_kwargs,
-        n_trials=n_trials_param,  # Now configurable via params
         output_dir=main_output_dir,
         calculator_for_global_optimization=(
             calculator_for_global_optimization
@@ -941,7 +930,12 @@ def _run_go_ts_pipeline(
     output_path = (
         Path(output_dir).expanduser().resolve()
         if output_dir is not None
-        else Path(f"{formula}_campaign")
+        else _default_go_ts_output_path(
+            composition,
+            go_params=go_params,
+            output_stem=formula,
+            output_root=None,
+        )
     )
     output_path.mkdir(parents=True, exist_ok=True)
     searches_dir, ts_results_dir = resolve_go_ts_pipeline_paths(output_path, formula)
@@ -1106,6 +1100,7 @@ def run_go(
         adsorbate_fragment_template=ads_temp,
     )
     out_path = _resolved_path(output_dir)
+    searches_dir = str(resolve_go_searches_dir(output_dir, get_cluster_formula(comp)))
     t0 = perf_counter()
     minima = _run_go_trials(
         comp,
@@ -1122,7 +1117,7 @@ def run_go(
         _log_completion(
             "run_go",
             elapsed_s=perf_counter() - t0,
-            details=f"minima={len(minima)} output_dir={out_path}",
+            details=f"minima={len(minima)} output_dir={searches_dir}",
         )
     return minima
 
@@ -1187,6 +1182,15 @@ def run_go_campaign(
         )
 
     out_path = _resolved_path(output_dir)
+    campaign_root = (
+        str(Path(out_path).expanduser().resolve())
+        if out_path is not None
+        else str(
+            resolve_go_searches_dir(
+                None, get_cluster_formula(full_compositions[0])
+            ).parent
+        )
+    )
     t0 = perf_counter()
     campaign = _run_go_campaign_compositions(
         full_compositions,
@@ -1202,7 +1206,7 @@ def run_go_campaign(
         _log_completion(
             "run_go_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(campaign)} output_dir={out_path}",
+            details=f"compositions={len(campaign)} output_dir={campaign_root}",
         )
     return campaign
 

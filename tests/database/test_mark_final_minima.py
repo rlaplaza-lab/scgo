@@ -19,20 +19,18 @@ def _iter_system_kvps(db_path):
 
 def test_mark_final_minima_prefers_final_id(tmp_path):
     run_id = "run_final_id"
-    trial = 1
     dbpath = tmp_path / "fid.db"
     with connect(str(dbpath)) as db:
         db.write(
             Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]]),
             relaxed=True,
-            key_value_pairs={"run_id": run_id, "trial_id": trial, "raw_score": -0.5},
+            key_value_pairs={"run_id": run_id, "raw_score": -0.5},
         )
         db.write(
             Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]]),
             relaxed=True,
             key_value_pairs={
                 "run_id": run_id,
-                "trial_id": trial,
                 "raw_score": -0.5,
                 "final_id": "persisted-fid",
             },
@@ -41,7 +39,7 @@ def test_mark_final_minima_prefers_final_id(tmp_path):
     stamp_scgo_database(dbpath)
 
     atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
-    atoms.info["provenance"] = {"run_id": run_id, "trial_id": trial}
+    atoms.info["provenance"] = {"run_id": run_id}
     final_info = [
         {
             "atoms": atoms,
@@ -54,7 +52,7 @@ def test_mark_final_minima_prefers_final_id(tmp_path):
 
     from scgo.database.registry import get_registry
 
-    get_registry(tmp_path).register_database(dbpath, run_id=run_id, trial_id=trial)
+    get_registry(tmp_path).register_database(dbpath, run_id=run_id)
     mark_final_minima_in_db(final_info, base_dir=str(tmp_path))
 
     assert_db_final_row(str(dbpath), run_id, expect_final_id=True)
@@ -109,12 +107,12 @@ def test_mark_final_minima_skips_entries_without_final_id(tmp_path):
         db.write(
             Atoms("Pt", positions=[[0, 0, 0]]),
             relaxed=True,
-            key_value_pairs={"run_id": "r1", "trial_id": 1, "raw_score": -0.1},
+            key_value_pairs={"run_id": "r1", "raw_score": -0.1},
         )
     stamp_scgo_database(dbpath)
 
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
-    atoms.info["provenance"] = {"run_id": "r1", "trial_id": 1}
+    atoms.info["provenance"] = {"run_id": "r1"}
     summary = mark_final_minima_in_db(
         [{"atoms": atoms, "energy": -0.1, "rank": 1, "final_written": "foo.xyz"}],
         base_dir=str(tmp_path),

@@ -97,7 +97,6 @@ def test_rng_in_params_raises_error(tmp_path, rng):
     # Add a dummy rng to the optimizer_params
     params = get_testing_params()
     params["calculator"] = "EMT"  # Use EMT for speed
-    params["optimizer_params"]["bh"]["n_trials"] = 2  # Small number of trials for BH
     params["validate_with_hessian"] = False  # Skip validation for speed
 
     # This should now raise an error (before any I/O)
@@ -286,7 +285,6 @@ def test_full_stack_smoke(tmp_path, rng):
         comp,
         global_optimizer="bh",
         global_optimizer_kwargs=optimizer_kwargs,
-        n_trials=1,
         output_dir=outdir,
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
@@ -438,18 +436,14 @@ def test_scgo_unknown_optimizer(tmp_path, rng):
         )
 
 
-def test_run_trials_zero_trials(tmp_path, rng):
-    """Test that zero trials raises error."""
+def test_run_trials_missing_system_type(tmp_path, rng):
+    """Test that missing system_type raises error."""
     outdir = str(tmp_path / "campaign")
-    # With n_trials=0, run_trials should raise ValueError
-    with pytest.raises(ValueError, match="n_trials.*must be positive"):
+    with pytest.raises(ValueError, match="system_type must be set"):
         run_trials(
             ["Pt"],
             global_optimizer="bh",
-            global_optimizer_kwargs={
-                "niter": 5
-            },  # Remove n_trials from optimizer params
-            n_trials=0,  # This is now the run_trials parameter
+            global_optimizer_kwargs={"niter": 5},
             output_dir=outdir,
             rng=rng,
         )
@@ -593,7 +587,6 @@ def test_campaign_level_rng_spawns_trial_level_rngs(rng):
 def test_cross_composition_reproducibility(tmp_path):
     """Test reproducibility across different compositions in campaigns."""
     params = get_testing_params()
-    params["optimizer_params"]["bh"]["n_trials"] = 1  # Single trial for BH
     params["validate_with_hessian"] = False
     out = str(tmp_path / "campaign")
 
@@ -640,9 +633,6 @@ def test_cross_composition_reproducibility(tmp_path):
 def test_cross_composition_different_seeds(tmp_path):
     """Test that different seeds produce different results across compositions."""
     params = get_testing_params()
-    params["optimizer_params"]["bh"]["n_trials"] = (
-        2  # Two trials for BH to reduce flakiness
-    )
     params["validate_with_hessian"] = False
     out = str(tmp_path / "campaign")
 
@@ -691,7 +681,6 @@ def test_cross_composition_different_seeds(tmp_path):
 def test_bimetallic_campaign_reproducibility(tmp_path):
     """Test reproducibility for bimetallic campaigns."""
     params = get_testing_params()
-    params["optimizer_params"]["bh"]["n_trials"] = 1  # Single trial for BH
     params["validate_with_hessian"] = False
     out = str(tmp_path / "campaign")
 
@@ -730,7 +719,6 @@ def test_bimetallic_campaign_reproducibility(tmp_path):
 def test_arbitrary_compositions_reproducibility(tmp_path):
     """Test reproducibility for arbitrary compositions campaigns."""
     params = get_testing_params()
-    params["optimizer_params"]["bh"]["n_trials"] = 1  # Single trial for BH
     params["validate_with_hessian"] = False
     out = str(tmp_path / "campaign")
     compositions = [["Pt", "Pt"], ["Au", "Pt"], ["Pt", "Au", "Au"]]

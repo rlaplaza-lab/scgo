@@ -27,7 +27,12 @@ from scgo.utils.comparators import (
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.output_paths import formula_searches_dir
-from scgo.utils.timing_report import flatten_run_timing_payload, load_run_timing_payload
+from scgo.utils.timing_report import (
+    TIMING_JSON_FILENAME,
+    flatten_run_timing_payload,
+    load_run_timing_payload,
+    resolve_run_timing_path,
+)
 
 logger = get_logger(__name__)
 
@@ -187,11 +192,31 @@ def load_latest_ga_profile(
         formula_searches_dir(root, cluster_formula).glob("run_*"),
         key=lambda p: p.name,
     )
+    searches_path = formula_searches_dir(root, cluster_formula)
     if not run_dirs:
+        logger.warning(
+            "No run_* directories under %s; GA profiling unavailable for %s",
+            searches_path,
+            cluster_formula,
+        )
         return None
     latest = run_dirs[-1]
+    timing_path = resolve_run_timing_path(str(latest))
+    if not Path(timing_path).is_file():
+        logger.warning(
+            "No %s in latest run directory %s; GA profiling unavailable for %s",
+            TIMING_JSON_FILENAME,
+            latest,
+            cluster_formula,
+        )
+        return None
     payload = load_run_timing_payload(str(latest))
     if payload is None:
+        logger.warning(
+            "Failed to read %s (invalid JSON or I/O error); GA profiling unavailable for %s",
+            timing_path,
+            cluster_formula,
+        )
         return None
     return flatten_run_timing_payload(payload)
 
@@ -400,6 +425,8 @@ def apply_ga_benchmark_overrides(
         ga_params["n_jobs_population_init"] = n_jobs_population_init
     if batch_size is not None:
         ga_params["batch_size"] = batch_size
+    ga_params["write_timing_json"] = True
+    ga_params["detailed_timing"] = True
     return params_copy
 
 
