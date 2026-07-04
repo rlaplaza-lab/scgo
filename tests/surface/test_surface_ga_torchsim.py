@@ -16,17 +16,21 @@ from tests.test_utils import MockRelaxer
 
 
 class PartiallyDisconnectingRelaxer:
-    """Relaxer that disconnects one adsorbate candidate per batch."""
+    """Relaxer that disconnects exactly one adsorbate candidate across the whole run."""
+
+    def __init__(self) -> None:
+        self._disconnect_remaining = 1
 
     def relax_batch(self, batch):
         results = []
         for i, atoms in enumerate(batch):
             relaxed = atoms.copy()
-            if i == 0 and len(relaxed) >= 2:
+            if self._disconnect_remaining > 0 and len(relaxed) >= 2:
                 pos = relaxed.get_positions()
                 # Push mobile atoms far from slab to trigger connectivity failure.
                 pos[-2:, 2] += 10.0
                 relaxed.set_positions(pos)
+                self._disconnect_remaining -= 1
             results.append((float(i) * 0.1, relaxed))
         return results
 
