@@ -20,6 +20,7 @@ import os
 from typing import Any
 
 from scgo.utils.logging import get_logger
+from scgo.utils.ts_provenance import ts_output_provenance
 
 _logger = get_logger(__name__)
 
@@ -147,6 +148,27 @@ def flatten_run_timing_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def build_timing_payload(
+    *,
+    backend: str,
+    timings_s: dict[str, float],
+    run_id: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a structured timing document with provenance header and schema version."""
+    payload: dict[str, Any] = {
+        **ts_output_provenance(),
+        "timing_schema_version": RUN_TIMING_SCHEMA_VERSION,
+        "backend": backend,
+        "timings_s": timings_s,
+    }
+    if run_id is not None:
+        payload["run_id"] = run_id
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 def build_run_timing_document(
     *,
     run_id: str,
@@ -161,7 +183,11 @@ def build_run_timing_document(
 def write_run_timing_file(
     run_dir: str,
     payload: dict[str, Any],
+    *,
+    run_id: str | None = None,
 ) -> str:
+    if run_id is not None:
+        payload = build_run_timing_document(run_id=run_id, payload=payload)
     return write_timing_file(run_dir, payload)
 
 

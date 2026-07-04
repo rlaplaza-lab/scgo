@@ -8,6 +8,7 @@ local minimizations, with Metropolis acceptance criteria.
 from __future__ import annotations
 
 import logging
+import os
 from time import perf_counter
 from typing import Any
 
@@ -61,7 +62,11 @@ from scgo.utils.helpers import (
     perform_local_relaxation,
 )
 from scgo.utils.logging import get_logger, should_show_progress
-from scgo.utils.timing_report import log_timing_summary, write_timing_file
+from scgo.utils.timing_report import (
+    build_timing_payload,
+    log_timing_summary,
+    write_timing_file,
+)
 from scgo.utils.validation import (
     validate_atoms,
     validate_calculator_attached,
@@ -402,20 +407,25 @@ def bh_go(
                 logger, "basin_hopping", profile_timings, verbosity=verbosity
             )
             if write_timing_json:
-                out: dict[str, Any] = {
-                    "backend": "basin_hopping",
-                    "timings_s": profile_timings,
-                    "counters": profile_counters,
-                }
+                timing_dir = (
+                    timing_output_dir if timing_output_dir is not None else output_dir
+                )
+                run_id_for_timing = os.path.basename(str(timing_dir).rstrip(os.sep))
+                extra: dict[str, Any] = {"counters": profile_counters}
                 if per_iteration is not None:
-                    out["per_iteration"] = per_iteration
+                    extra["per_iteration"] = per_iteration
+                out = build_timing_payload(
+                    backend="basin_hopping",
+                    timings_s=profile_timings,
+                    run_id=run_id_for_timing,
+                    extra=extra,
+                )
                 if timing_collector is not None:
                     timing_collector.append(out)
-                if write_timing_json:
-                    if timing_output_dir is not None:
-                        write_timing_file(timing_output_dir, out)
-                    elif timing_collector is None:
-                        write_timing_file(output_dir, out)
+                elif timing_output_dir is not None:
+                    write_timing_file(timing_output_dir, out)
+                else:
+                    write_timing_file(output_dir, out)
 
         a_current = retry_with_backoff(
             da.get_an_unrelaxed_candidate,

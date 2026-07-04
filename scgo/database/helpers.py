@@ -574,7 +574,15 @@ def _run_id_from_db_path(db_path: str | Path) -> str:
     run_id = get_run_id_from_dir(parent_name)
     if run_id is not None:
         return run_id
-    return os.path.basename(str(db_path))
+    if parent_name.startswith("run_"):
+        return parent_name
+    basename = os.path.basename(str(db_path))
+    logger.warning(
+        "Could not resolve run_id from path %s; using database basename %r as fallback",
+        db_path,
+        basename,
+    )
+    return basename
 
 
 def load_reference_structures(
@@ -762,7 +770,13 @@ def load_previous_results_parallel(
     if discovered_entries:
         by_run: dict[str, list[str]] = {}
         for db_path_str, run_id in discovered_entries:
-            if not run_id or run_id == current_run_id:
+            if not run_id:
+                logger.warning(
+                    "Skipping database %s: could not resolve run_id from path layout",
+                    db_path_str,
+                )
+                continue
+            if run_id == current_run_id:
                 continue
             by_run.setdefault(run_id, []).append(db_path_str)
         for run_id, db_list in by_run.items():

@@ -9,7 +9,9 @@ import pytest
 
 from scgo.utils.logging import get_logger
 from scgo.utils.timing_report import (
+    RUN_TIMING_SCHEMA_VERSION,
     build_run_timing_document,
+    build_timing_payload,
     cpu_non_relax_seconds_from_timings,
     flatten_run_timing_payload,
     ga_relax_seconds_from_timings,
@@ -38,6 +40,17 @@ def test_build_run_timing_document_attaches_run_id():
     doc = build_run_timing_document(run_id="run_test", payload=payload)
     assert doc["run_id"] == "run_test"
     assert doc["timings_s"]["total_wall_s"] == 1.0
+
+
+def test_build_timing_payload_includes_schema_and_run_id():
+    doc = build_timing_payload(
+        backend="torchsim_ga",
+        timings_s={"total_wall_s": 1.0},
+        run_id="run_test",
+    )
+    assert doc["run_id"] == "run_test"
+    assert doc["timing_schema_version"] == RUN_TIMING_SCHEMA_VERSION
+    assert doc["created_at"].endswith("Z")
 
 
 def test_load_run_timing_payload(tmp_path: Path):

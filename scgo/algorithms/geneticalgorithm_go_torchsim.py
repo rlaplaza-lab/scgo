@@ -92,6 +92,7 @@ from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.rng_helpers import ensure_rng_or_create, offspring_rng_triple
 from scgo.utils.timing_report import (
+    build_timing_payload,
     cpu_non_relax_seconds_from_timings,
     ga_relax_seconds_from_timings,
     log_timing_summary,
@@ -1612,14 +1613,20 @@ def ga_go(
             profile_timings
         )
         log_timing_summary(logger, "torchsim_ga", profile_timings, verbosity=verbosity)
-        out_payload: dict[str, Any] = {
-            "backend": "torchsim_ga",
-            "timings_s": profile_timings,
+        extra_payload: dict[str, Any] = {
             "counters": profile_counters,
             "retry_failures": profile_retry_failures,
         }
         if per_generation is not None:
-            out_payload["per_generation"] = per_generation
+            extra_payload["per_generation"] = per_generation
+        timing_dir = timing_output_dir if timing_output_dir is not None else output_dir
+        run_id_for_timing = os.path.basename(str(timing_dir).rstrip(os.sep))
+        out_payload = build_timing_payload(
+            backend="torchsim_ga",
+            timings_s=profile_timings,
+            run_id=run_id_for_timing,
+            extra=extra_payload,
+        )
         if timing_collector is not None:
             timing_collector.append(out_payload)
         if write_timing_json:

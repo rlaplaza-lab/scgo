@@ -20,7 +20,14 @@ from scgo.utils.helpers import (
     ensure_float64_forces,
     filter_unique_minima,
     get_cluster_formula,
+    get_provenance,
 )
+
+
+def test_get_provenance_reads_provenance_dict():
+    atoms = Atoms("Pt", positions=[[0, 0, 0]])
+    atoms.info = {"provenance": {"run_id": "run_test_abc"}}
+    assert get_provenance(atoms)["run_id"] == "run_test_abc"
 
 
 class TestFilterUniqueMinima:

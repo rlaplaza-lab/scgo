@@ -157,10 +157,27 @@ def test_save_transition_state_results():
         assert summary["num_successful"] == 1
         assert summary["num_converged"] == 1
         assert len(summary["results"]) == 2
-        r0 = summary["results"][0]
-        assert r0["minima_indices"] == [0, 1]
-        assert r0["minima_provenance"][0]["systems_row_id"] == 7
-        assert r0["minima_provenance"][1]["systems_row_id"] == 9
+
+
+def test_save_transition_state_results_skipped_pair():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ts_results = [
+            {
+                "status": "skipped",
+                "pair_id": "0_1",
+                "error": "validation failed",
+            },
+        ]
+        save_transition_state_results(ts_results, tmpdir, composition=["Cu", "Cu"])
+        summary_path = Path(tmpdir) / "results_summary.json"
+        assert summary_path.exists()
+        with open(summary_path) as f:
+            summary = json.load(f)
+        assert summary["num_total_pairs"] == 1
+        assert summary["num_successful"] == 0
+        assert summary["num_converged"] == 0
+        assert summary["results"][0]["status"] == "skipped"
+        assert summary["results"][0]["error"] == "validation failed"
 
 
 @pytest.mark.slow

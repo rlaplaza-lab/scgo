@@ -44,8 +44,9 @@ from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import cleanup_torch_cuda, get_calculator_class
-from scgo.utils.run_tracking import generate_run_id, save_run_metadata
+from scgo.utils.run_tracking import ensure_run_id, save_run_metadata
 from scgo.utils.timing_report import (
+    build_timing_payload,
     log_timing_summary,
     sum_neb_seconds_from_ts_results,
     write_timing_file,
@@ -175,13 +176,26 @@ def _run_serial_neb_search(
             logger.warning(
                 "Skipping pair %s due to structure validation error: %s", pair_id, e
             )
-            ts_results.append(
-                {
-                    "status": "skipped",
-                    "pair_id": pair_id,
-                    "error": str(e),
-                }
+            skipped = make_ts_result(
+                pair_id=pair_id,
+                n_images=neb_n_images,
+                spring_constant=neb_spring_constant,
+                use_torchsim=use_torchsim,
+                fmax=neb_fmax,
+                neb_steps=neb_steps,
+                interpolation_method=neb_interpolation_method,
+                climb=neb_climb,
+                align_endpoints=neb_align_endpoints,
+                perturb_sigma=neb_perturb_sigma,
+                neb_interpolation_mic=neb_interpolation_mic,
+                neb_tangent_method=neb_tangent_method,
+                reactant_energy=energy_i,
+                product_energy=energy_j,
+                error=str(e),
             )
+            skipped["status"] = "skipped"
+            attach_minima_traceability(skipped, minima, i, j)
+            ts_results.append(skipped)
             continue
 
         calculator: Any = None
@@ -657,7 +671,7 @@ def run_transition_state_search(
         logger.info(f"Selected {len(pairs)} structure pairs for TS search")
 
     ts_results_root.mkdir(parents=True, exist_ok=True)
-    run_id = generate_run_id()
+    run_id = ensure_run_id(None, verbosity=verbosity, logger=logger)
     run_dir = ts_results_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -763,17 +777,20 @@ def run_transition_state_search(
     if write_timing_json:
         write_timing_file(
             str(run_dir),
-            {
-                "backend": "ts_search",
-                "timings_s": ts_rollup,
-                "counters": {
-                    "n_results": len(ts_results),
-                    "n_success": sum(
-                        1 for r in ts_results if r.get("status") == "success"
-                    ),
+            build_timing_payload(
+                backend="ts_search",
+                timings_s=ts_rollup,
+                run_id=run_id,
+                extra={
+                    "counters": {
+                        "n_results": len(ts_results),
+                        "n_success": sum(
+                            1 for r in ts_results if r.get("status") == "success"
+                        ),
+                    },
+                    "parallel_batch_s": parallel_meta,
                 },
-                "parallel_batch_s": parallel_meta,
-            },
+            ),
         )
 
     _apply_surface_ts_geometry_gate(

@@ -298,7 +298,7 @@ def save_transition_state_results(
             "formula": formula,
             "num_total_pairs": len(ts_results),
             "num_successful": sum(1 for r in ts_results if r["status"] == "success"),
-            "num_converged": sum(1 for r in ts_results if r["neb_converged"]),
+            "num_converged": sum(1 for r in ts_results if r.get("neb_converged")),
             "current_run_id": run_id,
             "run_metadata_relpath": (
                 f"{run_id}/metadata.json" if run_id is not None else None
@@ -318,14 +318,14 @@ def save_transition_state_results(
         result_json = {
             "pair_id": result["pair_id"],
             "status": result["status"],
-            "neb_converged": result["neb_converged"],
-            "n_images": result["n_images"],
-            "spring_constant": result["spring_constant"],
-            "reactant_energy": result["reactant_energy"],
-            "product_energy": result["product_energy"],
-            "ts_energy": result["ts_energy"],
-            "barrier_height": result["barrier_height"],
-            "error": result["error"],
+            "neb_converged": result.get("neb_converged", False),
+            "n_images": result.get("n_images"),
+            "spring_constant": result.get("spring_constant"),
+            "reactant_energy": result.get("reactant_energy"),
+            "product_energy": result.get("product_energy"),
+            "ts_energy": result.get("ts_energy"),
+            "barrier_height": result.get("barrier_height"),
+            "error": result.get("error"),
         }
         if result.get("minima_indices") is not None:
             result_json["minima_indices"] = result["minima_indices"]

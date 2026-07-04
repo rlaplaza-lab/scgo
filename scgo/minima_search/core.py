@@ -726,6 +726,13 @@ def run_trials(
 
     if not all_minima_for_filtering:
         logger.info("No minima found.")
+        _write_results_summary(
+            output_dir=output_dir,
+            final_minima=[],
+            composition_str=composition_str,
+            run_id=run_id,
+            params=params,
+        )
         return []
 
     logger.info(
@@ -744,6 +751,13 @@ def run_trials(
     logger.info(f"Found {len(unique_candidates)} unique candidates.")
 
     if not unique_candidates:
+        _write_results_summary(
+            output_dir=output_dir,
+            final_minima=[],
+            composition_str=composition_str,
+            run_id=run_id,
+            params=params,
+        )
         return []
 
     if validate_with_hessian:
@@ -780,6 +794,13 @@ def run_trials(
         if not validated_minima:
             logger.info(
                 "Validation finished. No candidates were confirmed as true minima."
+            )
+            _write_results_summary(
+                output_dir=output_dir,
+                final_minima=[],
+                composition_str=composition_str,
+                run_id=run_id,
+                params=params,
             )
             return []
 

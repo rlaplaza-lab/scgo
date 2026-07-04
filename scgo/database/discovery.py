@@ -17,6 +17,7 @@ from scgo.database.registry import get_registry
 from scgo.database.schema import is_scgo_database
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
+from scgo.utils.run_tracking import get_run_id_from_dir
 
 logger = get_logger(__name__)
 
@@ -348,7 +349,7 @@ def list_discovered_db_paths_with_run(
     """List DB paths via :class:`DatabaseDiscovery` with run parsed from layout.
 
     Returns tuples ``(absolute_path, run_id)``. ``run_id`` is empty if the path
-    is not under ``run_*``.
+    is not under a recognizable ``run_*`` directory.
     """
     base_s = os.path.abspath(str(base_dir))
     discovery = DatabaseDiscovery(base_s)
@@ -359,6 +360,20 @@ def list_discovered_db_paths_with_run(
         db_path_str = os.path.abspath(str(db_path))
         rel = os.path.relpath(db_path_str, base_s)
         parts = rel.split(os.sep)
-        run_id = parts[0] if parts and parts[0].startswith("run_") else ""
+        run_id = ""
+        for part in parts:
+            resolved = get_run_id_from_dir(part)
+            if resolved is not None:
+                run_id = resolved
+                break
+            if part.startswith("run_"):
+                run_id = part
+                break
+        if not run_id:
+            logger.warning(
+                "Could not resolve run_id for database %s under %s",
+                db_path_str,
+                base_s,
+            )
         out.append((db_path_str, run_id))
     return out

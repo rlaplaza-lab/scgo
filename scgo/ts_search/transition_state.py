@@ -33,7 +33,11 @@ from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import get_logger
 from scgo.utils.run_helpers import cleanup_torch_cuda
-from scgo.utils.timing_report import log_timing_summary, write_timing_file
+from scgo.utils.timing_report import (
+    build_timing_payload,
+    log_timing_summary,
+    write_timing_file,
+)
 from scgo.utils.torchsim_policy import (
     _require_torchsim,
     _require_torchsim_fairchem,
@@ -994,6 +998,11 @@ def make_ts_result(
 def minima_provenance_dict(minima: list, idx: int) -> dict[str, Any]:
     """Extract per-minimum GO provenance for JSON serialization."""
     if not minima or idx < 0 or idx >= len(minima):
+        get_logger(__name__).warning(
+            "minima_provenance_dict: invalid index %s for %d minima",
+            idx,
+            len(minima) if minima else 0,
+        )
         return {}
 
     energy, atoms = minima[idx]
@@ -1364,16 +1373,15 @@ def find_transition_state(
         }
         result["timings_s"] = ts_timings
         neb_backend = "neb_torchsim" if use_torchsim else "neb_ase"
-        if verbosity >= 2:
-            log_timing_summary(logger, neb_backend, ts_timings, verbosity=verbosity)
+        log_timing_summary(logger, neb_backend, ts_timings, verbosity=verbosity)
         if write_timing_json:
             write_timing_file(
                 output_dir,
-                {
-                    "backend": neb_backend,
-                    "pair_id": pair_id,
-                    "timings_s": ts_timings,
-                },
+                build_timing_payload(
+                    backend=neb_backend,
+                    timings_s=ts_timings,
+                    extra={"pair_id": pair_id},
+                ),
                 filename=f"timing_{pair_id}.json",
             )
 

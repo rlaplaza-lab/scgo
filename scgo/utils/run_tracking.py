@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from scgo.utils.helpers import ensure_directory_exists, get_cluster_formula
@@ -59,7 +59,7 @@ def generate_run_id() -> str:
         Run ID in format: run_YYYYMMDD_HHMMSS_ffffff
         Example: "run_20250124_143022_123456"
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     timestamp = now.strftime("%Y%m%d_%H%M%S")
     microseconds = now.microsecond
     return f"run_{timestamp}_{microseconds:06d}"
@@ -111,7 +111,7 @@ def save_run_metadata(
 
     metadata_obj = RunMetadata(
         run_id=run_id,
-        timestamp=datetime.now().isoformat(),
+        timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         composition=composition,
         formula=formula,
         params=metadata.get("params") if metadata else None,

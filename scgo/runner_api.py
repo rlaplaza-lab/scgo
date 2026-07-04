@@ -43,6 +43,7 @@ from scgo.system_types import (
     SystemType,
     build_adsorbate_definition_from_inputs,
     get_system_policy,
+    resolve_connectivity_factor,
     validate_adsorbate_definition,
     validate_system_type_settings,
 )
@@ -51,7 +52,7 @@ from scgo.ts_search.transition_state_run import (
     run_transition_state_search as _ts_search,
 )
 from scgo.utils.helpers import get_cluster_formula
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
@@ -60,7 +61,6 @@ from scgo.utils.output_paths import (
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 
 from scgo.minima_search import run_trials
-from scgo.utils.logging import configure_logging
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
@@ -72,14 +72,18 @@ from scgo.utils.run_helpers import (
     prepare_algorithm_kwargs,
     validate_algorithm_params,
 )
-from scgo.utils.run_tracking import ensure_run_id
+from scgo.utils.run_tracking import (
+    ensure_run_id,
+    get_run_directories,
+    get_run_id_from_dir,
+)
 from scgo.utils.timing_report import (
     GO_TS_TIMING_JSON_FILENAME,
+    build_timing_payload,
     log_timing_summary,
     sum_neb_seconds_from_ts_results,
     write_timing_file,
 )
-from scgo.utils.ts_provenance import ts_output_provenance
 from scgo.utils.validation import validate_composition
 
 type CompositionInput = str | list[str] | Atoms
@@ -990,8 +994,6 @@ def _run_go_ts_pipeline(
     ts_kwargs_local.pop("system_type", None)
     write_ts_json = bool(ts_kwargs_local.pop("write_timing_json", False))
 
-    from scgo.system_types import resolve_connectivity_factor
-
     connectivity_factor_raw: float | None = ts_kwargs_local.pop(
         "connectivity_factor", None
     )
@@ -1010,9 +1012,7 @@ def _run_go_ts_pipeline(
         surface_config=surface_cfg,
     )
 
-    from scgo.ts_search import run_transition_state_search
-
-    ts_results = run_transition_state_search(
+    ts_results = _ts_search(
         composition,
         output_dir=output_path,
         seed=seed,
@@ -1036,17 +1036,41 @@ def _run_go_ts_pipeline(
     log_timing_summary(logger, "go_ts", go_ts_timings, verbosity=verbosity)
     write_go_json = _optimizer_write_timing_json_enabled(merged_ga)
     if write_ts_json or write_go_json:
+        go_run_dirs = get_run_directories(str(searches_dir))
+        ts_run_dirs = get_run_directories(str(ts_results_dir))
+        current_go_run_id = (
+            get_run_id_from_dir(go_run_dirs[-1]) if go_run_dirs else None
+        )
+        current_ts_run_id = (
+            get_run_id_from_dir(ts_run_dirs[-1]) if ts_run_dirs else None
+        )
+        go_timing_relpath = None
+        if current_go_run_id:
+            go_timing_path = searches_dir / current_go_run_id / "timing.json"
+            if go_timing_path.is_file():
+                go_timing_relpath = os.path.relpath(go_timing_path, output_path)
+        ts_timing_relpath = None
+        if current_ts_run_id:
+            ts_timing_path = ts_results_dir / current_ts_run_id / "timing.json"
+            if ts_timing_path.is_file():
+                ts_timing_relpath = os.path.relpath(ts_timing_path, output_path)
         write_timing_file(
             str(output_path),
-            {
-                **ts_output_provenance(extra={"formula": formula}),
-                "backend": "go_ts",
-                "timings_s": go_ts_timings,
-                "counters": {
-                    "ts_success": ts_success,
-                    "ts_total": len(ts_results),
+            build_timing_payload(
+                backend="go_ts",
+                timings_s=go_ts_timings,
+                extra={
+                    "formula": formula,
+                    "counters": {
+                        "ts_success": ts_success,
+                        "ts_total": len(ts_results),
+                    },
+                    "current_go_run_id": current_go_run_id,
+                    "current_ts_run_id": current_ts_run_id,
+                    "go_run_timing_relpath": go_timing_relpath,
+                    "ts_run_timing_relpath": ts_timing_relpath,
                 },
-            },
+            ),
             filename=GO_TS_TIMING_JSON_FILENAME,
         )
     logger.info(

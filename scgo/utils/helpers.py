@@ -377,9 +377,9 @@ def get_composition_counts(composition: list[str]) -> Counter[str]:
 
 
 def get_provenance(atoms: Atoms) -> dict[str, Any]:
-    """Get provenance (e.g. ``run_id``) from :attr:`Atoms.info` ``metadata``.
+    """Get provenance from :attr:`Atoms.info` (metadata, provenance, key_value_pairs).
 
-    Returns an empty dict if metadata is not present or atoms.info doesn't exist.
+    Later sources override earlier ones; ``metadata`` is canonical when keys collide.
 
     Args:
         atoms: The Atoms object to extract provenance from.
@@ -387,7 +387,16 @@ def get_provenance(atoms: Atoms) -> dict[str, Any]:
     Returns:
         Dictionary containing provenance information (may be empty).
     """
-    return dict(getattr(atoms, "info", {}).get("metadata", {}))
+    info = getattr(atoms, "info", {})
+    merged: dict[str, Any] = {}
+    for src in (
+        info.get("key_value_pairs", {}),
+        info.get("provenance", {}),
+        info.get("metadata", {}),
+    ):
+        if isinstance(src, dict):
+            merged.update(src)
+    return merged
 
 
 def get_cluster_formula(composition: list[str]) -> str:

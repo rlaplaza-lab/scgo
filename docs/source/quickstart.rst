@@ -538,7 +538,8 @@ exports.
 Run IDs
 ~~~~~~~
 
-Each invocation uses ``run_YYYYMMDD_HHMMSS_ffffff`` (microsecond granularity):
+Each invocation uses ``run_YYYYMMDD_HHMMSS_ffffff`` (microsecond granularity,
+UTC-based):
 
 .. list-table::
    :widths: 30 70
@@ -546,7 +547,7 @@ Each invocation uses ``run_YYYYMMDD_HHMMSS_ffffff`` (microsecond granularity):
 
    * - Runner
      - ``run_id`` behaviour
-   * - ``run_go`` / ``run_trials``
+   * - ``run_go``
      - One new ``run_*`` per call under ``{formula}_searches/``
    * - ``run_go_campaign``
      - One shared ``run_id`` for all compositions (override with ``run_id=``)
@@ -563,10 +564,13 @@ Per-run files
 
 Under each ``run_*`` directory:
 
-- ``metadata.json`` — composition, params snapshot, provenance header
+- ``metadata.json`` — composition, params snapshot, provenance header (``schema_version``,
+  ``scgo_version``, ``created_at`` UTC ISO-8601 with ``Z``, ``python_version``, ``timestamp``)
 - ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db`` — optimizer database (GO only)
-- ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``)
-- ``pair_<i>_<j>/`` — NEB artifacts and ``neb_{i}_{j}_metadata.json`` (TS only)
+- ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``); includes
+  ``run_id``, ``timing_schema_version``, and the same provenance header fields
+- ``pair_<i>_<j>/`` — NEB artifacts, ``neb_{i}_{j}_metadata.json``, and optional
+  ``timing_{i}_{j}.json`` per pair (TS only)
 
 Campaign-level files:
 
@@ -574,7 +578,8 @@ Campaign-level files:
 - ``final_unique_minima/`` or ``final_unique_ts/`` — deduplicated structure exports
 - ``ts_network_metadata.json`` — minima connectivity graph (TS only)
 - ``go_ts_timing.json`` — GO+TS pipeline rollup at the campaign root when timing
-  JSON is enabled in ``go_params`` and/or ``ts_params``
+  JSON is enabled in ``go_params`` and/or ``ts_params``; includes ``current_go_run_id``,
+  ``current_ts_run_id``, and relative paths to per-run ``timing.json`` files when present
 
 See :mod:`scgo.utils.timing_report` for timing JSON layout.
 
@@ -592,6 +597,8 @@ TS results record endpoint lineage in ``minima_provenance`` (in
 
    * - Field
      - Meaning
+   * - ``schema_version`` / ``scgo_version`` / ``created_at`` / ``python_version``
+     - Shared JSON provenance header on summaries, metadata, and timing files
    * - ``run_id``
      - GO run that produced the endpoint minimum
    * - ``source_db`` / ``source_db_relpath``

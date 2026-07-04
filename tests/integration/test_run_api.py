@@ -265,7 +265,6 @@ def test_campaign_respects_params_seed(tmp_path):
 
 def test__run_one_element_go_ts_pipeline_smoke(monkeypatch, tmp_path):
     import scgo.runner_api as runner_api_module
-    import scgo.ts_search as ts_search_module
 
     def _fake_trials(*args, **kwargs):
         return []
@@ -279,8 +278,8 @@ def test__run_one_element_go_ts_pipeline_smoke(monkeypatch, tmp_path):
         _fake_trials,
     )
     monkeypatch.setattr(
-        ts_search_module,
-        "run_transition_state_search",
+        runner_api_module,
+        "_ts_search",
         _fake_ts,
     )
 
@@ -733,7 +732,6 @@ def test_run_go_ts_passes_timing_from_go_params(monkeypatch):
 
 def test_run_go_ts_pipeline_writes_go_ts_timing_json(monkeypatch, tmp_path):
     import scgo.runner_api as runner_api_module
-    import scgo.ts_search as ts_search_module
     from scgo.utils.timing_report import GO_TS_TIMING_JSON_FILENAME
 
     def _fake_trials(*args, **kwargs):
@@ -743,7 +741,7 @@ def test_run_go_ts_pipeline_writes_go_ts_timing_json(monkeypatch, tmp_path):
         return [{"timings_s": {"neb_optimization_s": 1.5}, "status": "success"}]
 
     monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
-    monkeypatch.setattr(ts_search_module, "run_transition_state_search", _fake_ts)
+    monkeypatch.setattr(runner_api_module, "_ts_search", _fake_ts)
 
     campaign_root = tmp_path / "pt2_campaign"
     _run_go_ts_pipeline(
@@ -799,7 +797,6 @@ def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
 
 def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_path):
     import scgo.runner_api as runner_api_module
-    import scgo.ts_search as ts_search_module
 
     captured: dict[str, object] = {}
 
@@ -812,7 +809,7 @@ def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_pat
         return []
 
     monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
-    monkeypatch.setattr(ts_search_module, "run_transition_state_search", _fake_ts)
+    monkeypatch.setattr(runner_api_module, "_ts_search", _fake_ts)
 
     ads_def = {
         "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
