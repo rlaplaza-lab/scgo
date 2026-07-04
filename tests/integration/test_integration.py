@@ -133,7 +133,7 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
             atoms_from_file = read(str(xyz_files[0]))
             assert len(atoms_from_file) == 3
             assert "provenance" in atoms_from_file.info
-            # trial_id removed: assert "trial_id" in atoms_from_file.info["provenance"]
+            assert atoms_from_file.info["provenance"].get("run_id")
 
 
 @pytest.mark.integration

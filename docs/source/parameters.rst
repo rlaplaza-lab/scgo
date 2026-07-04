@@ -204,7 +204,7 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Parallel jobs for offspring
    * - ``write_timing_json``
      - ``False``
-     - Write timing to JSON
+     - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
    * - ``detailed_timing``
      - ``False``
      - Include per-generation timing
@@ -314,7 +314,7 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - TorchSim NEB batch size
    * - ``write_timing_json``
      - ``False``
-     - Write TS timing JSON sidecar
+     - Write ``{ts_run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
 
 **NEB:**
 

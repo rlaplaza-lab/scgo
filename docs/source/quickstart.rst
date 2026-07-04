@@ -487,6 +487,7 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
 .. code-block:: text
 
    results/pt5_gas_mace/
+   ├── go_ts_timing.json              # optional (write_timing_json in go/ts params)
    ├── Pt5_searches/
    │   ├── run_20260703_120000_123456/
    │   │   ├── metadata.json
@@ -524,78 +525,66 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
            └── run_<timestamp>_<microseconds>/
 
 ------------------
-Output Files
+On-disk layout
 ------------------
 
-Global optimization and transition-state search use **analogous directory
-hierarchies** under sibling ``{formula}_searches/`` and ``{formula}_ts_results/``
-trees (location depends on the runner — see *Output directories* above). Each
-tree has:
+.. _output-files:
 
-- One ``run_<timestamp>_<microseconds>/`` directory per invocation
-- Campaign-level ``results_summary.json`` and a deduplicated export directory
-- Per-run ``metadata.json``, optional ``timing.json``, and optimizer DB at the run root
-- TS pair work units under ``pair_<i>_<j>/`` inside each run
+GO and TS write sibling ``{formula}_searches/`` and ``{formula}_ts_results/``
+trees (see *Output directories* for path resolution). Each tree contains
+datetime-tagged ``run_*`` work directories, campaign summaries, and deduplicated
+exports.
 
-**Global optimization** (``{formula}_searches/``):
+Run IDs
+~~~~~~~
 
-.. code-block:: text
+Each invocation uses ``run_YYYYMMDD_HHMMSS_ffffff`` (microsecond granularity):
 
-   Pt5_searches/
-   ├── run_<timestamp>_<microseconds>/
-   │   ├── metadata.json
-   │   ├── timing.json                 # optional (write_timing_json=True)
-   │   └── ga_go.db                    # or bh_go.db / simple_go.db
-   ├── results_summary.json
-   └── final_unique_minima/            # XYZ files of best structures
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
 
-Each invocation creates one datetime-tagged ``run_*`` directory. Repeat
-``run_go`` (or a campaign loop) for additional independent runs; results merge
-across runs via database discovery and deduplication.
+   * - Runner
+     - ``run_id`` behaviour
+   * - ``run_go`` / ``run_trials``
+     - One new ``run_*`` per call under ``{formula}_searches/``
+   * - ``run_go_campaign``
+     - One shared ``run_id`` for all compositions (override with ``run_id=``)
+   * - ``run_ts_search`` / ``run_go_ts``
+     - TS mints a fresh ``run_*`` under ``{formula}_ts_results/`` (independent of GO)
 
-**Run-level ``timing.json``** — when ``write_timing_json=True``, a flat payload
-is written at ``{run_dir}/timing.json``. See :mod:`scgo.utils.timing_report`.
+Repeat ``run_go`` to add sibling ``run_*`` directories; SCGO merges prior minima
+via database discovery and deduplication. :func:`scgo.utils.run_tracking.get_run_directories`
+lists only datetime-pattern ``run_*`` dirs; custom IDs work at runtime but are
+omitted by that helper.
 
-**Transition state search** (``{formula}_ts_results/``):
+Per-run files
+~~~~~~~~~~~~~
 
-.. code-block:: text
+Under each ``run_*`` directory:
 
-   Pt5_ts_results/
-   ├── run_<timestamp>_<microseconds>/
-   │   ├── metadata.json
-   │   ├── timing.json                 # optional (write_timing_json=True)
-   │   └── pair_<i>_<j>/
-   │       └── neb_{i}_{j}_metadata.json   # + trajectory, TS/endpoints
-   ├── results_summary.json
-   ├── ts_network_metadata.json        # connectivity graph between minima
-   └── final_unique_ts/
-       └── final_unique_ts_summary.json
+- ``metadata.json`` — composition, params snapshot, provenance header
+- ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db`` — optimizer database (GO only)
+- ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``)
+- ``pair_<i>_<j>/`` — NEB artifacts and ``neb_{i}_{j}_metadata.json`` (TS only)
 
------------------------
-Run IDs and provenance
------------------------
+Campaign-level files:
 
-Each GO or TS invocation creates a **datetime-tagged** directory named
-``run_YYYYMMDD_HHMMSS_ffffff`` (microsecond granularity). This tag is the
-primary key for tracing artifacts across combined campaigns:
+- ``results_summary.json`` — run statistics and serializable TS pair results
+- ``final_unique_minima/`` or ``final_unique_ts/`` — deduplicated structure exports
+- ``ts_network_metadata.json`` — minima connectivity graph (TS only)
+- ``go_ts_timing.json`` — GO+TS pipeline rollup at the campaign root when timing
+  JSON is enabled in ``go_params`` and/or ``ts_params``
 
-- **``run_go`` / ``run_trials``** — one new ``run_*`` per invocation under
-  ``{formula}_searches/``.
-- **``run_go_campaign``** — a **single shared** ``run_id`` for all compositions
-  in the campaign (generated once at campaign start unless you pass ``run_id=``).
-- **``run_ts_search`` / ``run_go_ts``** — TS always mints a **fresh** ``run_*``
-  under ``{formula}_ts_results/`` (independent of any GO ``run_id``).
+See :mod:`scgo.utils.timing_report` for timing JSON layout.
 
-**Combining multiple runs:** repeat ``run_go`` (or a campaign loop) to add
-sibling ``run_*`` directories. SCGO discovers prior databases, merges minima,
-deduplicates, and writes ``final_unique_minima/`` exports. Only directories
-matching the datetime ``run_*`` pattern are listed by
-:func:`scgo.utils.run_tracking.get_run_directories`; custom ``run_id`` strings
-still work at runtime but are skipped by that helper.
+.. _run-ids-and-provenance:
 
-**TS minima provenance:** each NEB pair records endpoint lineage in
-``minima_provenance`` inside ``results_summary.json``, ``neb_{i}_{j}_metadata.json``,
-and ``ts_network_metadata.json``. Each entry links back to the GO minimum via:
+Provenance
+~~~~~~~~~~
+
+TS results record endpoint lineage in ``minima_provenance`` (in
+``results_summary.json``, NEB metadata, and ``ts_network_metadata.json``):
 
 .. list-table::
    :widths: 25 75
@@ -606,20 +595,13 @@ and ``ts_network_metadata.json``. Each entry links back to the GO minimum via:
    * - ``run_id``
      - GO run that produced the endpoint minimum
    * - ``source_db`` / ``source_db_relpath``
-     - Optimizer database path (basename and campaign-relative path)
+     - Optimizer database (basename and campaign-relative path)
    * - ``confid`` / ``gaid`` / ``systems_row_id``
-     - Row identifiers inside the GO database
+     - Row identifiers in the GO database
    * - ``unique_id`` / ``final_id``
      - Dedup and final-export identifiers when present
    * - ``energy``
      - Endpoint energy at pairing time (eV)
-
-**Timing artifacts:**
-
-- Per GO/TS run: ``{run_dir}/timing.json`` when ``write_timing_json=True``.
-- GO+TS pipeline rollup: ``go_ts_timing.json`` at the campaign root when timing
-  JSON is enabled in ``go_params`` and/or ``ts_params`` (see
-  :mod:`scgo.utils.timing_report`).
 
 -----------------------
 Reading prior results
@@ -667,7 +649,11 @@ Examples
 
 Working examples in the repository:
 
-- ``examples/example_pt5_gas.py``: Pt5 in gas phase
+- ``examples/example_pt5_gas.py``: Pt5 in gas phase (timing JSON + on-disk layout documented in-script)
 - ``examples/example_pt5_graphite.py``: Pt5 on graphite
 - ``examples/example_pt5_oh_gas.py``: Pt5 + OH in gas phase
 - ``examples/example_pt5_2oh_graphite.py``: Pt5 + 2OH on graphite
+
+Each example enables ``write_timing_json`` in both ``go_params`` and ``ts_params``
+so per-run ``timing.json`` and campaign ``go_ts_timing.json`` are written. See
+*On-disk layout* above.

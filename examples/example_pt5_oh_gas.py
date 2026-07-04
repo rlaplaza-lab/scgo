@@ -12,6 +12,9 @@ splices the core only. Optional tuning in ``go_params``:
 - ``cluster_adsorbate_config`` — placement height range, retries, clash checks
 - ``freeze_adsorbate_internal_geometry=True`` — strict Kabsch restore (this example
   enables it; default is ``False`` and still keeps fragments rigid as units)
+
+Output: ``results/pt5_oh_gas_mace/`` with ``Pt5_searches/``, ``Pt5_ts_results/``,
+and optional ``go_ts_timing.json`` (see docs quickstart, *On-disk layout*).
 """
 
 from __future__ import annotations

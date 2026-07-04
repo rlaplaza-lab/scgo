@@ -75,7 +75,7 @@ class TestValidateCalculatorCompatibility:
 
 
 class TestScgoFunction:
-    """Tests for scgo() function - single trial orchestration."""
+    """Tests for scgo() function - single GO run orchestration."""
 
     def test_scgo_with_bh_optimizer(self, tmp_path, rng):
         """Test scgo() with basin hopping optimizer."""
@@ -357,7 +357,7 @@ class TestRunTrials:
     """Tests for run_trials() function - single run orchestration."""
 
     def test_run_trials_single_run(self, tmp_path, rng):
-        """Test run_trials() with single trial."""
+        """Test run_trials() with a single datetime-tagged run."""
         composition = ["Pt", "Pt", "Pt"]
         output_dir = str(tmp_path / "trials_test")
 

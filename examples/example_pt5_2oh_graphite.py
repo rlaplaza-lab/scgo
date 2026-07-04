@@ -9,6 +9,10 @@ Workflow: build Pt5 core, place each OH on distinct hull sites, deposit the
 combined cluster on graphite with surface-biased orientation, then run tag-aware
 GA (core crossover, ``fragment_reposition`` for adsorbate diversity). See
 ``docs/source/api/system_types.rst`` for operator details.
+
+Output: ``results/pt5_2oh_graphite_mace/`` with ``Pt5_searches/``,
+``Pt5_ts_results/``, and optional ``go_ts_timing.json`` (see docs quickstart,
+*On-disk layout*).
 """
 
 from __future__ import annotations

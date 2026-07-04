@@ -25,7 +25,7 @@ Per [`benchmark_common.py`](benchmark_common.py), campaign outputs go under `ben
 
 - **Surface Pt-on-graphite** — flat root `benchmark/results/pt_surface_graphite/` ([`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py)), same `{Formula}_searches/` layout as above.
 
-TS runs add sibling `{Formula}_ts_results/` trees with the same run-oriented layout (`run_*/`, `results_summary.json`, deduplicated export); pair artifacts use `pair_*` subdirectories. See [`docs/source/quickstart.rst`](../docs/source/quickstart.rst) (*Output Files*).
+TS runs add sibling `{Formula}_ts_results/` trees with the same run-oriented layout (`run_*/`, `results_summary.json`, deduplicated export); pair artifacts use `pair_*` subdirectories. See [`docs/source/quickstart.rst`](../docs/source/quickstart.rst) (*On-disk layout*).
 
 Benchmark GA presets enable `write_timing_json` and `detailed_timing` so profiling lines in CLI output match `{run_dir}/timing.json` on disk.
 

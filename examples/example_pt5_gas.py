@@ -10,6 +10,11 @@ dicts as ``go_params`` / ``ts_params``. Runners deep-merge partial dicts with
 preset defaults at call time. Pass ``system_type`` on the ``run_go_ts`` call
 (not inside the param dicts). Keep ``seed`` consistent across ``seed=``,
 ``go_params['seed']``, and ``ts_params['seed']``.
+
+Output is written under ``results/pt5_gas_mace/``: sibling ``Pt5_searches/`` and
+``Pt5_ts_results/`` trees with datetime ``run_*`` directories, plus optional
+``go_ts_timing.json`` when timing export is enabled (as below). See the
+quickstart *On-disk layout* section in the docs.
 """
 
 from __future__ import annotations

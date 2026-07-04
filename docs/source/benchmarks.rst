@@ -44,8 +44,9 @@ All scripts write under ``benchmark/results/``.
            ├── results_summary.json
            └── final_unique_minima/
 
-TS runs add sibling ``{Formula}_ts_results/`` trees. See :doc:`/quickstart` for
-the full run-oriented layout.
+TS runs add sibling ``{Formula}_ts_results/`` trees with the same run-oriented layout
+(``run_*/``, summaries, deduplicated exports); pair work lives under ``pair_*`` subdirs.
+See :doc:`/quickstart` (*On-disk layout*).
 
 Benchmark GA presets enable ``write_timing_json`` and ``detailed_timing`` so CLI
 profiling lines match ``{run_dir}/timing.json`` on disk.

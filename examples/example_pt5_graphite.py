@@ -7,6 +7,9 @@
 Requires ``scgo[mace]``. Pass the same ``surface_config`` to the preset builders
 and ``run_go_ts`` (values must agree when both are set). See
 ``docs/source/parameters.rst`` (*Parameter resolution*) for merge rules.
+
+Output: ``results/pt5_graphite_mace/`` with ``Pt5_searches/``, ``Pt5_ts_results/``,
+and optional ``go_ts_timing.json`` (see docs quickstart, *On-disk layout*).
 """
 
 from __future__ import annotations

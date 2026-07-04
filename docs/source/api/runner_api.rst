@@ -121,15 +121,20 @@ Utility Functions
 Timing and Profiling
 --------------------
 
-Configure timing in ``params`` / ``go_params`` only (``optimizer_params['ga']`` or ``bh``):
+**Per-run timing** — set in ``params`` / ``go_params`` under
+``optimizer_params['ga']`` or ``bh``:
 
-- ``write_timing_json=True``: write ``timing.json`` under each run directory (alongside ``metadata.json``)
-- ``detailed_timing=True``: add ``per_generation`` rows (requires ``write_timing_json=True``)
+- ``write_timing_json=True`` — write ``{run_dir}/timing.json`` (alongside ``metadata.json``)
+- ``detailed_timing=True`` — add ``per_generation`` rows (requires ``write_timing_json=True``)
 
-For TS, set ``write_timing_json`` in ``ts_params`` when needed.
+**TS timing** — set ``write_timing_json`` in ``ts_params`` for ``{ts_run_dir}/timing.json``.
 
-See :mod:`scgo.utils.timing_report` for the JSON layout and
-:mod:`scgo.utils.output_paths` for campaign directory helpers.
+**GO+TS pipeline rollup** — when timing JSON is enabled in ``go_params`` and/or
+``ts_params``, ``run_go_ts`` also writes ``go_ts_timing.json`` at the campaign root.
+
+See :mod:`scgo.utils.timing_report` for JSON layout and
+:mod:`scgo.utils.output_paths` for directory helpers. On-disk layout and
+provenance: :doc:`/quickstart` (*On-disk layout*).
 
 ----------------
 Module Reference

@@ -1,8 +1,8 @@
 """Shared provenance fields for TS / NEB JSON outputs.
 
 ``schema_version`` tracks the provenance header; it is **3** for current SCGO
-releases. On-disk layouts and per-file keys are documented in the repository
-README (sections *What to expect on disk* and transition-state outputs).
+releases. On-disk layouts are documented in ``docs/source/quickstart.rst``
+(*On-disk layout*).
 """
 
 from __future__ import annotations

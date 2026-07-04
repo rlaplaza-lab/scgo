@@ -14,6 +14,13 @@ from scgo.surface.config import SurfaceSystemConfig
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.glob("example_*.py"))
 
+_EXPECTED_OUTPUT_STEMS = {
+    "example_pt5_gas.py": "pt5_gas",
+    "example_pt5_graphite.py": "pt5_graphite",
+    "example_pt5_oh_gas.py": "pt5_oh_gas",
+    "example_pt5_2oh_graphite.py": "pt5_2oh_graphite",
+}
+
 
 def _load_example_module(path: Path):
     spec = importlib.util.spec_from_file_location(path.stem, path)
@@ -79,3 +86,9 @@ def test_example_main_calls_run_go_ts_with_current_api(
     assert kwargs["system_type"] is not None
     assert kwargs.get("verbosity", 1) >= 1
     assert kwargs["seed"] == kwargs["go_params"]["seed"] == kwargs["ts_params"]["seed"]
+    assert kwargs["output_root"] == tmp_path / "results"
+    assert kwargs["output_stem"] == _EXPECTED_OUTPUT_STEMS[script_path.name]
+    ga = kwargs["go_params"]["optimizer_params"]["ga"]
+    assert ga["write_timing_json"] is True
+    assert ga["detailed_timing"] is True
+    assert kwargs["ts_params"]["write_timing_json"] is True

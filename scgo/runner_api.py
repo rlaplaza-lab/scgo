@@ -15,9 +15,10 @@ belongs in ``go_params`` only—not as separate ``run_*`` keywords. For
 ``ts_params``, ``system_type`` remains rejected while ``surface_config`` is
 allowed and validated against the run argument.
 
-GA/BH timing JSON is configured only in ``params``/``go_params`` under
+GA/BH timing JSON is configured in ``params``/``go_params`` under
 ``optimizer_params['ga']`` (or ``bh``): ``write_timing_json`` and ``detailed_timing``.
-See :mod:`scgo.utils.timing_report`.
+TS uses ``write_timing_json`` in ``ts_params``. ``run_go_ts`` may also write
+``go_ts_timing.json`` at the campaign root. See :mod:`scgo.utils.timing_report`.
 """
 
 from __future__ import annotations
