@@ -55,6 +55,14 @@ def test_load_run_timing_payload(tmp_path: Path):
     assert flatten_run_timing_payload(loaded)["timings_s"]["total_wall_s"] == 9.0
 
 
+def test_read_timing_file_warns_on_corrupt_json(tmp_path: Path, caplog):
+    path = tmp_path / "timing.json"
+    path.write_text("{not valid json", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        assert read_timing_file(str(path)) is None
+    assert "Failed to read timing file" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("timings", "expected"),
     [

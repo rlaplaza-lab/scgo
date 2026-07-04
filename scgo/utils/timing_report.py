@@ -6,6 +6,10 @@ TS: set ``write_timing_json`` in ``ts_params``.
 
 GO timing is written at **run** level: ``{run_dir}/timing.json`` (alongside
 ``metadata.json`` and the optimizer database).
+
+GO+TS pipeline rollup timing is written at the campaign root as
+``go_ts_timing.json`` when ``write_timing_json=True`` in ``go_params`` and/or
+``ts_params``.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from scgo.utils.logging import get_logger
 _logger = get_logger(__name__)
 
 TIMING_JSON_FILENAME = "timing.json"
+GO_TS_TIMING_JSON_FILENAME = "go_ts_timing.json"
 RUN_TIMING_SCHEMA_VERSION = 1
 
 _DB_IO_SUM_KEYS: tuple[str, ...] = (
@@ -118,8 +123,8 @@ def read_timing_file(path: str) -> dict[str, Any] | None:
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        _logger.debug("Failed to read timing file %s", path, exc_info=True)
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning("Failed to read timing file %s: %s", path, exc)
         return None
 
 

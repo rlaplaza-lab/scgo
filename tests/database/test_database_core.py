@@ -1182,6 +1182,33 @@ class TestDatabaseManagerCaching:
 
         manager.close()
 
+    def test_load_reference_structures_uses_datetime_run_id(self, tmp_path, rng):
+        """Reference structures inherit run_id from parent run_* directory."""
+        from scgo.database.helpers import load_reference_structures
+        from scgo.database.metadata import get_metadata
+
+        run_id = "run_20250124_143022_123456"
+        run_dir = tmp_path / run_id
+        run_dir.mkdir(parents=True)
+
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
+        a = atoms.copy()
+        a.info["key_value_pairs"] = _final_kvp(-5.0)
+        a.info["data"] = {"tag": "test_min"}
+        da.add_relaxed_step(a)
+        close_data_connection(da)
+        del da
+
+        refs = load_reference_structures(
+            f"{run_id}/ga_go.db",
+            composition=["Pt", "Pt"],
+            max_structures=10,
+            base_dir=tmp_path,
+        )
+        assert len(refs) == 1
+        assert get_metadata(refs[0], "run_id") == run_id
+
     def test_diversity_references_caching(self, tmp_path, rng):
         """Test diversity reference loading with caching."""
         for i in range(3):

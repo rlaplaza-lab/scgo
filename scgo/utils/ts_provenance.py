@@ -12,6 +12,11 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
+from scgo.utils.logging import get_logger
+
+_logger = get_logger(__name__)
+_version_warned: set[str] = set()
+
 TS_OUTPUT_SCHEMA_VERSION = 3
 CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION = 1
 
@@ -33,6 +38,13 @@ def package_version(dist_name: str) -> str:
     try:
         return version(dist_name)
     except PackageNotFoundError:
+        if dist_name not in _version_warned:
+            _logger.warning(
+                "Could not resolve package version for %r; provenance will record "
+                "'unknown'",
+                dist_name,
+            )
+            _version_warned.add(dist_name)
         return "unknown"
 
 

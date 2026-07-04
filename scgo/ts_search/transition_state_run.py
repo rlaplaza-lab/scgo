@@ -535,6 +535,10 @@ def run_transition_state_search(
     )
 
     if params is None:
+        logger.warning(
+            "params is None; defaulting TS calculator to EMT. Pass explicit "
+            "params with calculator='MACE' (or another backend) for production runs."
+        )
         params = {"calculator": "EMT", "calculator_kwargs": {}}
     calculator_name = params.get("calculator", "EMT")
     calculator_kwargs = params.get("calculator_kwargs", {})

@@ -45,7 +45,7 @@ from scgo.utils.helpers import (
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.run_tracking import load_run_metadata
+from scgo.utils.run_tracking import get_run_id_from_dir, load_run_metadata
 
 logger = get_logger(__name__)
 
@@ -568,6 +568,15 @@ def load_previous_run_results(
     )
 
 
+def _run_id_from_db_path(db_path: str | Path) -> str:
+    """Resolve GO run ID from a database path (parent ``run_*`` dir when present)."""
+    parent_name = Path(db_path).parent.name
+    run_id = get_run_id_from_dir(parent_name)
+    if run_id is not None:
+        return run_id
+    return os.path.basename(str(db_path))
+
+
 def load_reference_structures(
     db_glob_pattern: str,
     composition: list[str] | None = None,
@@ -605,7 +614,7 @@ def load_reference_structures(
     for db_file in db_files:
         try:
             minima = extract_minima_from_database_file(
-                db_file, run_id=os.path.basename(db_file)
+                db_file, run_id=_run_id_from_db_path(db_file)
             )
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
             logger.debug(f"Failed to extract minima from {db_file}: {e}")

@@ -572,6 +572,56 @@ is written at ``{run_dir}/timing.json``. See :mod:`scgo.utils.timing_report`.
        └── final_unique_ts_summary.json
 
 -----------------------
+Run IDs and provenance
+-----------------------
+
+Each GO or TS invocation creates a **datetime-tagged** directory named
+``run_YYYYMMDD_HHMMSS_ffffff`` (microsecond granularity). This tag is the
+primary key for tracing artifacts across combined campaigns:
+
+- **``run_go`` / ``run_trials``** — one new ``run_*`` per invocation under
+  ``{formula}_searches/``.
+- **``run_go_campaign``** — a **single shared** ``run_id`` for all compositions
+  in the campaign (generated once at campaign start unless you pass ``run_id=``).
+- **``run_ts_search`` / ``run_go_ts``** — TS always mints a **fresh** ``run_*``
+  under ``{formula}_ts_results/`` (independent of any GO ``run_id``).
+
+**Combining multiple runs:** repeat ``run_go`` (or a campaign loop) to add
+sibling ``run_*`` directories. SCGO discovers prior databases, merges minima,
+deduplicates, and writes ``final_unique_minima/`` exports. Only directories
+matching the datetime ``run_*`` pattern are listed by
+:func:`scgo.utils.run_tracking.get_run_directories`; custom ``run_id`` strings
+still work at runtime but are skipped by that helper.
+
+**TS minima provenance:** each NEB pair records endpoint lineage in
+``minima_provenance`` inside ``results_summary.json``, ``neb_{i}_{j}_metadata.json``,
+and ``ts_network_metadata.json``. Each entry links back to the GO minimum via:
+
+.. list-table::
+   :widths: 25 75
+   :header-rows: 1
+
+   * - Field
+     - Meaning
+   * - ``run_id``
+     - GO run that produced the endpoint minimum
+   * - ``source_db`` / ``source_db_relpath``
+     - Optimizer database path (basename and campaign-relative path)
+   * - ``confid`` / ``gaid`` / ``systems_row_id``
+     - Row identifiers inside the GO database
+   * - ``unique_id`` / ``final_id``
+     - Dedup and final-export identifiers when present
+   * - ``energy``
+     - Endpoint energy at pairing time (eV)
+
+**Timing artifacts:**
+
+- Per GO/TS run: ``{run_dir}/timing.json`` when ``write_timing_json=True``.
+- GO+TS pipeline rollup: ``go_ts_timing.json`` at the campaign root when timing
+  JSON is enabled in ``go_params`` and/or ``ts_params`` (see
+  :mod:`scgo.utils.timing_report`).
+
+-----------------------
 Reading prior results
 -----------------------
 

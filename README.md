@@ -56,7 +56,7 @@ results = run_go(
 
 Pass one of four `system_type` values on every run: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, or `surface_cluster_adsorbate`. See [system types](https://scgo.readthedocs.io/en/latest/api/system_types.html) for when to use each.
 
-Output layout depends on the runner: `run_go` writes directly to `{formula}_searches/` (default in the current directory); combined and TS workflows use a **campaign root** with sibling `{formula}_searches/` and `{formula}_ts_results/` subdirectories. See [output directories](https://scgo.readthedocs.io/en/latest/quickstart.html#output-directories) and [output files](https://scgo.readthedocs.io/en/latest/quickstart.html#output-files).
+Output layout depends on the runner: `run_go` writes directly to `{formula}_searches/` (default in the current directory); combined and TS workflows use a **campaign root** with sibling `{formula}_searches/` and `{formula}_ts_results/` subdirectories. See [output directories](https://scgo.readthedocs.io/en/latest/quickstart.html#output-directories), [output files](https://scgo.readthedocs.io/en/latest/quickstart.html#output-files), and [run IDs and provenance](https://scgo.readthedocs.io/en/latest/quickstart.html#run-ids-and-provenance).
 
 ## Examples
 

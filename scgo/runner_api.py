@@ -72,13 +72,29 @@ from scgo.utils.run_helpers import (
     validate_algorithm_params,
 )
 from scgo.utils.run_tracking import ensure_run_id
-from scgo.utils.timing_report import log_timing_summary, sum_neb_seconds_from_ts_results
+from scgo.utils.timing_report import (
+    GO_TS_TIMING_JSON_FILENAME,
+    log_timing_summary,
+    sum_neb_seconds_from_ts_results,
+    write_timing_file,
+)
+from scgo.utils.ts_provenance import ts_output_provenance
 from scgo.utils.validation import validate_composition
 
 type CompositionInput = str | list[str] | Atoms
 _ALGO_KEYS = ("simple", "bh", "ga")
 _LOGGER = get_logger(__name__)
 _DEFAULT_GO_PARAMS: dict[str, Any] | None = None
+
+
+def _optimizer_write_timing_json_enabled(params: dict[str, Any]) -> bool:
+    """Return True when any GO optimizer slot requests ``write_timing_json``."""
+    opt = params.get("optimizer_params") or {}
+    for algo in _ALGO_KEYS:
+        slot = opt.get(algo)
+        if isinstance(slot, dict) and slot.get("write_timing_json"):
+            return True
+    return False
 
 
 def _default_optimizer_system_type(algo: str) -> SystemType | None:
@@ -1017,6 +1033,21 @@ def _run_go_ts_pipeline(
         "cpu_non_relax_s": max(0.0, elapsed_s - go_wall_s - ts_neb),
     }
     log_timing_summary(logger, "go_ts", go_ts_timings, verbosity=verbosity)
+    write_go_json = _optimizer_write_timing_json_enabled(merged_ga)
+    if write_ts_json or write_go_json:
+        write_timing_file(
+            str(output_path),
+            {
+                **ts_output_provenance(extra={"formula": formula}),
+                "backend": "go_ts",
+                "timings_s": go_ts_timings,
+                "counters": {
+                    "ts_success": ts_success,
+                    "ts_total": len(ts_results),
+                },
+            },
+            filename=GO_TS_TIMING_JSON_FILENAME,
+        )
     logger.info(
         "Completed GO->TS pipeline for %s: successful NEBs=%d/%d, wall_time=%.2f s",
         formula,

@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -727,6 +729,45 @@ def test_run_go_ts_passes_timing_from_go_params(monkeypatch):
     ga = captured["go_params"]["optimizer_params"]["ga"]
     assert ga["write_timing_json"] is True
     assert ga["detailed_timing"] is True
+
+
+def test_run_go_ts_pipeline_writes_go_ts_timing_json(monkeypatch, tmp_path):
+    import scgo.runner_api as runner_api_module
+    import scgo.ts_search as ts_search_module
+    from scgo.utils.timing_report import GO_TS_TIMING_JSON_FILENAME
+
+    def _fake_trials(*args, **kwargs):
+        return []
+
+    def _fake_ts(*args, **kwargs):
+        return [{"timings_s": {"neb_optimization_s": 1.5}, "status": "success"}]
+
+    monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
+    monkeypatch.setattr(ts_search_module, "run_transition_state_search", _fake_ts)
+
+    campaign_root = tmp_path / "pt2_campaign"
+    _run_go_ts_pipeline(
+        ["Pt", "Pt"],
+        "gas_cluster",
+        go_params={
+            **get_testing_params(),
+            "optimizer_params": {
+                "ga": {"write_timing_json": True},
+            },
+        },
+        ts_kwargs=coerce_ts_params_to_runner_kwargs(
+            _emt_ts_gasc(), system_type="gas_cluster"
+        ),
+        seed=42,
+        verbosity=0,
+        output_dir=campaign_root,
+    )
+    timing_path = campaign_root / GO_TS_TIMING_JSON_FILENAME
+    assert timing_path.is_file()
+    payload = json.loads(timing_path.read_text(encoding="utf-8"))
+    assert payload["backend"] == "go_ts"
+    assert "go_phase_s" in payload["timings_s"]
+    assert payload["counters"]["ts_success"] == 1
 
 
 def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
