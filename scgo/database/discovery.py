@@ -339,20 +339,20 @@ class DatabaseDiscovery:
         return filtered
 
 
-def list_discovered_db_paths_with_run_trial(
+def list_discovered_db_paths_with_run(
     base_dir: str | Path,
     *,
     composition: list[str] | None = None,
     use_cache: bool = True,
-) -> list[tuple[str, str, int | None]]:
+) -> list[tuple[str, str]]:
     """List DB paths via :class:`DatabaseDiscovery` with run parsed from layout.
 
-    Returns tuples ``(absolute_path, run_id, None)``. ``run_id`` is empty if
-    the path is not under ``run_*``.
+    Returns tuples ``(absolute_path, run_id)``. ``run_id`` is empty if the path
+    is not under ``run_*``.
     """
     base_s = os.path.abspath(str(base_dir))
     discovery = DatabaseDiscovery(base_s)
-    out: list[tuple[str, str, int | None]] = []
+    out: list[tuple[str, str]] = []
     for db_path in discovery.find_databases(
         composition=composition, use_cache=use_cache
     ):
@@ -360,5 +360,5 @@ def list_discovered_db_paths_with_run_trial(
         rel = os.path.relpath(db_path_str, base_s)
         parts = rel.split(os.sep)
         run_id = parts[0] if parts and parts[0].startswith("run_") else ""
-        out.append((db_path_str, run_id, None))
+        out.append((db_path_str, run_id))
     return out

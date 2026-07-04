@@ -145,24 +145,20 @@ def test_extract_minima_from_database_file(tmp_path, pt3_atoms):
     from scgo.database import extract_minima_from_database_file
 
     run_id = "run_20250124_143022_123456"
-    trial_id = 1
 
     # Test with non-existent database
-    minima = extract_minima_from_database_file(
-        str(tmp_path / "nonexistent.db"), run_id, trial_id
-    )
+    minima = extract_minima_from_database_file(str(tmp_path / "nonexistent.db"), run_id)
     assert minima == []
 
     # Full database testing is covered by integration tests
 
 
 def test_extract_minima_persist_provenance_writes_to_db(test_database):
-    """When persist=True, run_id/trial should be written back into DB rows."""
+    """When persist=True, run_id should be written back into DB rows."""
     from scgo.database import extract_minima_from_database_file
 
     db_path = test_database
     run_id = "run_persist_001"
-    trial_id = 2
 
     # Ensure DB initially has no run_id stored in key_value_pairs
     import sqlite3
@@ -174,7 +170,7 @@ def test_extract_minima_persist_provenance_writes_to_db(test_database):
         assert cur.fetchone()[0] == 0
 
     # Call with persist=True
-    minima = extract_minima_from_database_file(db_path, run_id, trial_id, persist=True)
+    minima = extract_minima_from_database_file(db_path, run_id, persist=True)
     assert minima, "Expected minima to be returned from test DB"
 
     # At least one DB row should now contain the run_id in key_value_pairs
@@ -389,8 +385,8 @@ def test_composition_isolation(tmp_path, rng):
         "Expected both Pt3 and Pt4 DB files to exist"
     )
     # They should have different structures
-    minima3 = extract_minima_from_database_file(str(pt3_db), "run_20250124_143022", 1)
-    minima4 = extract_minima_from_database_file(str(pt4_db), "run_20250124_143022", 1)
+    minima3 = extract_minima_from_database_file(str(pt3_db), "run_20250124_143022")
+    minima4 = extract_minima_from_database_file(str(pt4_db), "run_20250124_143022")
     assert minima3 and minima4, "Expected minima entries in both databases"
     assert len(minima3[0][1]) == 3  # Pt3 has 3 atoms
     assert len(minima4[0][1]) == 4  # Pt4 has 4 atoms

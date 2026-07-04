@@ -7,7 +7,7 @@ from tests.test_utils import assert_db_final_row
 
 
 def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
-    # Create a DB outside the canonical run_xxx/trial_xxx layout
+    # Create a DB outside the canonical run_* layout
     dbpath = tmp_path / "external.db"
     db = connect(str(dbpath))
 
@@ -17,7 +17,6 @@ def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
         relaxed=True,
         key_value_pairs={
             "run_id": "run_ext",
-            "trial_id": 1,
             "raw_score": -0.1,
             "final_id": "fid-ext",
         },
@@ -27,7 +26,6 @@ def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
     atoms.info.setdefault("provenance", {})
     atoms.info["provenance"]["run_id"] = "run_ext"
-    atoms.info["provenance"]["trial_id"] = 1
 
     final_info = [
         {

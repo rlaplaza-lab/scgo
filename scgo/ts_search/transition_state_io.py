@@ -14,7 +14,7 @@ from scgo.constants import DEFAULT_COMPARATOR_TOL, DEFAULT_ENERGY_TOLERANCE
 from scgo.database import (
     extract_minima_from_database_file,
 )
-from scgo.database.discovery import list_discovered_db_paths_with_run_trial
+from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.database.metadata import add_metadata
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
@@ -79,11 +79,11 @@ def load_minima_by_composition(
 
     target_formula = get_cluster_formula(composition) if composition else None
 
-    db_files_with_run_trial = list_discovered_db_paths_with_run_trial(
+    db_files_with_run = list_discovered_db_paths_with_run(
         base_dir, composition=composition, use_cache=True
     )
 
-    for db_file, run_id, _trial_id in db_files_with_run_trial:
+    for db_file, run_id in db_files_with_run:
         try:
             # When prefer_final_unique=True, require_final=True so we only load
             # GO's canonical final unique minima (DB rows tagged final_unique_minimum).

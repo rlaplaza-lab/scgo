@@ -574,7 +574,7 @@ def _run_go_trials(
     *,
     params_already_merged: bool = False,
 ) -> list[tuple[float, Atoms]]:
-    """Run trials for a composition; return unique minima as (energy, Atoms) list sorted by energy."""
+    """Run global optimization for a composition; return unique minima sorted by energy."""
     configure_logging(verbosity)
     logger = get_logger(__name__)
 

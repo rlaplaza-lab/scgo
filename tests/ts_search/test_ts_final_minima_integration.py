@@ -163,7 +163,7 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
     )
 
     db_minima = extract_minima_from_database_file(
-        db_path, "run_loader", None, require_final=False
+        db_path, "run_loader", require_final=False
     )
     assert len(db_minima) == len(energies)
 

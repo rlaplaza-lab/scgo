@@ -684,7 +684,7 @@ class TestRunTrialsSurfaceAlignment:
 
     def test_run_trials_gas_skips_slab_alignment(self, tmp_path, rng, monkeypatch):
         atoms = create_test_atoms(["Pt", "Pt"])
-        add_metadata(atoms, run_id="run_test", trial_id=1, system_type="gas_cluster")
+        add_metadata(atoms, run_id="run_test", system_type="gas_cluster")
         align_calls = 0
 
         def _fake_scgo(**_kwargs):

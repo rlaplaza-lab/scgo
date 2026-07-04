@@ -26,7 +26,7 @@ from scgo.database.connection import (
     get_connection,
 )
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
-from scgo.database.discovery import list_discovered_db_paths_with_run_trial
+from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.database.exceptions import DatabaseSetupError
 from scgo.database.metadata import add_metadata, get_metadata
 from scgo.database.registry import get_registry
@@ -392,11 +392,11 @@ def setup_database(
 def extract_minima_from_database_file(
     db_path: str | Path,
     run_id: str,
-    trial_id: int | None = None,
+    *,
     require_final: bool = True,
     persist: bool = False,
 ) -> list[tuple[float, Atoms]]:
-    """Return minima from ``db_path`` annotated with ``run_id`` / ``trial_id``.
+    """Return minima from ``db_path`` annotated with ``run_id``.
 
     By default only rows tagged ``final_unique_minimum`` are returned (the
     canonical global-optimization result). Pass ``require_final=False`` to
@@ -445,13 +445,11 @@ def extract_minima_from_database_file(
                     db_path,
                 )
 
-            # Add run_id and trial_id to provenance (in-memory) and optionally
-            # persist into the DB rows when requested via `persist=True`.
+            # Add run_id to provenance (in-memory) and optionally persist to DB.
             for _, atoms in use_minima:
                 add_metadata(
                     atoms,
                     run_id=run_id,
-                    trial_id=trial_id,
                     source_db=os.path.basename(db_path),
                 )
 
@@ -469,11 +467,6 @@ def extract_minima_from_database_file(
                                 f"UPDATE systems SET {k} = json_set(COALESCE({k}, '{{}}'), '$.run_id', ?) WHERE id = ?",
                                 (run_id, row_id),
                             )
-                            if trial_id is not None:
-                                conn.execute(
-                                    f"UPDATE systems SET {k} = json_set(COALESCE({k}, '{{}}'), '$.trial_id', ?) WHERE id = ?",
-                                    (trial_id, row_id),
-                                )
                         conn.commit()
                 except (
                     sqlite3.DatabaseError,
@@ -495,7 +488,7 @@ def extract_minima_from_database_file(
 def extract_transition_states_from_database_file(
     db_path: str | Path,
     run_id: str,
-    trial_id: int | None = None,
+    *,
     require_final_unique_ts: bool = True,
 ) -> list[tuple[float, Atoms]]:
     """Return transition-state rows from ``db_path`` with provenance.
@@ -540,7 +533,6 @@ def extract_transition_states_from_database_file(
                 add_metadata(
                     atoms,
                     run_id=run_id,
-                    trial_id=trial_id,
                     source_db=os.path.basename(db_path),
                 )
 
@@ -686,7 +678,6 @@ def _load_single_database_worker(
     db_path: str,
     composition: list[str] | None = None,
     run_id: str | None = None,
-    trial_id: int | None = None,
     require_final: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Load minima from a single database in subprocess.
@@ -695,7 +686,6 @@ def _load_single_database_worker(
         db_path: Database file path.
         composition: Optional composition filter.
         run_id: Run ID for provenance.
-        trial_id: Optional trial ID for provenance.
         require_final: If True, only return rows tagged as `final_unique_minimum`.
 
     Returns:
@@ -710,7 +700,7 @@ def _load_single_database_worker(
     # Delegate to extract_minima_from_database_file (SCGO-stamped DBs only).
     try:
         minima = extract_minima_from_database_file(
-            db_path, run_id or "", trial_id, require_final=require_final
+            db_path, run_id or "", require_final=require_final
         )
     except (sqlite3.DatabaseError, OSError, ValueError) as e:
         logger.error(f"Failed to extract minima from {db_path} in worker: {e}")
@@ -749,23 +739,23 @@ def load_previous_results_parallel(
     ``prefer_final_unique=False`` to include all relaxed structures.
     """
     # First collect all database files to load
-    all_db_files: list[tuple[str, str | None, int | None]] = []
+    all_db_files: list[tuple[str, str | None]] = []
 
     if not os.path.exists(base_output_dir):
         return []
 
-    discovered_entries = list_discovered_db_paths_with_run_trial(
+    discovered_entries = list_discovered_db_paths_with_run(
         base_output_dir,
         composition=composition,
         use_cache=True,
     )
 
     if discovered_entries:
-        by_run: dict[str, list[tuple[str, int | None]]] = {}
-        for db_path_str, run_id, trial_id in discovered_entries:
+        by_run: dict[str, list[str]] = {}
+        for db_path_str, run_id in discovered_entries:
             if not run_id or run_id == current_run_id:
                 continue
-            by_run.setdefault(run_id, []).append((db_path_str, trial_id))
+            by_run.setdefault(run_id, []).append(db_path_str)
         for run_id, db_list in by_run.items():
             run_dir = os.path.join(base_output_dir, run_id)
             metadata = load_run_metadata(run_dir)
@@ -773,7 +763,7 @@ def load_previous_results_parallel(
                 expected_formula = get_cluster_formula(composition)
                 if metadata.formula != expected_formula:
                     continue
-            all_db_files.extend((p, run_id, t) for p, t in db_list)
+            all_db_files.extend((p, run_id) for p in db_list)
 
     if not all_db_files:
         run_dir_pattern = os.path.join(base_output_dir, "run_*")
@@ -803,9 +793,7 @@ def load_previous_results_parallel(
             pattern = db_filename if db_filename else "*.db"
             db_files = glob.glob(os.path.join(run_dir, pattern))
 
-            all_db_files.extend(
-                (db_path, run_id_from_dir, None) for db_path in db_files
-            )
+            all_db_files.extend((db_path, run_id_from_dir) for db_path in db_files)
 
     if not all_db_files:
         logger.info(f"No databases found in {base_output_dir}")
@@ -837,14 +825,13 @@ def load_previous_results_parallel(
                         db_path,
                         composition,
                         run_id,
-                        trial_id,
                         prefer_final_unique,
-                    ): (db_path, run_id, trial_id)
-                    for db_path, run_id, trial_id in all_db_files
+                    ): (db_path, run_id)
+                    for db_path, run_id in all_db_files
                 }
 
                 for future in as_completed(futures):
-                    db_path, run_id, trial_id = futures[future]
+                    db_path, run_id = futures[future]
                     try:
                         minima = future.result(timeout=30)
                         # minima are already filtered by composition and have provenance from worker
@@ -876,9 +863,9 @@ def load_previous_results_parallel(
     else:
         logger.info(f"Loading {len(all_db_files)} databases sequentially")
 
-        for db_path, run_id, trial_id in all_db_files:
+        for db_path, run_id in all_db_files:
             minima = extract_minima_from_database_file(
-                db_path, run_id or "", trial_id, require_final=prefer_final_unique
+                db_path, run_id or "", require_final=prefer_final_unique
             )
             # Apply composition filter using helper function
             filtered_minima = _filter_minima_by_composition(minima, composition)
