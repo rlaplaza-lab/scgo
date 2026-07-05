@@ -937,6 +937,7 @@ def ga_go(
         initial_pop_count = 0
         initial_discarded_count = 0
         initial_ineligible_relaxed_count = 0
+        inserted_initial_population: list[Atoms] = []
 
         def _insert_unrelaxed(cand):
             cand.info.setdefault("key_value_pairs", {})
@@ -971,6 +972,12 @@ def ga_go(
                         adsorbate_definition=adsorbate_definition,
                         fragment_templates=adsorbate_fragment_template,
                     )
+                if surface_mode and n_slab > 0:
+                    canonicalize_relaxed_for_storage(
+                        cand,
+                        surface_mode=True,
+                        n_slab=n_slab,
+                    )
                 try:
                     validate_structure_for_system_type(
                         cand,
@@ -995,6 +1002,7 @@ def ga_go(
                     config=RetryConfig(max_retries=5),
                     operation_name="insert_unrelaxed_candidate",
                 )
+                inserted_initial_population.append(cand)
         profile_timings["initial_unrelaxed_insert_s"] = perf_counter() - t0
 
         # Helper to write a relaxed batch into the database under a single connection
@@ -1082,12 +1090,12 @@ def ga_go(
                     original.calc = SinglePointCalculator(original, energy=energy)
                     da.add_relaxed_step(original)
 
-        # Process starting population in batches
-        batch_size_internal = batch_size or len(initial_population)
+        # Process starting population in batches (only candidates inserted above).
+        batch_size_internal = batch_size or len(inserted_initial_population)
         t0_relax = 0.0
         t0_write = 0.0
-        for i in range(0, len(initial_population), batch_size_internal):
-            batch = initial_population[i : i + batch_size_internal]
+        for i in range(0, len(inserted_initial_population), batch_size_internal):
+            batch = inserted_initial_population[i : i + batch_size_internal]
             t_start = perf_counter()
             relaxed_results = relaxer.relax_batch(
                 [
