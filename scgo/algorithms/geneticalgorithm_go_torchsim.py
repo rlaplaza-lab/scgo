@@ -41,6 +41,7 @@ from scgo.algorithms.ga_common import (
     update_early_stopping_state_unified,
     update_mutation_weights,
     validate_ga_common_params,
+    validate_structure_for_ga_storage,
 )
 from scgo.ase_ga_patches.population import Population
 from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
@@ -84,7 +85,6 @@ from scgo.utils.fitness_strategies import (
     ensure_fitness_strategy_resolved,
 )
 from scgo.utils.helpers import (
-    canonicalize_relaxed_for_storage,
     extract_minima_from_database,
 )
 from scgo.utils.logging import get_logger, should_show_progress
@@ -289,6 +289,8 @@ def _build_offspring_worker(
         ctx.system_type,
     )
     try:
+        # Pre-relax geometric screen (raw frame); eligibility is decided post-relax
+        # via validate_structure_for_ga_storage after canonicalization.
         validate_structure_for_system_type(
             child,
             system_type=ctx.system_type,
@@ -488,32 +490,25 @@ def _relax_unrelaxed_candidates(
                         adsorbate_definition,
                         system_type,
                     )
-                canonicalize_relaxed_for_storage(
+                validation_error = validate_structure_for_ga_storage(
                     original,
                     surface_mode=surface_mode,
                     n_slab=n_slab,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
                 )
-                validation_error: str | None = None
-                try:
-                    validate_structure_for_system_type(
-                        original,
-                        system_type=system_type,
-                        surface_config=surface_config,
-                        n_slab=n_slab if surface_mode else None,
-                        adsorbate_definition=adsorbate_definition,
-                        connectivity_factor=connectivity_factor,
-                        allow_cluster_fragmentation=allow_cluster_fragmentation,
-                        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    )
-                except ValueError as exc:
+                if validation_error is not None:
                     ineligible_count += 1
-                    validation_error = str(exc)
                     logger.warning(
                         "Offspring %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
                         idx + 1,
                         len(batch),
-                        exc,
+                        validation_error,
                     )
 
                 # Copy forces if available (already converted to float64 by relaxer)
@@ -972,29 +967,23 @@ def ga_go(
                         adsorbate_definition=adsorbate_definition,
                         fragment_templates=adsorbate_fragment_template,
                     )
-                if surface_mode and n_slab > 0:
-                    canonicalize_relaxed_for_storage(
-                        cand,
-                        surface_mode=True,
-                        n_slab=n_slab,
-                    )
-                try:
-                    validate_structure_for_system_type(
-                        cand,
-                        system_type=system_type,
-                        surface_config=surface_config,
-                        n_slab=n_slab,
-                        adsorbate_definition=adsorbate_definition,
-                        connectivity_factor=connectivity_factor,
-                        allow_cluster_fragmentation=allow_cluster_fragmentation,
-                        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    )
-                except ValueError as exc:
+                validation_error = validate_structure_for_ga_storage(
+                    cand,
+                    surface_mode=surface_mode,
+                    n_slab=n_slab,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                )
+                if validation_error is not None:
                     initial_discarded_count += 1
                     logger.warning(
                         "Discarding disconnected initial candidate before DB insert: %s",
-                        exc,
+                        validation_error,
                     )
                     continue
                 database_retry(
@@ -1022,30 +1011,23 @@ def ga_go(
                         adsorbate_definition,
                         system_type,
                     )
-                    canonicalize_relaxed_for_storage(
+                    validation_error = validate_structure_for_ga_storage(
                         original,
                         surface_mode=surface_mode,
                         n_slab=n_slab,
+                        system_type=system_type,
+                        surface_config=surface_config,
+                        adsorbate_definition=adsorbate_definition,
+                        connectivity_factor=connectivity_factor,
+                        allow_cluster_fragmentation=allow_cluster_fragmentation,
+                        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
                     )
-                    validation_error: str | None = None
-                    try:
-                        validate_structure_for_system_type(
-                            original,
-                            system_type=system_type,
-                            surface_config=surface_config,
-                            n_slab=n_slab if surface_mode else None,
-                            adsorbate_definition=adsorbate_definition,
-                            connectivity_factor=connectivity_factor,
-                            allow_cluster_fragmentation=allow_cluster_fragmentation,
-                            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                        )
-                    except ValueError as exc:
-                        validation_error = str(exc)
+                    if validation_error is not None:
                         initial_ineligible_relaxed_count += 1
                         logger.warning(
                             "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
-                            exc,
+                            validation_error,
                         )
 
                     # Copy forces if available

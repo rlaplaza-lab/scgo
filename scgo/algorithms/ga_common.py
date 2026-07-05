@@ -16,7 +16,6 @@ from numpy.random import Generator
 
 if typing.TYPE_CHECKING:
     from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-    from scgo.system_types import AdsorbateDefinition
     from scgo.utils.diversity_scorer import DiversityScorer
     from scgo.utils.fitness_strategies import FitnessStrategy
 from ase import Atoms
@@ -64,12 +63,15 @@ from scgo.surface.deposition import (
     create_deposited_cluster_batch,
 )
 from scgo.system_types import (
+    AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
     get_system_policy,
     uses_surface,
     validate_composition_against_adsorbate,
+    validate_structure_for_system_type,
 )
+from scgo.utils.helpers import canonicalize_relaxed_for_storage
 from scgo.utils.rng_helpers import (
     create_child_rng,
     ensure_rng_or_create,
@@ -138,6 +140,52 @@ def ga_run_metadata_extras(
         adsorbate_partition_metadata(system_type, composition, adsorbate_definition)
     )
     return out
+
+
+def validate_structure_for_ga_storage(
+    atoms: Atoms,
+    *,
+    surface_mode: bool,
+    n_slab: int,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    connectivity_factor: float | None = None,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+) -> str | None:
+    """Validate ``atoms`` in the GA database storage frame.
+
+    Applies :func:`~scgo.utils.helpers.canonicalize_relaxed_for_storage` and then
+    :func:`~scgo.system_types.validate_structure_for_system_type`. Returns
+    ``None`` when the structure is eligible for GA evolution; otherwise the
+    validation error message.
+
+    All TorchSim GA code paths that assign ``ga_eligible`` after relaxation
+    (or before initial unrelaxed insert) must use this helper so pre- and
+    post-relax checks see the same canonical frame.
+    """
+    canonicalize_relaxed_for_storage(
+        atoms,
+        surface_mode=surface_mode,
+        n_slab=n_slab,
+    )
+    try:
+        validate_structure_for_system_type(
+            atoms,
+            system_type=system_type,
+            surface_config=surface_config,
+            n_slab=n_slab if surface_mode else None,
+            adsorbate_definition=adsorbate_definition,
+            connectivity_factor=connectivity_factor,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        )
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 def core_adsorbate_partition_counts(
