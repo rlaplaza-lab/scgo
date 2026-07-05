@@ -54,8 +54,8 @@ def test_ga_go_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng):
         output_dir=str(out),
         calculator=EMT(),
         relaxer=MockRelaxer(max_steps=1),
-        niter=1,
-        population_size=3,
+        niter=2,
+        population_size=8,
         offspring_fraction=0.5,
         niter_local_relaxation=20,
         batch_size=2,
@@ -66,7 +66,7 @@ def test_ga_go_surface_config_mock_relaxer(pt_slab_small, tmp_path, rng):
     )
 
     assert isinstance(minima, list)
-    assert len(minima) >= 1
+    assert len(minima) >= 1, "GA produced no eligible surface minima"
     _e, best = minima[0]
     n_slab = len(slab)
     assert len(best) == n_slab + 2
