@@ -85,12 +85,14 @@ def load_minima_by_composition(
 
     for db_file, run_id in db_files_with_run:
         try:
+            db_relpath = _relative_db_path(db_file, base_dir)
             # When prefer_final_unique=True, require_final=True so we only load
             # GO's canonical final unique minima (DB rows tagged final_unique_minimum).
             minima = extract_minima_from_database_file(
                 db_file,
                 run_id=run_id,
                 require_final=prefer_final_unique,
+                source_db_relpath=db_relpath,
             )
 
             if not minima:
@@ -115,7 +117,7 @@ def load_minima_by_composition(
                     atoms_copy,
                     run_id=run_id,
                     source_db=os.path.basename(db_file),
-                    source_db_relpath=_relative_db_path(db_file, base_dir),
+                    source_db_relpath=db_relpath,
                 )
                 validate_stored_slab_adsorbate_metadata(atoms_copy)
                 validate_stored_mobile_partition_metadata(atoms_copy)

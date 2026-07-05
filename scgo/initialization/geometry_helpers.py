@@ -904,7 +904,7 @@ def place_multi_atom_seed_on_facet(
     # Get the largest facet of the seed
     seed_facets = get_largest_facets(seed_atoms, n_facets=1)
     if not seed_facets:
-        # Fallback: use center of mass
+        # Fallback: arbitrary +x axis when no facet can be identified
         seed_normal = np.array([1.0, 0.0, 0.0])
     else:
         seed_facet_centroid, seed_facet_normal, _ = seed_facets[0]

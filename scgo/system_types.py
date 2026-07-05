@@ -8,6 +8,7 @@ from typing import Literal, NotRequired, TypedDict
 from ase import Atoms
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.feasibility import validate_adsorbate_placement_feasibility
 from scgo.cluster_adsorbate.helpers import (
     parse_positive_fragment_lengths,
     resolve_fragment_anchor_and_bond_axis,  # noqa: F401
@@ -39,7 +40,8 @@ class AdsorbateDefinition(TypedDict, total=False):
     the side that is empty). They must form an **ordered** partition of the run
     ``composition`` such that
     ``composition == core_symbols + adsorbate_symbols`` (list equality, same
-    length and order for the mobile atoms). The slab, if any, is *not* part of
+    length and order for the mobile atoms). Element symbols may appear in both
+    lists (e.g. oxide cores with O-containing adsorbates). The slab, if any, is *not* part of
     ``composition``.
 
     **Empty core** (``core_symbols=[]``): all mobile atoms are in
@@ -377,7 +379,9 @@ def validate_composition_against_adsorbate(
 
     Both ``core_symbols`` and ``adsorbate_symbols`` must be present (use ``[]`` if
     empty). The run ``composition`` must equal ``core_symbols + adsorbate_symbols``
-    in order.
+    in order. Element symbols may repeat across core and adsorbate (e.g. lattice
+    O in an oxide core plus O in an OH adsorbate); partitioning is by atom index,
+    not by chemical element.
 
     Raises:
         ValueError: If keys are missing, both sides are empty for non-empty
@@ -407,14 +411,6 @@ def validate_composition_against_adsorbate(
         raise ValueError(
             f"{prefix}composition must equal core_symbols + adsorbate_symbols. Got {composition}, expected {expected}."
         )
-
-    if core_list and ads_list:
-        core_set = set(core_list)
-        ads_set = set(ads_list)
-        if core_set & ads_set:
-            raise ValueError(
-                f"{prefix}core_symbols and adsorbate_symbols must be disjoint. Overlapping: {sorted(core_set & ads_set)}."
-            )
 
     return core_list, ads_list
 
@@ -633,10 +629,6 @@ def build_adsorbate_definition_from_inputs(
         adsorbate_definition=ads_def,
         context=context,
     )
-    from scgo.cluster_adsorbate.feasibility import (
-        validate_adsorbate_placement_feasibility,
-    )
-
     validate_adsorbate_placement_feasibility(
         core_list,
         ads_def["adsorbate_fragment_lengths"],

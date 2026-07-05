@@ -395,6 +395,7 @@ def extract_minima_from_database_file(
     *,
     require_final: bool = True,
     persist: bool = False,
+    source_db_relpath: str | None = None,
 ) -> list[tuple[float, Atoms]]:
     """Return minima from ``db_path`` annotated with ``run_id``.
 
@@ -403,6 +404,9 @@ def extract_minima_from_database_file(
     include all relaxed non-TS structures.
 
     If ``persist`` is True, attempt to write provenance back to the DB.
+
+    When ``source_db_relpath`` is set, it is stored alongside ``source_db`` in
+    per-structure provenance for TS traceability.
     """
     db_path = str(db_path)
 
@@ -446,12 +450,14 @@ def extract_minima_from_database_file(
                 )
 
             # Add run_id to provenance (in-memory) and optionally persist to DB.
+            metadata_kwargs: dict[str, str] = {
+                "run_id": run_id,
+                "source_db": os.path.basename(db_path),
+            }
+            if source_db_relpath is not None:
+                metadata_kwargs["source_db_relpath"] = source_db_relpath
             for _, atoms in use_minima:
-                add_metadata(
-                    atoms,
-                    run_id=run_id,
-                    source_db=os.path.basename(db_path),
-                )
+                add_metadata(atoms, **metadata_kwargs)
 
             if persist:
                 try:

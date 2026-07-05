@@ -170,3 +170,26 @@ def test_attach_adsorbate_internal_geometry_constraints_freezes_bonds() -> None:
     )
     # Two OH fragments, each contributes one constrained pair.
     assert len(atoms.constraints) == 2
+
+
+def test_build_adsorbate_definition_allows_shared_oxygen_in_core_and_adsorbate() -> (
+    None
+):
+    """Oxide nanoparticle cores may contain O while adsorbates also include O."""
+    from ase import Atoms
+
+    from scgo.system_types import build_adsorbate_definition_from_inputs
+
+    core = ["Ru", "W", "O", "O"]
+    oh = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]])
+
+    ads_def, _fragments, full = build_adsorbate_definition_from_inputs(
+        system_type="gas_cluster_adsorbate",
+        composition=core,
+        adsorbates=oh,
+        context="test",
+    )
+
+    assert ads_def["core_symbols"] == core
+    assert ads_def["adsorbate_symbols"] == ["O", "H"]
+    assert full == core + ["O", "H"]

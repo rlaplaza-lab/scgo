@@ -24,7 +24,7 @@ try:
 
     release = _pkg_version("scgo")
 except Exception:
-    release = "0.4.0"
+    release = "0.4.1"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
