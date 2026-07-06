@@ -10,12 +10,15 @@ import sys
 import tarfile
 import traceback
 import urllib.request
+from pathlib import Path
 
 REPO_URL = "https://github.com/rlaplaza-lab/scgo.git"
 GIT_REF = "__GIT_REF__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
 CONDA_ENV = "scgo-gpu"
-WORKDIR = "/kaggle/working/scgo"
+WORKDIR = Path("/kaggle/working/scgo")
+DATASET_INPUT = Path("/kaggle/input/scgocisrc")
+SOURCE_ARCHIVE = "scgo-src.tar.gz"
 
 
 def log(message: str) -> None:
@@ -23,7 +26,7 @@ def log(message: str) -> None:
 
 
 def run(
-    cmd: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None
+    cmd: list[str], *, cwd: str | Path | None = None, env: dict[str, str] | None = None
 ) -> None:
     log("+ " + " ".join(cmd))
     subprocess.run(cmd, check=True, cwd=cwd, env=env)
@@ -105,6 +108,23 @@ def _resolve_python() -> list[str]:
     return _conda_python()
 
 
+def _extract_dataset_archive(archive: Path) -> None:
+    if WORKDIR.exists():
+        shutil.rmtree(WORKDIR)
+    WORKDIR.mkdir(parents=True, exist_ok=True)
+    log(f"Extracting bundled source from {archive}")
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(path=WORKDIR)
+
+
+def _fetch_repo_from_dataset() -> bool:
+    archive = DATASET_INPUT / SOURCE_ARCHIVE
+    if archive.is_file():
+        _extract_dataset_archive(archive)
+        return True
+    return False
+
+
 def _ensure_git() -> None:
     if shutil.which("git"):
         return
@@ -113,10 +133,10 @@ def _ensure_git() -> None:
         run(["apt-get", "install", "-y", "git"])
 
 
-def _fetch_repo() -> None:
-    if os.path.isdir(WORKDIR):
+def _fetch_repo_from_network() -> None:
+    if WORKDIR.exists():
         shutil.rmtree(WORKDIR)
-    os.makedirs(WORKDIR, exist_ok=True)
+    WORKDIR.mkdir(parents=True, exist_ok=True)
     _ensure_git()
     if shutil.which("git"):
         try:
@@ -129,7 +149,7 @@ def _fetch_repo() -> None:
                     "--branch",
                     GIT_REF,
                     REPO_URL,
-                    WORKDIR,
+                    str(WORKDIR),
                 ]
             )
             return
@@ -138,15 +158,23 @@ def _fetch_repo() -> None:
     archive_url = (
         f"https://github.com/rlaplaza-lab/scgo/archive/refs/heads/{GIT_REF}.tar.gz"
     )
-    archive_path = "/kaggle/working/scgo-src.tar.gz"
+    archive_path = Path("/kaggle/working/scgo-src.tar.gz")
     log(f"Downloading {archive_url}")
     urllib.request.urlretrieve(archive_url, archive_path)
+    extracted = Path(f"/kaggle/working/scgo-{GIT_REF}")
     with tarfile.open(archive_path, "r:gz") as tar:
         tar.extractall(path="/kaggle/working")
-    extracted = f"/kaggle/working/scgo-{GIT_REF}"
-    if not os.path.isdir(extracted):
+    if not extracted.is_dir():
         raise FileNotFoundError(f"Expected extracted source at {extracted}")
-    shutil.move(extracted, WORKDIR)
+    shutil.move(str(extracted), str(WORKDIR))
+
+
+def _fetch_repo() -> None:
+    if _fetch_repo_from_dataset():
+        log("Using CI source bundle from Kaggle dataset input")
+        return
+    log("Dataset bundle not found; fetching source over the network")
+    _fetch_repo_from_network()
 
 
 def main() -> int:
