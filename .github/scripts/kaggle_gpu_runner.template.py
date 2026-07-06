@@ -19,6 +19,8 @@ CONDA_ENV = "scgo-gpu"
 WORKDIR = Path("/kaggle/working/scgo")
 DATASET_INPUT = Path("/kaggle/input/scgocisrc")
 SOURCE_ARCHIVE = "scgo-src.tar.gz"
+PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu124"
+PYPI_INDEX = "https://pypi.org/simple"
 
 
 def log(message: str) -> None:
@@ -37,8 +39,19 @@ def _python_ok(version: str) -> bool:
     return (major, minor) >= (3, 12)
 
 
+def _log_kaggle_inputs() -> None:
+    inputs_root = Path("/kaggle/input")
+    if not inputs_root.is_dir():
+        log("No /kaggle/input directory mounted")
+        return
+    log("Kaggle input mounts:")
+    for path in sorted(inputs_root.rglob("*")):
+        if path.is_file():
+            log(f"  {path} ({path.stat().st_size} bytes)")
+
+
 def _system_python() -> list[str] | None:
-    for candidate in (sys.executable, "python3", "python"):
+    for candidate in ("python3.12", "python3", sys.executable, "python"):
         if candidate == "python" and not shutil.which("python"):
             continue
         try:
@@ -108,18 +121,35 @@ def _resolve_python() -> list[str]:
     return _conda_python()
 
 
+def _safe_extractall(tar: tarfile.TarFile, path: Path) -> None:
+    if hasattr(tarfile, "data_filter"):
+        tar.extractall(path=path, filter="data")
+    else:
+        tar.extractall(path=path)
+
+
 def _extract_dataset_archive(archive: Path) -> None:
     if WORKDIR.exists():
         shutil.rmtree(WORKDIR)
     WORKDIR.mkdir(parents=True, exist_ok=True)
     log(f"Extracting bundled source from {archive}")
     with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(path=WORKDIR)
+        _safe_extractall(tar, WORKDIR)
+
+
+def _find_dataset_archive() -> Path | None:
+    if not DATASET_INPUT.is_dir():
+        return None
+    direct = DATASET_INPUT / SOURCE_ARCHIVE
+    if direct.is_file():
+        return direct
+    matches = sorted(DATASET_INPUT.rglob(SOURCE_ARCHIVE))
+    return matches[0] if matches else None
 
 
 def _fetch_repo_from_dataset() -> bool:
-    archive = DATASET_INPUT / SOURCE_ARCHIVE
-    if archive.is_file():
+    archive = _find_dataset_archive()
+    if archive is not None:
         _extract_dataset_archive(archive)
         return True
     return False
@@ -163,7 +193,7 @@ def _fetch_repo_from_network() -> None:
     urllib.request.urlretrieve(archive_url, archive_path)
     extracted = Path(f"/kaggle/working/scgo-{GIT_REF}")
     with tarfile.open(archive_path, "r:gz") as tar:
-        tar.extractall(path="/kaggle/working")
+        _safe_extractall(tar, Path("/kaggle/working"))
     if not extracted.is_dir():
         raise FileNotFoundError(f"Expected extracted source at {extracted}")
     shutil.move(str(extracted), str(WORKDIR))
@@ -179,6 +209,7 @@ def _fetch_repo() -> None:
 
 def main() -> int:
     try:
+        _log_kaggle_inputs()
         _fetch_repo()
         os.chdir(WORKDIR)
 
@@ -190,12 +221,14 @@ def main() -> int:
                 *pip,
                 "install",
                 "--no-cache-dir",
-                "torch>=2.12.0,<2.13",
+                "-e",
+                ".[mace,dev]",
                 "--index-url",
-                "https://download.pytorch.org/whl/cu124",
+                PYTORCH_CUDA_INDEX,
+                "--extra-index-url",
+                PYPI_INDEX,
             ]
         )
-        run([*pip, "install", "--no-cache-dir", "-e", ".[mace,dev]"])
 
         run(
             [

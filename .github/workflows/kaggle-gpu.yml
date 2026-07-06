@@ -1,6 +1,7 @@
 name: Kaggle GPU tests
 
 # Manual GPU CI via Kaggle (see tests/README.md). CPU CI in ci.yml excludes requires_cuda.
+# Uses Frederisk/kaggle-action@v2 — https://github.com/Frederisk/kaggle-action
 
 on:
   workflow_dispatch:
@@ -93,19 +94,28 @@ jobs:
               if token.startswith("KGAT_"):
                   emit_access_token(token)
               else:
-                  emit_access_token(token)
+                  raise SystemExit(
+                      "KAGGLE_API_TOKEN must be a KGAT_* access token or JSON "
+                      '{"username": "...", "key": "..."} for legacy credentials'
+                  )
           PY
 
       - name: Publish CI source bundle to Kaggle dataset
         env:
           KAGGLE_API_TOKEN: ${{ steps.kaggle_creds.outputs.api_token }}
+          KAGGLE_USERNAME: ${{ steps.kaggle_creds.outputs.username }}
+          KAGGLE_KEY: ${{ steps.kaggle_creds.outputs.key }}
           GIT_REF: ${{ inputs.ref }}
         run: |
           python -m pip install --upgrade kaggle
-          mkdir -p ~/.kaggle
-          printf '%s' "$KAGGLE_API_TOKEN" > ~/.kaggle/access_token
-          chmod 600 ~/.kaggle/access_token
-          tar -czf /tmp/scgo-src.tar.gz --exclude=.git .
+          python .github/scripts/setup_kaggle_auth.py
+          tar -czf /tmp/scgo-src.tar.gz \
+            --exclude=.git \
+            --exclude=./dist \
+            --exclude=./Pt4_searches \
+            --exclude='**/__pycache__' \
+            --exclude='**/*.pyc' \
+            .
           mkdir -p scgo-dataset
           cp /tmp/scgo-src.tar.gz scgo-dataset/
           cat > scgo-dataset/dataset-metadata.json <<'EOF'
@@ -120,6 +130,16 @@ jobs:
           else
             kaggle datasets version -p scgo-dataset -m "CI bundle for ${GIT_REF}" --dir-mode zip
           fi
+          echo "Waiting for dataset version to finish processing..."
+          for attempt in $(seq 1 60); do
+            status="$(kaggle datasets status rlaplaza/scgocisrc 2>&1 || true)"
+            echo "[$attempt] $status"
+            if echo "$status" | grep -Eqi 'complete|ready|done'; then
+              break
+            fi
+            sleep 5
+          done
+          kaggle datasets files rlaplaza/scgocisrc
 
       - name: Run tests on Kaggle GPU
         uses: Frederisk/kaggle-action@v2
@@ -133,6 +153,7 @@ jobs:
           enable_internet: enable
           is_private: true
           fetch_time_seconds: "15"
+          timeout_seconds: "10800"
           dataset_sources: |
             rlaplaza/scgocisrc
 
@@ -141,14 +162,9 @@ jobs:
         continue-on-error: true
         env:
           KAGGLE_API_TOKEN: ${{ steps.kaggle_creds.outputs.api_token }}
+          KAGGLE_USERNAME: ${{ steps.kaggle_creds.outputs.username }}
+          KAGGLE_KEY: ${{ steps.kaggle_creds.outputs.key }}
         run: |
-          if [ -z "$KAGGLE_API_TOKEN" ]; then
-            echo "No normalized access token available for log download"
-            exit 0
-          fi
           python -m pip install --upgrade kaggle
-          mkdir -p ~/.kaggle
-          printf '%s' "$KAGGLE_API_TOKEN" > ~/.kaggle/access_token
-          chmod 600 ~/.kaggle/access_token
-          kaggle kernels output scgogpuci -p /tmp/kaggle-log || true
-          find /tmp/kaggle-log -type f -print -exec sh -c 'echo "===== $1 ====="; cat "$1"' _ {} \;
+          python .github/scripts/setup_kaggle_auth.py
+          python .github/scripts/dump_kaggle_kernel_log.py scgogpuci /tmp/kaggle-log
