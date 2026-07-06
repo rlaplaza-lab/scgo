@@ -12,6 +12,7 @@ import multiprocessing as mp
 import os
 import sqlite3
 import threading
+import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -112,13 +113,22 @@ def _write_to_database(args):
         atoms.info["data"] = {"worker_tag": f"w{worker_id}"}
         atoms_list.append(atoms)
 
-    with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
-        for atoms in atoms_list:
-            da.add_unrelaxed_candidate(
-                atoms, description=f"concurrent_stress:w{worker_id}"
-            )
-            da.add_relaxed_step(atoms)
-    return True, worker_id
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
+                for atoms in atoms_list:
+                    da.add_unrelaxed_candidate(
+                        atoms, description=f"concurrent_stress:w{worker_id}"
+                    )
+                    da.add_relaxed_step(atoms)
+            return True, worker_id
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower() and attempt < max_attempts - 1:
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            raise
+    return False, worker_id
 
 
 class TestDatabaseSetupAndFlow:
