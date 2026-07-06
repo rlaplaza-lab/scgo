@@ -69,7 +69,7 @@ GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 
 1. GitHub → Actions → **Kaggle GPU tests** → **Run workflow**
 2. Leave defaults (`ref=main`, `marker=requires_cuda and not benchmark`) unless testing a branch
-3. Requires repo secret `KAGGLE_API_TOKEN`
+3. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
 
 Example-mimic GPU integration coverage: `tests/integration/test_gpu_examples_integration.py` (all four `system_type` values from `examples/`).
 
