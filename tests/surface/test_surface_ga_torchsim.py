@@ -6,7 +6,6 @@ import pytest
 from ase.calculators.emt import EMT
 
 from scgo.algorithms import ga_go
-from scgo.calculators.mace_helpers import MACE
 from scgo.database import get_connection
 from scgo.database.metadata import get_metadata
 
@@ -64,10 +63,13 @@ def test_ga_go_disconnected_rows_persist_but_are_ineligible(
     assert any(not bool(get_metadata(row, "ga_eligible", default=True)) for row in rows)
 
 
+@pytest.mark.requires_mace
 @pytest.mark.requires_cuda
 @pytest.mark.slow
 def test_ga_go_surface_config_mace_cuda(surface_config_pt111, tmp_path, rng):
     """Optional real GPU path: MACE + CUDA when available (conda scgo on a GPU box)."""
+    from scgo.calculators.mace_helpers import MACE
+
     slab = surface_config_pt111.slab
     out = tmp_path / "surface_ga_torchsim_cuda"
     out.mkdir(parents=True, exist_ok=True)

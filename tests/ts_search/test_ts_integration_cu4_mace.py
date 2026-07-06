@@ -12,11 +12,12 @@ import torch_sim.neighbors as _ts_nl
 from ase import Atoms
 from ase.optimize import FIRE
 from ase_ga.data import DataConnection
-from mace.calculators import mace_mp
 
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
 from tests.test_utils import create_preparedb, mark_test_minima_as_final
+
+pytestmark = [pytest.mark.requires_mace, pytest.mark.benchmark]
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ def test_full_workflow_cu4_mace_database_persistence():
         db = create_preparedb(Atoms("Cu4"), db_path, population_size=50)
 
         # Initialize MACE calculator for relaxation
+        from mace.calculators import mace_mp
+
         mace_calc = mace_mp(model="small", default_dtype="float32")
 
         # Add 4 diverse Cu4 configurations
@@ -474,6 +477,8 @@ def test_ts_search_reproducibility_with_mace():
 
             # Create deterministic Cu4 database
             db = create_preparedb(Atoms("Cu4"), db_path, population_size=50)
+            from mace.calculators import mace_mp
+
             mace_calc = mace_mp(model="small", default_dtype="float32")
 
             # Use only 2 fixed configurations for faster testing

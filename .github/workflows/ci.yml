@@ -126,6 +126,7 @@ jobs:
         run: |
           python -m pytest tests/ --collect-only -q -m "not slow and not integration"
           python -m pytest tests/ --collect-only -q -m "slow and not benchmark"
+          python -m pytest tests/ --collect-only -q -m "not slow and not integration and not requires_mace"
 
       - name: Run fast tests
         if: matrix.suite == 'mace'
@@ -135,7 +136,7 @@ jobs:
       - name: Run fast tests (UMA)
         if: matrix.suite == 'uma'
         run: |
-          pytest tests/ -n 2 -m "not slow and not integration" -v
+          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace" -v
 
       - name: Run slow tests
         if: matrix.suite == 'mace'
@@ -149,7 +150,7 @@ jobs:
         env:
           SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
-          pytest tests/ -m "slow and not benchmark" -n 2 -v
+          pytest tests/ -m "slow and not benchmark and not requires_mace" -n 2 -v
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

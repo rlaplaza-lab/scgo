@@ -8,6 +8,7 @@
 | `integration` | Full workflow (GO campaigns, output trees) | Excluded from fast job (`not integration`) |
 | `benchmark` | Long MLIP regression (Cu₄ MACE E2E) | Excluded from CI |
 | `requires_cuda` | Needs GPU | Skipped on CPU runners |
+| `requires_mace` | Needs MACE extra | Excluded from UMA CI jobs |
 | `requires_multicore` | Needs ≥2 CPUs | Skipped on single-core |
 
 Fast CI (every PR): `pytest tests/ -m "not slow and not integration"`
