@@ -7,17 +7,25 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import traceback
+import urllib.request
 
 REPO_URL = "https://github.com/rlaplaza-lab/scgo.git"
 GIT_REF = "__GIT_REF__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
 CONDA_ENV = "scgo-gpu"
+WORKDIR = "/kaggle/working/scgo"
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
 
 
 def run(
     cmd: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None
 ) -> None:
-    print("+", " ".join(cmd), flush=True)
+    log("+ " + " ".join(cmd))
     subprocess.run(cmd, check=True, cwd=cwd, env=env)
 
 
@@ -44,7 +52,7 @@ def _system_python() -> list[str] | None:
         except (OSError, subprocess.CalledProcessError):
             continue
         version = completed.stdout.strip()
-        print(f"Found {candidate} version {version}", flush=True)
+        log(f"Found {candidate} version {version}")
         if _python_ok(version):
             return [candidate]
     return None
@@ -85,61 +93,100 @@ def _conda_python() -> list[str]:
     ):
         subprocess.run(tos_cmd, env=conda_env, check=False)
     run([conda, "create", "-y", "-n", CONDA_ENV, "python=3.12"], env=conda_env)
-    return [
-        conda,
-        "run",
-        "--no-capture-output",
-        "-n",
-        CONDA_ENV,
-        "python",
-    ]
+    return [conda, "run", "--no-capture-output", "-n", CONDA_ENV, "python"]
 
 
 def _resolve_python() -> list[str]:
     system = _system_python()
     if system is not None:
-        print("Using system Python (>= 3.12)", flush=True)
+        log("Using system Python (>= 3.12)")
         return system
-    print("System Python unavailable or < 3.12; creating conda env", flush=True)
+    log("System Python unavailable or < 3.12; creating conda env")
     return _conda_python()
 
 
-def main() -> int:
-    workdir = "/kaggle/working/scgo"
-    if os.path.isdir(workdir):
-        run(["rm", "-rf", workdir])
-    run(["git", "clone", "--depth", "1", "--branch", GIT_REF, REPO_URL, workdir])
-    os.chdir(workdir)
+def _ensure_git() -> None:
+    if shutil.which("git"):
+        return
+    if shutil.which("apt-get"):
+        run(["apt-get", "update"])
+        run(["apt-get", "install", "-y", "git"])
 
-    py = _resolve_python()
-    pip = [*py, "-m", "pip"]
-    run([*pip, "install", "--upgrade", "pip"])
-    run([*pip, "install", "-e", ".[mace,dev]"])
 
-    run(
-        [
-            *py,
-            "-c",
-            "import torch; assert torch.cuda.is_available(), 'CUDA required'",
-        ]
+def _fetch_repo() -> None:
+    if os.path.isdir(WORKDIR):
+        shutil.rmtree(WORKDIR)
+    os.makedirs(WORKDIR, exist_ok=True)
+    _ensure_git()
+    if shutil.which("git"):
+        try:
+            run(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    GIT_REF,
+                    REPO_URL,
+                    WORKDIR,
+                ]
+            )
+            return
+        except subprocess.CalledProcessError as exc:
+            log(f"git clone failed ({exc}); falling back to source tarball")
+    archive_url = (
+        f"https://github.com/rlaplaza-lab/scgo/archive/refs/heads/{GIT_REF}.tar.gz"
     )
+    archive_path = "/kaggle/working/scgo-src.tar.gz"
+    log(f"Downloading {archive_url}")
+    urllib.request.urlretrieve(archive_url, archive_path)
+    with tarfile.open(archive_path, "r:gz") as tar:
+        tar.extractall(path="/kaggle/working")
+    extracted = f"/kaggle/working/scgo-{GIT_REF}"
+    if not os.path.isdir(extracted):
+        raise FileNotFoundError(f"Expected extracted source at {extracted}")
+    shutil.move(extracted, WORKDIR)
 
-    env = os.environ.copy()
-    env["SCGO_BATCH_TEST_SAMPLES"] = "15"
 
-    pytest_cmd = [
-        *py,
-        "-m",
-        "pytest",
-        "tests/",
-        "-m",
-        PYTEST_MARKER,
-        "-v",
-        "--tb=short",
-    ]
-    print("+", " ".join(pytest_cmd), flush=True)
-    completed = subprocess.run(pytest_cmd, env=env)
-    return int(completed.returncode)
+def main() -> int:
+    try:
+        _fetch_repo()
+        os.chdir(WORKDIR)
+
+        py = _resolve_python()
+        pip = [*py, "-m", "pip"]
+        run([*pip, "install", "--upgrade", "pip"])
+        run([*pip, "install", "--no-cache-dir", "-e", ".[mace,dev]"])
+
+        run(
+            [
+                *py,
+                "-c",
+                "import torch; assert torch.cuda.is_available(), 'CUDA required'",
+            ]
+        )
+
+        env = os.environ.copy()
+        env["SCGO_BATCH_TEST_SAMPLES"] = "15"
+
+        pytest_cmd = [
+            *py,
+            "-m",
+            "pytest",
+            "tests/",
+            "-m",
+            PYTEST_MARKER,
+            "-v",
+            "--tb=short",
+        ]
+        log("+ " + " ".join(pytest_cmd))
+        completed = subprocess.run(pytest_cmd, env=env)
+        return int(completed.returncode)
+    except Exception:
+        log("SCGO Kaggle runner failed:")
+        log(traceback.format_exc())
+        return 1
 
 
 if __name__ == "__main__":
