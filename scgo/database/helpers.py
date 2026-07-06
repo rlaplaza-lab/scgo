@@ -581,10 +581,11 @@ def load_previous_run_results(
             minima = extract_minima_from_database_file(
                 db_path, run_id or "", require_final=prefer_final_unique
             )
-            all_minima.extend(_filter_minima_by_composition(minima, composition))
-            if minima:
+            filtered_minima = _filter_minima_by_composition(minima, composition)
+            all_minima.extend(filtered_minima)
+            if filtered_minima:
                 logger.debug(
-                    f"Loaded {len(minima)} minima from {os.path.basename(db_path)}"
+                    f"Loaded {len(filtered_minima)} minima from {os.path.basename(db_path)}"
                 )
 
     logger.info(
