@@ -78,8 +78,7 @@ def test_run_go_ts_pt4_produces_valid_barrier(tmp_path) -> None:
         system_type="gas_cluster",
     )
     assert isinstance(summary, dict)
-    if summary.get("ts_total_count", 0) == 0:
-        pytest.skip("TS search found no pairs (insufficient distinct minima)")
+    assert summary.get("ts_total_count", 0) >= 1
     ts_results = summary.get("ts_results") or []
     valid = [
         r
@@ -88,8 +87,36 @@ def test_run_go_ts_pt4_produces_valid_barrier(tmp_path) -> None:
     ]
     assert valid, "No TS dicts with barrier_height"
     barrier = float(valid[0]["barrier_height"])
-    assert 0.0 <= barrier <= 10.0
+    assert 0.0 < barrier <= 10.0
     assert valid[0].get("ts_energy") is not None
+    assert valid[0].get("status") in {"success", "failed"}
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_run_go_ts_h2_has_no_ts_pairs(tmp_path) -> None:
+    go_params = get_testing_params()
+    go_params["optimizer_params"]["simple"].update(
+        {
+            "niter": 2,
+            "niter_local_relaxation": 8,
+        }
+    )
+    ts_params = _emt_ts_params(neb_steps=200, max_pairs=3)
+
+    summary = run_go_ts(
+        ["H", "H"],
+        go_params=go_params,
+        ts_params=ts_params,
+        seed=42,
+        verbosity=0,
+        output_dir=str(tmp_path / "h2_go_ts"),
+        system_type="gas_cluster",
+    )
+    assert isinstance(summary, dict)
+    assert summary.get("ts_total_count", -1) == 0
+    assert summary.get("ts_success_count", -1) == 0
+    assert summary.get("ts_results") == []
 
 
 @pytest.mark.slow

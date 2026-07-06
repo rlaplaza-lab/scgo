@@ -52,7 +52,7 @@ MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 
 # EMT reference physics (shared across physics assertion helpers)
 EMT_PT2_BOND_ANG = 2.26
-EMT_PT2_BOND_TOL_ANG = 0.05
+EMT_PT2_BOND_TOL_ANG = 0.02
 EMT_H2_BARRIER_EV = (2.0, 5.0)
 NN_DISTANCE_BAND = (0.9, 1.3)
 TS_FMAX_CONVERGED = 0.15
