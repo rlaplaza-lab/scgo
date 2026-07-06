@@ -789,6 +789,7 @@ def test_find_ts_emt_basic(cu3_triangle, cu3_linear, temp_output_dir):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_mace
 def test_find_ts_mace_cpu(cu3_triangle, cu3_linear, temp_output_dir):
     """Test TS finding with MACE on CPU (no TorchSim).
 

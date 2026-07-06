@@ -560,6 +560,7 @@ def test_write_timing_json_at_run_level(tmp_path, rng):
 
 @pytest.mark.slow
 @pytest.mark.integration
+@pytest.mark.requires_mace
 def test_bh_high_energy_strategy(tmp_path, rng):
     """Test Basin Hopping with high_energy fitness strategy."""
     from scgo.param_presets import get_high_energy_params
@@ -599,6 +600,7 @@ def test_bh_high_energy_strategy(tmp_path, rng):
 
 @pytest.mark.slow
 @pytest.mark.integration
+@pytest.mark.requires_mace
 def test_ga_diversity_strategy(tmp_path, rng):
     """Test Genetic Algorithm with diversity fitness strategy."""
     from scgo.param_presets import get_diversity_params

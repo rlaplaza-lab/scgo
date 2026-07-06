@@ -276,6 +276,7 @@ def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_databas
 
 
 @pytest.mark.slow
+@pytest.mark.requires_mace
 def test_run_transition_state_search_parallel_neb_executes(
     monkeypatch, mock_database_dir
 ):
