@@ -10,7 +10,10 @@ from ase import Atoms
 from numpy.random import Generator
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
-from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.config import (
+    ClusterAdsorbateConfig,
+    resolve_cluster_adsorbate_config,
+)
 from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.initialization import create_initial_cluster
@@ -42,7 +45,7 @@ def build_adsorbate_only_cluster(
     if not fragment_templates:
         raise ValueError("fragment_templates must contain at least one fragment")
 
-    ca = cluster_adsorbate_config or ClusterAdsorbateConfig()
+    ca = resolve_cluster_adsorbate_config(cluster_adsorbate_config)
     anchor, bond_axis = (
         resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
         if adsorbate_definition is not None
@@ -129,7 +132,7 @@ def build_hierarchical_core_fragment_cluster(
             max_placement_attempts=max_placement_attempts,
         )
 
-    ca = cluster_adsorbate_config or ClusterAdsorbateConfig()
+    ca = resolve_cluster_adsorbate_config(cluster_adsorbate_config)
     expected_mobile = list(core_list) + list(ads_list)
     if list(full_composition) != expected_mobile:
         raise ValueError(

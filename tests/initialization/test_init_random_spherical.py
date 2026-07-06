@@ -115,8 +115,7 @@ class TestBoundaryValues:
             atoms = random_spherical(
                 ["Pt", "Pt"], cell_side=10.0, min_distance_factor=10.0, rng=rng
             )
-            # If it succeeds, should be valid
-            assert atoms is None or len(atoms) == 2
+            assert len(atoms) == 2
         except ValueError:
             # Placement failure is acceptable with very large factor
             pass

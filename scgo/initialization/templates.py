@@ -238,7 +238,13 @@ def _find_octahedron_params(n_atoms: int) -> tuple[int, int] | None:
                 if diff < min_diff:
                     min_diff = diff
                     best_params = (length, cutoff)
-            except (ValueError, RuntimeError, TypeError):
+            except (ValueError, RuntimeError, TypeError) as exc:
+                logger.debug(
+                    "Octahedron param probe failed for length=%s cutoff=%s: %s",
+                    length,
+                    cutoff,
+                    exc,
+                )
                 continue
 
     return best_params
@@ -791,7 +797,8 @@ def _generate_custom_template(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError):
+    except (ValueError, RuntimeError, AttributeError) as exc:
+        logger.debug("Template creation from positions failed: %s", exc)
         return None
 
 
@@ -939,7 +946,8 @@ def _generate_ase_template_with_common_pattern(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError):
+    except (ValueError, RuntimeError, AttributeError) as exc:
+        logger.debug("Template creation from positions failed: %s", exc)
         return None
 
 
@@ -1494,7 +1502,13 @@ def _find_valid_template_types(n_atoms: int) -> list[str]:
                 )
                 if result is not None and len(result) == n_atoms:
                     valid_types.append(template_type)
-            except (ValueError, RuntimeError, TypeError):
+            except (ValueError, RuntimeError, TypeError) as exc:
+                logger.debug(
+                    "Template type %s probe failed for n_atoms=%s: %s",
+                    template_type,
+                    n_atoms,
+                    exc,
+                )
                 continue
         computed = tuple(sorted(valid_types))
     finally:

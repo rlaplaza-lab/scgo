@@ -496,9 +496,12 @@ def resolve_adsorbate_fragments(
     if not fragments:
         raise ValueError(f"{prefix}adsorbate fragment template(s) must not be empty.")
 
-    lengths = parse_positive_fragment_lengths(
-        adsorbate_definition.get("adsorbate_fragment_lengths")
-    )
+    lengths = adsorbate_definition.get("adsorbate_fragment_lengths")
+    if lengths is None:
+        parsed_lengths: list[int] = []
+    else:
+        parsed_lengths = parse_positive_fragment_lengths(lengths)
+    lengths = parsed_lengths
     raw_ads = adsorbate_definition.get("adsorbate_symbols", [])
     ads_symbols = [str(s) for s in raw_ads] if isinstance(raw_ads, list) else []
     if not lengths and ads_symbols:

@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 from ase.calculators.emt import EMT
 
+from scgo.cluster_adsorbate.config import resolve_cluster_adsorbate_config
 from scgo.constants import BOLTZMANN_K_EV_PER_K, SURFACE_GA_MIN_LOCAL_RELAX_STEPS
 from scgo.param_presets import get_default_params, get_ts_search_params
 from scgo.surface.config import SurfaceSystemConfig
@@ -458,7 +459,9 @@ def prepare_algorithm_kwargs(
         Dictionary ready for direct algorithm execution.
     """
     resolved = resolve_auto_params(algo_params, composition, chosen_go)
-    surface_config = algo_params.get("surface_config") or params.get("surface_config")
+    surface_config = algo_params.get("surface_config")
+    if surface_config is None:
+        surface_config = params.get("surface_config")
     if system_type == "gas_cluster" and surface_config is not None:
         raise ValueError(
             "system_type='gas_cluster' does not allow surface_config. "
@@ -509,6 +512,11 @@ def prepare_algorithm_kwargs(
         v = params.get(key)
         if v is not None:
             base_kwargs[key] = v
+
+    if get_system_policy(system_type).has_adsorbate:
+        base_kwargs["cluster_adsorbate_config"] = resolve_cluster_adsorbate_config(
+            base_kwargs.get("cluster_adsorbate_config")
+        )
 
     return base_kwargs
 

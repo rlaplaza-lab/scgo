@@ -68,7 +68,9 @@ def validate_stored_slab_adsorbate_metadata(atoms: Atoms) -> None:
         return
     n_meta = int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
     if n_meta <= 0:
-        return
+        raise ValueError(
+            "surface_cluster structures require n_slab_atoms > 0 in metadata"
+        )
     if len(atoms) < n_meta:
         raise ValueError(
             "Slab metadata expects at least "

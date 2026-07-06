@@ -18,7 +18,16 @@ def resolve_fragment_anchor_and_bond_axis(
 
 
 def parse_positive_fragment_lengths(raw: object) -> list[int]:
-    """Return positive fragment lengths from an adsorbate_definition field, or ``[]``."""
+    """Return positive fragment lengths from an adsorbate_definition field.
+
+    Raises:
+        ValueError: If *raw* is not a list or contains no positive integer lengths.
+    """
     if not isinstance(raw, list):
-        return []
-    return [int(x) for x in raw if isinstance(x, int) and int(x) > 0]
+        raise ValueError(
+            f"adsorbate_fragment_lengths must be a list of positive ints, got {type(raw).__name__}"
+        )
+    lengths = [int(x) for x in raw if isinstance(x, int) and int(x) > 0]
+    if not lengths:
+        raise ValueError("adsorbate_fragment_lengths must contain positive integers")
+    return lengths

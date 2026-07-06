@@ -561,13 +561,16 @@ def run_transition_state_search(
     )
 
     if params is None:
-        logger.warning(
-            "params is None; defaulting TS calculator to EMT. Pass explicit "
-            "params with calculator='MACE' (or another backend) for production runs."
+        raise ValueError(
+            "params is required for transition-state search. Build with "
+            "get_ts_search_params(system_type=...) or initialize_ts_params()."
         )
-        params = {"calculator": "EMT", "calculator_kwargs": {}}
-    calculator_name = params.get("calculator", "EMT")
-    calculator_kwargs = params.get("calculator_kwargs", {})
+    if "calculator" not in params:
+        raise ValueError(
+            "params must include 'calculator'. Build with get_ts_search_params()."
+        )
+    calculator_name = str(params["calculator"])
+    calculator_kwargs = params.get("calculator_kwargs") or {}
 
     use_torchsim, use_parallel_neb = resolve_ts_torchsim_flags(
         calculator_name,

@@ -108,17 +108,20 @@ def calculate_fitness(
         raise ValueError(f"Unknown fitness strategy: {strategy}")
 
 
-def get_fitness_from_atoms(atoms: Atoms, default: float = 0.0) -> float:
+def get_fitness_from_atoms(atoms: Atoms, default: float | None = None) -> float | None:
     """Extract fitness value from Atoms object info dict.
 
     Args:
         atoms: Atoms object with fitness stored in info dict.
-        default: Default value if fitness not found.
+        default: Default value if fitness not found (``None`` when unset).
 
     Returns:
-        Fitness value or default if not found.
+        Fitness value or *default* if not found.
     """
-    return getattr(atoms, "info", {}).get("fitness", default)
+    info = getattr(atoms, "info", {})
+    if "fitness" not in info:
+        return default
+    return float(info["fitness"])
 
 
 def set_fitness_in_atoms(atoms: Atoms, fitness: float, strategy: str) -> None:

@@ -14,7 +14,10 @@ from ase.spacegroup import Spacegroup
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
-from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.config import (
+    ClusterAdsorbateConfig,
+    resolve_cluster_adsorbate_config,
+)
 from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
@@ -85,7 +88,7 @@ def _build_adsorbate_fragments_on_slab(
     if not fragments:
         return None
 
-    ca = cluster_adsorbate_config or ClusterAdsorbateConfig()
+    ca = resolve_cluster_adsorbate_config(cluster_adsorbate_config)
     site_core = _slab_surface_layer(slab, axis)
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
@@ -321,6 +324,9 @@ def create_deposited_cluster(
     For non-adsorbate runs: build one gas-phase cluster for ``composition``, then
     place above slab. For adsorbate runs: build hierarchical core+fragment first.
     """
+    cluster_adsorbate_config = resolve_cluster_adsorbate_config(
+        cluster_adsorbate_config
+    )
     axis = config.surface_normal_axis
     slab_top = slab_surface_extreme(slab, axis, upper=True)
 

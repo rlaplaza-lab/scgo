@@ -81,7 +81,8 @@ def iter_relaxed_structures(
                 sqlite3.OperationalError,
                 TypeError,
                 ValueError,
-            ):
+            ) as exc:
+                logger.debug("COUNT query failed for %s: %s", db_path, exc)
                 total = 0
             logger.debug(
                 "Streaming %s structures from %s (chunk_size=%s)",
@@ -210,4 +211,4 @@ def count_database_structures(db_path: str | Path) -> int:
             return int((res or [0])[0] or 0)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         logger.error("Error counting structures in %s: %s", db_path, e)
-        return 0
+        raise

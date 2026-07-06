@@ -83,6 +83,8 @@ from scgo.utils.validation import (
     validate_positive,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def slab_ga_metadata_extras(
     surface_config: SurfaceSystemConfig | None, n_slab: int, system_type: SystemType
@@ -202,7 +204,8 @@ def core_adsorbate_partition_counts(
             adsorbate_definition,
             context="core_adsorbate_partition_counts",
         )
-    except ValueError:
+    except ValueError as exc:
+        logger.debug("core_adsorbate_partition_counts validation failed: %s", exc)
         return None
     if len(core_list) == 0 or len(ads_list) == 0:
         return None
@@ -223,7 +226,8 @@ def core_adsorbate_partition_details(
             adsorbate_definition,
             context="core_adsorbate_partition_details",
         )
-    except ValueError:
+    except ValueError as exc:
+        logger.debug("core_adsorbate_partition_details validation failed: %s", exc)
         return None
     if len(core_list) == 0 or len(ads_list) == 0:
         return None

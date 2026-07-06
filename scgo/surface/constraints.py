@@ -51,7 +51,7 @@ def _layer_indices_by_clustering(
             selected = sorted_cluster_ids[:n_layers]
 
         return {i for i in range(len(positions)) if clusters[i] in selected}
-    except Exception:
+    except (ValueError, TypeError, np.linalg.LinAlgError):
         logger.debug(
             "fclusterdata layer selection failed; using coordinate rounding fallback",
             exc_info=True,

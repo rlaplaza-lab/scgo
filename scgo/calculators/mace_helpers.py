@@ -117,6 +117,7 @@ class MACE(Calculator):
         name = f"MACE-{model_name}"
         # Pass the constructed name to the parent class initializer.
         super().__init__(name=name, **kwargs)
+        self.model_name = model_name
 
         logger = get_logger(__name__)
         logger.info(

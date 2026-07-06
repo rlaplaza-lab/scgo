@@ -173,6 +173,19 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
     )
 
 
+def try_convex_hull(positions: np.ndarray) -> ConvexHull | None:
+    """Return convex hull for *positions*, or ``None`` for degenerate geometry."""
+    if len(positions) < 4:
+        return None
+    try:
+        return _get_cached_hull(positions)
+    except (ValueError, QhullError) as exc:
+        get_logger(__name__).debug(
+            "Convex hull unavailable for %d points: %s", len(positions), exc
+        )
+        return None
+
+
 def get_convex_hull_vertex_indices(atoms: Atoms) -> np.ndarray:
     """Return atom indices that are vertices of the cluster's convex hull.
 
@@ -187,12 +200,11 @@ def get_convex_hull_vertex_indices(atoms: Atoms) -> np.ndarray:
     """
     if len(atoms) < 4:
         return np.array([], dtype=np.intp)
-    try:
-        positions = atoms.get_positions()
-        hull = _get_cached_hull(positions)
-        return np.asarray(hull.vertices, dtype=np.intp)
-    except (ValueError, QhullError):
+    positions = atoms.get_positions()
+    hull = try_convex_hull(positions)
+    if hull is None:
         return np.array([], dtype=np.intp)
+    return np.asarray(hull.vertices, dtype=np.intp)
 
 
 def _adjust_bond_distance_for_facet_geometry(

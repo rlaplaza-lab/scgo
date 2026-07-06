@@ -969,9 +969,10 @@ def _run_go_ts_pipeline(
 
     pipeline_t0 = perf_counter()
     merged_ga = go_params
+    calculator_name = merged_ga["calculator"]
     calculator_kwargs = merged_ga.get("calculator_kwargs", {})
-    _ = get_calculator_class(merged_ga.get("calculator", "MACE"))
-    calculator_for_global_optimization = get_calculator_class(merged_ga["calculator"])(
+    _ = get_calculator_class(calculator_name)
+    calculator_for_global_optimization = get_calculator_class(calculator_name)(
         **calculator_kwargs,
     )
     try:

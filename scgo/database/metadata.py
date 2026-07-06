@@ -109,7 +109,8 @@ def _parse_key_value_pairs_row(row: tuple) -> dict[str, Any]:
         if not kv_json:
             return {}
         return json.loads(kv_json)
-    except (json.JSONDecodeError, TypeError, ValueError, IndexError):
+    except (json.JSONDecodeError, TypeError, ValueError, IndexError) as exc:
+        logger.debug("Failed to parse key_value_pairs row: %s", exc)
         return {}
 
 

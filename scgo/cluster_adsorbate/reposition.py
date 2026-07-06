@@ -9,7 +9,10 @@ from ase_ga.utilities import atoms_too_close_two_sets
 from numpy.random import Generator
 
 from scgo.ase_ga_patches.standardmutations import _ensure_rng
-from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.config import (
+    ClusterAdsorbateConfig,
+    resolve_cluster_adsorbate_config,
+)
 from scgo.cluster_adsorbate.helpers import (
     parse_positive_fragment_lengths,
     resolve_fragment_anchor_and_bond_axis,
@@ -105,7 +108,7 @@ class FragmentRepositionMutation(OffspringCreator):
         metal_core = mobile[core_mask]
         clash_mobile = mobile[~ads_mask]
 
-        ca = self.cluster_adsorbate_config or ClusterAdsorbateConfig()
+        ca = resolve_cluster_adsorbate_config(self.cluster_adsorbate_config)
         anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(
             self.adsorbate_definition
         )

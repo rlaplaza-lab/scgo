@@ -151,6 +151,7 @@ def test_get_set_fitness_in_atoms():
 
     # Test with different default
     atoms2 = Atoms("Pt2", positions=[[0, 0, 0], [1, 0, 0]])
+    assert get_fitness_from_atoms(atoms2) is None
     assert get_fitness_from_atoms(atoms2, default=0.0) == pytest.approx(0.0, abs=1e-8)
 
 

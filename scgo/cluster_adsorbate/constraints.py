@@ -49,12 +49,10 @@ def attach_adsorbate_internal_geometry_constraints(
         return
     core_symbols = adsorbate_definition.get("core_symbols", [])
     if not isinstance(core_symbols, list):
-        return
+        raise ValueError("adsorbate_definition.core_symbols must be a list")
     fragment_lengths = parse_positive_fragment_lengths(
         adsorbate_definition.get("adsorbate_fragment_lengths", [])
     )
-    if not fragment_lengths:
-        return
 
     ads_start = int(n_slab) + len(core_symbols)
     bond_pairs: list[tuple[int, int]] = []

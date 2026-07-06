@@ -133,8 +133,8 @@ def get_scgo_metadata(db_path: str | Path) -> dict[str, str]:
                 return {}
             rows = conn.execute("SELECT key, value FROM scgo_metadata").fetchall()
             return {r[0]: r[1] for r in rows}
-    except (sqlite3.OperationalError, sqlite3.DatabaseError, FileNotFoundError):
-        # On any read error (locked DB, non-existent file, etc.) treat as non-SCGO
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, FileNotFoundError) as exc:
+        logger.debug("Could not read scgo_metadata from %s: %s", db_path, exc)
         return {}
 
 

@@ -375,6 +375,7 @@ def _apply_template_rotation_and_validate(
             f"Template structure validation failed: {error_message}. Falling back to random_spherical."
         )
         return None
+    selected.info["scgo_validation_complete"] = True
     return selected
 
 

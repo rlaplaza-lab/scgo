@@ -46,3 +46,12 @@ class ClusterAdsorbateConfig:
             self.structure_connectivity_factor,
             strict=True,
         )
+
+
+def resolve_cluster_adsorbate_config(
+    config: ClusterAdsorbateConfig | None,
+) -> ClusterAdsorbateConfig:
+    """Return *config* or the package default (single allowed default site)."""
+    if config is None:
+        return ClusterAdsorbateConfig()
+    return config

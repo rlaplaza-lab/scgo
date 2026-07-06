@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
@@ -9,6 +10,18 @@ from scgo.param_presets import get_ts_defaults
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
+
+
+@dataclass(frozen=True)
+class TsRunConfig:
+    """Resolved transition-state runner configuration (flat dict view)."""
+
+    calculator: str
+    calculator_kwargs: dict[str, Any]
+    system_type: SystemType
+    use_torchsim: bool
+    use_parallel_neb: bool
+    surface_config: SurfaceSystemConfig | None
 
 
 def coerce_ts_params_to_runner_kwargs(
@@ -76,11 +89,18 @@ def coerce_ts_params_to_runner_kwargs(
     }
     if str(ts_params.get("calculator", "")).strip().upper() == "UMA":
         ck = ts_params.get("calculator_kwargs", {}) or {}
+        model_name = ck.get("model_name")
+        task_name = ck.get("task_name")
+        if not model_name or not task_name:
+            raise ValueError(
+                "UMA transition-state search requires calculator_kwargs with "
+                "'model_name' and 'task_name' (set via get_ts_search_params())."
+            )
         kwargs["torchsim_params"].update(
             {
                 "model_kind": "fairchem",
-                "fairchem_model_name": ck.get("model_name", "uma-s-1p2"),
-                "fairchem_task_name": ck.get("task_name", "oc25"),
+                "fairchem_model_name": str(model_name),
+                "fairchem_task_name": str(task_name),
             }
         )
 

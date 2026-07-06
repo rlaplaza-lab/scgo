@@ -7,9 +7,11 @@ from typing import Literal
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import QhullError
 
-from scgo.initialization.geometry_helpers import _get_cached_hull
+from scgo.initialization.geometry_helpers import try_convex_hull
+from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 SiteType = Literal["vertex", "edge", "facet"]
 
@@ -41,9 +43,11 @@ def compute_surface_site_candidates(
         return out
     pos = core.get_positions()
     com = np.mean(pos, axis=0)
-    try:
-        hull = _get_cached_hull(pos)
-    except (QhullError, ValueError):
+    hull = try_convex_hull(pos)
+    if hull is None:
+        logger.debug(
+            "Convex hull site discovery unavailable for %d core atoms", len(core)
+        )
         return out
 
     vertices = np.asarray(hull.vertices, dtype=np.intp)

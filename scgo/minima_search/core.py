@@ -17,7 +17,6 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator
-from ase.calculators.emt import EMT
 from ase.io import write
 from ase_ga.utilities import get_all_atom_types
 
@@ -310,9 +309,51 @@ _ALGORITHM_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
-def _ensure_calculator(calculator: Calculator | None) -> Calculator:
-    """Return *calculator* or a default EMT instance when None."""
-    return calculator or EMT()
+def _require_calculator(calculator: Calculator | None) -> Calculator:
+    """Require an explicit ASE calculator for global optimization."""
+    if calculator is None:
+        raise ValueError(
+            "calculator_for_global_optimization is required. "
+            "Pass an ASE calculator (e.g. EMT() in tests)."
+        )
+    return calculator
+
+
+def _validate_common_run_inputs(
+    *,
+    composition: list[str],
+    global_optimizer: str,
+    global_optimizer_kwargs: dict[str, Any],
+    output_dir: str,
+    rng: np.random.Generator,
+    verbosity: int,
+    require_system_type: bool = False,
+) -> None:
+    """Validate arguments shared by :func:`scgo` and :func:`run_trials`."""
+    validate_composition(composition, allow_empty=False, allow_tuple=False)
+
+    if not isinstance(global_optimizer, str):
+        raise ValueError("global_optimizer must be a string")
+
+    if not isinstance(global_optimizer_kwargs, dict):
+        raise ValueError("global_optimizer_kwargs must be a dictionary")
+
+    if require_system_type and not isinstance(
+        global_optimizer_kwargs.get("system_type"), str
+    ):
+        raise ValueError(
+            "system_type must be set in global_optimizer_kwargs "
+            "(e.g. 'gas_cluster', 'surface_cluster')."
+        )
+
+    if not isinstance(output_dir, str) or not output_dir:
+        raise ValueError("output_dir must be a non-empty string")
+
+    if not isinstance(rng, np.random.Generator):
+        raise ValueError("rng must be a numpy.random.Generator")
+
+    if not isinstance(verbosity, int) or verbosity not in (0, 1, 2, 3):
+        raise ValueError("verbosity must be one of 0, 1, 2, or 3")
 
 
 def _validate_calculator_compatibility(
@@ -377,25 +418,16 @@ def scgo(
     """
     logger = get_logger(__name__)
 
-    validate_composition(composition, allow_empty=False, allow_tuple=False)
+    _validate_common_run_inputs(
+        composition=composition,
+        global_optimizer=global_optimizer,
+        global_optimizer_kwargs=global_optimizer_kwargs,
+        output_dir=output_dir,
+        rng=rng,
+        verbosity=verbosity,
+    )
 
-    if not isinstance(global_optimizer, str):
-        raise ValueError("global_optimizer must be a string")
-
-    if not isinstance(global_optimizer_kwargs, dict):
-        raise ValueError("global_optimizer_kwargs must be a dictionary")
-
-    if not isinstance(output_dir, str) or not output_dir:
-        raise ValueError("output_dir must be a non-empty string")
-
-    # RNG must be a numpy Generator (required for deterministic behavior)
-    if not isinstance(rng, np.random.Generator):
-        raise ValueError("rng must be a numpy.random.Generator")
-
-    if not isinstance(verbosity, int) or verbosity not in (0, 1, 2, 3):
-        raise ValueError("verbosity must be one of 0, 1, 2, or 3")
-
-    calculator_for_global_optimization = _ensure_calculator(
+    calculator_for_global_optimization = _require_calculator(
         calculator_for_global_optimization
     )
 
@@ -579,6 +611,7 @@ def run_trials(
     verbosity: int = 1,
     run_id: str | None = None,
     clean: bool = False,
+    allow_metadata_mismatch: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Run global optimization once, filter and validate results across runs.
 
@@ -599,34 +632,20 @@ def run_trials(
     """
     logger = get_logger(__name__)
 
-    # Validate inputs early
-    validate_composition(composition, allow_empty=False, allow_tuple=False)
-
-    if not isinstance(global_optimizer, str):
-        raise ValueError("global_optimizer must be a string")
-
-    if not isinstance(global_optimizer_kwargs, dict):
-        raise ValueError("global_optimizer_kwargs must be a dictionary")
-
-    if not isinstance(global_optimizer_kwargs.get("system_type"), str):
-        raise ValueError(
-            "system_type must be set in global_optimizer_kwargs "
-            "(e.g. 'gas_cluster', 'surface_cluster')."
-        )
-
-    if not isinstance(output_dir, str) or not output_dir:
-        raise ValueError("output_dir must be a non-empty string")
-
-    if not isinstance(rng, np.random.Generator):
-        raise ValueError("rng must be a numpy.random.Generator")
+    _validate_common_run_inputs(
+        composition=composition,
+        global_optimizer=global_optimizer,
+        global_optimizer_kwargs=global_optimizer_kwargs,
+        output_dir=output_dir,
+        rng=rng,
+        verbosity=verbosity,
+        require_system_type=True,
+    )
 
     if not isinstance(validate_with_hessian, bool):
         raise ValueError("validate_with_hessian must be a boolean")
 
-    if not isinstance(verbosity, int) or verbosity not in (0, 1, 2, 3):
-        raise ValueError("verbosity must be one of 0, 1, 2, or 3")
-
-    calculator_for_global_optimization = _ensure_calculator(
+    calculator_for_global_optimization = _require_calculator(
         calculator_for_global_optimization
     )
 
@@ -891,7 +910,12 @@ def run_trials(
             validate_stored_slab_adsorbate_metadata(atoms_clean)
             validate_stored_mobile_partition_metadata(atoms_clean)
         except ValueError as e:
-            logger.warning("Structure metadata check before write: %s", e)
+            if allow_metadata_mismatch:
+                logger.warning("Structure metadata check before write: %s", e)
+            else:
+                raise ValueError(
+                    f"Refusing to write minimum with invalid metadata: {e}"
+                ) from e
         aligned_to_surface_reference = False
         if reference_atoms is not None and surface_align_kwargs is not None:
             is_slab_candidate, _ = _is_slab_surface_minimum(atoms_clean)

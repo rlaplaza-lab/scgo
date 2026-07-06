@@ -148,7 +148,10 @@ class DiversityScorer:
             try:
                 cum_diff, max_diff = self.comparator.get_differences(atoms, ref)
                 dissimilarities.append(cum_diff + 0.5 * max_diff)
-            except (ValueError, RuntimeError):
+            except (ValueError, RuntimeError) as exc:
+                get_logger(__name__).debug(
+                    "Skipping comparator pair in diversity fallback: %s", exc
+                )
                 continue
 
         if not dissimilarities:

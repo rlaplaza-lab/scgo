@@ -17,18 +17,20 @@ from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
 from tests.test_utils import create_test_atoms, setup_test_atoms
 
 
-class TestEnsureCalculator:
-    """Tests for _ensure_calculator function."""
+class TestRequireCalculator:
+    """Tests for _require_calculator function."""
 
-    def test_ensure_calculator_with_none(self):
-        """Test that None calculator returns default EMT calculator."""
-        calc = main_mod._ensure_calculator(None)
-        assert isinstance(calc, EMT)
+    def test_require_calculator_with_none(self):
+        """Test that None calculator raises ValueError."""
+        with pytest.raises(
+            ValueError, match="calculator_for_global_optimization is required"
+        ):
+            main_mod._require_calculator(None)
 
-    def test_ensure_calculator_with_calculator(self):
+    def test_require_calculator_with_calculator(self):
         """Test that provided calculator is returned unchanged."""
         provided_calc = EMT()
-        calc = main_mod._ensure_calculator(provided_calc)
+        calc = main_mod._require_calculator(provided_calc)
         assert calc is provided_calc
 
 
@@ -137,6 +139,7 @@ class TestScgoFunction:
             global_optimizer_kwargs=optimizer_kwargs,
             output_dir=output_dir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             verbosity=0,
         )
 
@@ -150,6 +153,7 @@ class TestScgoFunction:
                 global_optimizer_kwargs={"niter": 1},
                 output_dir=str(tmp_path / "missing_system_type"),
                 rng=rng,
+                calculator_for_global_optimization=EMT(),
                 verbosity=0,
             )
 
@@ -278,6 +282,7 @@ class TestScgoFunction:
                 global_optimizer_kwargs={"system_type": "gas_cluster"},
                 output_dir=output_dir,
                 rng=rng,
+                calculator_for_global_optimization=EMT(),
                 verbosity=0,
             )
 
@@ -312,6 +317,7 @@ class TestScgoFunction:
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
             output_dir=output_dir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             verbosity=0,
         )
 
@@ -330,6 +336,7 @@ class TestScgoFunction:
             output_dir=output_dir,
             rng=rng,
             run_id=run_id,
+            calculator_for_global_optimization=EMT(),
             verbosity=0,
         )
 
@@ -431,6 +438,7 @@ class TestRunTrials:
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
             output_dir=output_dir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             verbosity=0,
         )
@@ -452,6 +460,7 @@ class TestRunTrials:
             output_dir=output_dir,
             rng=rng,
             run_id=custom_run_id,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             verbosity=0,
         )
@@ -472,6 +481,7 @@ class TestRunTrials:
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
             output_dir=output_dir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             verbosity=0,
         )
@@ -484,6 +494,7 @@ class TestRunTrials:
             output_dir=output_dir,
             rng=rng,
             clean=True,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             verbosity=0,
         )
@@ -526,6 +537,7 @@ class TestRunTrials:
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
             output_dir=output_dir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             verbosity=0,
         )
@@ -625,6 +637,7 @@ class TestRunTrialsSurfaceAlignment:
             },
             output_dir=output_dir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             tag_final_minima=False,
             verbosity=0,
@@ -674,6 +687,7 @@ class TestRunTrialsSurfaceAlignment:
             },
             output_dir=str(tmp_path / "slab_knobs"),
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             tag_final_minima=False,
             verbosity=0,
@@ -704,6 +718,7 @@ class TestRunTrialsSurfaceAlignment:
             global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
             output_dir=str(tmp_path / "gas_no_align"),
             rng=rng,
+            calculator_for_global_optimization=EMT(),
             validate_with_hessian=False,
             tag_final_minima=False,
             verbosity=0,
@@ -785,8 +800,8 @@ class TestWriteResultsSummary:
         assert isinstance(summary.get("scgo_version"), str) and summary["scgo_version"]
 
 
-def test_select_and_run_ga_delegates_to_ga_go(monkeypatch, rng):
-    """Unified GA path always calls ga_go."""
+def test_scgo_ga_delegates_to_ga_go(monkeypatch, rng, tmp_path):
+    """Unified GA path in scgo() calls ga_go."""
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
     called = {"ga": False}
 
@@ -796,15 +811,17 @@ def test_select_and_run_ga_delegates_to_ga_go(monkeypatch, rng):
 
     monkeypatch.setattr(main_mod, "ga_go", fake_ga_go)
 
-    results = main_mod._select_and_run_ga(
+    results = scgo(
         composition=["H", "H"],
-        output_dir=".",
-        optimizer_kwargs={
+        global_optimizer="ga",
+        global_optimizer_kwargs={
             "niter": 1,
             "population_size": 2,
+            "system_type": "gas_cluster",
         },
-        calculator=EMT(),
+        output_dir=str(tmp_path / "ga_delegate"),
         rng=rng,
+        calculator_for_global_optimization=EMT(),
         verbosity=0,
     )
 
