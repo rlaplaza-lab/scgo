@@ -15,6 +15,7 @@ from scgo.database.connection import get_connection
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.registry import get_registry
 from scgo.database.schema import is_scgo_database
+from scgo.database.streaming import count_database_structures
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.run_tracking import get_run_id_from_dir
@@ -203,9 +204,7 @@ class DatabaseDiscovery:
 
         # Count structures
         try:
-            with get_connection(db_path) as db:
-                candidates = db.get_all_relaxed_candidates()
-                info["structure_count"] = len(candidates)
+            info["structure_count"] = count_database_structures(db_path)
         except (
             sqlite3.DatabaseError,
             sqlite3.OperationalError,
@@ -251,8 +250,11 @@ class DatabaseDiscovery:
 
         Call this if filesystem has changed (new runs, databases added/removed).
         """
+        from scgo.database.schema import clear_scgo_database_cache
+
         self._cache.clear()
         self._metadata_cache.clear()
+        clear_scgo_database_cache()
         logger.debug("Cleared database discovery caches")
 
     def _build_cache_key(

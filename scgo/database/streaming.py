@@ -23,6 +23,27 @@ from scgo.utils.logging import TRACE, get_logger
 logger = get_logger(__name__)
 
 
+def _relaxed_rows_where_clause(
+    *,
+    require_final_minimum: bool = False,
+    exclude_transition_states: bool = False,
+    require_transition_state: bool = False,
+    require_final_ts: bool = False,
+) -> str:
+    """Build SQL WHERE fragment for relaxed-row streaming filters."""
+    col = SYSTEMS_JSON_COLUMN
+    clauses = [f"json_extract({col}, '$.relaxed') = 1"]
+    if require_final_minimum:
+        clauses.append(f"json_extract({col}, '$.final_unique_minimum') = 1")
+    if exclude_transition_states:
+        clauses.append(f"COALESCE(json_extract({col}, '$.is_transition_state'), 0) = 0")
+    if require_transition_state:
+        clauses.append(f"json_extract({col}, '$.is_transition_state') = 1")
+    if require_final_ts:
+        clauses.append(f"json_extract({col}, '$.final_unique_ts') = 1")
+    return " AND ".join(clauses)
+
+
 def _safe_get_atoms(da, row_id):
     """Safely fetch atoms for a given row id.
 
@@ -62,19 +83,28 @@ def _iter_relaxed_minima_from_da(
     da,
     db_path: Path,
     chunk_size: int = 100,
+    *,
+    require_final_minimum: bool = False,
+    exclude_transition_states: bool = False,
+    require_transition_state: bool = False,
+    require_final_ts: bool = False,
 ):
     """Yield (energy, atoms_copy) for relaxed rows using chunked id queries."""
     if chunk_size is None or chunk_size <= 0:
         raise ValueError("chunk_size must be a positive integer")
 
+    where_sql = _relaxed_rows_where_clause(
+        require_final_minimum=require_final_minimum,
+        exclude_transition_states=exclude_transition_states,
+        require_transition_state=require_transition_state,
+        require_final_ts=require_final_ts,
+    )
+
     with da.c.managed_connection() as conn:
-        relaxed_col = SYSTEMS_JSON_COLUMN
         raw_score_col = SYSTEMS_JSON_COLUMN
 
         try:
-            cur = conn.execute(
-                f"SELECT COUNT(*) FROM systems WHERE json_extract({relaxed_col}, '$.relaxed') = 1"
-            )
+            cur = conn.execute(f"SELECT COUNT(*) FROM systems WHERE {where_sql}")
             total = int((cur.fetchone() or [0])[0] or 0)
         except (sqlite3.DatabaseError, sqlite3.OperationalError, TypeError, ValueError):
             total = 0
@@ -88,12 +118,12 @@ def _iter_relaxed_minima_from_da(
 
         try:
             cursor = conn.execute(
-                f"SELECT id FROM systems WHERE json_extract({relaxed_col}, '$.relaxed') = 1 "
+                f"SELECT id FROM systems WHERE {where_sql} "
                 f"ORDER BY CAST(json_extract({raw_score_col}, '$.raw_score') AS REAL) DESC"
             )
         except sqlite3.OperationalError:
             cursor = conn.execute(
-                f"SELECT id FROM systems WHERE json_extract({relaxed_col}, '$.relaxed') = 1 ORDER BY id"
+                f"SELECT id FROM systems WHERE {where_sql} ORDER BY id"
             )
 
         while True:

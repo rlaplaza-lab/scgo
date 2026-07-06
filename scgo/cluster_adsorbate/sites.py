@@ -7,7 +7,9 @@ from typing import Literal
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import ConvexHull, QhullError
+from scipy.spatial import QhullError
+
+from scgo.initialization.geometry_helpers import _get_cached_hull
 
 SiteType = Literal["vertex", "edge", "facet"]
 
@@ -40,7 +42,7 @@ def compute_surface_site_candidates(
     pos = core.get_positions()
     com = np.mean(pos, axis=0)
     try:
-        hull = ConvexHull(pos)
+        hull = _get_cached_hull(pos)
     except (QhullError, ValueError):
         return out
 

@@ -17,6 +17,7 @@ from scgo.system_types import (
     SystemType,
     validate_structure_for_system_type,
 )
+from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import get_logger
 
 from .transition_state import (
@@ -34,6 +35,20 @@ if TYPE_CHECKING:
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
 logger = get_logger(__name__)
+
+
+def _neb_endpoint_energy(minimum: tuple[float, Atoms]) -> float:
+    energy, atoms = minimum
+    extracted = extract_energy_from_atoms(atoms)
+    return float(extracted if extracted is not None else energy)
+
+
+def _neb_image_dedup_key(atoms: Atoms) -> tuple:
+    """Hashable key for deduplicating NEB images across bands."""
+    return (
+        tuple(atoms.get_chemical_symbols()),
+        tuple(np.round(atoms.get_positions().ravel(), 6)),
+    )
 
 
 class ParallelNEBBatch:
@@ -84,25 +99,30 @@ class ParallelNEBBatch:
 
         step_cap = min(self.max_total_steps, int(max_steps))
         while self.active_nebs and self.step_count < step_cap:
-            all_images: list[Atoms] = []
+            unique_images: list[Atoms] = []
+            unique_index: dict[tuple, int] = {}
             neb_image_map: list[tuple[int, int, int]] = []
 
             for neb_idx in self.active_nebs:
                 neb = self.neb_instances[neb_idx]
-                start_idx = len(all_images)
-                all_images.extend(neb.images)
-                neb_image_map.append((neb_idx, start_idx, len(all_images)))
+                for img_idx, atoms in enumerate(neb.images):
+                    key = _neb_image_dedup_key(atoms)
+                    if key not in unique_index:
+                        unique_index[key] = len(unique_images)
+                        unique_images.append(atoms)
+                    unique_slot = unique_index[key]
+                    neb_image_map.append((neb_idx, img_idx, unique_slot))
 
-            if not all_images:
+            if not unique_images:
                 break
 
             logger.debug(
-                f"Step {self.step_count}: Evaluating {len(all_images)} images "
-                f"from {len(self.active_nebs)} active NEBs"
+                f"Step {self.step_count}: Evaluating {len(unique_images)} unique images "
+                f"({len(neb_image_map)} total slots) from {len(self.active_nebs)} active NEBs"
             )
 
             try:
-                batch_results = self.relaxer.relax_batch(all_images, steps=0)
+                unique_results = self.relaxer.relax_batch(unique_images, steps=0)
             except (RuntimeError, ValueError) as e:
                 kind = (
                     "Invalid input"
@@ -115,25 +135,15 @@ class ParallelNEBBatch:
                     results[neb_idx]["error"] = str(e)
                 break
 
-            for neb_idx, _, _ in neb_image_map:
+            for neb_idx in self.active_nebs:
                 self.neb_instances[neb_idx]._force_calls += 1
 
-            for neb_idx, start_idx, end_idx in neb_image_map:
-                neb = self.neb_instances[neb_idx]
-                if len(neb.images) != end_idx - start_idx:
-                    raise RuntimeError(
-                        f"NEB {neb_idx}: image count mismatch. "
-                        f"NEB has {len(neb.images)} images, "
-                        f"batch returned {end_idx - start_idx} results"
-                    )
-                for atoms, (energy, relaxed_atoms) in zip(
-                    neb.images,
-                    batch_results[start_idx:end_idx],
-                    strict=True,
-                ):
-                    attach_singlepoint_from_relax_output(
-                        atoms, energy, relaxed_atoms, require_forces=False
-                    )
+            for neb_idx, img_idx, unique_slot in neb_image_map:
+                energy, relaxed_atoms = unique_results[unique_slot]
+                atoms = self.neb_instances[neb_idx].images[img_idx]
+                attach_singlepoint_from_relax_output(
+                    atoms, energy, relaxed_atoms, require_forces=False
+                )
 
             still_active: list[int] = []
             for neb_idx in self.active_nebs:
@@ -275,36 +285,8 @@ def run_parallel_neb_search(
     t_parallel0 = perf_counter()
     relaxer = _tsh.TorchSimBatchRelaxer(**(torchsim_params or {}))
 
-    # Endpoint single-point energies in one batched call.
-    endpoints: list[Atoms] = []
-    pair_endpoint_index: list[tuple[int, int]] = []
+    pair_endpoints: list[tuple[Atoms, Atoms, float, float]] = []
     for i, j in pairs:
-        ri, rj = _neb_endpoint_copies(
-            minima[i][1],
-            minima[j][1],
-            surface_config,
-            system_type,
-            n_slab=n_slab,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-        )
-        endpoints.append(ri)
-        endpoints.append(rj)
-        pair_endpoint_index.append((len(endpoints) - 2, len(endpoints) - 1))
-
-    ep_results = relaxer.relax_batch(endpoints, steps=0)
-    pair_endpoint_energies = [
-        (float(ep_results[a][0]), float(ep_results[b][0]))
-        for a, b in pair_endpoint_index
-    ]
-
-    neb_instances: list[TorchSimNEB] = []
-    pair_results: list[dict[str, Any]] = []
-    for (i, j), (react_e, prod_e) in zip(pairs, pair_endpoint_energies, strict=True):
-        pair_id = f"{i}_{j}"
         react_ep, prod_ep = _neb_endpoint_copies(
             minima[i][1],
             minima[j][1],
@@ -317,6 +299,21 @@ def run_parallel_neb_search(
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
+        pair_endpoints.append(
+            (
+                react_ep,
+                prod_ep,
+                _neb_endpoint_energy(minima[i]),
+                _neb_endpoint_energy(minima[j]),
+            )
+        )
+
+    neb_instances: list[TorchSimNEB] = []
+    pair_results: list[dict[str, Any]] = []
+    for (i, j), (react_ep, prod_ep, react_e, prod_e) in zip(
+        pairs, pair_endpoints, strict=True
+    ):
+        pair_id = f"{i}_{j}"
         images = interpolate_path(
             react_ep,
             prod_ep,

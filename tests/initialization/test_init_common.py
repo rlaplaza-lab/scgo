@@ -1524,6 +1524,7 @@ def _assert_connectivity_with_diagnostics(
         )
 
 
+@pytest.mark.slow
 class TestReproducibilityAllModes:
     """Consolidated reproducibility tests for all initialization modes.
 
@@ -1572,6 +1573,7 @@ class TestReliabilityAllModes:
     parametrizing over all modes, cluster sizes, and seeds.
     """
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
     @pytest.mark.parametrize("seed", REPRODUCIBILITY_SEEDS)
     @pytest.mark.parametrize("n_atoms", SMALL_SIZES)
@@ -1589,6 +1591,7 @@ class TestReliabilityAllModes:
             atoms, context=f"mode={mode}, seed={seed}, n_atoms={n_atoms}"
         )
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
     @pytest.mark.parametrize("seed", REPRODUCIBILITY_SEEDS)
     @pytest.mark.parametrize("n_atoms", SMALL_SIZES)

@@ -152,29 +152,34 @@ def build_hierarchical_core_fragment_cluster(
         combined = core
         metal_core = core
         site_types: list[str] = []
-        all_placed = True
+        placement_failed = False
         for frag_tmpl in fragments:
             frag_metadata: dict[str, str] = {}
-            frag = place_fragment_on_cluster(
-                metal_core,
-                frag_tmpl,
-                rng,
-                ca,
-                anchor_index=anchor,
-                bond_axis=bond_axis,
-                within_structure_site_counts=within_structure_site_counts,
-                batch_site_counts=batch_site_counts,
-                placement_metadata=frag_metadata,
-                site_core=metal_core,
-                clash_atoms=combined,
-            )
+            frag = None
+            for _frag_attempt in range(ca.max_placement_attempts):
+                frag = place_fragment_on_cluster(
+                    metal_core,
+                    frag_tmpl,
+                    rng,
+                    ca,
+                    anchor_index=anchor,
+                    bond_axis=bond_axis,
+                    within_structure_site_counts=within_structure_site_counts,
+                    batch_site_counts=batch_site_counts,
+                    placement_metadata=frag_metadata,
+                    site_core=metal_core,
+                    clash_atoms=combined,
+                )
+                if frag is not None:
+                    break
             if frag is None:
-                all_placed = False
+                placement_failed = True
                 break
             site_types.append(frag_metadata.get("site_type", "directional_fallback"))
             combined = combine_core_adsorbate(combined, frag)
+            metal_core = combined
 
-        if not all_placed:
+        if placement_failed:
             continue
 
         _stamp_site_metadata(combined, site_types)

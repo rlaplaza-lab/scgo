@@ -232,6 +232,7 @@ class TestMaceHelpers:
     def test_mace_urls_enum(self):
         assert hasattr(MaceUrls, "mace_mp_small") or hasattr(MaceUrls, "mace_matpes_0")
 
+    @pytest.mark.slow
     def test_mace_calculator_initialization(self):
         try:
             calc = MACE(model="mace_mp_small")

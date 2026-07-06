@@ -11,34 +11,22 @@ import numpy as np
 
 from scgo.param_presets import get_testing_params
 from scgo.runner_api import _run_go_trials
-from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import slab_surface_extreme
 from scgo.utils.helpers import deep_merge_dicts
 
 
-def test__run_go_trials_passes_surface_config_when_ga_selected(pt_slab_small, tmp_path):
-    slab = pt_slab_small
-    surface_config = SurfaceSystemConfig(
-        slab=slab,
-        adsorption_height_min=1.0,
-        adsorption_height_max=2.8,
-        fix_all_slab_atoms=True,
-        comparator_use_mic=False,
-        max_placement_attempts=400,
-    )
+def test__run_go_trials_passes_surface_config_when_ga_selected(
+    surface_config_pt111, minimal_ga_kwargs, tmp_path
+):
     base = get_testing_params()
     params = deep_merge_dicts(
         base,
         {
             "optimizer_params": {
                 "ga": {
-                    "niter": 2,
-                    "population_size": 4,
-                    "offspring_fraction": 0.5,
+                    **minimal_ga_kwargs,
                     "niter_local_relaxation": 400,
-                    "n_jobs_population_init": 1,
-                    "early_stopping_niter": 0,
-                    "surface_config": surface_config,
+                    "surface_config": surface_config_pt111,
                 }
             }
         },
@@ -56,6 +44,7 @@ def test__run_go_trials_passes_surface_config_when_ga_selected(pt_slab_small, tm
         output_dir=str(tmp_path / "surf_go"),
     )
 
+    slab = surface_config_pt111.slab
     assert len(minima) >= 1
     _e, best = minima[0]
     n_slab = len(slab)

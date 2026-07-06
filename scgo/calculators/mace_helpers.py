@@ -165,3 +165,28 @@ class MACE(Calculator):
             system_changes=system_changes,
         )
         self.results = self._mace_calc.results
+
+
+def infer_mace_model_name_from_calculator(calculator: Calculator) -> str | None:
+    """Return the MACE foundation model name from an ASE calculator, if known."""
+    model_name = getattr(calculator, "model_name", None)
+    if isinstance(model_name, str) and model_name:
+        return model_name
+    name = getattr(calculator, "name", "") or ""
+    if name.startswith("MACE-"):
+        suffix = name.removeprefix("MACE-")
+        return suffix or None
+    return None
+
+
+def try_extract_torchsim_model_from_mace_calculator(
+    calculator: Calculator,
+) -> object | None:
+    """Reuse the TorchSim/MACE model already loaded on an ASE MACE calculator."""
+    mace_calc = getattr(calculator, "_mace_calc", None)
+    if mace_calc is None:
+        return None
+    models = getattr(mace_calc, "models", None)
+    if models:
+        return models[0]
+    return getattr(mace_calc, "model", None)

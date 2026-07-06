@@ -34,10 +34,11 @@ from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+_RANKED_CANDIDATES_PER_ATTEMPT = 12
+
 
 _BLMIN_RATIO_FLOOR = 0.55
 _MIN_DISTANCE_FACTOR_FLOOR = 0.3
-_RANKED_CANDIDATES_PER_ATTEMPT = 12
 
 
 @dataclass(frozen=True)
@@ -254,6 +255,8 @@ def place_fragment_on_cluster(
     clash_positions = clash_target.get_positions()
     clash_numbers = clash_target.get_atomic_numbers()
     frag_numbers = fragment_template.get_atomic_numbers()
+    blmin_zs = list(clash_numbers) + list(frag_numbers)
+    blmin_base = build_blmin_from_zs(blmin_zs, ratio=1.0)
 
     for attempt in range(config.max_placement_attempts):
         attempt_ratio = attempt / max(1, config.max_placement_attempts - 1)
@@ -262,9 +265,10 @@ def place_fragment_on_cluster(
                 config, attempt_ratio, fragment_template, core, anchor_index
             )
         )
-        blmin = blmin_for_core_and_fragment(
-            clash_target, fragment_template, blmin_ratio
-        )
+        if blmin_ratio == 1.0:
+            blmin = blmin_base
+        else:
+            blmin = {pair: dist * blmin_ratio for pair, dist in blmin_base.items()}
 
         trials = _generate_placement_trials(
             rng,
@@ -304,7 +308,8 @@ def place_fragment_on_cluster(
 
         ranked.sort(key=lambda item: item[0])
 
-        for _score, trial, pos in ranked:
+        accepted: tuple[_PlacementTrial, np.ndarray, Atoms] | None = None
+        for _score, trial, pos in ranked[:3]:
             frag = Atoms(
                 symbols=symbols,
                 positions=pos,
@@ -313,29 +318,32 @@ def place_fragment_on_cluster(
             )
             if atoms_too_close_two_sets(frag, clash_target, blmin):
                 continue
+            accepted = (trial, pos, frag)
+            break
 
-            if config.validate_combined_structure:
-                trial_combined = combine_core_adsorbate(clash_target, frag)
-                ok, _msg = validate_combined_cluster_structure(
-                    trial_combined,
-                    min_distance_factor=min_dist_factor,
-                    connectivity_factor=config.structure_connectivity_factor,
-                    check_clashes=config.structure_check_clashes,
-                    check_connectivity=config.structure_check_connectivity,
-                )
-                if not ok:
-                    continue
+        if accepted is None:
+            continue
 
-            if (
-                trial.selected_type is not None
-                and within_structure_site_counts is not None
-            ):
-                within_structure_site_counts[trial.selected_type] = (
-                    int(within_structure_site_counts.get(trial.selected_type, 0)) + 1
-                )
-            if placement_metadata is not None:
-                placement_metadata["site_type"] = trial.site_type
-            return frag
+        trial, _pos, frag = accepted
+        if config.validate_combined_structure:
+            trial_combined = combine_core_adsorbate(clash_target, frag)
+            ok, _msg = validate_combined_cluster_structure(
+                trial_combined,
+                min_distance_factor=min_dist_factor,
+                connectivity_factor=config.structure_connectivity_factor,
+                check_clashes=config.structure_check_clashes,
+                check_connectivity=config.structure_check_connectivity,
+            )
+            if not ok:
+                continue
+
+        if trial.selected_type is not None and within_structure_site_counts is not None:
+            within_structure_site_counts[trial.selected_type] = (
+                int(within_structure_site_counts.get(trial.selected_type, 0)) + 1
+            )
+        if placement_metadata is not None:
+            placement_metadata["site_type"] = trial.site_type
+        return frag
 
     logger.warning(
         "place_fragment_on_cluster: exceeded max_placement_attempts=%s",

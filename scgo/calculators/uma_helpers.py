@@ -53,6 +53,8 @@ class UMA(Calculator):
             'Initializing UMA calculator ("%s") on device: "%s"', model_name, dev
         )
 
+        self.model_name = model_name
+        self.task_name = task_name
         self._inner = FAIRChemCalculator.from_model_checkpoint(
             model_name,
             task_name=task_name,

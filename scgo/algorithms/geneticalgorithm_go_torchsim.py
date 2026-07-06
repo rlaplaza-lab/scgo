@@ -43,8 +43,16 @@ from scgo.algorithms.ga_common import (
     validate_ga_common_params,
     validate_structure_for_ga_storage,
 )
+from scgo.ase_ga_patches.cutandsplicepairing import (
+    CutAndSplicePairing,
+    DualCutAndSplicePairing,
+)
 from scgo.ase_ga_patches.population import Population
 from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
+from scgo.calculators.mace_helpers import (
+    infer_mace_model_name_from_calculator,
+    try_extract_torchsim_model_from_mace_calculator,
+)
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import (
@@ -90,7 +98,11 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger, should_show_progress
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
-from scgo.utils.rng_helpers import ensure_rng_or_create, offspring_rng_triple
+from scgo.utils.rng_helpers import (
+    create_child_rng,
+    ensure_rng_or_create,
+    offspring_rng_triple,
+)
 from scgo.utils.timing_report import (
     build_timing_payload,
     cpu_non_relax_seconds_from_timings,
@@ -98,7 +110,7 @@ from scgo.utils.timing_report import (
     log_timing_summary,
     write_timing_file,
 )
-from scgo.utils.torchsim_policy import is_ml_calculator
+from scgo.utils.torchsim_policy import is_ml_calculator, is_uma_like_calculator
 from scgo.utils.validation import validate_composition
 
 
@@ -209,6 +221,54 @@ class OffspringBuildContext:
     current_mutation_probability: float
     operators_list: list
     name_map: dict[str, int]
+    operators_epoch: int
+
+
+_OFFSPRING_WORKER_STATE: dict[str, Any] = {}
+
+
+def _reseed_pairing_rng(pairing: Any, rng: np.random.Generator) -> None:
+    if isinstance(pairing, DualCutAndSplicePairing):
+        pairing.rng = create_child_rng(rng)
+        pairing.primary.rng = create_child_rng(rng)
+        pairing.exploratory.rng = create_child_rng(rng)
+        return
+    if isinstance(pairing, CutAndSplicePairing):
+        pairing.rng = create_child_rng(rng)
+
+
+def _load_offspring_worker_state(ctx: OffspringBuildContext) -> None:
+    """Build pairing and operators once per worker process / generation."""
+    placeholder_rng = np.random.default_rng(0)
+    pairing = create_ga_pairing(
+        ctx.atoms_template,
+        ctx.n_to_optimize,
+        placeholder_rng,
+        slab_atoms=ctx.slab_for_pairing,
+        system_type=ctx.system_type,
+        composition=ctx.composition,
+        adsorbate_definition=ctx.adsorbate_definition,
+    )
+    _OFFSPRING_WORKER_STATE["operators_epoch"] = ctx.operators_epoch
+    _OFFSPRING_WORKER_STATE["pairing"] = pairing
+    _OFFSPRING_WORKER_STATE["operators"] = copy.deepcopy(ctx.operators_list)
+
+
+def _offspring_worker_bootstrap_init(ctx: OffspringBuildContext) -> None:
+    _offspring_worker_init()
+    _load_offspring_worker_state(ctx)
+
+
+def _ensure_offspring_worker_state(ctx: OffspringBuildContext) -> None:
+    if _OFFSPRING_WORKER_STATE.get("operators_epoch") != ctx.operators_epoch:
+        _load_offspring_worker_state(ctx)
+
+
+def _offspring_worker_has_cached_state(ctx: OffspringBuildContext) -> bool:
+    return (
+        _OFFSPRING_WORKER_STATE.get("operators_epoch") == ctx.operators_epoch
+        and "pairing" in _OFFSPRING_WORKER_STATE
+    )
 
 
 def _offspring_worker_init() -> None:
@@ -226,17 +286,23 @@ def _build_offspring_worker(
     worker_logger = get_logger(__name__)
     pairing_rng, operator_rng, decision_rng = offspring_rng_triple(job["task_seed"])
     setup_t0 = perf_counter()
-    local_pairing = create_ga_pairing(
-        ctx.atoms_template,
-        ctx.n_to_optimize,
-        pairing_rng,
-        slab_atoms=ctx.slab_for_pairing,
-        system_type=ctx.system_type,
-        composition=ctx.composition,
-        adsorbate_definition=ctx.adsorbate_definition,
-    )
-    local_ops = copy.deepcopy(ctx.operators_list)
-    reseed_mutation_operator_rngs(local_ops, operator_rng)
+    if _offspring_worker_has_cached_state(ctx):
+        local_pairing = _OFFSPRING_WORKER_STATE["pairing"]
+        _reseed_pairing_rng(local_pairing, pairing_rng)
+        local_ops = _OFFSPRING_WORKER_STATE["operators"]
+        reseed_mutation_operator_rngs(local_ops, operator_rng)
+    else:
+        local_pairing = create_ga_pairing(
+            ctx.atoms_template,
+            ctx.n_to_optimize,
+            pairing_rng,
+            slab_atoms=ctx.slab_for_pairing,
+            system_type=ctx.system_type,
+            composition=ctx.composition,
+            adsorbate_definition=ctx.adsorbate_definition,
+        )
+        local_ops = copy.deepcopy(ctx.operators_list)
+        reseed_mutation_operator_rngs(local_ops, operator_rng)
     local_mutations = update_mutation_weights(
         operators_list=local_ops,
         name_map=ctx.name_map,
@@ -730,25 +796,6 @@ def ga_go(
     # Normalize RNG early and enforce Generator-only policy
     rng = ensure_rng_or_create(rng)
 
-    if relaxer is None:
-        if is_ml_calculator(calculator):
-            relaxer = TorchSimBatchRelaxer(
-                force_tol=fmax,
-                mace_model_name="mace_matpes_0",
-                max_steps=niter_local_relaxation,
-            )
-        else:
-            relaxer = AseBatchRelaxer(
-                calculator,
-                optimizer=optimizer,
-                force_tol=fmax,
-                max_steps=niter_local_relaxation,
-            )
-    elif (
-        isinstance(niter_local_relaxation, int) and niter_local_relaxation > 0
-    ) or relaxer.max_steps is None:
-        relaxer.max_steps = niter_local_relaxation
-
     n_to_optimize = len(composition)
 
     surface_mode = uses_surface(system_type)
@@ -776,7 +823,62 @@ def ga_go(
             cell=[cell_side] * 3,
             pbc=False,
         )
-    atoms_template.calc = calculator
+
+    pop_for_probe = population_size if population_size is not None else 32
+    expected_max_atoms = (len(composition) + n_slab) * pop_for_probe
+
+    if relaxer is None:
+        if is_ml_calculator(calculator):
+            if is_uma_like_calculator(calculator):
+                model_name = getattr(calculator, "model_name", None)
+                if model_name is None and calculator.name.startswith("UMA-"):
+                    model_name = calculator.name.removeprefix("UMA-")
+                if not model_name:
+                    raise ValueError(
+                        "Cannot infer UMA model_name from calculator for TorchSim relaxer."
+                    )
+                relaxer = TorchSimBatchRelaxer(
+                    model_kind="fairchem",
+                    fairchem_model_name=str(model_name),
+                    fairchem_task_name=getattr(calculator, "task_name", None),
+                    force_tol=fmax,
+                    max_steps=niter_local_relaxation,
+                    expected_max_atoms=expected_max_atoms,
+                    max_atoms_to_try=expected_max_atoms,
+                )
+            else:
+                mace_model_name = infer_mace_model_name_from_calculator(calculator)
+                if not mace_model_name:
+                    raise ValueError(
+                        "Cannot infer MACE model_name from calculator for TorchSim relaxer."
+                    )
+                shared_model = try_extract_torchsim_model_from_mace_calculator(
+                    calculator
+                )
+                relaxer = TorchSimBatchRelaxer(
+                    force_tol=fmax,
+                    mace_model_name=str(mace_model_name),
+                    max_steps=niter_local_relaxation,
+                    expected_max_atoms=expected_max_atoms,
+                    max_atoms_to_try=expected_max_atoms,
+                    model=shared_model,
+                )
+        else:
+            relaxer = AseBatchRelaxer(
+                calculator,
+                optimizer=optimizer,
+                force_tol=fmax,
+                max_steps=niter_local_relaxation,
+            )
+    elif (
+        isinstance(niter_local_relaxation, int) and niter_local_relaxation > 0
+    ) or relaxer.max_steps is None:
+        relaxer.max_steps = niter_local_relaxation
+
+    if isinstance(relaxer, TorchSimBatchRelaxer):
+        atoms_template.calc = None
+    else:
+        atoms_template.calc = calculator
 
     # Load reference structures and create DiversityScorer for diversity strategy
     diversity_scorer = setup_diversity_scorer(
@@ -1228,91 +1330,111 @@ def ga_go(
             worker_failures_gen = 0
             worker_failure_types_gen: dict[str, int] = {}
             retry_failure_reasons_gen: dict[str, int] = {}
-            while created < n_offspring and attempts < max_attempts:
-                attempts_remaining = max_attempts - attempts
-                if attempts_remaining <= 0:
-                    break
-                jobs_target = min(n_offspring - created, attempts_remaining)
-                jobs: list[dict[str, Any]] = []
-                for _ in range(jobs_target):
-                    attempts += 1
-                    t0 = perf_counter()
-                    candidates = population.get_two_candidates()
-                    t_parent_select_gen += perf_counter() - t0
-                    if candidates is None:
-                        continue
-                    a1, a2 = candidates
-                    task_seed = int(rng.integers(0, 2**31 - 1))
-                    jobs.append(
-                        {
-                            "index": len(jobs),
-                            "a1": a1.copy(),
-                            "a2": a2.copy(),
-                            "task_seed": task_seed,
-                        }
-                    )
-                if not jobs:
-                    continue
 
-                n_workers = _resolve_parallel_worker_count(n_jobs_offspring, len(jobs))
-                offspring_ctx = OffspringBuildContext(
-                    atoms_template=_picklable_atoms_copy(atoms_template),
-                    n_to_optimize=n_to_optimize,
-                    composition=composition,
-                    blmin=blmin if ga_fast_prefilter_enabled else {},
-                    system_type=system_type,
-                    n_slab=n_slab,
-                    slab_for_pairing=_picklable_atoms_copy(slab_for_pairing),
-                    surface_normal_axis=(
-                        surface_config.surface_normal_axis if surface_mode else 2
-                    ),
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
-                    adsorbate_fragment_templates=_picklable_fragment_templates(
-                        adsorbate_fragment_template
-                    ),
-                    surface_config=surface_config,
-                    adaptive_config=adaptive_config,
-                    current_mutation_probability=current_mutation_probability,
-                    operators_list=copy.deepcopy(operators_list),
-                    name_map=name_map,
+            offspring_ctx = OffspringBuildContext(
+                atoms_template=_picklable_atoms_copy(atoms_template),
+                n_to_optimize=n_to_optimize,
+                composition=composition,
+                blmin=blmin if ga_fast_prefilter_enabled else {},
+                system_type=system_type,
+                n_slab=n_slab,
+                slab_for_pairing=_picklable_atoms_copy(slab_for_pairing),
+                surface_normal_axis=(
+                    surface_config.surface_normal_axis if surface_mode else 2
+                ),
+                adsorbate_definition=adsorbate_definition,
+                connectivity_factor=connectivity_factor,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                adsorbate_fragment_templates=_picklable_fragment_templates(
+                    adsorbate_fragment_template
+                ),
+                surface_config=surface_config,
+                adaptive_config=adaptive_config,
+                current_mutation_probability=current_mutation_probability,
+                operators_list=operators_list,
+                name_map=name_map,
+                operators_epoch=generation,
+            )
+            n_workers_offspring = _resolve_parallel_worker_count(
+                n_jobs_offspring, max(1, n_offspring)
+            )
+            offspring_executor: ProcessPoolExecutor | None = None
+            if n_workers_offspring > 1:
+                offspring_executor = ProcessPoolExecutor(
+                    max_workers=n_workers_offspring,
+                    initializer=_offspring_worker_bootstrap_init,
+                    initargs=(offspring_ctx,),
                 )
+            else:
+                _ensure_offspring_worker_state(offspring_ctx)
 
-                t_parallel = perf_counter()
-                job_results: dict[int, dict[str, Any]] = {}
-                worker_exceptions: list[BaseException] = []
-                if n_workers == 1:
-                    for job in jobs:
-                        try:
-                            result = _build_offspring_worker(job, offspring_ctx)
-                        except (RuntimeError, ValueError, TypeError) as exc:
-                            worker_failures_gen += 1
-                            err_name = type(exc).__name__
-                            worker_failure_types_gen[err_name] = (
-                                worker_failure_types_gen.get(err_name, 0) + 1
-                            )
-                            reason = f"worker_exception_{err_name}"
-                            retry_failure_reasons_gen[reason] = (
-                                retry_failure_reasons_gen.get(reason, 0) + 1
-                            )
-                            worker_exceptions.append(exc)
-                            logger.exception(
-                                "Offspring crossover/mutation worker failed (%s)",
-                                err_name,
-                            )
+            try:
+                while created < n_offspring and attempts < max_attempts:
+                    attempts_remaining = max_attempts - attempts
+                    if attempts_remaining <= 0:
+                        break
+                    jobs_target = min(n_offspring - created, attempts_remaining)
+                    jobs: list[dict[str, Any]] = []
+                    for _ in range(jobs_target):
+                        attempts += 1
+                        t0 = perf_counter()
+                        candidates = population.get_two_candidates()
+                        t_parent_select_gen += perf_counter() - t0
+                        if candidates is None:
                             continue
-                        job_results[result["index"]] = result
-                else:
-                    with ProcessPoolExecutor(
-                        max_workers=n_workers,
-                        initializer=_offspring_worker_init,
-                    ) as executor:
+                        a1, a2 = candidates
+                        task_seed = int(rng.integers(0, 2**31 - 1))
+                        jobs.append(
+                            {
+                                "index": len(jobs),
+                                "a1": a1.copy(),
+                                "a2": a2.copy(),
+                                "task_seed": task_seed,
+                            }
+                        )
+                    if not jobs:
+                        continue
+
+                    n_workers = _resolve_parallel_worker_count(
+                        n_jobs_offspring, len(jobs)
+                    )
+
+                    t_parallel = perf_counter()
+                    job_results: dict[int, dict[str, Any]] = {}
+                    worker_exceptions: list[BaseException] = []
+                    if n_workers == 1:
+                        for job in jobs:
+                            try:
+                                result = _build_offspring_worker(
+                                    job,
+                                    offspring_ctx,
+                                )
+                            except (RuntimeError, ValueError, TypeError) as exc:
+                                worker_failures_gen += 1
+                                err_name = type(exc).__name__
+                                worker_failure_types_gen[err_name] = (
+                                    worker_failure_types_gen.get(err_name, 0) + 1
+                                )
+                                reason = f"worker_exception_{err_name}"
+                                retry_failure_reasons_gen[reason] = (
+                                    retry_failure_reasons_gen.get(reason, 0) + 1
+                                )
+                                worker_exceptions.append(exc)
+                                logger.exception(
+                                    "Offspring crossover/mutation worker failed (%s)",
+                                    err_name,
+                                )
+                                continue
+                            job_results[result["index"]] = result
+                    else:
+                        assert offspring_executor is not None
                         futures = [
-                            executor.submit(_build_offspring_worker, job, offspring_ctx)
+                            offspring_executor.submit(
+                                _build_offspring_worker, job, offspring_ctx
+                            )
                             for job in jobs
                         ]
                         for future in as_completed(futures):
@@ -1335,56 +1457,67 @@ def ga_go(
                                 )
                                 continue
                             job_results[result["index"]] = result
-                if len(jobs) > 0 and len(job_results) == 0 and worker_exceptions:
-                    first = worker_exceptions[0]
-                    if not all(isinstance(e, ValueError) for e in worker_exceptions):
-                        raise RuntimeError(
-                            f"All {len(jobs)} parallel offspring workers failed"
-                        ) from first
-                t_offspring_parallel_wall_gen += perf_counter() - t_parallel
-                if worker_failures_gen:
-                    profile_counters["offspring_worker_failures"] += worker_failures_gen
-                    failure_limit = max(3, len(jobs) // 2)
-                    if worker_failures_gen >= failure_limit:
-                        logger.warning(
-                            "Generation %s offspring worker failures: %d/%d (%s)",
-                            generation,
-                            worker_failures_gen,
-                            len(jobs),
-                            worker_failure_types_gen,
+                    if len(jobs) > 0 and len(job_results) == 0 and worker_exceptions:
+                        first = worker_exceptions[0]
+                        if not all(
+                            isinstance(e, ValueError) for e in worker_exceptions
+                        ):
+                            raise RuntimeError(
+                                f"All {len(jobs)} parallel offspring workers failed"
+                            ) from first
+                    t_offspring_parallel_wall_gen += perf_counter() - t_parallel
+                    if worker_failures_gen:
+                        profile_counters["offspring_worker_failures"] += (
+                            worker_failures_gen
                         )
-
-                pending_inserts: list[tuple[Atoms, str]] = []
-                for idx in range(len(jobs)):
-                    if created >= n_offspring:
-                        break
-                    result = job_results.get(idx)
-                    if result is None:
-                        continue
-                    t_operator_setup_gen += float(result["operator_setup_s"])
-                    t_crossover_gen += float(result["crossover_s"])
-                    t_mutation_gen += float(result["mutation_s"])
-                    child = result["child"]
-                    if child is None:
-                        reason = result.get("failure_reason") or "unknown"
-                        retry_failure_reasons_gen[reason] = (
-                            retry_failure_reasons_gen.get(reason, 0) + 1
-                        )
-                        continue
-                    pending_inserts.append((child, result["desc"]))
-                if pending_inserts:
-                    t0 = perf_counter()
-                    with da.c:
-                        for child, desc in pending_inserts:
-                            database_retry(
-                                lambda _a3=child, _desc=desc: (
-                                    da.add_unrelaxed_candidate(_a3, description=_desc)
-                                ),
-                                config=RetryConfig(max_retries=5),
-                                operation_name="add_unrelaxed_offspring",
+                        failure_limit = max(3, len(jobs) // 2)
+                        if worker_failures_gen >= failure_limit:
+                            logger.warning(
+                                "Generation %s offspring worker failures: %d/%d (%s)",
+                                generation,
+                                worker_failures_gen,
+                                len(jobs),
+                                worker_failure_types_gen,
                             )
-                            created += 1
-                    t_db_unrelaxed_gen += perf_counter() - t0
+
+                    pending_inserts: list[tuple[Atoms, str]] = []
+                    for idx in range(len(jobs)):
+                        if created >= n_offspring:
+                            break
+                        result = job_results.get(idx)
+                        if result is None:
+                            continue
+                        t_operator_setup_gen += float(result["operator_setup_s"])
+                        t_crossover_gen += float(result["crossover_s"])
+                        t_mutation_gen += float(result["mutation_s"])
+                        child = result["child"]
+                        if child is None:
+                            reason = result.get("failure_reason") or "unknown"
+                            retry_failure_reasons_gen[reason] = (
+                                retry_failure_reasons_gen.get(reason, 0) + 1
+                            )
+                            continue
+                        pending_inserts.append((child, result["desc"]))
+                    if pending_inserts:
+                        t0 = perf_counter()
+                        with da.c:
+                            for child, desc in pending_inserts:
+                                database_retry(
+                                    lambda _a3=child, _desc=desc: (
+                                        da.add_unrelaxed_candidate(
+                                            _a3, description=_desc
+                                        )
+                                    ),
+                                    config=RetryConfig(max_retries=5),
+                                    operation_name="add_unrelaxed_offspring",
+                                )
+                                created += 1
+                        t_db_unrelaxed_gen += perf_counter() - t0
+            finally:
+                if offspring_executor is not None:
+                    offspring_executor.shutdown(wait=True)
+                _OFFSPRING_WORKER_STATE.clear()
+
             generation_acceptance = created / max(attempts, 1)
             recent_acceptance_ratios.append(generation_acceptance)
             profile_counters["offspring_attempts_total"] += attempts

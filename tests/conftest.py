@@ -9,6 +9,7 @@ from ase import Atoms
 from ase.build import fcc111
 from ase.calculators.emt import EMT
 
+from scgo.surface.config import SurfaceSystemConfig
 from tests.test_utils import setup_test_atoms
 
 
@@ -89,6 +90,47 @@ def pt_slab_small():
     slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
     slab.pbc = True
     return slab
+
+
+@pytest.fixture
+def surface_config_pt111(pt_slab_small):
+    """Standard Pt(111) surface config used across surface GA tests."""
+    return SurfaceSystemConfig(
+        slab=pt_slab_small,
+        adsorption_height_min=1.0,
+        adsorption_height_max=2.8,
+        fix_all_slab_atoms=True,
+        comparator_use_mic=False,
+        max_placement_attempts=400,
+    )
+
+
+@pytest.fixture
+def minimal_ga_kwargs():
+    """Minimal GA parameters for fast smoke tests."""
+    return {
+        "niter": 2,
+        "population_size": 4,
+        "offspring_fraction": 0.5,
+        "niter_local_relaxation": 50,
+        "n_jobs_population_init": 1,
+        "early_stopping_niter": 0,
+    }
+
+
+@pytest.fixture
+def ts_minima_db(tmp_path):
+    """Temporary GA database with marked final minima for TS integration tests."""
+    from ase import Atoms
+
+    from tests.test_utils import create_preparedb, mark_test_minima_as_final
+
+    db_path = tmp_path / "ts_minima.db"
+    db = create_preparedb(Atoms("Pt2"), db_path, population_size=10)
+    pt3 = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]])
+    db.add_unrelaxed_candidate(pt3, description="pt3")
+    mark_test_minima_as_final(db_path)
+    return str(db_path)
 
 
 @pytest.fixture

@@ -143,10 +143,24 @@ def get_scgo_metadata(db_path: str | Path) -> dict[str, str]:
         return {}
 
 
+_scgo_database_cache: dict[str, bool] = {}
+
+
+def clear_scgo_database_cache() -> None:
+    """Clear the :func:`is_scgo_database` memoization cache."""
+    _scgo_database_cache.clear()
+
+
 def is_scgo_database(db_path: str | Path) -> bool:
     """True if ``scgo_metadata.created_by`` is ``scgo``."""
+    key = str(Path(db_path).resolve())
+    cached = _scgo_database_cache.get(key)
+    if cached is not None:
+        return cached
     meta = get_scgo_metadata(db_path)
-    return bool(meta) and meta.get("created_by") == "scgo"
+    result = bool(meta) and meta.get("created_by") == "scgo"
+    _scgo_database_cache[key] = result
+    return result
 
 
 def stamp_scgo_database(

@@ -15,5 +15,5 @@ def test_select_gas_dimer_uses_simple() -> None:
     assert select_scgo_minima_algorithm(2, "gas_cluster") == "simple"
 
 
-def test_select_gas_adsorbate_trimer_uses_bh() -> None:
-    assert select_scgo_minima_algorithm(3, "gas_cluster_adsorbate") == "bh"
+def test_select_gas_adsorbate_trimer_uses_ga() -> None:
+    assert select_scgo_minima_algorithm(3, "gas_cluster_adsorbate") == "ga"

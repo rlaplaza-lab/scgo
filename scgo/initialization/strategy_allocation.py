@@ -181,7 +181,7 @@ def _generate_allocations_list(
     return allocations
 
 
-def _allocate_strategies_metropolis(
+def _allocate_initialization_strategies(
     n_structures: int,
     templates: list[Atoms],
     n_seed_formulas: int,

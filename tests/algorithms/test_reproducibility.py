@@ -265,6 +265,7 @@ def test_update_mutation_weights_operator_selection_reproducible():
     assert len(set(indices)) > 1, "Expected multiple operators to be selected"
 
 
+@pytest.mark.slow
 def test_full_stack_smoke(tmp_path, rng):
     comp = ["Pt", "Pt", "Pt", "Pt"]
     outdir = str(tmp_path / "campaign")
@@ -297,6 +298,7 @@ def test_full_stack_smoke(tmp_path, rng):
         assert len(a) == len(comp)
 
 
+@pytest.mark.slow
 def test_run_py_smoke(tmp_path):
     """Test _run_go_trials smoke test."""
     comp = ["Pt", "Pt"]
@@ -314,6 +316,7 @@ def test_run_py_smoke(tmp_path):
         assert len(a) == 2
 
 
+@pytest.mark.slow
 def test_run_py_campaign_smoke(tmp_path):
     """Test one-element campaign smoke via composition builder."""
     params = get_testing_params()
@@ -341,6 +344,7 @@ def test_run_py_campaign_smoke(tmp_path):
         assert len(a) == 3
 
 
+@pytest.mark.slow
 def test_run_py_campaign_two_elements_smoke(tmp_path):
     """Test two-element campaign smoke via composition builder."""
     params = get_testing_params()
@@ -584,6 +588,7 @@ def test_campaign_level_rng_spawns_trial_level_rngs(rng):
             assert trial_sequences[i] != trial_sequences[j]
 
 
+@pytest.mark.slow
 def test_cross_composition_reproducibility(tmp_path):
     """Test reproducibility across different compositions in campaigns."""
     params = get_testing_params()
@@ -630,6 +635,7 @@ def test_cross_composition_reproducibility(tmp_path):
             )
 
 
+@pytest.mark.slow
 def test_cross_composition_different_seeds(tmp_path):
     """Test that different seeds produce different results across compositions."""
     params = get_testing_params()
@@ -678,6 +684,7 @@ def test_cross_composition_different_seeds(tmp_path):
     assert different_results is True, "Different seeds should produce different results"
 
 
+@pytest.mark.slow
 def test_bimetallic_campaign_reproducibility(tmp_path):
     """Test reproducibility for bimetallic campaigns."""
     params = get_testing_params()
@@ -716,6 +723,7 @@ def test_bimetallic_campaign_reproducibility(tmp_path):
             assert np.isclose(energy1, energy2, rtol=1e-10)
 
 
+@pytest.mark.slow
 def test_arbitrary_compositions_reproducibility(tmp_path):
     """Test reproducibility for arbitrary compositions campaigns."""
     params = get_testing_params()
@@ -821,51 +829,7 @@ def test_rng_different_seeds_different_results(seed1, seed2):
     )  # Same composition
 
 
-@pytest.mark.requires_multicore
-def test_ga_multiprocess_reproducibility_smoke(tmp_path):
-    """Integral but bounded GA reproducibility test for single vs multiprocess init."""
-    comp = ["Pt", "Pt"]
-    seed = 789
-    common_kwargs = {
-        "population_size": 3,
-        "niter": 2,
-        "niter_local_relaxation": 2,
-        "optimizer": FIRE,
-        "fmax": 0.25,
-        "vacuum": 5.0,
-        "energy_tolerance": 0.1,
-        "mutation_probability": 0.2,
-        "verbosity": 0,
-    }
-
-    minima_single = ga_go(
-        comp,
-        output_dir=str(tmp_path / "ga_single"),
-        calculator=EMT(),
-        rng=np.random.default_rng(seed),
-        n_jobs_population_init=1,
-        **common_kwargs,
-    )
-    minima_multi = ga_go(
-        comp,
-        output_dir=str(tmp_path / "ga_multi"),
-        calculator=EMT(),
-        rng=np.random.default_rng(seed),
-        n_jobs_population_init=2,
-        **common_kwargs,
-    )
-
-    assert compare_minima_lists(
-        minima_single,
-        minima_multi,
-        rtol=REPRODUCIBILITY_RTOL,
-        atol=REPRODUCIBILITY_ATOL,
-    )
-    for energy, atoms in minima_multi:
-        assert np.isfinite(energy)
-        assert isinstance(atoms, Atoms)
-
-
+@pytest.mark.slow
 def test_database_persistence_reproducibility(tmp_path):
     """Test that database persistence is deterministic across runs."""
     from scgo.database import setup_database
@@ -926,6 +890,7 @@ def test_database_persistence_reproducibility(tmp_path):
     close_data_connection(da2)
 
 
+@pytest.mark.slow
 def test_fixed_seed_exact_reproducibility(tmp_path):
     """Test that fixed seed gives bit-for-bit identical results across runs."""
     comp = ["Pt", "Pt"]

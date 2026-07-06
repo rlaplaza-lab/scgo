@@ -16,7 +16,7 @@ from scgo.initialization.initialization_config import (
     VACUUM_DEFAULT,
 )
 from scgo.initialization.initializers import (
-    _allocate_strategies_metropolis,
+    _allocate_initialization_strategies,
     _discover_available_strategies,
     _filter_candidates_by_geometry,
     _find_smaller_candidates,
@@ -343,7 +343,7 @@ def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
     )
 
     # Get allocations
-    allocations = _allocate_strategies_metropolis(
+    allocations = _allocate_initialization_strategies(
         n_structures=n_structures,
         templates=discovery["templates"],
         n_seed_formulas=discovery["n_seed_formulas"],

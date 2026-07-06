@@ -333,11 +333,6 @@ def resolve_auto_params(
             if pop_size_val in ("auto", None)
             else pop_size_val
         )
-        if algo_params.get("surface_config") is not None:
-            resolved["niter_local_relaxation"] = max(
-                SURFACE_GA_MIN_LOCAL_RELAX_STEPS,
-                int(resolved["niter_local_relaxation"]),
-            )
 
     return resolved
 

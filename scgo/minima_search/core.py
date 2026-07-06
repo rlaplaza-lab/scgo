@@ -10,6 +10,7 @@ import logging
 import os
 import sqlite3
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,7 @@ from scgo.utils.helpers import (
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.run_tracking import (
     RunMetadataJSONEncoder,
@@ -68,6 +70,30 @@ from scgo.utils.validation import validate_composition
 _DEFAULT_REQUIRED_METHODS = ["get_potential_energy", "get_forces"]
 
 _SURFACE_SYSTEM_TYPES = frozenset({"surface_cluster", "surface_cluster_adsorbate"})
+
+_VALIDATION_CALCULATOR: Calculator | None = None
+
+
+def _init_validation_worker(calculator: Calculator) -> None:
+    global _VALIDATION_CALCULATOR
+    _VALIDATION_CALCULATOR = calculator
+
+
+def _validate_minimum_worker(
+    payload: tuple[float, Atoms, float, bool, float],
+) -> tuple[float, Atoms] | None:
+    energy, atoms, fmax_threshold, check_hessian, imag_freq_threshold = payload
+    if _VALIDATION_CALCULATOR is None:
+        raise RuntimeError("Validation worker calculator not initialized")
+    if is_true_minimum(
+        atoms=atoms,
+        calculator=_VALIDATION_CALCULATOR,
+        fmax_threshold=fmax_threshold,
+        check_hessian=check_hessian,
+        imag_freq_threshold=imag_freq_threshold,
+    ):
+        return (energy, atoms)
+    return None
 
 
 def _create_surface_initialized_atoms(
@@ -270,20 +296,16 @@ def _sanitize_global_optimizer_kwargs_for_metadata(
     return gok
 
 
-# Algorithm registry with default parameters
-# Note: GA uses special handling via _select_and_run_ga, so function is None
+# Algorithm registry
 _ALGORITHM_REGISTRY: dict[str, dict[str, Any]] = {
     "simple": {
         "function": simple_go,
-        "default_niter": 1,
     },
     "bh": {
         "function": bh_go,
-        "default_niter": 100,
     },
     "ga": {
-        "function": None,  # Special handling via _select_and_run_ga
-        "default_niter": 10,
+        "function": ga_go,
     },
 }
 
@@ -319,41 +341,6 @@ def _validate_calculator_compatibility(
         return False, f"Calculator missing required methods: {missing_methods}"
 
     return True, "Calculator is compatible"
-
-
-def _select_and_run_ga(
-    composition: list[str],
-    output_dir: str,
-    optimizer_kwargs: dict[str, Any],
-    calculator: Calculator,
-    rng: np.random.Generator,
-    verbosity: int,
-    run_id: str | None = None,
-    clean: bool = False,
-) -> list[tuple[float, Atoms]]:
-    """Run the unified GA implementation (TorchSim or ASE batch relaxer).
-
-    Args:
-        composition: List of element symbols defining the cluster composition.
-        output_dir: Directory for output files.
-        optimizer_kwargs: Dictionary of optimizer parameters.
-        calculator: The ASE calculator to use.
-        rng: Random number generator.
-        verbosity: Verbosity level.
-
-    Returns:
-        List of ``(energy, Atoms)`` tuples from the GA run.
-    """
-    return ga_go(
-        composition=composition,
-        output_dir=output_dir,
-        calculator=calculator,
-        rng=rng,
-        verbosity=verbosity,
-        run_id=run_id,
-        clean=clean,
-        **optimizer_kwargs,
-    )
 
 
 def scgo(
@@ -485,16 +472,15 @@ def scgo(
     algo_function = algo_config["function"]
 
     if optimizer_name_lower == "ga":
-        # GA requires special handling with calculator
-        all_minima = _select_and_run_ga(
+        all_minima = ga_go(
             composition=composition,
             output_dir=output_dir,
-            optimizer_kwargs={**optimizer_kwargs, **timing_kwargs},
             calculator=calculator_for_global_optimization,
             rng=rng,
             verbosity=verbosity,
             run_id=run_id,
             clean=clean,
+            **{**optimizer_kwargs, **timing_kwargs},
         )
     else:
         # Non-GA algorithms need explicit starting atoms.
@@ -585,6 +571,10 @@ def run_trials(
     rng: np.random.Generator,
     calculator_for_global_optimization: Calculator | None = None,
     validate_with_hessian: bool = True,
+    fmax_threshold: float = 0.05,
+    check_hessian: bool = True,
+    imag_freq_threshold: float = 50.0,
+    validation_n_jobs: int = 1,
     tag_final_minima: bool = True,
     verbosity: int = 1,
     run_id: str | None = None,
@@ -772,24 +762,60 @@ def run_trials(
             calculator_for_global_optimization.directory = val_dir
 
         validated_minima = []
-        for i, (energy, atoms) in enumerate(unique_candidates):
+        n_validate_workers = (
+            resolve_n_jobs_to_workers(validation_n_jobs)
+            if check_hessian and validation_n_jobs != 1
+            else 1
+        )
+        payloads = [
+            (energy, atoms, fmax_threshold, check_hessian, imag_freq_threshold)
+            for energy, atoms in unique_candidates
+        ]
+
+        if n_validate_workers > 1 and len(payloads) > 1:
             logger.info(
-                f"Validating candidate {i + 1}/{len(unique_candidates)} (E={energy:.4f} eV)...",
+                "Validating %d unique candidates with %d parallel workers...",
+                len(payloads),
+                n_validate_workers,
             )
-            try:
-                is_valid = is_true_minimum(
-                    atoms=atoms,
-                    calculator=calculator_for_global_optimization,
-                    check_hessian=True,
+            with ProcessPoolExecutor(
+                max_workers=min(n_validate_workers, len(payloads)),
+                initializer=_init_validation_worker,
+                initargs=(calculator_for_global_optimization,),
+            ) as executor:
+                futures = [
+                    executor.submit(_validate_minimum_worker, payload)
+                    for payload in payloads
+                ]
+                for i, future in enumerate(as_completed(futures), 1):
+                    try:
+                        validated = future.result()
+                    except (OSError, RuntimeError, ValueError) as e:
+                        logger.warning("Validation failed for candidate %d: %s", i, e)
+                        continue
+                    if validated is not None:
+                        validated_minima.append(validated)
+        else:
+            for i, (energy, atoms) in enumerate(unique_candidates):
+                logger.info(
+                    f"Validating candidate {i + 1}/{len(unique_candidates)} (E={energy:.4f} eV)...",
                 )
-                if is_valid:
-                    validated_minima.append((energy, atoms))
-                else:
-                    logger.info(f"Candidate {i + 1} rejected")
-            except (OSError, RuntimeError, ValueError) as e:
-                logger.warning(
-                    f"Validation failed for candidate {i + 1} (E={energy:.4f} eV): {e}"
-                )
+                try:
+                    is_valid = is_true_minimum(
+                        atoms=atoms,
+                        calculator=calculator_for_global_optimization,
+                        fmax_threshold=fmax_threshold,
+                        check_hessian=check_hessian,
+                        imag_freq_threshold=imag_freq_threshold,
+                    )
+                    if is_valid:
+                        validated_minima.append((energy, atoms))
+                    else:
+                        logger.info(f"Candidate {i + 1} rejected")
+                except (OSError, RuntimeError, ValueError) as e:
+                    logger.warning(
+                        f"Validation failed for candidate {i + 1} (E={energy:.4f} eV): {e}"
+                    )
 
         if not validated_minima:
             logger.info(
@@ -813,7 +839,6 @@ def run_trials(
     logger.info(f"Best potential energy: {best_energy:.4f} eV")
 
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")
-    ensure_directory_exists(final_xyz_dir)
     logger.info(
         f'Writing {len(final_minima)} final structures to "{os.path.basename(final_xyz_dir)}"'
     )

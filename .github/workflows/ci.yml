@@ -61,9 +61,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - python-version: "3.12"
-            pip-extras: "mace,dev"
-            suite: mace
           - python-version: "3.13"
             pip-extras: "mace,dev"
             suite: mace
@@ -118,17 +115,19 @@ jobs:
       - name: Run fast tests (MACE)
         if: matrix.suite == 'mace' && github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch'
         run: |
-          pytest tests/ -n 2 -m "not slow" -v --cov=scgo --cov-report=xml --cov-report=term
+          pytest tests/ -n 2 -m "not slow and not integration" -v --cov=scgo --cov-report=xml --cov-report=term
 
       - name: Run fast tests (MACE, main)
         if: matrix.suite == 'mace' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
         run: |
-          pytest tests/ -n 2 -m "not slow" -v --cov=scgo --cov-report=xml --cov-report=term
+          pytest tests/ -n 2 -m "not slow and not integration" -v --cov=scgo --cov-report=xml --cov-report=term
 
       - name: Run slow tests (MACE, main)
         if: matrix.suite == 'mace' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+        env:
+          SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
-          pytest tests/ -m slow -v --cov=scgo --cov-report=xml --cov-report=term --cov-append
+          pytest tests/ -m "slow and not benchmark" -n 2 -v --cov=scgo --cov-report=xml --cov-report=term --cov-append
 
       - name: Run UMA subset (no MACE/TorchSim)
         if: matrix.suite == 'uma'

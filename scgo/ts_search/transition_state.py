@@ -1134,6 +1134,7 @@ def find_transition_state(
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
+    relaxer: Any | None = None,
 ) -> dict[str, Any]:
     """Run NEB to locate a transition state between two structures.
 
@@ -1257,18 +1258,26 @@ def find_transition_state(
 
         neb: NEB
         if use_torchsim:
-            relaxer = _tsh.TorchSimBatchRelaxer(**(torchsim_params or {}))
+            ts_relaxer = relaxer
+            if ts_relaxer is None:
+                ts_relaxer = _tsh.TorchSimBatchRelaxer(**(torchsim_params or {}))
 
-            ep_results = relaxer.relax_batch([images[0], images[-1]], steps=0)
-            result["reactant_energy"] = float(ep_results[0][0])
-            result["product_energy"] = float(ep_results[1][0])
+            react_e = extract_energy_from_atoms(images[0])
+            prod_e = extract_energy_from_atoms(images[-1])
+            if react_e is not None and prod_e is not None:
+                result["reactant_energy"] = float(react_e)
+                result["product_energy"] = float(prod_e)
+            else:
+                ep_results = ts_relaxer.relax_batch([images[0], images[-1]], steps=0)
+                result["reactant_energy"] = float(ep_results[0][0])
+                result["product_energy"] = float(ep_results[1][0])
 
             if verbosity >= 2:
                 logger.info(f"Using TorchSim batched NEB (climb={climb})")
 
             neb = TorchSimNEB(
                 images,
-                relaxer,
+                ts_relaxer,
                 k=spring_constant,
                 climb=climb,
                 method=neb_tangent_method,

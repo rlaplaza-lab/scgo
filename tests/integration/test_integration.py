@@ -137,6 +137,7 @@ def test_full_optimizer_workflow(tmp_path, rng, optimizer, opt_kwargs):
 
 
 @pytest.mark.integration
+@pytest.mark.slow
 def test_full_workflow_reproducible_with_fixed_seed(tmp_path):
     """End-to-end GA workflow is repeatable when re-run with the same seed.
 
@@ -429,6 +430,7 @@ def test_campaign_two_elements(tmp_path):
 
 
 @pytest.mark.integration
+@pytest.mark.slow
 def test__run_go_trials_integration(tmp_path):
     """Test the high-level _run_go_trials function."""
     comp = ["Pt", "Pt"]

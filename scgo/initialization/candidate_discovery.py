@@ -153,12 +153,12 @@ def _compute_files_signature(files: list[str]) -> tuple[tuple[str, float], ...]:
 
 def get_structure_signature(atoms: Atoms, precision: int = 4) -> tuple[float, ...]:
     """Create a signature based on sorted interatomic distances."""
+    from scipy.spatial.distance import pdist
+
     positions = atoms.get_positions()
-    distances = [
-        np.linalg.norm(positions[i] - positions[j])
-        for i in range(len(positions))
-        for j in range(i + 1, len(positions))
-    ]
+    if len(positions) <= 1:
+        return ()
+    distances = pdist(positions)
     return tuple(np.round(np.sort(distances), precision))
 
 

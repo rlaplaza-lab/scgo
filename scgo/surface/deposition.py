@@ -358,7 +358,7 @@ def create_deposited_cluster(
                     cluster_adsorbate_config,
                     batch_site_counts,
                     axis,
-                    config.max_placement_attempts,
+                    max_placement_attempts=1,
                 )
                 if combined is None:
                     continue
@@ -505,6 +505,18 @@ def create_deposited_cluster_batch(
     task_seeds = [
         int(rng.integers(0, 2**63 - 1, dtype=np.int64)) for _ in range(n_structures)
     ]
+    shared_site_counts = batch_site_counts
+    site_counts_lock = Lock() if shared_site_counts is not None else None
+
+    def _record_batch_site_type(structure: Atoms) -> None:
+        if shared_site_counts is None or site_counts_lock is None:
+            return
+        site_type = structure.info.get("adsorbate_site_type")
+        if not isinstance(site_type, str):
+            return
+        with site_counts_lock:
+            if site_type in shared_site_counts:
+                shared_site_counts[site_type] += 1
 
     def _build_structure_with_seed(task_seed: int) -> Atoms:
         task_rng = np.random.default_rng(task_seed)
@@ -522,8 +534,10 @@ def create_deposited_cluster_batch(
                 adsorbate_definition=adsorbate_definition,
                 adsorbate_fragment_template=adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
+                batch_site_counts=shared_site_counts,
             )
             if structure is not None:
+                _record_batch_site_type(structure)
                 return structure
         raise RuntimeError(
             "Could not generate deposited structure in parallel worker; "

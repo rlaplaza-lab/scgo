@@ -398,17 +398,32 @@ class CutAndSplicePairing(OffspringCreator):
         a2_copy = a2.copy()
         self.last_attempt_count = 0
 
+        newcell = self.generate_unit_cell(cell1, cell2)
+        if newcell is None:
+            return None
+
+        cached_cut_configs = None
+        if self.number_of_variable_cell_vectors == 0:
+            for a_copy, a in zip([a1_copy, a2_copy], [a1, a2], strict=False):
+                a_copy.set_positions(a.get_positions())
+                if self.use_tags:
+                    gather_atoms_by_tag(a_copy)
+                elif not uses_surface(self.system_type):
+                    a_copy.center()
+            cached_cut_configs = self._candidate_cut_configurations(
+                a1_copy,
+                a2_copy,
+                newcell,
+            )
+
         # Run until a valid pairing is made or maxcount pairings are tested.
         while counter < maxcount:
             counter += 1
 
-            newcell = self.generate_unit_cell(cell1, cell2)
-            if newcell is None:
-                # No valid unit cell could be generated.
-                # This strongly suggests that it is near-impossible
-                # to generate one from these parent cells and it is
-                # better to abort now.
-                break
+            if self.number_of_variable_cell_vectors != 0:
+                newcell = self.generate_unit_cell(cell1, cell2)
+                if newcell is None:
+                    break
 
             cut_n = None
             if self.number_of_variable_cell_vectors != 0:
@@ -439,11 +454,16 @@ class CutAndSplicePairing(OffspringCreator):
                     if not uses_surface(self.system_type):
                         a_copy.center()
 
-            for _score, cut_p, cut_normal in self._candidate_cut_configurations(
-                a1_copy,
-                a2_copy,
-                newcell,
-            ):
+            if cached_cut_configs is not None:
+                cut_configurations = cached_cut_configs
+            else:
+                cut_configurations = self._candidate_cut_configurations(
+                    a1_copy,
+                    a2_copy,
+                    newcell,
+                )
+
+            for _score, cut_p, cut_normal in cut_configurations:
                 self.last_attempt_count += 1
 
                 child = self._get_pairing(a1_copy, a2_copy, cut_p, cut_normal, newcell)

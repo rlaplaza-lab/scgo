@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import cdist, pdist, squareform
 
 
 def get_blmin_distance(
@@ -23,11 +23,11 @@ def steric_deficit(positions, atomic_numbers, blmin: dict) -> float:
         return 0.0
 
     distances = squareform(pdist(positions))
+    numbers = np.asarray(atomic_numbers, dtype=int)
     deficit = 0.0
     for i in range(n_atoms):
         for j in range(i + 1, n_atoms):
-            required = get_blmin_distance(blmin, atomic_numbers[i], atomic_numbers[j])
-            gap = required - distances[i, j]
+            gap = get_blmin_distance(blmin, numbers[i], numbers[j]) - distances[i, j]
             if gap > 0.0:
                 deficit += gap
     return deficit
@@ -41,11 +41,17 @@ def steric_deficit_two_sets(
     blmin: dict,
 ) -> float:
     """Sum of blmin violations between two disjoint atom sets."""
-    deficit = 0.0
-    for i, left_pos in enumerate(left_positions):
-        for j, right_pos in enumerate(right_positions):
-            required = get_blmin_distance(blmin, left_numbers[i], right_numbers[j])
-            gap = required - np.linalg.norm(left_pos - right_pos)
-            if gap > 0.0:
-                deficit += gap
-    return deficit
+    if len(left_positions) == 0 or len(right_positions) == 0:
+        return 0.0
+
+    distances = cdist(left_positions, right_positions)
+    left_z = np.asarray(left_numbers, dtype=int)
+    right_z = np.asarray(right_numbers, dtype=int)
+    required = np.array(
+        [
+            [get_blmin_distance(blmin, int(zi), int(zj)) for zj in right_z]
+            for zi in left_z
+        ],
+        dtype=float,
+    )
+    return float(np.maximum(required - distances, 0.0).sum())

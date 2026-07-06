@@ -32,6 +32,7 @@ def _skip_if_torchsim_uses_vesin() -> None:
         pytest.skip(_VESIN_SKIP_MSG)
 
 
+@pytest.mark.benchmark
 @pytest.mark.slow
 def test_full_workflow_cu4_mace_database_persistence():
     """End-to-end Cu4 MACE integration test (slow)."""

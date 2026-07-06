@@ -122,8 +122,15 @@ def _run_serial_neb_search(
     logger = get_logger(__name__)
     ts_results: list[dict[str, Any]] = []
 
+    shared_relaxer = None
+    if use_torchsim:
+        from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+        shared_relaxer = TorchSimBatchRelaxer(**(torchsim_params or {}))
+
     for idx, (i, j) in enumerate(pairs, 1):
-        cleanup_torch_cuda(logger=logger)
+        if not use_torchsim:
+            cleanup_torch_cuda(logger=logger)
 
         energy_i, atoms_i = minima[i]
         energy_j, atoms_j = minima[j]
@@ -225,6 +232,7 @@ def _run_serial_neb_search(
                 system_type=system_type,
                 use_torchsim=use_torchsim,
                 torchsim_params=torchsim_params,
+                relaxer=shared_relaxer,
                 verbosity=verbosity,
                 write_timing_json=write_timing_json,
                 n_slab=n_slab,
@@ -276,6 +284,10 @@ def _run_serial_neb_search(
         if not use_torchsim and calculator is not None:
             del calculator
 
+        if not use_torchsim:
+            cleanup_torch_cuda(logger=logger)
+
+    if use_torchsim:
         cleanup_torch_cuda(logger=logger)
 
     return ts_results

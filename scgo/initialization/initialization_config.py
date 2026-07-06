@@ -12,8 +12,6 @@ Notable tunables (library-internal, not GO preset keys):
 
 from __future__ import annotations
 
-from typing import Any
-
 # Placement and retry parameters
 MAX_PLACEMENT_ATTEMPTS_PER_ATOM = 500
 MAX_CONNECTIVITY_RETRIES = 10
@@ -147,15 +145,15 @@ TEMPLATE_ROTATION_CANDIDATES = (
     3  # Number of rotation variants to generate per template for diversity
 )
 
-# Template weight configuration (base weights and thresholds)
-TEMPLATE_BASE_WEIGHTS: dict[str, dict[str, Any]] = {
-    "icosahedron": {"base": 1.5, "large_threshold": 20, "large_weight": 2.0},
-    "decahedron": {"base": 1.3, "large_threshold": 20, "large_weight": 1.8},
-    "cuboctahedron": {"base": 1.0, "size_range": (10, 30), "range_weight": 1.5},
-    "octahedron": {"base": 1.0, "size_range": (10, 30), "range_weight": 1.4},
-    "truncated_octahedron": {"base": 1.0, "size_range": (20, 30), "range_weight": 1.6},
-    "cube": {"base": 0.8, "magic_sizes": [8, 27, 64, 125], "magic_weight": 1.3},
-    "tetrahedron": {"base": 0.8, "small_threshold": 10, "small_weight": 1.2},
+# Template weight configuration (base weights per template type)
+TEMPLATE_BASE_WEIGHTS: dict[str, float] = {
+    "icosahedron": 1.5,
+    "decahedron": 1.3,
+    "cuboctahedron": 1.0,
+    "octahedron": 1.0,
+    "truncated_octahedron": 1.0,
+    "cube": 0.8,
+    "tetrahedron": 0.8,
 }
 
 # Multi-element composition penalty factor

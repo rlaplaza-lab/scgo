@@ -18,6 +18,7 @@ import logging
 import time
 import warnings
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -493,6 +494,27 @@ class TorchSimBatchRelaxer:
         if self.expected_max_atoms is not None and self.max_memory_scaler is None:
             self._warm_autobatcher_memory_scaler(self.expected_max_atoms)
 
+    def _memory_scaler_cache_key(self, n_atoms: int) -> dict[str, Any]:
+        return {
+            "n_atoms": n_atoms,
+            "model_name": self._cache_model_name(),
+            "memory_scales_with": self.memory_scales_with,
+            "device": self._device_str,
+        }
+
+    def _get_cached_memory_scaler(self, n_atoms: int) -> float | None:
+        return _GLOBAL_MEMORY_SCALER_CACHE.get(**self._memory_scaler_cache_key(n_atoms))
+
+    def _apply_cached_memory_scaler(self, n_atoms: int) -> bool:
+        cached_scaler = self._get_cached_memory_scaler(n_atoms)
+        if cached_scaler is None:
+            return False
+        autobatcher = self._runner_kwargs.get("autobatcher")
+        if autobatcher is None:
+            return False
+        autobatcher.max_memory_scaler = cached_scaler
+        return True
+
     def _persist_autobatcher_scaler(self, n_atoms: int) -> None:
         """Persist the current autobatcher's ``max_memory_scaler`` to the disk cache.
 
@@ -505,11 +527,8 @@ class TorchSimBatchRelaxer:
         if not scaler:
             return
         _GLOBAL_MEMORY_SCALER_CACHE.set(
-            n_atoms=n_atoms,
-            model_name=self._cache_model_name(),
-            memory_scales_with=self.memory_scales_with,
-            device=self._device_str,
             value=float(scaler),
+            **self._memory_scaler_cache_key(n_atoms),
         )
 
     def _warm_autobatcher_memory_scaler(self, n_atoms: int) -> None:
@@ -526,14 +545,7 @@ class TorchSimBatchRelaxer:
         if autobatcher is None or self.max_memory_scaler is not None:
             return
 
-        cached_scaler = _GLOBAL_MEMORY_SCALER_CACHE.get(
-            n_atoms=n_atoms,
-            model_name=self._cache_model_name(),
-            memory_scales_with=self.memory_scales_with,
-            device=self._device_str,
-        )
-        if cached_scaler is not None:
-            autobatcher.max_memory_scaler = cached_scaler
+        if self._apply_cached_memory_scaler(n_atoms):
             logger.info("Used cached memory scaler from disk (avoided probing)")
             return
 
@@ -597,14 +609,7 @@ class TorchSimBatchRelaxer:
 
         # Try to apply cached memory scaler to avoid expensive re-probing (~70s per new cluster size)
         if self.max_memory_scaler is None and "autobatcher" in self._runner_kwargs:
-            cached_scaler = _GLOBAL_MEMORY_SCALER_CACHE.get(
-                n_atoms=max_atoms_in_batch,
-                model_name=self._cache_model_name(),
-                memory_scales_with=self.memory_scales_with,
-                device=self._device_str,
-            )
-            if cached_scaler is not None:
-                self._runner_kwargs["autobatcher"].max_memory_scaler = cached_scaler
+            self._apply_cached_memory_scaler(max_atoms_in_batch)
 
         runner_kwargs = self._runner_kwargs.copy()
         if steps is not None:
@@ -633,23 +638,21 @@ class TorchSimBatchRelaxer:
             logger.debug(
                 "Running TorchSim single-point evaluation via optimize(max_steps=0)."
             )
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message="All systems have reached the maximum number of steps",
-                )
-                state = self._ts.optimize(  # type: ignore[call-arg]
-                    system=system_in,
-                    model=self.model,
-                    optimizer=self.optimizer,
-                    **runner_kwargs,
-                )
+        optimize_kwargs = runner_kwargs
+        if max_steps_now == 0:
+            warnings_ctx = warnings.catch_warnings()
+            warnings_ctx.filterwarnings(
+                "ignore",
+                message="All systems have reached the maximum number of steps",
+            )
         else:
+            warnings_ctx = nullcontext()
+        with warnings_ctx:
             state = self._ts.optimize(  # type: ignore[call-arg]
                 system=system_in,
                 model=self.model,
                 optimizer=self.optimizer,
-                **runner_kwargs,
+                **optimize_kwargs,
             )
 
         # Cache the memory scaler if we computed a new estimate (avoid ~70s re-probing)

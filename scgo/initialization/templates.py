@@ -57,7 +57,6 @@ from .geometry_helpers import (
     _identify_safe_removal_candidates,
     _should_check_connectivity,
     _verify_exact_composition,
-    clear_convex_hull_cache,
     compute_bond_distance_params,
     get_convex_hull_vertex_indices,
     get_covalent_radius,
@@ -65,8 +64,6 @@ from .geometry_helpers import (
     validate_cluster_structure,
 )
 from .initialization_config import (
-    BOND_DISTANCE_MULTIPLIER_2ATOM,
-    BOND_DISTANCE_MULTIPLIER_3ATOM,
     CONNECTIVITY_FACTOR,
     MAGIC_NUMBER_TOLERANCE,
     MAGIC_NUMBERS,
@@ -427,7 +424,6 @@ def remove_atoms_from_vertices(
         if not is_valid:
             return None
 
-        clear_convex_hull_cache()
         current = new_cluster
         total_removed += len(remove_indices)
         if not remove_indices:
@@ -587,7 +583,6 @@ def grow_template_via_facets(
                 f"grow_template_via_facets: no atoms placed, retry {round_retry_count}/{max_round_retries}, "
                 f"candidates={len(candidates)}, to_add={len(to_add)}"
             )
-            clear_convex_hull_cache()
             continue
         elif placed_count == 0 and to_add:
             logger.debug(
@@ -614,7 +609,7 @@ def grow_template_via_facets(
             )
             return None
 
-        clear_convex_hull_cache()
+        round_retry_count = 0
 
     current.set_cell([cell_side, cell_side, cell_side])
     current.center()
@@ -1621,65 +1616,6 @@ def _generate_template_with_atom_adjustment(
     return None
 
 
-def _validate_template_geometry(atoms: Atoms) -> bool:
-    """Validate that a template structure has reasonable geometry.
-
-    Filters out templates with atoms that are unreasonably far apart or too close.
-    This ensures templates are physically reasonable starting structures.
-
-    Args:
-        atoms: The Atoms object to validate
-
-    Returns:
-        True if geometry is reasonable, False otherwise
-    """
-    if len(atoms) <= 1:
-        return True
-
-    positions: Any | np.ndarray[tuple[Any, ...], np.dtype[Any]] = atoms.get_positions()
-    symbols = atoms.get_chemical_symbols()
-
-    distances = []
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            dist: np.floating[Any] = np.linalg.norm(positions[i] - positions[j])
-            distances.append(dist)
-
-    if not distances:
-        return True
-
-    min_dist = min(distances)
-    max_dist = max(distances)
-
-    if len(atoms) <= 3:
-        max_covalent_sum = 0.0
-        for i in range(len(atoms)):
-            for j in range(i + 1, len(atoms)):
-                r_i = get_covalent_radius(symbols[i])
-                r_j = get_covalent_radius(symbols[j])
-                max_covalent_sum = max(max_covalent_sum, r_i + r_j)
-
-        # For 2-atom clusters, use strict criteria: within 1.2x sum of covalent radii
-        max_reasonable_distance: float = (
-            BOND_DISTANCE_MULTIPLIER_2ATOM * max_covalent_sum
-            if len(atoms) == 2
-            else BOND_DISTANCE_MULTIPLIER_3ATOM * max_covalent_sum
-        )
-
-        if max_dist > max_reasonable_distance:
-            return False
-
-    min_covalent_sum = float("inf")
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            r_i = get_covalent_radius(symbols[i])
-            r_j = get_covalent_radius(symbols[j])
-            min_covalent_sum = min(min_covalent_sum, r_i + r_j)
-
-    min_allowed_distance: float = min_covalent_sum * MIN_DISTANCE_FACTOR_DEFAULT
-    return not (min_dist < min_allowed_distance)
-
-
 def _validate_and_add_template(
     atoms: Atoms,
     results: list[Atoms],
@@ -1710,9 +1646,6 @@ def _validate_and_add_template(
     if logger_instance is None:
         logger_instance = logger
 
-    if not _validate_template_geometry(atoms):
-        return False
-
     validated_atoms, is_valid, error_message = validate_cluster(
         atoms,
         composition=None,
@@ -1727,6 +1660,7 @@ def _validate_and_add_template(
 
     if is_valid:
         _set_template_info(validated_atoms, template_type)
+        validated_atoms.info["scgo_validation_complete"] = True
         results.append(validated_atoms)
         return True
     else:

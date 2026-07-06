@@ -19,11 +19,12 @@ from ase.calculators.calculator import Calculator
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.optimize.optimize import Optimizer
 from ase.vibrations import Vibrations
-from ase_ga.standard_comparators import SequentialComparator
 from scipy.spatial import KDTree
 
 from scgo.constants import (
+    DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
+    DEFAULT_PAIR_COR_MAX,
     MIN_ATOMIC_DISTANCE_WARNING,
     PENALTY_ENERGY,
 )
@@ -593,6 +594,8 @@ def filter_unique_minima(
     *,
     n_top: int,
     mic: bool = False,
+    comparator_tol: float = DEFAULT_COMPARATOR_TOL,
+    comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
 ) -> list[tuple[float, Atoms]]:
     """Filters a list of (energy, Atoms) tuples to identify unique structures.
 
@@ -624,12 +627,13 @@ def filter_unique_minima(
         kvp = atoms.info.setdefault("key_value_pairs", {})
         kvp.setdefault("raw_score", -float(energy))
 
-    # Import here to avoid circular dependency
-    from scgo.algorithms.ga_common import create_structure_comparator
+    from scgo.utils.comparators import PureInteratomicDistanceComparator
 
-    comparer: SequentialComparator = create_structure_comparator(
-        n_top,
-        energy_tolerance,
+    comparer = PureInteratomicDistanceComparator(
+        n_top=n_top,
+        tol=comparator_tol,
+        pair_cor_max=comparator_pair_cor_max,
+        dE=energy_tolerance,
         mic=mic,
     )
 

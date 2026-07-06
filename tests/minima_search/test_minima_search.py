@@ -843,3 +843,51 @@ def test_sanitize_global_optimizer_kwargs_for_metadata_surface_config():
     assert clean["surface_config"]["cluster_init_vacuum"] == 8.0
     assert clean["surface_config"]["init_mode"] == "smart"
     assert clean["surface_config"]["max_placement_attempts"] == 200
+
+
+def test_run_trials_passes_hessian_params_to_is_true_minimum(
+    tmp_path, monkeypatch, rng
+):
+    """Preset Hessian knobs must reach is_true_minimum when validation is enabled."""
+    from ase.calculators.emt import EMT
+
+    captured: dict[str, object] = {}
+
+    def _fake_is_true_minimum(*, atoms, calculator, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(main_mod, "is_true_minimum", _fake_is_true_minimum)
+
+    def _fake_scgo(*_args, **_kwargs):
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
+        atoms.calc = EMT()
+        energy = float(atoms.get_potential_energy())
+        return [(energy, atoms)]
+
+    monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+    monkeypatch.setattr(
+        main_mod, "filter_unique_minima", lambda candidates, **_: candidates
+    )
+
+    outdir = str(tmp_path / "searches")
+    run_trials(
+        composition=["Pt", "Pt"],
+        global_optimizer="bh",
+        global_optimizer_kwargs={
+            "niter": 1,
+            "system_type": "gas_cluster",
+        },
+        output_dir=outdir,
+        calculator_for_global_optimization=EMT(),
+        validate_with_hessian=True,
+        check_hessian=False,
+        fmax_threshold=0.02,
+        imag_freq_threshold=25.0,
+        rng=rng,
+        clean=True,
+    )
+
+    assert captured.get("check_hessian") is False
+    assert captured.get("fmax_threshold") == 0.02
+    assert captured.get("imag_freq_threshold") == 25.0

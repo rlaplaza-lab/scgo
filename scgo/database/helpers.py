@@ -39,8 +39,6 @@ from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock, retry_with_back
 from scgo.utils.helpers import (
     ensure_directory_exists,
     ensure_final_id,
-    extract_energy_from_atoms,
-    extract_minima_from_database,
     get_cluster_formula,
     get_composition_counts,
 )
@@ -53,7 +51,7 @@ logger = get_logger(__name__)
 def _ensure_database_indices(
     db_path: str,
     *,
-    enable_expression_indexes: bool = False,
+    enable_expression_indexes: bool = True,
     enable_wal_mode: bool = False,
 ) -> None:
     """Create SQLite indices for performance.
@@ -186,7 +184,7 @@ def setup_database(
     remove_existing: bool = True,
     remove_aux_files: bool = False,
     enable_wal_mode: bool = False,
-    enable_expression_indexes: bool = False,
+    enable_expression_indexes: bool = True,
     run_id: str | None = None,
 ) -> DataConnection:
     """Create/open an ASE `DataConnection` for `db_filename` in `output_dir`.
@@ -419,29 +417,15 @@ def extract_minima_from_database_file(
 
     with get_connection(db_path) as da:
         try:
-            candidates = [
-                atoms
-                for _, atoms in _iter_relaxed_minima_from_da(
-                    da, Path(db_path), chunk_size=100
-                )
-            ]
-            minima = extract_minima_from_database(candidates)
-
-            # Transition-state rows live in the same relaxed table; never treat them as minima.
-            minima = [
-                (e, at)
-                for e, at in minima
-                if not get_metadata(at, "is_transition_state", False)
-            ]
-
-            final_minima = [
-                (e, at)
-                for (e, at) in minima
-                if get_metadata(at, "final_unique_minimum", False)
-            ]
-
-            # require_final=True: final_unique_minimum only; False: all relaxed (non-TS) rows
-            use_minima = final_minima if require_final else minima
+            use_minima: list[tuple[float, Atoms]] = []
+            for energy, atoms in _iter_relaxed_minima_from_da(
+                da,
+                Path(db_path),
+                chunk_size=100,
+                require_final_minimum=require_final,
+                exclude_transition_states=True,
+            ):
+                use_minima.append((energy, atoms))
 
             if require_final and not use_minima:
                 logger.debug(
@@ -519,18 +503,13 @@ def extract_transition_states_from_database_file(
     with get_connection(db_path) as da:
         try:
             out: list[tuple[float, Atoms]] = []
-            for _, atoms in _iter_relaxed_minima_from_da(
-                da, Path(db_path), chunk_size=100
+            for energy, atoms in _iter_relaxed_minima_from_da(
+                da,
+                Path(db_path),
+                chunk_size=100,
+                require_transition_state=True,
+                require_final_ts=require_final_unique_ts,
             ):
-                if not get_metadata(atoms, "is_transition_state", False):
-                    continue
-                if require_final_unique_ts and not get_metadata(
-                    atoms, "final_unique_ts", False
-                ):
-                    continue
-                energy = extract_energy_from_atoms(atoms)
-                if energy is None:
-                    continue
                 out.append((float(energy), atoms))
 
             out.sort(key=lambda x: x[0])

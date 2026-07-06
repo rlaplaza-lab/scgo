@@ -172,10 +172,6 @@ def combine_seeds(
             )
             return None
 
-        from .geometry_helpers import clear_convex_hull_cache
-
-        clear_convex_hull_cache()
-
     combined_atoms.set_cell([cell_side, cell_side, cell_side])
     combined_atoms.center()
 

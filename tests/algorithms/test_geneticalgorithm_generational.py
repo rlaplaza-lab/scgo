@@ -257,6 +257,7 @@ def test_offspring_build_context_picklable(rng):
         current_mutation_probability=0.3,
         operators_list=operators_list,
         name_map=name_map,
+        operators_epoch=0,
     )
     pickle.loads(pickle.dumps(ctx))
 

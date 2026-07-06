@@ -4,6 +4,8 @@ This module centralizes test configuration values to avoid duplication
 across test files and make it easier to adjust test parameters globally.
 """
 
+import os
+
 # Random seed configurations for reproducibility testing
 REPRODUCIBILITY_SEEDS = [42, 123, 456, 789, 1001, 2022, 3033, 4044, 5055, 6066]
 
@@ -31,7 +33,7 @@ MIXED_COMPOSITIONS = {
 INITIALIZATION_MODES = ["random_spherical", "seed+growth", "template", "smart"]
 
 # Batch testing configurations
-BATCH_TEST_SAMPLES = 100  # Number of samples for batch tests
+BATCH_TEST_SAMPLES = int(os.environ.get("SCGO_BATCH_TEST_SAMPLES", "100"))
 BATCH_TEST_SAMPLES_SLOW = 15  # For slow batch tests
 UNIQUENESS_THRESHOLD = 0.8  # Minimum uniqueness ratio (80%)
 

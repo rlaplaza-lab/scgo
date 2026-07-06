@@ -322,3 +322,38 @@ def test_create_deposited_cluster_batch_preserves_adsorbate_symbol_order_with_tw
     assert len(batch) == 5
     for atoms in batch:
         assert atoms.get_chemical_symbols()[n_slab:] == composition
+
+
+def test_parallel_batch_updates_shared_site_counts(monkeypatch, pt_slab):
+    """Parallel batch init must pass and update batch_site_counts like sequential."""
+    composition = ["Pt"]
+    blmin = _build_surface_blmin(pt_slab, composition)
+    cfg = _surface_config(pt_slab, max_placement_attempts=20)
+    site_counts = {"vertex": 0, "edge": 0, "facet": 0}
+    call_count = {"n": 0}
+
+    def _fake_create_deposited_cluster(*_args, **kwargs):
+        call_count["n"] += 1
+        assert kwargs.get("batch_site_counts") is site_counts
+        mobile = Atoms("Pt", positions=[[0, 0, 3.0]])
+        combined = pt_slab + mobile
+        combined.info["adsorbate_site_type"] = "vertex"
+        return combined
+
+    monkeypatch.setattr(
+        deposition_module, "create_deposited_cluster", _fake_create_deposited_cluster
+    )
+
+    batch = create_deposited_cluster_batch(
+        composition,
+        pt_slab,
+        blmin,
+        n_structures=3,
+        rng=default_rng(7),
+        config=cfg,
+        n_jobs=2,
+        batch_site_counts=site_counts,
+    )
+    assert len(batch) == 3
+    assert call_count["n"] >= 3
+    assert site_counts["vertex"] == 3

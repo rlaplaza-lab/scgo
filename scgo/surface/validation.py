@@ -203,12 +203,17 @@ def _validate_mobile_connectivity_policy(
     use_mic: bool,
     allow_cluster_fragmentation: bool,
     allow_adsorbate_surface_detachment: bool,
+    surface_normal_axis: int = 2,
 ) -> tuple[bool, str]:
     """Enforce mobile-region connectivity rules and per-subgroup slab contact."""
     n_ads = len(mobile)
     if n_ads < 2:
         return _check_mobile_touches_slab(
-            combined, n_slab, connectivity_factor=connectivity_factor, use_mic=use_mic
+            combined,
+            n_slab,
+            connectivity_factor=connectivity_factor,
+            use_mic=use_mic,
+            surface_normal_axis=surface_normal_axis,
         )
 
     components, _ = _find_connected_components(
@@ -227,7 +232,11 @@ def _validate_mobile_connectivity_policy(
                 "to permit splits)",
             )
         return _check_mobile_touches_slab(
-            combined, n_slab, connectivity_factor=connectivity_factor, use_mic=use_mic
+            combined,
+            n_slab,
+            connectivity_factor=connectivity_factor,
+            use_mic=use_mic,
+            surface_normal_axis=surface_normal_axis,
         )
 
     core_like: list[list[int]] = []
@@ -277,22 +286,47 @@ def _validate_mobile_connectivity_policy(
     return True, ""
 
 
+def _slab_surface_layer_indices(
+    combined: Atoms,
+    n_slab: int,
+    *,
+    surface_normal_axis: int,
+    thickness: float = 2.5,
+) -> list[int]:
+    """Indices of slab atoms within ``thickness`` Å of the top surface."""
+    pos = combined.get_positions()
+    if n_slab <= 0 or len(pos) < n_slab:
+        return list(range(n_slab))
+    slab_pos = pos[:n_slab]
+    top = float(np.max(slab_pos[:, surface_normal_axis]))
+    mask = slab_pos[:, surface_normal_axis] >= top - thickness
+    indices = [i for i in range(n_slab) if mask[i]]
+    return indices if indices else list(range(n_slab))
+
+
 def _check_mobile_touches_slab(
     combined: Atoms,
     n_slab: int,
     *,
     connectivity_factor: float,
     use_mic: bool,
+    surface_normal_axis: int = 2,
 ) -> tuple[bool, str]:
     """True when at least one mobile atom is within bonding distance of the slab."""
     n = len(combined)
     symbols = combined.get_chemical_symbols()
+    slab_indices = _slab_surface_layer_indices(
+        combined,
+        n_slab,
+        surface_normal_axis=surface_normal_axis,
+    )
+    slab_radii = [get_covalent_radius(symbols[j]) for j in slab_indices]
     touches = False
     min_cross = float("inf")
     for i in range(n_slab, n):
         r_i = get_covalent_radius(symbols[i])
-        for j in range(n_slab):
-            r_j = get_covalent_radius(symbols[j])
+        for j_idx, j in enumerate(slab_indices):
+            r_j = slab_radii[j_idx]
             threshold = (r_i + r_j) * connectivity_factor
             d = float(combined.get_distance(i, j, mic=use_mic))
             min_cross = min(min_cross, d)
@@ -431,4 +465,5 @@ def validate_supported_cluster_deposit(
         use_mic=use_mic,
         allow_cluster_fragmentation=allow_cluster_fragmentation,
         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        surface_normal_axis=surface_normal_axis,
     )

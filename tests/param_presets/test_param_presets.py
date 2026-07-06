@@ -349,6 +349,7 @@ def test_production_style_mace_go_ts_surface_has_surface_config(monkeypatch):
     )
 
 
+@pytest.mark.slow
 def test_get_torchsim_ga_params_relaxer_uses_calculator_mace_model_name():
     """TorchSim relaxer must use the same MACE name as ``calculator_kwargs``."""
     pytest.importorskip("torch")
@@ -365,6 +366,7 @@ def test_get_torchsim_ga_params_relaxer_uses_calculator_mace_model_name():
     assert relaxer.mace_model_name == "mace_mp_small"
 
 
+@pytest.mark.slow
 def test_get_torchsim_ga_params_default_relaxer_matches_default_model():
     pytest.importorskip("torch")
     pytest.importorskip("mace")

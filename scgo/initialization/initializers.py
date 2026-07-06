@@ -58,7 +58,7 @@ from .initialization_config import (
 )
 from .random_spherical import grow_from_seed, random_spherical
 from .seed_combiners import combine_and_grow
-from .strategy_allocation import _allocate_strategies_metropolis
+from .strategy_allocation import _allocate_initialization_strategies
 from .templates import generate_template_matches
 
 TEMPLATE_ROTATIONS_CACHE_NS = "template_rotations"
@@ -218,13 +218,8 @@ def _calculate_template_weight(
     Returns:
         Weight for this template type
     """
-    # Extract base weight from TEMPLATE_BASE_WEIGHTS dict
-    # TEMPLATE_BASE_WEIGHTS is dict[str, dict[str, float]], so we need to get the "base" value
-    weight_config = TEMPLATE_BASE_WEIGHTS.get(template_type, {})
-    if isinstance(weight_config, dict):
-        base_weight = weight_config.get("base", 1.0)
-    else:
-        base_weight = 1.0
+    # Extract base weight from TEMPLATE_BASE_WEIGHTS
+    base_weight = TEMPLATE_BASE_WEIGHTS.get(template_type, 1.0)
 
     # Boost less common template types for diversity
     type_count = template_type_counts.get(template_type, 0)
@@ -962,7 +957,7 @@ def _discover_available_strategies(
     n_seed_formulas = len(candidates_by_formula)
     n_seed_combinations = len(valid_combinations)
 
-    # Note: Discovery info logging moved to _allocate_strategies_metropolis
+    # Note: Discovery info logging moved to _allocate_initialization_strategies
     # to avoid duplicate messages when create_initial_cluster is called
     # before batch generation (e.g., for creating a template structure)
 
@@ -1014,15 +1009,18 @@ def _try_strategies_in_order(
         try:
             result = strategy_func()
             if result is not None:
-                validated_atoms, _, _ = validate_cluster(
-                    result,
-                    composition=composition,
-                    min_distance_factor=min_distance_factor,
-                    connectivity_factor=connectivity_factor,
-                    sort_atoms=True,
-                    raise_on_failure=True,
-                    source=strategy_name,
-                )
+                if result.info.get("scgo_validation_complete"):
+                    validated_atoms = result
+                else:
+                    validated_atoms, _, _ = validate_cluster(
+                        result,
+                        composition=composition,
+                        min_distance_factor=min_distance_factor,
+                        connectivity_factor=connectivity_factor,
+                        sort_atoms=True,
+                        raise_on_failure=True,
+                        source=strategy_name,
+                    )
                 if return_strategy:
                     fallback_from = (
                         primary_strategy if strategy_name != primary_strategy else None
@@ -1332,7 +1330,7 @@ def create_initial_cluster_batch(
             valid_combinations=valid_seed_combinations,
         )
 
-        allocations = _allocate_strategies_metropolis(
+        allocations = _allocate_initialization_strategies(
             n_structures=n_structures,
             templates=discovery["templates"],
             n_seed_formulas=discovery["n_seed_formulas"],

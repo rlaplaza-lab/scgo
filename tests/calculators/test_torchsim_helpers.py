@@ -7,6 +7,37 @@ is now a mandatory dependency, these tests expect it to be available.
 import pytest
 
 
+def test_infer_mace_model_name_from_calculator():
+    from ase.calculators.calculator import Calculator
+
+    from scgo.calculators.mace_helpers import infer_mace_model_name_from_calculator
+
+    class FakeMace(Calculator):
+        implemented_properties: list[str] = []
+
+        def __init__(self, model_name: str) -> None:
+            super().__init__(name=f"MACE-{model_name}")
+            self.model_name = model_name
+
+    calc = FakeMace("small")
+    assert infer_mace_model_name_from_calculator(calc) == "small"
+    calc.model_name = "mace_matpes_0"
+    assert infer_mace_model_name_from_calculator(calc) == "mace_matpes_0"
+
+
+def test_try_extract_torchsim_model_from_mace_calculator():
+    from unittest.mock import MagicMock
+
+    from scgo.calculators.mace_helpers import (
+        try_extract_torchsim_model_from_mace_calculator,
+    )
+
+    model = object()
+    calc = MagicMock()
+    calc._mace_calc = MagicMock(models=[model])
+    assert try_extract_torchsim_model_from_mace_calculator(calc) is model
+
+
 def test_torchsim_import_success():
     """TorchSim and PyTorch are available as core dependencies."""
     import torch

@@ -578,6 +578,8 @@ def select_scgo_minima_algorithm(
     if n_atoms <= 2 and simple_allowed:
         return "simple"
     if n_atoms == 3:
+        if policy.has_adsorbate:
+            return "ga"
         return "bh"
     return "ga"
 
@@ -718,6 +720,10 @@ def _run_go_trials(
             else get_calculator_class(params["calculator"])(**calculator_kwargs)
         ),
         validate_with_hessian=params.get("validate_with_hessian", False),
+        fmax_threshold=params.get("fmax_threshold", 0.05),
+        check_hessian=params.get("check_hessian", True),
+        imag_freq_threshold=params.get("imag_freq_threshold", 50.0),
+        validation_n_jobs=params.get("validation_n_jobs", 1),
         tag_final_minima=params.get("tag_final_minima", True),
         rng=rng,
         run_id=run_id,
