@@ -749,12 +749,16 @@ def assert_adsorption_height_in_bounds(
     n_slab: int,
     axis: int = 2,
     tolerance: float = ADSORPTION_HEIGHT_TOLERANCE_ANG,
+    mobile_slice: slice | None = None,
 ) -> None:
-    """Assert mobile atoms lie within an adsorption-height window above the slab top."""
+    """Assert selected mobile atoms lie within an adsorption-height window above the slab top."""
     from scgo.surface.deposition import slab_surface_extreme
 
     slab_top = slab_surface_extreme(slab, axis, upper=True)
-    mobile_positions = atoms.get_positions()[n_slab:]
+    positions = atoms.get_positions()
+    mobile_positions = (
+        positions[mobile_slice] if mobile_slice is not None else positions[n_slab:]
+    )
     assert len(mobile_positions) > 0, "No mobile atoms to check"
     for pos in mobile_positions:
         height = float(pos[axis] - slab_top)
