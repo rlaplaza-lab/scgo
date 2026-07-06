@@ -10,9 +10,10 @@ from ase_ga.utilities import closest_distances_generator
 from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.surface.config import SurfaceSystemConfig, describe_surface_config
-from scgo.surface.deposition import create_deposited_cluster, slab_surface_extreme
+from scgo.surface.deposition import create_deposited_cluster
 from scgo.surface.fragment_templates import build_default_fragment_template
 from scgo.system_types import validate_adsorbate_definition
+from tests.test_utils import assert_adsorption_height_in_bounds
 
 
 def _small_slab() -> SurfaceSystemConfig:
@@ -111,13 +112,14 @@ def test_hierarchical_deposition_ordering_and_slab_prefix():
     sym = out.get_chemical_symbols()
     assert sym[:n_slab] == list(slab.get_chemical_symbols())
     assert sym[n_slab:] == mobile
-    # Adsorbate region should lie above the slab on the normal axis
-    ax = cfg.surface_normal_axis
-    z_slab = slab_surface_extreme(slab, ax, upper=True)
-    z_min_ads = float(
-        np.min(out.get_positions()[n_slab:, ax]),
+    assert_adsorption_height_in_bounds(
+        out,
+        slab,
+        cfg.adsorption_height_min,
+        cfg.adsorption_height_max,
+        n_slab=n_slab,
+        axis=cfg.surface_normal_axis,
     )
-    assert z_min_ads >= z_slab + cfg.adsorption_height_min - 0.5
 
 
 def test_surface_deposition_accepts_empty_core_symbols():

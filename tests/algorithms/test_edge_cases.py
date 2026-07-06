@@ -108,7 +108,8 @@ def test_bh_extreme_temperature_zero(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
-    # Should still find some minima (at least the initial relaxed structure)
+    energies = [float(e) for e, _a in minima]
+    assert min(energies) <= energies[0] + 1e-6
 
 
 @pytest.mark.slow

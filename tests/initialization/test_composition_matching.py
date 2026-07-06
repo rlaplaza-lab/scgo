@@ -13,19 +13,19 @@ class TestExactCompositionMatching:
         """Test that single element composition matches exactly."""
         composition = ["Pt"] * 13
         atoms = create_initial_cluster(composition, rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
+        assert_cluster_valid(atoms, composition)
 
     def test_multi_element_exact_match(self, rng):
         """Test that multi-element composition matches exactly."""
         composition = ["Pt", "Au", "Pt", "Au", "Pt"]
         atoms = create_initial_cluster(composition, rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
+        assert_cluster_valid(atoms, composition)
 
     def test_complex_composition_exact_match(self, rng):
         """Test complex multi-element composition."""
         composition = ["Pt", "Au", "Pd", "Pt", "Au", "Pd", "Pt"]
         atoms = create_initial_cluster(composition, rng=rng)
-        assert_cluster_valid(atoms, composition, check_connectivity=False)
+        assert_cluster_valid(atoms, composition)
 
     def test_all_magic_numbers_exact_match(self, rng):
         """Test that all magic numbers produce exact composition."""
@@ -43,28 +43,28 @@ class TestExactCompositionMatching:
                 placement_radius_scaling=1.3,
             )
             if atoms is not None:
-                assert_cluster_valid(atoms, composition, check_connectivity=False)
+                assert_cluster_valid(atoms, composition)
 
     def test_multi_element_magic_number(self, rng):
         """Test multi-element composition at magic number."""
         composition = ["Pt", "Au"] * 6 + ["Pt"]  # 13 atoms: 7 Pt, 6 Au
         atoms = create_initial_cluster(composition, mode="template", rng=rng)
         if atoms is not None:
-            assert_cluster_valid(atoms, composition, check_connectivity=False)
+            assert_cluster_valid(atoms, composition)
 
     def test_template_composition_after_atom_removal(self, rng):
         """Test that templates preserve exact composition counts after atom removal."""
         target_composition = ["Pt", "Au"] * 6  # 12 atoms: 6 Pt, 6 Au
         atoms = create_initial_cluster(target_composition, mode="template", rng=rng)
         if atoms is not None:
-            assert_cluster_valid(atoms, target_composition, check_connectivity=False)
+            assert_cluster_valid(atoms, target_composition)
 
     def test_template_composition_after_atom_addition(self, rng):
         """Test that templates preserve exact composition counts after atom addition."""
         target_composition = ["Pt", "Au"] * 7 + ["Pt"]  # 15 atoms: 8 Pt, 7 Au
         atoms = create_initial_cluster(target_composition, mode="template", rng=rng)
         if atoms is not None:
-            assert_cluster_valid(atoms, target_composition, check_connectivity=False)
+            assert_cluster_valid(atoms, target_composition)
 
     def test_seed_growth_composition_after_cycling(self, rng):
         """Test that seed+growth preserves exact composition when composition is cycled."""
@@ -72,7 +72,7 @@ class TestExactCompositionMatching:
         target_composition = composition_pattern * 4  # 12 atoms: 8 Pt, 4 Au
         atoms = create_initial_cluster(target_composition, mode="seed+growth", rng=rng)
         if atoms is not None:
-            assert_cluster_valid(atoms, target_composition, check_connectivity=False)
+            assert_cluster_valid(atoms, target_composition)
 
 
 class TestCompositionCountAccuracy:
@@ -83,7 +83,7 @@ class TestCompositionCountAccuracy:
         pattern = ["Pt", "Pt", "Au"]
         target_composition = pattern * 3  # 9 atoms: 6 Pt, 3 Au
         atoms = create_initial_cluster(target_composition, rng=rng)
-        assert_cluster_valid(atoms, target_composition, check_connectivity=False)
+        assert_cluster_valid(atoms, target_composition)
         actual_counts = get_composition_counts(atoms.get_chemical_symbols())
         assert actual_counts["Pt"] == 6
         assert actual_counts["Au"] == 3
@@ -93,11 +93,11 @@ class TestCompositionCountAccuracy:
         target_pattern = ["Pt", "Au"] * 6  # 12 atoms: 6 Pt, 6 Au
         atoms = create_initial_cluster(target_pattern, mode="template", rng=rng)
         if atoms is not None:
-            assert_cluster_valid(atoms, target_pattern, check_connectivity=False)
+            assert_cluster_valid(atoms, target_pattern)
 
     def test_template_addition_preserves_exact_counts(self, rng):
         """Test that template atom addition preserves exact composition counts."""
         target_composition = ["Pt", "Au", "Pt"] * 5  # 15 atoms: 10 Pt, 5 Au
         atoms = create_initial_cluster(target_composition, mode="template", rng=rng)
         if atoms is not None:
-            assert_cluster_valid(atoms, target_composition, check_connectivity=False)
+            assert_cluster_valid(atoms, target_composition)

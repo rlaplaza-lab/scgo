@@ -16,6 +16,7 @@ from scgo.cluster_adsorbate import (
     relax_metal_cluster_with_adsorbate,
 )
 from scgo.utils.ts_provenance import CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION
+from tests.test_utils import assert_pt_o_distance_reasonable
 
 _OH_BOND = 0.96
 
@@ -102,6 +103,7 @@ def test_oh_relax_reports_connected_structure_emt() -> None:
     )
     assert prov["calculator_class"] == "EMT"
     assert prov["n_frag"] == 2
+    assert_pt_o_distance_reasonable(relaxed, pt_idx=0, o_idx=2)
 
 
 def test_relax_metal_cluster_with_adsorbate_oh_placement_emt() -> None:
@@ -126,6 +128,7 @@ def test_relax_metal_cluster_with_adsorbate_oh_placement_emt() -> None:
     assert np.isfinite(info["final_energy"])
     assert info["structure_ok_initial"] is True
     assert info["structure_ok_final"] is True
+    assert_pt_o_distance_reasonable(relaxed, pt_idx=0, o_idx=3)
 
 
 def test_preplaced_wrong_length_raises() -> None:

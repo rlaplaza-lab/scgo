@@ -1,5 +1,9 @@
 name: CI
 
+# Marker contract (pytest -m):
+#   PR + main fast:  not slow and not integration
+#   PR + main slow:  slow and not benchmark
+#   excluded:        benchmark, requires_cuda (no GPU runner)
 on:
   push:
     branches: [ main ]
@@ -61,9 +65,15 @@ jobs:
     strategy:
       matrix:
         include:
+          - python-version: "3.12"
+            pip-extras: "mace,dev"
+            suite: mace
           - python-version: "3.13"
             pip-extras: "mace,dev"
             suite: mace
+          - python-version: "3.12"
+            pip-extras: "uma,dev"
+            suite: uma
           - python-version: "3.13"
             pip-extras: "uma,dev"
             suite: uma
@@ -112,36 +122,38 @@ jobs:
               conn.close()
           PY
 
-      - name: Run fast tests (MACE)
-        if: matrix.suite == 'mace' && github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch'
+      - name: Audit pytest marker collection
+        run: |
+          python -m pytest tests/ --collect-only -q -m "not slow and not integration"
+          python -m pytest tests/ --collect-only -q -m "slow and not benchmark"
+
+      - name: Run fast tests
+        if: matrix.suite == 'mace'
         run: |
           pytest tests/ -n 2 -m "not slow and not integration" -v --cov=scgo --cov-report=xml --cov-report=term
 
-      - name: Run fast tests (MACE, main)
-        if: matrix.suite == 'mace' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+      - name: Run fast tests (UMA)
+        if: matrix.suite == 'uma'
         run: |
-          pytest tests/ -n 2 -m "not slow and not integration" -v --cov=scgo --cov-report=xml --cov-report=term
+          pytest tests/ -n 2 -m "not slow and not integration" -v
 
-      - name: Run slow tests (MACE, main)
-        if: matrix.suite == 'mace' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+      - name: Run slow tests
+        if: matrix.suite == 'mace'
         env:
           SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
           pytest tests/ -m "slow and not benchmark" -n 2 -v --cov=scgo --cov-report=xml --cov-report=term --cov-append
 
-      - name: Run UMA subset (no MACE/TorchSim)
+      - name: Run slow tests (UMA)
         if: matrix.suite == 'uma'
+        env:
+          SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
-          pytest tests/test_optional_extras_smoke.py \
-            tests/calculators/test_uma_helpers.py \
-            tests/param_presets/test_param_presets.py \
-            tests/param_presets/test_param_presets_and_run_helpers.py \
-            tests/utils/test_torchsim_policy.py \
-            -v
+          pytest tests/ -m "slow and not benchmark" -n 2 -v
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         if: matrix.suite == 'mace' && matrix.python-version == '3.13'
         with:
           files: ./coverage.xml
-          fail_ci_if_error: false
+          fail_ci_if_error: true

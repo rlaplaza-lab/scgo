@@ -52,10 +52,10 @@ From the repository root, ensure the package is on `PYTHONPATH` (editable instal
 
 ## Pytest
 
-[`pytest.ini`](../pytest.ini) excludes `benchmark/` from the default test path (`norecursedirs`). To run MLIP regression hooks:
+[`pytest.ini`](../pytest.ini) sets `testpaths = tests`, so `benchmark/` is **not** collected by default `pytest tests/`. MLIP regression hooks also require CUDA (`@pytest.mark.requires_cuda` on `benchmark_Pt.py`). To run them explicitly:
 
 ```bash
-pytest benchmark/ -m slow
+pytest benchmark/ -m "slow and requires_cuda"
 ```
 
 ## Environment

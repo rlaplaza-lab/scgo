@@ -487,6 +487,7 @@ def test__run_go_trials_deterministic_with_same_seed(tmp_path):
         assert np.allclose(a1.get_positions(), a2.get_positions())
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_output_directory_creation(tmp_path, rng):
     """Test that output directories are created correctly."""
@@ -531,6 +532,7 @@ def test_output_directory_creation(tmp_path, rng):
         assert xyz_file.name.endswith(".xyz")
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_write_timing_json_at_run_level(tmp_path, rng):
     """Timing JSON is written alongside metadata.json at run root."""

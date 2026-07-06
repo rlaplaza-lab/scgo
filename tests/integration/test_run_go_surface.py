@@ -7,12 +7,10 @@ when the chosen algorithm is ``ga`` — so use **at least four** adsorbate atoms
 
 from __future__ import annotations
 
-import numpy as np
-
 from scgo.param_presets import get_testing_params
 from scgo.runner_api import _run_go_trials
-from scgo.surface.deposition import slab_surface_extreme
 from scgo.utils.helpers import deep_merge_dicts
+from tests.test_utils import assert_adsorption_height_in_bounds
 
 
 def test__run_go_trials_passes_surface_config_when_ga_selected(
@@ -49,6 +47,11 @@ def test__run_go_trials_passes_surface_config_when_ga_selected(
     _e, best = minima[0]
     n_slab = len(slab)
     assert len(best) == n_slab + 4
-    z_top = slab_surface_extreme(slab, 2, upper=True)
-    ads_z = best.get_positions()[n_slab:, 2]
-    assert np.min(ads_z) > z_top - 0.2
+    assert_adsorption_height_in_bounds(
+        best,
+        slab,
+        surface_config_pt111.adsorption_height_min,
+        surface_config_pt111.adsorption_height_max,
+        n_slab=n_slab,
+        axis=surface_config_pt111.surface_normal_axis,
+    )

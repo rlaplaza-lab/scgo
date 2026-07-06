@@ -17,6 +17,8 @@ from scgo.initialization.atomic_radii import build_blmin, build_blmin_from_zs
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
 
+pytestmark = pytest.mark.slow
+
 MAX_MUTATION_ATTEMPTS = 40
 
 _GAS_ADSORBATE_OPS = (

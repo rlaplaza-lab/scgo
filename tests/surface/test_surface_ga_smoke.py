@@ -2,68 +2,80 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 from ase.calculators.emt import EMT
 from numpy.random import default_rng
 
 from scgo.algorithms import ga_go
-from scgo.surface.deposition import slab_surface_extreme
-from tests.test_utils import MockRelaxer
+from tests.test_utils import MockRelaxer, assert_adsorption_height_in_bounds
 
 
-def _assert_surface_ga_result(minima, slab, n_adsorbate: int) -> None:
+def _assert_surface_ga_result(minima, slab, surface_config, n_adsorbate: int) -> None:
     assert len(minima) >= 1
     _e, best = minima[0]
     n_slab = len(slab)
     assert len(best) == n_slab + n_adsorbate
-    z_top = slab_surface_extreme(slab, 2, upper=True)
-    ads_z = best.get_positions()[n_slab:, 2]
-    assert np.min(ads_z) > z_top - 0.2
+    assert_adsorption_height_in_bounds(
+        best,
+        slab,
+        surface_config.adsorption_height_min,
+        surface_config.adsorption_height_max,
+        n_slab=n_slab,
+        axis=surface_config.surface_normal_axis,
+    )
 
 
-@pytest.mark.parametrize(
-    ("relaxer_factory", "ga_overrides"),
-    [
-        pytest.param(None, {}, id="emt"),
-        pytest.param(
-            lambda: MockRelaxer(max_steps=1),
-            {
-                "niter": 1,
-                "population_size": 3,
-                "niter_local_relaxation": 20,
-                "batch_size": 2,
-            },
-            id="mock_relaxer",
-        ),
-    ],
-)
-def test_ga_go_surface_config_smoke(
+@pytest.mark.slow
+def test_ga_go_surface_config_smoke_emt(
     surface_config_pt111,
     minimal_ga_kwargs,
     tmp_path,
-    relaxer_factory,
-    ga_overrides,
 ):
-    """Minimal GA on a slab via direct ``ga_go`` (EMT or MockRelaxer)."""
+    """Minimal GA on a slab with real EMT relaxation."""
     slab = surface_config_pt111.slab
     rng = default_rng(42)
-    out = tmp_path / "surface_ga_smoke"
+    out = tmp_path / "surface_ga_smoke_emt"
     out.mkdir(parents=True, exist_ok=True)
-
-    kwargs = {**minimal_ga_kwargs, **ga_overrides}
-    relaxer = relaxer_factory() if relaxer_factory is not None else None
 
     minima = ga_go(
         composition=["Pt", "Pt"],
         output_dir=str(out),
         calculator=EMT(),
-        relaxer=relaxer,
         verbosity=0,
         rng=rng,
         system_type="surface_cluster",
         surface_config=surface_config_pt111,
-        **kwargs,
+        **minimal_ga_kwargs,
     )
+    _assert_surface_ga_result(minima, slab, surface_config_pt111, n_adsorbate=2)
 
-    _assert_surface_ga_result(minima, slab, n_adsorbate=2)
+
+def test_ga_go_surface_config_smoke_mock_relaxer(
+    surface_config_pt111,
+    minimal_ga_kwargs,
+    tmp_path,
+):
+    """Minimal GA on a slab with MockRelaxer (fast infrastructure smoke)."""
+    slab = surface_config_pt111.slab
+    rng = default_rng(42)
+    out = tmp_path / "surface_ga_smoke_mock"
+    out.mkdir(parents=True, exist_ok=True)
+
+    minima = ga_go(
+        composition=["Pt", "Pt"],
+        output_dir=str(out),
+        calculator=EMT(),
+        relaxer=MockRelaxer(max_steps=1),
+        verbosity=0,
+        rng=rng,
+        system_type="surface_cluster",
+        surface_config=surface_config_pt111,
+        niter=1,
+        population_size=3,
+        niter_local_relaxation=20,
+        batch_size=2,
+        offspring_fraction=minimal_ga_kwargs["offspring_fraction"],
+        early_stopping_niter=minimal_ga_kwargs.get("early_stopping_niter", 0),
+        n_jobs_population_init=minimal_ga_kwargs.get("n_jobs_population_init", 1),
+    )
+    _assert_surface_ga_result(minima, slab, surface_config_pt111, n_adsorbate=2)
