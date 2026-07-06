@@ -91,6 +91,7 @@ def write_kernel_metadata(
     code_file: Path,
     dataset_sources: list[str],
     timeout_seconds: int,
+    machine_shape: str,
 ) -> None:
     run_cmd(["kaggle", "kernels", "init", "-p", str(staging_dir)])
     metadata_path = staging_dir / "kernel-metadata.json"
@@ -106,6 +107,8 @@ def write_kernel_metadata(
     metadata["enable_tpu"] = False
     metadata["enable_internet"] = True
     metadata["dataset_sources"] = dataset_sources
+    if machine_shape:
+        metadata["machine_shape"] = machine_shape
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     push_cmd = ["kaggle", "kernels", "push", "-p", str(staging_dir)]
@@ -147,6 +150,11 @@ def main() -> int:
     parser.add_argument("--fetch-seconds", type=int, default=15)
     parser.add_argument("--timeout-seconds", type=int, default=10800)
     parser.add_argument("--log-dir", default="/tmp/kaggle-kernel-log")
+    parser.add_argument(
+        "--machine-shape",
+        default="NvidiaTeslaT4",
+        help="Kaggle GPU type (T4 required; P100 sm_60 is incompatible with cu124 torch)",
+    )
     args = parser.parse_args()
 
     code_file = Path(args.code_file)
@@ -165,6 +173,7 @@ def main() -> int:
         code_file=staged_code,
         dataset_sources=args.dataset,
         timeout_seconds=args.timeout_seconds,
+        machine_shape=args.machine_shape,
     )
 
     final_status = wait_for_kernel(args.slug, fetch_seconds=args.fetch_seconds)

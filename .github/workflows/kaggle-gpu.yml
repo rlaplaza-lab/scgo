@@ -96,6 +96,7 @@ jobs:
           python -m pip install --upgrade kaggle
           python .github/scripts/kaggle_run_kernel.py \
             --code-file .github/scripts/kaggle_gpu_runner.py \
+            --machine-shape NvidiaTeslaT4 \
             --fetch-seconds 15 \
             --timeout-seconds 10800
 

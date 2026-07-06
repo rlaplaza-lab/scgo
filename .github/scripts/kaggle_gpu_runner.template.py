@@ -288,6 +288,30 @@ def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
     )
 
 
+def _assert_cuda_usable(py: list[str]) -> None:
+    run(
+        [
+            *py,
+            "-c",
+            (
+                "import torch\n"
+                "if not torch.cuda.is_available():\n"
+                "    raise SystemExit('CUDA required')\n"
+                "name = torch.cuda.get_device_name()\n"
+                "cap = torch.cuda.get_device_capability()\n"
+                "print(f'GPU: {name}, capability sm_{cap[0]}{cap[1]}')\n"
+                "if cap[0] < 7:\n"
+                "    raise SystemExit(\n"
+                "        f'GPU {name} (sm_{cap[0]}{cap[1]}) is incompatible with the '\n"
+                "        'installed PyTorch CUDA build; use machine_shape NvidiaTeslaT4'\n"
+                "    )\n"
+                "torch.ones(1, device='cuda')\n"
+                "print('CUDA smoke test passed')\n"
+            ),
+        ]
+    )
+
+
 def main() -> int:
     try:
         _log_kaggle_inputs()
@@ -299,14 +323,7 @@ def main() -> int:
         run([*pip, "install", "--upgrade", "pip"])
         _install_torch_stack(py, pip)
         _install_scgo_mace(py, pip)
-
-        run(
-            [
-                *py,
-                "-c",
-                "import torch; assert torch.cuda.is_available(), 'CUDA required'",
-            ]
-        )
+        _assert_cuda_usable(py)
 
         env = os.environ.copy()
         env["SCGO_BATCH_TEST_SAMPLES"] = "15"
