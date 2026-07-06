@@ -99,4 +99,3 @@ def test_misaligned_vs_aligned_neb_max_energy(h2_reactant, h2_product) -> None:
         return max(img.get_potential_energy() for img in images)
 
     assert _max_energy(aligned) <= _max_energy(misaligned) + 0.05
-
