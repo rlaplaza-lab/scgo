@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
+from ase.calculators.emt import EMT
 
 from scgo import parse_composition_arg
 from scgo.minima_search import run_trials
@@ -154,14 +155,30 @@ def test_scgo_validations(rng):
         scgo(["Pt"], "ga", {}, "out_dir", None)
 
     # Invalid optimizer name
-    with pytest.raises(ValueError):
-        scgo(["Pt"], "invalid_optimizer", {}, "out_dir", rng)
+    with pytest.raises(ValueError, match="Unknown global_optimizer"):
+        from scgo.minima_search import scgo
+
+        scgo(
+            ["Pt"],
+            "invalid_optimizer",
+            {"system_type": "gas_cluster"},
+            "out_dir",
+            rng,
+            calculator_for_global_optimization=EMT(),
+        )
 
     # Invalid system_type in optimizer kwargs
     with pytest.raises(ValueError, match="system_type must be set"):
         from scgo.minima_search import scgo
 
-        scgo(["Pt"], "ga", {}, "out_dir", rng)
+        scgo(
+            ["Pt"],
+            "ga",
+            {},
+            "out_dir",
+            rng,
+            calculator_for_global_optimization=EMT(),
+        )
 
 
 def test_run_trials_validations(rng):

@@ -21,7 +21,7 @@ def test_accepts_path_when_parsed_is_subset_of_target():
     assert _could_path_contain_relevant_candidates(db_path, target)
 
 
-def test_accepts_path_when_composition_cannot_be_parsed_from_path():
+def test_rejects_path_when_composition_cannot_be_parsed_from_path():
     target = Counter({"Pt": 2})
     db_path = "some/flat/dir/minima.db"
-    assert _could_path_contain_relevant_candidates(db_path, target)
+    assert not _could_path_contain_relevant_candidates(db_path, target)

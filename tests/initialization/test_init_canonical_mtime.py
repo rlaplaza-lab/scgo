@@ -15,7 +15,7 @@ from scgo.initialization.initializers import _find_smaller_candidates
 
 
 def test_canonical_mtime_invalidation_and_refresh(tmp_path, pt2_atoms):
-    run_dir = tmp_path / "run_000"
+    run_dir = tmp_path / "Pt2_searches" / "run_000"
     run_dir.mkdir(parents=True)
     db_path = run_dir / "ga_go.db"
 

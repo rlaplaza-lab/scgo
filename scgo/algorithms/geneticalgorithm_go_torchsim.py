@@ -49,10 +49,6 @@ from scgo.ase_ga_patches.cutandsplicepairing import (
 )
 from scgo.ase_ga_patches.population import Population
 from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
-from scgo.calculators.mace_helpers import (
-    infer_mace_model_name_from_calculator,
-    try_extract_torchsim_model_from_mace_calculator,
-)
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import (
@@ -847,6 +843,11 @@ def ga_go(
                     max_atoms_to_try=expected_max_atoms,
                 )
             else:
+                from scgo.calculators.mace_helpers import (
+                    infer_mace_model_name_from_calculator,
+                    try_extract_torchsim_model_from_mace_calculator,
+                )
+
                 mace_model_name = infer_mace_model_name_from_calculator(calculator)
                 if not mace_model_name:
                     raise ValueError(

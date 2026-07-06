@@ -621,6 +621,7 @@ class TestCampaignFunctionValidationIntegration:
                 global_optimizer_kwargs={},
                 output_dir="out",
                 rng=rng,
+                calculator_for_global_optimization=EMT(),
             )
 
 

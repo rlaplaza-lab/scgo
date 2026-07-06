@@ -82,6 +82,15 @@ def _stamp_init_test_db(db_path: str | Path) -> None:
     stamp_scgo_database(db_path)
 
 
+def _discovery_db_path(
+    tmp_path: Path, formula_hint: str, filename: str = "cluster.db"
+) -> Path:
+    """Return a DB path whose parent directories encode composition for discovery."""
+    db_path = tmp_path / f"{formula_hint}_searches" / "run_001" / filename
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return db_path
+
+
 class TestBasicInitialization:
     """Tests for basic cluster initialization functionality."""
 
@@ -379,7 +388,7 @@ class TestCacheBehavior:
 
     def test_composition_cache_behavior(self, tmp_path, pt2_atoms):
         """Test composition cache behavior."""
-        db_path = tmp_path / "test.db"
+        db_path = _discovery_db_path(tmp_path, "Pt2")
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
@@ -454,7 +463,7 @@ class TestCacheBehavior:
 
     def test_concurrent_composition_cache_access(self, tmp_path, pt2_atoms):
         """Test that composition cache is thread-safe under concurrent access."""
-        db_path = tmp_path / "test.db"
+        db_path = _discovery_db_path(tmp_path, "Pt2")
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
@@ -600,7 +609,7 @@ class TestDatabaseIntegration:
     def test_find_smaller_candidates(self, tmp_path):
         """Test finding smaller candidates from database."""
         # Create test database
-        db_path = tmp_path / "test.db"
+        db_path = _discovery_db_path(tmp_path, "Pt3Au")
         with connect(db_path) as db:
             # Add a Pt2 structure
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
@@ -972,7 +981,7 @@ class TestFindSmallerCandidates:
 
     def test_empty_target(self, tmp_path):
         """Test finding candidates for empty target composition."""
-        db_path = tmp_path / "test.db"
+        db_path = _discovery_db_path(tmp_path, "Pt2")
         connect(str(db_path))
         candidates = _find_smaller_candidates([], str(db_path))
         assert candidates == {}
@@ -984,7 +993,7 @@ class TestFindSmallerCandidates:
 
     def test_finds_smaller_candidates(self, tmp_path):
         """Test finding valid smaller candidates."""
-        db_path = tmp_path / "test.db"
+        db_path = _discovery_db_path(tmp_path, "Pt2")
         with connect(str(db_path)) as db:
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
             # Mark this candidate as a final unique minimum so it is available
@@ -1005,7 +1014,7 @@ class TestFindSmallerCandidates:
 
     def test_filters_larger_candidates(self, tmp_path):
         """Test that candidates larger than target are filtered out."""
-        db_path = tmp_path / "large.db"
+        db_path = _discovery_db_path(tmp_path, "Pt5", "large.db")
         with connect(str(db_path)) as db:
             pt5 = Atoms("Pt5", positions=[[i * 2.5, 0, 0] for i in range(5)])
             db.write(pt5, relaxed=True, key_value_pairs={"raw_score": -25.0}, gaid=1)
@@ -1025,7 +1034,7 @@ class TestFindSmallerCandidates:
 
     def test_cache_invalidation(self, tmp_path, pt2_atoms):
         """Test cache invalidation on file changes."""
-        db_path = tmp_path / "test.db"
+        db_path = _discovery_db_path(tmp_path, "Pt2")
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             # not final - should not be considered by seed finder
@@ -1060,7 +1069,7 @@ class TestFindSmallerCandidates:
 
     def test_finds_smaller_candidates_requires_final_flag(self, tmp_path, pt2_atoms):
         """Ensure non-final relaxed candidates are ignored by seed finder."""
-        db_path = tmp_path / "test2.db"
+        db_path = _discovery_db_path(tmp_path, "Pt2", "test2.db")
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
@@ -1093,7 +1102,7 @@ class TestFindSmallerCandidates:
 
         # Create a fresh database file with a final-tagged candidate to verify
         # that final candidates are discoverable (avoids cache timing issues).
-        db3_path = tmp_path / "test2b.db"
+        db3_path = _discovery_db_path(tmp_path, "Pt2", "test2b.db")
         with connect(str(db3_path)) as db3:
             rf = Atoms("Pt2", positions=[[0, 0, 0], [3.0, 0, 0]])
             rf.info.setdefault("metadata", {})["final_unique_minimum"] = True

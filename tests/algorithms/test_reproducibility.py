@@ -434,9 +434,10 @@ def test_scgo_unknown_optimizer(tmp_path, rng):
         scgo(
             ["Pt", "Pt"],
             global_optimizer="unknown",
-            global_optimizer_kwargs={},
+            global_optimizer_kwargs={"system_type": "gas_cluster"},
             output_dir=outdir,
             rng=rng,
+            calculator_for_global_optimization=EMT(),
         )
 
 

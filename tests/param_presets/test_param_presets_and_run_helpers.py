@@ -24,6 +24,7 @@ from scgo.utils.run_helpers import (
     initialize_ts_params,
     log_configuration,
     log_params_resolution,
+    prepare_algorithm_kwargs,
     resolve_auto_params,
     resolve_diversity_params,
     validate_algorithm_params,
@@ -327,7 +328,7 @@ class TestResolveAutoParams:
         assert isinstance(resolved["niter_local_relaxation"], int)
         assert isinstance(resolved["population_size"], int)
 
-    def test_resolve_auto_params_surface_ga_floors_niter_local(self):
+    def test_prepare_algorithm_kwargs_surface_ga_floors_niter_local(self):
         from ase.build import fcc111
 
         from scgo.constants import SURFACE_GA_MIN_LOCAL_RELAX_STEPS
@@ -338,14 +339,22 @@ class TestResolveAutoParams:
         composition = ["Pt"] * 4
         base = {"surface_config": cfg}
         assert (
-            resolve_auto_params(
-                {**base, "niter_local_relaxation": "auto"}, composition, "ga"
+            prepare_algorithm_kwargs(
+                {**base, "niter_local_relaxation": "auto"},
+                {},
+                composition,
+                "ga",
+                system_type="surface_cluster",
             )["niter_local_relaxation"]
             >= SURFACE_GA_MIN_LOCAL_RELAX_STEPS
         )
         assert (
-            resolve_auto_params(
-                {**base, "niter_local_relaxation": 40}, composition, "ga"
+            prepare_algorithm_kwargs(
+                {**base, "niter_local_relaxation": 40},
+                {},
+                composition,
+                "ga",
+                system_type="surface_cluster",
             )["niter_local_relaxation"]
             == SURFACE_GA_MIN_LOCAL_RELAX_STEPS
         )

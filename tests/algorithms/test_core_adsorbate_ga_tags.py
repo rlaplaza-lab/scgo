@@ -94,6 +94,7 @@ def test_create_mutation_operators_two_block_tags_omit_distort() -> None:
     ads: AdsorbateDefinition = {
         "core_symbols": ["Pt", "Pt"],
         "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
     }
     tmpl = Atoms(symbols=comp, positions=np.zeros((4, 3)), pbc=False)
     blmin = closest_distances_generator(
