@@ -22,31 +22,43 @@ def redact_text(text: str) -> str:
     return redacted
 
 
-def _render_log(log_path: Path) -> str:
-    text = log_path.read_text(encoding="utf-8", errors="replace")
-    if not text.strip():
+def parse_kaggle_log(text: str) -> str:
+    text = text.strip()
+    if not text:
         return text
 
-    lines = text.splitlines()
+    entries: list[dict] = []
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, list):
+            entries = [item for item in payload if isinstance(item, dict)]
+        elif isinstance(payload, dict):
+            entries = [payload]
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        idx = 0
+        while idx < len(text):
+            while idx < len(text) and text[idx] in ", \n\r\t":
+                idx += 1
+            if idx >= len(text):
+                break
+            try:
+                obj, end = decoder.raw_decode(text, idx)
+            except json.JSONDecodeError:
+                return text
+            if isinstance(obj, dict):
+                entries.append(obj)
+            idx = end
+
+    if not entries:
+        return text
+
     chunks: list[str] = []
-    parsed_ndjson = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            chunks.append(line)
-            continue
-        parsed_ndjson = True
-        data = payload.get("data")
+    for entry in entries:
+        data = entry.get("data")
         if isinstance(data, str):
             chunks.append(data)
-
-    if parsed_ndjson:
-        return "".join(chunks)
-    return text
+    return "".join(chunks) if chunks else text
 
 
 def main() -> int:
@@ -79,18 +91,21 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    log_files = sorted(output_dir.rglob("*.log"))
+    log_files = sorted(output_dir.glob("*.log"))
+    if not log_files:
+        log_files = sorted(output_dir.rglob("*.log"))
     if not log_files:
         print(f"No .log files under {output_dir}", file=sys.stderr)
-        for path in sorted(output_dir.rglob("*")):
-            if path.is_file():
-                print(f"===== {path} =====")
-                print(redact_text(path.read_text(encoding="utf-8", errors="replace")))
         return 1
 
     for log_path in log_files:
-        print(f"===== {log_path.name} =====")
-        print(redact_text(_render_log(log_path)))
+        print(f"::group::Kaggle kernel log ({log_path.name})")
+        print(
+            redact_text(
+                parse_kaggle_log(log_path.read_text(encoding="utf-8", errors="replace"))
+            )
+        )
+        print("::endgroup::")
     return 0
 
 

@@ -16,7 +16,8 @@ REPO_URL = "https://github.com/rlaplaza-lab/scgo.git"
 GIT_REF = "__GIT_REF__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
 CONDA_ENV = "scgo-gpu"
-WORKDIR = Path("/kaggle/working/scgo")
+# Use /tmp so pytest/pip artifacts are not saved as Kaggle kernel output.
+WORKDIR = Path("/tmp/scgo")
 DATASET_INPUT = Path("/kaggle/input/scgocisrc")
 SOURCE_ARCHIVE = "scgo-src.tar.gz"
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu124"
@@ -188,12 +189,14 @@ def _fetch_repo_from_network() -> None:
     archive_url = (
         f"https://github.com/rlaplaza-lab/scgo/archive/refs/heads/{GIT_REF}.tar.gz"
     )
-    archive_path = Path("/kaggle/working/scgo-src.tar.gz")
+    archive_path = Path("/tmp/scgo-src-download.tar.gz")
     log(f"Downloading {archive_url}")
     urllib.request.urlretrieve(archive_url, archive_path)
-    extracted = Path(f"/kaggle/working/scgo-{GIT_REF}")
+    extracted = Path(f"/tmp/scgo-{GIT_REF}")
+    if extracted.exists():
+        shutil.rmtree(extracted)
     with tarfile.open(archive_path, "r:gz") as tar:
-        _safe_extractall(tar, Path("/kaggle/working"))
+        _safe_extractall(tar, Path("/tmp"))
     if not extracted.is_dir():
         raise FileNotFoundError(f"Expected extracted source at {extracted}")
     shutil.move(str(extracted), str(WORKDIR))
@@ -216,6 +219,17 @@ def main() -> int:
         py = _resolve_python()
         pip = [*py, "-m", "pip"]
         run([*pip, "install", "--upgrade", "pip"])
+        run(
+            [
+                *pip,
+                "install",
+                "--no-cache-dir",
+                "torch>=2.12.0,<2.13",
+                "torchvision",
+                "--index-url",
+                PYTORCH_CUDA_INDEX,
+            ]
+        )
         run(
             [
                 *pip,

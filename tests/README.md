@@ -68,7 +68,7 @@ Install dev extras: `pip install -e ".[mace,dev]"` or `pip install -e ".[uma,dev
 GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 
 1. GitHub → Actions → **Kaggle GPU tests** → **Run workflow**
-2. Leave defaults (`ref=main`, `marker=requires_cuda and not benchmark`) unless testing a branch
+2. Leave defaults (`ref=main`, `marker=requires_cuda and requires_mace and not benchmark`) unless testing a branch
 3. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
 
 The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. **Pip installs (MACE/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI.
@@ -79,7 +79,7 @@ Example-mimic GPU integration coverage: `tests/integration/test_gpu_examples_int
 
 ```bash
 # All GPU tests (skipped without CUDA)
-pytest tests/ -m "requires_cuda and not benchmark" -v
+pytest tests/ -m "requires_cuda and requires_mace and not benchmark" -v
 
 # Example-mimic GPU integration only
 pytest tests/integration/test_gpu_examples_integration.py -v
