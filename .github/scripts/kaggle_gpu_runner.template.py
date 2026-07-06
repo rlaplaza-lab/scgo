@@ -148,10 +148,29 @@ def _find_dataset_archive() -> Path | None:
     return matches[0] if matches else None
 
 
+def _dataset_tree_ready() -> bool:
+    return DATASET_INPUT.is_dir() and (DATASET_INPUT / "pyproject.toml").is_file()
+
+
+def _copy_dataset_tree() -> None:
+    if WORKDIR.exists():
+        shutil.rmtree(WORKDIR)
+    log(f"Copying bundled source tree from {DATASET_INPUT}")
+    shutil.copytree(
+        DATASET_INPUT,
+        WORKDIR,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+        dirs_exist_ok=True,
+    )
+
+
 def _fetch_repo_from_dataset() -> bool:
     archive = _find_dataset_archive()
     if archive is not None:
         _extract_dataset_archive(archive)
+        return True
+    if _dataset_tree_ready():
+        _copy_dataset_tree()
         return True
     return False
 
@@ -210,6 +229,65 @@ def _fetch_repo() -> None:
     _fetch_repo_from_network()
 
 
+def _install_torch_stack(py: list[str], pip: list[str]) -> None:
+    """Install CUDA torch on Kaggle where cu124 wheels may be 2.4–2.6 only."""
+    attempts = (
+        [
+            *pip,
+            "install",
+            "--no-cache-dir",
+            "torch>=2.12.0,<2.13",
+            "torchvision",
+            "--index-url",
+            PYTORCH_CUDA_INDEX,
+            "--extra-index-url",
+            PYPI_INDEX,
+        ],
+        [
+            *pip,
+            "install",
+            "--no-cache-dir",
+            "torch",
+            "torchvision",
+            "--index-url",
+            PYTORCH_CUDA_INDEX,
+        ],
+    )
+    for cmd in attempts:
+        log("+ " + " ".join(cmd))
+        completed = subprocess.run(cmd)
+        if completed.returncode == 0:
+            return
+        log(f"Torch install failed (exit {completed.returncode}); trying fallback")
+    raise subprocess.CalledProcessError(1, attempts[-1])
+
+
+def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
+    """Install SCGO + MACE without pyproject's torch>=2.12 pin (unavailable on Kaggle)."""
+    run([*pip, "install", "--no-cache-dir", "-e", ".", "--no-deps"])
+    run(
+        [
+            *pip,
+            "install",
+            "--no-cache-dir",
+            "ase>=3.22.0",
+            "ase-ga>=0.1.0",
+            "numpy>=2.2",
+            "scipy>=1.14,<3",
+            "tqdm>=4.60.0",
+            "e3nn==0.4.4",
+            "mace-torch==0.3.16",
+            "nvalchemi-toolkit-ops==0.3.1",
+            "nvidia-nccl-cu12>=2.28",
+            "torch-sim-atomistic[mace]==0.6.0",
+            "pytest>=7.0.0",
+            "pytest-xdist>=3.0.0",
+            "pytest-cov>=4.0.0",
+            "psutil>=7.0.0",
+        ]
+    )
+
+
 def main() -> int:
     try:
         _log_kaggle_inputs()
@@ -219,30 +297,8 @@ def main() -> int:
         py = _resolve_python()
         pip = [*py, "-m", "pip"]
         run([*pip, "install", "--upgrade", "pip"])
-        run(
-            [
-                *pip,
-                "install",
-                "--no-cache-dir",
-                "torch>=2.12.0,<2.13",
-                "torchvision",
-                "--index-url",
-                PYTORCH_CUDA_INDEX,
-            ]
-        )
-        run(
-            [
-                *pip,
-                "install",
-                "--no-cache-dir",
-                "-e",
-                ".[mace,dev]",
-                "--index-url",
-                PYTORCH_CUDA_INDEX,
-                "--extra-index-url",
-                PYPI_INDEX,
-            ]
-        )
+        _install_torch_stack(py, pip)
+        _install_scgo_mace(py, pip)
 
         run(
             [

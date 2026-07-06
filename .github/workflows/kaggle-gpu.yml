@@ -78,7 +78,7 @@ jobs:
           if ! kaggle datasets status rlaplaza/scgocisrc >/dev/null 2>&1; then
             kaggle datasets create -p scgo-dataset
           else
-            kaggle datasets version -p scgo-dataset -m "CI bundle for ${GIT_REF}" --dir-mode zip
+            kaggle datasets version -p scgo-dataset -m "CI bundle for ${GIT_REF}"
           fi
           echo "Waiting for dataset version to finish processing..."
           for attempt in $(seq 1 60); do
