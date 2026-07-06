@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 from ase import Atoms
 
-from scgo.calculators.mace_helpers import MACE, MaceUrls
 from scgo.calculators.orca_helpers import prepare_orca_calculations, write_orca_inputs
 from scgo.calculators.vasp_helpers import prepare_vasp_calculations, write_vasp_inputs
 from tests.test_utils import setup_test_atoms
@@ -223,17 +222,24 @@ class TestPrepareVaspCalculations:
         assert len(subdirs) == 2
 
 
+@pytest.mark.requires_mace
 class TestMaceHelpers:
     """Tests for MACE calculator helpers."""
 
     def test_mace_calculator_import(self):
+        from scgo.calculators.mace_helpers import MACE
+
         assert MACE is not None and callable(MACE)
 
     def test_mace_urls_enum(self):
+        from scgo.calculators.mace_helpers import MaceUrls
+
         assert hasattr(MaceUrls, "mace_mp_small") or hasattr(MaceUrls, "mace_matpes_0")
 
     @pytest.mark.slow
     def test_mace_calculator_initialization(self):
+        from scgo.calculators.mace_helpers import MACE
+
         try:
             calc = MACE(model="mace_mp_small")
         except (FileNotFoundError, OSError, RuntimeError) as e:

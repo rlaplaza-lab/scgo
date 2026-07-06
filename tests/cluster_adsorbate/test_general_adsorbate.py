@@ -144,6 +144,63 @@ def test_gas_adsorbate_subgraph_integrity_optional_flag() -> None:
     )
 
 
+def test_gas_adsorbate_subgraph_integrity_rejects_cross_fragment_bonding() -> None:
+    atoms = Atoms(
+        symbols=["Pt", "Pt", "O", "H", "H"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.4, 0.0, 0.0],
+            [1.2, 0.0, 1.5],  # O in OH fragment
+            [1.2, 0.0, 2.46],  # H in OH fragment (O-H ~= 0.96 A)
+            [2.0, 0.0, 1.5],  # separate H fragment but bonded to O (unwanted HOH)
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    adsorbate_definition = {
+        "core_symbols": ["Pt", "Pt"],
+        "adsorbate_symbols": ["O", "H", "H"],
+        "adsorbate_fragment_lengths": [2, 1],
+    }
+
+    with pytest.raises(ValueError, match="fragment 0 bonded to fragment 1"):
+        validate_structure_for_system_type(
+            atoms,
+            system_type="gas_cluster_adsorbate",
+            adsorbate_definition=adsorbate_definition,
+            enforce_adsorbate_subgraph_integrity=True,
+        )
+
+
+def test_gas_adsorbate_subgraph_integrity_allows_cross_fragment_bonding_when_disabled() -> (
+    None
+):
+    atoms = Atoms(
+        symbols=["Pt", "Pt", "O", "H", "H"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.4, 0.0, 0.0],
+            [1.2, 0.0, 1.5],
+            [1.2, 0.0, 2.46],
+            [2.0, 0.0, 1.5],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    adsorbate_definition = {
+        "core_symbols": ["Pt", "Pt"],
+        "adsorbate_symbols": ["O", "H", "H"],
+        "adsorbate_fragment_lengths": [2, 1],
+    }
+
+    validate_structure_for_system_type(
+        atoms,
+        system_type="gas_cluster_adsorbate",
+        adsorbate_definition=adsorbate_definition,
+        enforce_adsorbate_subgraph_integrity=False,
+    )
+
+
 def test_attach_adsorbate_internal_geometry_constraints_freezes_bonds() -> None:
     atoms = Atoms(
         symbols=["Pt", "Pt", "O", "H", "O", "H"],

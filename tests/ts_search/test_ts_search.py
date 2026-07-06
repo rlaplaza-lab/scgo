@@ -138,6 +138,7 @@ def test_interpolate_path_perturb_deterministic_with_rng(h2_reactant, h2_product
     assert np.allclose(imgs1[1].get_positions(), imgs2[1].get_positions())
 
 
+@pytest.mark.slow
 def test_find_transition_state_records_align_and_perturb(
     temp_output_dir, h2_reactant, h2_product
 ):
@@ -382,6 +383,7 @@ def test_select_structure_pairs_ignores_fixed_slab_atom_differences():
     assert (0, 2) in pairs
 
 
+@pytest.mark.slow
 def test_find_ts_simple(h2_reactant, h2_product, temp_output_dir):
     """Test basic TS finding with EMT calculator."""
     result = find_transition_state(
@@ -413,6 +415,7 @@ def test_find_ts_simple(h2_reactant, h2_product, temp_output_dir):
     assert result["n_images"] == 3
 
 
+@pytest.mark.slow
 def test_find_ts_with_climb(cu3_triangle, cu3_linear, temp_output_dir):
     """Test TS finding with climbing image NEB."""
     result = find_transition_state(
@@ -462,6 +465,7 @@ def test_find_transition_state_endpoint_failure_cu3(
         assert result.get("error") is not None
 
 
+@pytest.mark.slow
 def test_find_ts_linear_interpolation(h2_reactant, h2_product, temp_output_dir):
     """Test TS finding with linear interpolation instead of IDPP."""
     result = find_transition_state(
@@ -487,6 +491,7 @@ def test_find_ts_linear_interpolation(h2_reactant, h2_product, temp_output_dir):
         assert result.get("error") and "endpoint" in result.get("error").lower()
 
 
+@pytest.mark.slow
 def test_find_ts_saves_trajectory(h2_reactant, h2_product, temp_output_dir):
     """Test that NEB trajectory is saved."""
     traj_path = os.path.join(temp_output_dir, "custom_neb.traj")
@@ -752,6 +757,7 @@ def test_select_structure_pairs_physics_ranking_when_capped(monkeypatch):
     assert ranked == [(1, 2), (0, 2)]
 
 
+@pytest.mark.slow
 def test_find_ts_emt_basic(cu3_triangle, cu3_linear, temp_output_dir):
     """Test TS finding with EMT calculator on CPU.
 
@@ -783,6 +789,7 @@ def test_find_ts_emt_basic(cu3_triangle, cu3_linear, temp_output_dir):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_mace
 def test_find_ts_mace_cpu(cu3_triangle, cu3_linear, temp_output_dir):
     """Test TS finding with MACE on CPU (no TorchSim).
 
@@ -864,6 +871,7 @@ def test_find_ts_mace_gpu_torchsim(cu3_triangle, cu3_linear, temp_output_dir):
         assert "transition_state" in result
 
 
+@pytest.mark.requires_mace
 class TestTorchSimNEB:
     """TorchSim NEB with MACE (small clusters for fast tests)."""
 
@@ -975,6 +983,7 @@ def test_find_ts_allows_missing_endpoint_energies_when_use_torchsim(
     assert result.get("product_energy") == pytest.approx(-4.1234)
 
 
+@pytest.mark.slow
 def test_find_ts_high_spring_constant(
     h2_reactant, h2_product, temp_output_dir, default_rel_tol
 ):

@@ -499,6 +499,7 @@ def test_campaign_run_id_consistency(tmp_path):
     )
 
     params = {
+        "calculator": "EMT",
         "optimizer_params": {
             "bh": {"niter": 1, "niter_local_relaxation": 2},
         },

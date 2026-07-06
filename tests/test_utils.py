@@ -33,6 +33,13 @@ DIVERSITY_TEST_SAMPLES_MEDIUM = _tc.DIVERSITY_TEST_SAMPLES_MEDIUM
 DIVERSITY_TEST_SAMPLES_LARGE = _tc.DIVERSITY_TEST_SAMPLES_LARGE
 DIVERSITY_THRESHOLD_MIN = _tc.DIVERSITY_THRESHOLD_MIN
 DIVERSITY_THRESHOLD_DEFAULT = _tc.DIVERSITY_THRESHOLD_DEFAULT
+EMT_PT2_BOND_ANG = _tc.EMT_PT2_BOND_ANG
+EMT_PT2_BOND_TOL_ANG = _tc.EMT_PT2_BOND_TOL_ANG
+EMT_H2_BARRIER_EV = _tc.EMT_H2_BARRIER_EV
+NN_DISTANCE_BAND = _tc.NN_DISTANCE_BAND
+TS_FMAX_CONVERGED = _tc.TS_FMAX_CONVERGED
+ADSORPTION_HEIGHT_TOLERANCE_ANG = _tc.ADSORPTION_HEIGHT_TOLERANCE_ANG
+PT_O_DISTANCE_ANG = _tc.PT_O_DISTANCE_ANG
 
 
 class MockRelaxer:
@@ -654,6 +661,165 @@ def assert_cluster_valid(
         check_connectivity=check_connectivity,
     )
     assert is_valid is True, f"Cluster validation failed: {msg}"
+
+
+def assert_ts_result_valid(
+    result: dict[str, Any],
+    *,
+    barrier_range: tuple[float, float] = EMT_H2_BARRIER_EV,
+    require_interior_ts: bool = True,
+) -> None:
+    """Assert a NEB/TS result satisfies basic transition-state physics invariants."""
+    barrier = result.get("barrier_height")
+    assert barrier is not None, f"Missing barrier_height in result: {result}"
+    lo, hi = barrier_range
+    assert lo <= barrier <= hi, f"barrier_height {barrier} not in [{lo}, {hi}]"
+
+    ts_energy = result.get("ts_energy")
+    reactant_energy = result.get("reactant_energy")
+    product_energy = result.get("product_energy")
+    assert ts_energy is not None, f"Missing ts_energy in result: {result}"
+    if reactant_energy is not None and product_energy is not None:
+        assert ts_energy >= min(reactant_energy, product_energy) - 1e-6, (
+            f"TS energy {ts_energy} below endpoint minimum "
+            f"({reactant_energy}, {product_energy})"
+        )
+
+    if require_interior_ts:
+        assert result.get("status") == "success", (
+            f"Expected successful interior TS, got status={result.get('status')!r} "
+            f"error={result.get('error')!r}"
+        )
+        ts_idx = result.get("ts_image_index")
+        n_images = result.get("n_images")
+        assert ts_idx is not None and n_images is not None
+        assert 0 < int(ts_idx) < int(n_images), (
+            f"TS image index {ts_idx} not interior for n_images={n_images}"
+        )
+
+    if result.get("neb_converged"):
+        final_fmax = result.get("final_fmax")
+        assert final_fmax is not None
+        assert float(final_fmax) < TS_FMAX_CONVERGED, (
+            f"final_fmax {final_fmax} >= {TS_FMAX_CONVERGED} despite neb_converged"
+        )
+
+
+def assert_nn_distances_in_band(
+    atoms: Atoms,
+    *,
+    band: tuple[float, float] = NN_DISTANCE_BAND,
+) -> None:
+    """Assert each atom's nearest-neighbor distance is within a covalent-radii band."""
+    from scgo.initialization.atomic_radii import get_covalent_radius
+
+    symbols = atoms.get_chemical_symbols()
+    n_atoms = len(atoms)
+    if n_atoms < 2:
+        return
+
+    for i in range(n_atoms):
+        ri = get_covalent_radius(symbols[i])
+        best_j = None
+        best_d = float("inf")
+        for j in range(n_atoms):
+            if i == j:
+                continue
+            d = atoms.get_distance(i, j, mic=True)
+            if d < best_d:
+                best_d = d
+                best_j = j
+        assert best_j is not None
+        rj = get_covalent_radius(symbols[best_j])
+        expected = ri + rj
+        lo = band[0] * expected
+        hi = band[1] * expected
+        assert lo <= best_d <= hi, (
+            f"NN distance {best_d:.3f} Å for {symbols[i]}-{symbols[best_j]} "
+            f"outside [{lo:.3f}, {hi:.3f}] (expected sum radii {expected:.3f})"
+        )
+
+
+def assert_deposition_height_in_bounds(
+    atoms: Atoms,
+    slab: Atoms,
+    h_min: float,
+    h_max: float,
+    *,
+    n_slab: int,
+    axis: int = 2,
+    tolerance: float = ADSORPTION_HEIGHT_TOLERANCE_ANG,
+    mobile_slice: slice | None = None,
+) -> None:
+    """Assert **initial placement** heights lie in the deposition sampler window.
+
+    ``SurfaceSystemConfig.adsorption_height_min/max`` constrain how
+    :func:`~scgo.surface.deposition.create_deposited_cluster` samples the
+    cluster bottom above the slab top. They are not post-relaxation bounds:
+    GA and NEB may move atoms outside this window while remaining bound to
+    the surface. Use :func:`assert_supported_cluster_binding` after relaxation.
+    """
+    from scgo.surface.deposition import slab_surface_extreme
+
+    slab_top = slab_surface_extreme(slab, axis, upper=True)
+    positions = atoms.get_positions()
+    mobile_positions = (
+        positions[mobile_slice] if mobile_slice is not None else positions[n_slab:]
+    )
+    assert len(mobile_positions) > 0, "No mobile atoms to check"
+    for pos in mobile_positions:
+        height = float(pos[axis] - slab_top)
+        assert h_min - tolerance <= height <= h_max + tolerance, (
+            f"Deposition height {height:.3f} Å not in [{h_min}, {h_max}] ± {tolerance}"
+        )
+
+
+def assert_supported_cluster_binding(
+    atoms: Atoms,
+    surface_config,
+    *,
+    n_core_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+) -> None:
+    """Assert a relaxed slab+cluster remains chemisorbed and geometrically valid.
+
+    Checks surface contact, no penetration below the slab top, connectivity,
+    and (when fragment lengths are given) adsorbate fragment integrity.
+    """
+    from scgo.surface.validation import validate_supported_cluster_deposit
+
+    ok, msg = validate_supported_cluster_deposit(
+        atoms,
+        len(surface_config.slab),
+        surface_normal_axis=surface_config.surface_normal_axis,
+        use_mic=surface_config.comparator_use_mic,
+        n_core_mobile=n_core_mobile,
+        adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+    )
+    assert ok, msg
+
+
+# Backward-compatible alias; prefer assert_deposition_height_in_bounds.
+assert_adsorption_height_in_bounds = assert_deposition_height_in_bounds
+
+
+def assert_pt_o_distance_reasonable(
+    atoms: Atoms,
+    pt_idx: int,
+    o_idx: int,
+    *,
+    lo: float = PT_O_DISTANCE_ANG[0],
+    hi: float = PT_O_DISTANCE_ANG[1],
+) -> None:
+    """Assert Pt–O separation is within a chemically reasonable window."""
+    d = atoms.get_distance(pt_idx, o_idx, mic=True)
+    assert lo <= d <= hi, f"Pt–O distance {d:.3f} Å outside [{lo}, {hi}]"
 
 
 def assert_run_id_persisted(atoms: Atoms, expected_run_id: str) -> None:
