@@ -71,7 +71,7 @@ GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 2. Leave defaults (`ref=main`, `marker=requires_cuda and not benchmark`) unless testing a branch
 3. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
 
-The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle.
+The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. **Pip installs (MACE/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI.
 
 Example-mimic GPU integration coverage: `tests/integration/test_gpu_examples_integration.py` (all four `system_type` values from `examples/`).
 

@@ -138,34 +138,17 @@ jobs:
 
       - name: Dump Kaggle kernel log on failure
         if: failure()
+        continue-on-error: true
         env:
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_API_TOKEN: ${{ steps.kaggle_creds.outputs.api_token }}
         run: |
+          if [ -z "$KAGGLE_API_TOKEN" ]; then
+            echo "No normalized access token available for log download"
+            exit 0
+          fi
           python -m pip install --upgrade kaggle
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          raw = os.environ["KAGGLE_API_TOKEN"].strip()
-          kaggle_dir = Path.home() / ".kaggle"
-          kaggle_dir.mkdir(parents=True, exist_ok=True)
-
-          def normalize_token(value: str) -> str:
-              return value.replace("\n", "").replace("\r", "").strip()
-
-          if raw.startswith("{"):
-              data = json.loads(raw)
-              token = normalize_token(
-                  str(data.get("token") or data.get("api_token") or data.get("key") or "")
-              )
-          else:
-              token = normalize_token(raw)
-          if token.startswith("KGAT_"):
-              (kaggle_dir / "access_token").write_text(token, encoding="utf-8")
-          else:
-              raise SystemExit("Expected KGAT access token in KAGGLE_API_TOKEN secret")
-          PY
+          mkdir -p ~/.kaggle
+          printf '%s' "$KAGGLE_API_TOKEN" > ~/.kaggle/access_token
           chmod 600 ~/.kaggle/access_token
           kaggle kernels output scgogpuci -p /tmp/kaggle-log || true
           find /tmp/kaggle-log -type f -print -exec sh -c 'echo "===== $1 ====="; cat "$1"' _ {} \;
