@@ -137,7 +137,11 @@ def _could_path_contain_relevant_candidates(
     """Check if a path might contain candidates that are subsets of target."""
     path_comp = _parse_composition_from_path(path)
     if path_comp is None:
-        return True  # Cannot determine, assume it might
+        logger.debug(
+            "Cannot parse composition from path %s; skipping candidate discovery scan",
+            path,
+        )
+        return False
 
     path_counts = get_composition_counts(path_comp)
     return is_composition_subset(path_counts, target_counts)
