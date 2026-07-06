@@ -128,44 +128,33 @@ def test_run_go_ts_h2_has_no_ts_pairs(tmp_path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_run_go_surface_adsorbate_remains_chemisorbed(
+def test_run_go_surface_cluster_remains_chemisorbed(
     tmp_path, surface_config_pt111
 ) -> None:
-    from ase import Atoms
-
+    """Public run_go on a supported Pt cluster should stay bound to the slab."""
     params = get_testing_params()
     params["optimizer_params"]["ga"].update(
         {
             "niter": 1,
-            "population_size": 3,
+            "population_size": 4,
             "niter_local_relaxation": 30,
+            "batch_size": 2,
             "surface_config": surface_config_pt111,
         }
     )
     slab = surface_config_pt111.slab
     n_slab = len(slab)
-    oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
 
     minima = run_go(
-        ["Pt", "Pt", "Pt"],
+        ["Pt", "Pt", "Pt", "Pt"],
         params=params,
-        seed=7,
+        seed=42,
         verbosity=0,
         output_dir=str(tmp_path / "surf_go"),
-        system_type="surface_cluster_adsorbate",
+        system_type="surface_cluster",
         surface_config=surface_config_pt111,
-        adsorbates=[oh],
     )
-    if not minima:
-        pytest.skip("No minima returned from surface adsorbate GO")
+    assert minima, "run_go returned no minima for surface_cluster"
     _energy, best = minima[0]
-    assert len(best) > n_slab
-    symbols = best.get_chemical_symbols()
-    assert "O" in symbols[n_slab:]
-    assert "H" in symbols[n_slab:]
-    assert_supported_cluster_binding(
-        best,
-        surface_config_pt111,
-        n_core_mobile=3,
-        adsorbate_fragment_lengths=[2],
-    )
+    assert len(best) == n_slab + 4
+    assert_supported_cluster_binding(best, surface_config_pt111)

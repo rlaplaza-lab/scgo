@@ -1097,6 +1097,13 @@ def ga_go(
                 inserted_initial_population.append(cand)
         profile_timings["initial_unrelaxed_insert_s"] = perf_counter() - t0
 
+        if not inserted_initial_population:
+            logger.error(
+                "No valid initial GA population after validation (%d discarded)",
+                initial_discarded_count,
+            )
+            return []
+
         # Helper to write a relaxed batch into the database under a single connection
         def _write_relaxed_batch(batch, relaxed_results):
             nonlocal initial_ineligible_relaxed_count
