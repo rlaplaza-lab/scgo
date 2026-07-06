@@ -21,10 +21,32 @@ Shared assertions live in [`test_utils.py`](test_utils.py):
 
 - `assert_ts_result_valid` — interior TS image, barrier band, endpoint ordering
 - `assert_nn_distances_in_band` — covalent-radii-scaled NN distances
-- `assert_adsorption_height_in_bounds` — slab adsorption height window
+- `assert_deposition_height_in_bounds` — **placement-stage** height window from `SurfaceSystemConfig` (initial deposition only; not valid after GA/NEB)
+- `assert_supported_cluster_binding` — **post-relaxation** slab contact, no burial, connectivity, fragment integrity
 - `assert_pt_o_distance_reasonable` — Pt–O bond sanity
 
-Constants in [`constants.py`](constants.py) (`EMT_PT2_BOND_ANG`, `EMT_H2_BARRIER_EV`, etc.).
+Constants in [`constants.py`](constants.py) (`EMT_PT2_BOND_ANG`, `PT4_EMT_BARRIER_EV`, etc.).
+
+### Surface height checks (placement vs relaxation)
+
+`adsorption_height_min/max` constrain the **deposition sampler** in
+`create_deposited_cluster`: how far the cluster bottom is placed above the
+slab top. After GA or NEB, atoms may move outside that window while still
+being chemisorbed. Tests must use:
+
+- `assert_deposition_height_in_bounds` — mock-relaxer / fresh placement smoke tests
+- `assert_supported_cluster_binding` — real EMT relaxation and end-to-end GO
+
+Hierarchical core+fragment deposits use fragment placement on the cluster
+hull; validate with `assert_supported_cluster_binding`, not bare-slab height
+windows.
+
+### Optional MLIP extras on CI
+
+`requires_mace` marks tests that import the MACE stack at runtime. UMA CI
+jobs install only `uma` extras and exclude these tests by marker — not because
+the physics is optional, but because the calculators are mutually exclusive
+install targets on disk-limited runners.
 
 ## Local runs
 

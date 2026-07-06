@@ -7,7 +7,12 @@ import pytest
 
 from scgo.param_presets import get_testing_params, get_ts_search_params
 from scgo.runner_api import run_go, run_go_ts
-from tests.test_utils import assert_db_final_row
+from tests.constants import PT4_EMT_BARRIER_EV
+from tests.test_utils import (
+    assert_db_final_row,
+    assert_supported_cluster_binding,
+    assert_ts_result_valid,
+)
 
 
 def _emt_ts_params(**overrides) -> dict:
@@ -57,7 +62,8 @@ def test_run_go_pt2_produces_tagged_minima(tmp_path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_run_go_ts_pt4_produces_valid_barrier(tmp_path) -> None:
+def test_run_go_ts_pt4_finds_ts_candidate_pairs(tmp_path) -> None:
+    """End-to-end: Pt4 GO+TS workflow discovers at least one candidate pair."""
     go_params = get_testing_params()
     go_params["optimizer_params"]["ga"].update(
         {
@@ -80,16 +86,17 @@ def test_run_go_ts_pt4_produces_valid_barrier(tmp_path) -> None:
     assert isinstance(summary, dict)
     assert summary.get("ts_total_count", 0) >= 1
     ts_results = summary.get("ts_results") or []
-    valid = [
-        r
-        for r in ts_results
-        if isinstance(r, dict) and r.get("barrier_height") is not None
-    ]
-    assert valid, "No TS dicts with barrier_height"
-    barrier = float(valid[0]["barrier_height"])
-    assert 0.0 < barrier <= 10.0
-    assert valid[0].get("ts_energy") is not None
-    assert valid[0].get("status") in {"success", "failed"}
+    assert ts_results, "Expected TS result dicts"
+    for result in ts_results:
+        assert isinstance(result, dict)
+        assert "pair_id" in result
+        assert "status" in result
+        if result.get("status") == "success":
+            assert_ts_result_valid(
+                result,
+                barrier_range=PT4_EMT_BARRIER_EV,
+                require_interior_ts=True,
+            )
 
 
 @pytest.mark.slow
@@ -121,7 +128,9 @@ def test_run_go_ts_h2_has_no_ts_pairs(tmp_path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_run_go_surface_adsorbate_height_bounds(tmp_path, surface_config_pt111) -> None:
+def test_run_go_surface_adsorbate_remains_chemisorbed(
+    tmp_path, surface_config_pt111
+) -> None:
     from ase import Atoms
 
     params = get_testing_params()
@@ -154,3 +163,9 @@ def test_run_go_surface_adsorbate_height_bounds(tmp_path, surface_config_pt111) 
     symbols = best.get_chemical_symbols()
     assert "O" in symbols[n_slab:]
     assert "H" in symbols[n_slab:]
+    assert_supported_cluster_binding(
+        best,
+        surface_config_pt111,
+        n_core_mobile=3,
+        adsorbate_fragment_lengths=[2],
+    )

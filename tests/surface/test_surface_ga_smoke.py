@@ -7,22 +7,36 @@ from ase.calculators.emt import EMT
 from numpy.random import default_rng
 
 from scgo.algorithms import ga_go
-from tests.test_utils import MockRelaxer, assert_adsorption_height_in_bounds
+from tests.test_utils import (
+    MockRelaxer,
+    assert_deposition_height_in_bounds,
+    assert_supported_cluster_binding,
+)
 
 
-def _assert_surface_ga_result(minima, slab, surface_config, n_adsorbate: int) -> None:
+def _assert_surface_ga_result(
+    minima,
+    slab,
+    surface_config,
+    n_adsorbate: int,
+    *,
+    post_relaxation: bool,
+) -> None:
     assert len(minima) >= 1
     _e, best = minima[0]
     n_slab = len(slab)
     assert len(best) == n_slab + n_adsorbate
-    assert_adsorption_height_in_bounds(
-        best,
-        slab,
-        surface_config.adsorption_height_min,
-        surface_config.adsorption_height_max,
-        n_slab=n_slab,
-        axis=surface_config.surface_normal_axis,
-    )
+    if post_relaxation:
+        assert_supported_cluster_binding(best, surface_config)
+    else:
+        assert_deposition_height_in_bounds(
+            best,
+            slab,
+            surface_config.adsorption_height_min,
+            surface_config.adsorption_height_max,
+            n_slab=n_slab,
+            axis=surface_config.surface_normal_axis,
+        )
 
 
 @pytest.mark.slow
@@ -47,7 +61,13 @@ def test_ga_go_surface_config_smoke_emt(
         surface_config=surface_config_pt111,
         **minimal_ga_kwargs,
     )
-    _assert_surface_ga_result(minima, slab, surface_config_pt111, n_adsorbate=2)
+    _assert_surface_ga_result(
+        minima,
+        slab,
+        surface_config_pt111,
+        n_adsorbate=2,
+        post_relaxation=True,
+    )
 
 
 def test_ga_go_surface_config_smoke_mock_relaxer(
@@ -55,7 +75,7 @@ def test_ga_go_surface_config_smoke_mock_relaxer(
     minimal_ga_kwargs,
     tmp_path,
 ):
-    """Minimal GA on a slab with MockRelaxer (fast infrastructure smoke)."""
+    """Minimal GA on a slab with MockRelaxer (placement geometry preserved)."""
     slab = surface_config_pt111.slab
     rng = default_rng(42)
     out = tmp_path / "surface_ga_smoke_mock"
@@ -78,4 +98,10 @@ def test_ga_go_surface_config_smoke_mock_relaxer(
         early_stopping_niter=minimal_ga_kwargs.get("early_stopping_niter", 0),
         n_jobs_population_init=minimal_ga_kwargs.get("n_jobs_population_init", 1),
     )
-    _assert_surface_ga_result(minima, slab, surface_config_pt111, n_adsorbate=2)
+    _assert_surface_ga_result(
+        minima,
+        slab,
+        surface_config_pt111,
+        n_adsorbate=2,
+        post_relaxation=False,
+    )

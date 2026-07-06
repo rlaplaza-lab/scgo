@@ -58,3 +58,5 @@ NN_DISTANCE_BAND = (0.9, 1.3)
 TS_FMAX_CONVERGED = 0.15
 ADSORPTION_HEIGHT_TOLERANCE_ANG = 0.15
 PT_O_DISTANCE_ANG = (1.8, 2.4)
+# EMT barrier for Pt4 tetrahedron <-> planar isomerization (eV).
+PT4_EMT_BARRIER_EV = (0.05, 8.0)

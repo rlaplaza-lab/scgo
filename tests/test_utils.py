@@ -740,7 +740,7 @@ def assert_nn_distances_in_band(
         )
 
 
-def assert_adsorption_height_in_bounds(
+def assert_deposition_height_in_bounds(
     atoms: Atoms,
     slab: Atoms,
     h_min: float,
@@ -751,7 +751,14 @@ def assert_adsorption_height_in_bounds(
     tolerance: float = ADSORPTION_HEIGHT_TOLERANCE_ANG,
     mobile_slice: slice | None = None,
 ) -> None:
-    """Assert selected mobile atoms lie within an adsorption-height window above the slab top."""
+    """Assert **initial placement** heights lie in the deposition sampler window.
+
+    ``SurfaceSystemConfig.adsorption_height_min/max`` constrain how
+    :func:`~scgo.surface.deposition.create_deposited_cluster` samples the
+    cluster bottom above the slab top. They are not post-relaxation bounds:
+    GA and NEB may move atoms outside this window while remaining bound to
+    the surface. Use :func:`assert_supported_cluster_binding` after relaxation.
+    """
     from scgo.surface.deposition import slab_surface_extreme
 
     slab_top = slab_surface_extreme(slab, axis, upper=True)
@@ -763,8 +770,43 @@ def assert_adsorption_height_in_bounds(
     for pos in mobile_positions:
         height = float(pos[axis] - slab_top)
         assert h_min - tolerance <= height <= h_max + tolerance, (
-            f"Adsorbate height {height:.3f} Å not in [{h_min}, {h_max}] ± {tolerance}"
+            f"Deposition height {height:.3f} Å not in [{h_min}, {h_max}] ± {tolerance}"
         )
+
+
+def assert_supported_cluster_binding(
+    atoms: Atoms,
+    surface_config,
+    *,
+    n_core_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+) -> None:
+    """Assert a relaxed slab+cluster remains chemisorbed and geometrically valid.
+
+    Checks surface contact, no penetration below the slab top, connectivity,
+    and (when fragment lengths are given) adsorbate fragment integrity.
+    """
+    from scgo.surface.validation import validate_supported_cluster_deposit
+
+    ok, msg = validate_supported_cluster_deposit(
+        atoms,
+        len(surface_config.slab),
+        surface_normal_axis=surface_config.surface_normal_axis,
+        use_mic=surface_config.comparator_use_mic,
+        n_core_mobile=n_core_mobile,
+        adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+    )
+    assert ok, msg
+
+
+# Backward-compatible alias; prefer assert_deposition_height_in_bounds.
+assert_adsorption_height_in_bounds = assert_deposition_height_in_bounds
 
 
 def assert_pt_o_distance_reasonable(

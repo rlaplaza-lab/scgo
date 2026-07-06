@@ -112,11 +112,25 @@ def validate_adsorbate_fragment_integrity(
         for j in range(i + 1, len(fragment_index_ranges)):
             fragment_j = fragment_index_ranges[j]
             for idx_i in fragment_i:
-                radius_i = get_covalent_radius(symbols[idx_i])
+                sym_i = symbols[idx_i]
+                radius_i = get_covalent_radius(sym_i)
                 for idx_j in fragment_j:
-                    radius_j = get_covalent_radius(symbols[idx_j])
-                    threshold = (radius_i + radius_j) * connectivity_factor
+                    sym_j = symbols[idx_j]
+                    radius_j = get_covalent_radius(sym_j)
                     distance = float(atoms.get_distance(idx_i, idx_j, mic=use_mic))
+                    if sym_i == "H" or sym_j == "H":
+                        # Allow hydrogen-bond distances between fragments; reject
+                        # only covalent H-X contacts (e.g. unwanted HOH formation).
+                        if distance <= 1.15:
+                            return (
+                                False,
+                                "Adsorbate fragment integrity check failed: "
+                                f"fragment {i} bonded to fragment {j} "
+                                f"(atoms {idx_i}-{idx_j}, distance={distance:.3f} Å, "
+                                "covalent H-contact threshold=1.15 Å).",
+                            )
+                        continue
+                    threshold = (radius_i + radius_j) * connectivity_factor
                     if distance <= threshold:
                         return (
                             False,

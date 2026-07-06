@@ -12,10 +12,14 @@ from numpy.random import default_rng
 from scgo.cluster_adsorbate import ClusterAdsorbateConfig, place_fragment_on_cluster
 from scgo.cluster_adsorbate.placement import radii_derived_height_bounds
 from scgo.initialization import create_initial_cluster
-from scgo.ts_search.transition_state import interpolate_path
+from scgo.ts_search.transition_state import find_transition_state, interpolate_path
 from scgo.utils.helpers import perform_local_relaxation
-from tests.constants import EMT_PT2_BOND_ANG, EMT_PT2_BOND_TOL_ANG
-from tests.test_utils import assert_nn_distances_in_band
+from tests.constants import (
+    EMT_PT2_BOND_ANG,
+    EMT_PT2_BOND_TOL_ANG,
+    PT4_EMT_BARRIER_EV,
+)
+from tests.test_utils import assert_nn_distances_in_band, assert_ts_result_valid
 
 
 def _oh_template() -> Atoms:
@@ -72,6 +76,70 @@ def test_oh_placement_height_within_bounds() -> None:
     o_idx = len(core)
     min_pt_o = min(combined.get_distance(o_idx, i) for i in range(len(core)))
     assert h_min - 0.15 <= min_pt_o <= h_max + 0.15
+
+
+def _pt4_square_planar() -> Atoms:
+    return Atoms(
+        "Pt4",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [EMT_PT2_BOND_ANG, 0.0, 0.0],
+            [EMT_PT2_BOND_ANG, EMT_PT2_BOND_ANG, 0.0],
+            [0.0, EMT_PT2_BOND_ANG, 0.0],
+        ],
+        pbc=False,
+    )
+
+
+def _relax_emt_minimum(atoms: Atoms) -> Atoms:
+    relaxed = atoms.copy()
+    relaxed.calc = EMT()
+    perform_local_relaxation(relaxed, EMT(), LBFGS, fmax=0.05, steps=120)
+    return relaxed
+
+
+@pytest.mark.slow
+def test_pt4_isomerization_barrier_emt(pt4_tetrahedron, tmp_path) -> None:
+    """Distinct relaxed Pt4 isomers have a positive isomerization barrier on EMT.
+
+    EMT+NEB often reports the maximum along the path at an endpoint (no interior
+    saddle image). We still require a positive barrier and sane endpoint ordering;
+    interior-saddle checks apply only when ``status == 'success'``.
+    """
+    reactant = _relax_emt_minimum(pt4_tetrahedron)
+    product = _relax_emt_minimum(_pt4_square_planar())
+    e_react = reactant.get_potential_energy()
+    e_prod = product.get_potential_energy()
+    assert e_react != pytest.approx(e_prod, abs=5e-3), (
+        "Endpoints must be distinct EMT minima to define an isomerization path"
+    )
+
+    output_dir = tmp_path / "pt4_ts"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result = find_transition_state(
+        reactant,
+        product,
+        calculator=EMT(),
+        output_dir=str(output_dir),
+        pair_id="pt4_tet_planar",
+        n_images=9,
+        fmax=0.15,
+        neb_steps=250,
+        climb=True,
+        verbosity=0,
+    )
+    assert_ts_result_valid(
+        result,
+        barrier_range=PT4_EMT_BARRIER_EV,
+        require_interior_ts=False,
+    )
+    if result.get("status") == "success":
+        assert_ts_result_valid(
+            result,
+            barrier_range=PT4_EMT_BARRIER_EV,
+            require_interior_ts=True,
+        )
 
 
 @pytest.mark.slow
