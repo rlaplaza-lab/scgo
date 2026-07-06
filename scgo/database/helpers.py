@@ -9,6 +9,7 @@ import multiprocessing
 import os
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from scgo.database.schema import (
     is_scgo_database,
     stamp_scgo_database,
 )
-from scgo.database.streaming import _iter_relaxed_minima_from_da
+from scgo.database.streaming import iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock, retry_with_backoff
 from scgo.utils.helpers import (
     ensure_directory_exists,
@@ -43,7 +44,7 @@ from scgo.utils.helpers import (
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.run_tracking import get_run_id_from_dir, load_run_metadata
+from scgo.utils.run_tracking import load_run_metadata, resolve_run_id_from_db_path
 
 logger = get_logger(__name__)
 
@@ -54,15 +55,7 @@ def _ensure_database_indices(
     enable_expression_indexes: bool = True,
     enable_wal_mode: bool = False,
 ) -> None:
-    """Create SQLite indices for performance.
-
-    Creates indices on commonly queried columns to improve performance
-    of database operations. Indices are created with IF NOT EXISTS to
-    allow safe re-running.
-
-    Args:
-        db_path: Path to the database file
-    """
+    """Create SQLite indices for performance."""
     try:
 
         def _create_indices(conn: sqlite3.Connection) -> None:
@@ -112,37 +105,15 @@ def _ensure_database_indices(
         logger.warning(f"Unexpected error creating indices on {db_path}: {e}")
 
 
-def _write_scgo_metadata(da: DataConnection, db_file: str) -> None:
-    """Write minimal SCGO metadata (best-effort).
-
-    Uses direct SQLite writes so setup does not rely on ephemeral ASE
-    ``managed_connection`` handles before the GA opens ``with da.c:``.
-    """
-    _ = da  # retained for call-site compatibility
-    with contextlib.suppress(
-        sqlite3.DatabaseError,
-        sqlite3.OperationalError,
-        OSError,
-        ValueError,
-    ):
-        stamp_scgo_database(db_file)
-
-
 def _register_database_best_effort(
     base_dir: str | Path, db_file: str, atoms_template: Atoms | None, run_id: str | None
 ) -> None:
-    """Best-effort register DB in registry (no exceptions).
-
-    If ``base_dir`` lies under a parent whose name ends with ``_searches``,
-    registers only at that parent (one index file per campaign). Otherwise
-    registers at ``base_dir``.
-    """
+    """Best-effort register DB in registry (no exceptions)."""
     comp_list = None
     if atoms_template is not None:
         try:
             comp_list = atoms_template.get_chemical_symbols()
         except (AttributeError, TypeError) as e:
-            # Non-fatal: composition extraction failed — continue without composition
             logger.debug(
                 "Could not extract composition from atoms_template for %s: %s",
                 db_file,
@@ -152,7 +123,6 @@ def _register_database_best_effort(
 
     base_path = Path(base_dir)
 
-    # Determine registry roots - prefer search directory if available
     search_root = next(
         (p for p in base_path.parents if p.name.endswith("_searches")), None
     )
@@ -187,11 +157,7 @@ def setup_database(
     enable_expression_indexes: bool = True,
     run_id: str | None = None,
 ) -> DataConnection:
-    """Create/open an ASE `DataConnection` for `db_filename` in `output_dir`.
-
-    Preserves optional initial candidates; supports WAL mode. Returns a
-    DataConnection-like adapter.
-    """
+    """Create/open an ASE `DataConnection` for `db_filename` in `output_dir`."""
     output_dir_str = str(output_dir)
     ensure_directory_exists(output_dir_str)
     db_file = os.path.join(output_dir_str, db_filename)
@@ -203,8 +169,6 @@ def setup_database(
                 with contextlib.suppress(OSError):
                     os.remove(aux_file)
 
-    # If run_id is provided, default to not removing existing database
-    # to preserve run history, unless explicitly requested
     if remove_existing and os.path.exists(db_file):
 
         def _remove_db():
@@ -255,10 +219,6 @@ def setup_database(
         with contextlib.suppress(AttributeError, sqlite3.OperationalError):
             prep_db.vacuum()
 
-    # Opening DataConnection uses retry_on_lock below; do not rename or probe-lock
-    # the SQLite file (unsafe on shared HPC filesystems and other writers).
-
-    # Open DataConnection with centralized retry-on-lock semantics
     try:
 
         def _open_connection_impl():
@@ -272,7 +232,6 @@ def setup_database(
 
         da = _open_connection()
 
-        # Create performance indices (base + optional JSON expression indexes)
         _ensure_database_indices(
             db_file,
             enable_expression_indexes=enable_expression_indexes,
@@ -291,13 +250,16 @@ def setup_database(
             enable_wal_mode,
         )
 
-        # SCGO metadata: use helper to keep main flow linear
-        _write_scgo_metadata(da, db_file)
+        with contextlib.suppress(
+            sqlite3.DatabaseError,
+            sqlite3.OperationalError,
+            OSError,
+            ValueError,
+        ):
+            stamp_scgo_database(db_file)
 
-        # Register database in persistent registry (best-effort)
         _register_database_best_effort(output_dir_str, db_file, atoms_template, run_id)
 
-        # Adapter: validate composition; preserve metadata round-trip for unrelaxed pool
         class _DBAdapter:
             def __init__(self, da_obj, expected_atomic_numbers):
                 self._da = da_obj
@@ -315,7 +277,6 @@ def setup_database(
                     close_data_connection(self._da)
 
             def add_relaxed_step(self, a, *args, **kwargs):
-                # Validate composition against expected atomic numbers (order-insensitive)
                 if Counter(int(x) for x in a.get_atomic_numbers()) != Counter(
                     self._expected_atomic_numbers
                 ):
@@ -323,7 +284,6 @@ def setup_database(
                         "Candidate composition does not match database stoichiometry"
                     )
 
-                # ASE GA DataConnection expects raw_score in key_value_pairs.
                 if "key_value_pairs" not in a.info:
                     a.info["key_value_pairs"] = {}
 
@@ -334,7 +294,6 @@ def setup_database(
                             energy
                         )
                     except (AttributeError, RuntimeError, ValueError):
-                        # GA continuation when relax leaves no usable energy (missing calc / worker failure).
                         logger.warning(
                             "raw_score missing and energy could not be computed for candidate; "
                             "assigning PENALTY_ENERGY and continuing."
@@ -355,12 +314,10 @@ def setup_database(
                 return self._da.add_relaxed_step(a, *args, **kwargs)
 
             def add_unrelaxed_candidate(self, a, *args, **kwargs):
-                # Store metadata locally so immediate get_an_unrelaxed_candidate can return it
                 self._last_unrelaxed_metadata = (
                     a.info.get("metadata", {}).copy() if a.info.get("metadata") else {}
                 )
 
-                # ASE DB persists key_value_pairs; copy metadata keys for discovery
                 prov_src = a.info.get("metadata") or {}
                 kv = a.info.setdefault("key_value_pairs", {})
                 for _k in ("run_id", "trial_id", "confid", "gaid", "id"):
@@ -372,7 +329,6 @@ def setup_database(
 
             def get_an_unrelaxed_candidate(self, *args, **kwargs):
                 u = self._da.get_an_unrelaxed_candidate(*args, **kwargs)
-                # If metadata was lost by underlying DB, restore it from the last write
                 if (
                     u is not None
                     and "metadata" not in u.info
@@ -387,66 +343,56 @@ def setup_database(
         raise DatabaseSetupError(f"Failed to setup database {db_file}: {e}") from e
 
 
-def extract_minima_from_database_file(
+def _extract_structures_from_db(
     db_path: str | Path,
     run_id: str,
     *,
-    require_final: bool = True,
+    iter_relaxed_kwargs: dict,
+    sort: bool = False,
     persist: bool = False,
     source_db_relpath: str | None = None,
+    empty_log: Callable[[], None] | None = None,
 ) -> list[tuple[float, Atoms]]:
-    """Return minima from ``db_path`` annotated with ``run_id``.
-
-    By default only rows tagged ``final_unique_minimum`` are returned (the
-    canonical global-optimization result). Pass ``require_final=False`` to
-    include all relaxed non-TS structures.
-
-    If ``persist`` is True, attempt to write provenance back to the DB.
-
-    When ``source_db_relpath`` is set, it is stored alongside ``source_db`` in
-    per-structure provenance for TS traceability.
-    """
+    """Load relaxed structures from a stamped SCGO database file."""
     db_path = str(db_path)
 
     if not os.path.exists(db_path):
         return []
 
     if not is_scgo_database(db_path):
-        logger.debug("Skipping extract_minima: not an SCGO database %s", db_path)
+        logger.debug("Skipping extract: not an SCGO database %s", db_path)
         return []
 
     with get_connection(db_path) as da:
         try:
-            use_minima: list[tuple[float, Atoms]] = []
-            for energy, atoms in _iter_relaxed_minima_from_da(
+            out: list[tuple[float, Atoms]] = []
+            for energy, atoms in iter_relaxed_structures(
                 da,
                 Path(db_path),
                 chunk_size=100,
-                require_final_minimum=require_final,
-                exclude_transition_states=True,
+                **iter_relaxed_kwargs,
             ):
-                use_minima.append((energy, atoms))
+                out.append((float(energy), atoms) if sort else (energy, atoms))
 
-            if require_final and not use_minima:
-                logger.debug(
-                    "No final_unique_minimum-tagged rows in %s (require_final=True)",
-                    db_path,
-                )
+            if sort:
+                out.sort(key=lambda x: x[0])
 
-            # Add run_id to provenance (in-memory) and optionally persist to DB.
+            if empty_log is not None and not out:
+                empty_log()
+
             metadata_kwargs: dict[str, str] = {
                 "run_id": run_id,
                 "source_db": os.path.basename(db_path),
             }
             if source_db_relpath is not None:
                 metadata_kwargs["source_db_relpath"] = source_db_relpath
-            for _, atoms in use_minima:
+            for _, atoms in out:
                 add_metadata(atoms, **metadata_kwargs)
 
             if persist:
                 try:
                     with da.c.managed_connection() as conn:
-                        for _, atoms in use_minima:
+                        for _, atoms in out:
                             row_id = get_metadata(atoms, "systems_row_id", None)
                             if row_id is None:
                                 continue
@@ -469,10 +415,39 @@ def extract_minima_from_database_file(
                         "Failed to persist provenance to DB %s: %s", db_path, e
                     )
 
-            return use_minima
-        except (sqlite3.DatabaseError, OSError, ValueError) as e:
-            logger.warning("Failed to extract minima from %s: %s", db_path, e)
+            return out
+        except (sqlite3.DatabaseError, OSError, ValueError, AttributeError) as e:
+            logger.warning("Failed to extract structures from %s: %s", db_path, e)
             return []
+
+
+def extract_minima_from_database_file(
+    db_path: str | Path,
+    run_id: str,
+    *,
+    require_final: bool = True,
+    persist: bool = False,
+    source_db_relpath: str | None = None,
+) -> list[tuple[float, Atoms]]:
+    """Return minima from ``db_path`` annotated with ``run_id``."""
+    return _extract_structures_from_db(
+        db_path,
+        run_id,
+        iter_relaxed_kwargs={
+            "require_final_minimum": require_final,
+            "exclude_transition_states": True,
+        },
+        persist=persist,
+        source_db_relpath=source_db_relpath,
+        empty_log=(
+            lambda: logger.debug(
+                "No final_unique_minimum-tagged rows in %s (require_final=True)",
+                db_path,
+            )
+        )
+        if require_final
+        else None,
+    )
 
 
 def extract_transition_states_from_database_file(
@@ -481,252 +456,19 @@ def extract_transition_states_from_database_file(
     *,
     require_final_unique_ts: bool = True,
 ) -> list[tuple[float, Atoms]]:
-    """Return transition-state rows from ``db_path`` with provenance.
-
-    By default only rows tagged ``final_unique_ts`` are returned (canonical
-    deduplicated, converged output from the TS search tagging path). Pass
-    ``require_final_unique_ts=False`` to include any relaxed row marked
-    ``is_transition_state`` (e.g. from ``integrate_ts_to_database`` without the
-    canonical tag).
-    """
-    db_path = str(db_path)
-
-    if not os.path.exists(db_path):
-        return []
-
-    if not is_scgo_database(db_path):
-        logger.debug(
-            "Skipping extract_transition_states: not an SCGO database %s", db_path
-        )
-        return []
-
-    with get_connection(db_path) as da:
-        try:
-            out: list[tuple[float, Atoms]] = []
-            for energy, atoms in _iter_relaxed_minima_from_da(
-                da,
-                Path(db_path),
-                chunk_size=100,
-                require_transition_state=True,
-                require_final_ts=require_final_unique_ts,
-            ):
-                out.append((float(energy), atoms))
-
-            out.sort(key=lambda x: x[0])
-
-            for _, atoms in out:
-                add_metadata(
-                    atoms,
-                    run_id=run_id,
-                    source_db=os.path.basename(db_path),
-                )
-
-            return out
-        except (sqlite3.DatabaseError, OSError, ValueError, AttributeError) as e:
-            logger.warning(
-                "Failed to extract transition states from %s: %s", db_path, e
-            )
-            return []
+    """Return transition-state rows from ``db_path`` with provenance."""
+    return _extract_structures_from_db(
+        db_path,
+        run_id,
+        iter_relaxed_kwargs={
+            "require_transition_state": True,
+            "require_final_ts": require_final_unique_ts,
+        },
+        sort=True,
+    )
 
 
 def load_previous_run_results(
-    base_output_dir: str,
-    db_filename: str | None = None,
-    composition: list[str] | None = None,
-    current_run_id: str | None = None,
-    prefer_final_unique: bool = True,
-) -> list[tuple[float, Atoms]]:
-    """Load minima from previous runs for a composition.
-
-    By default only ``final_unique_minimum`` rows are loaded. Pass
-    ``prefer_final_unique=False`` to include all relaxed structures.
-    """
-    # Delegate to the parallel-capable implementation — it preserves the
-    # original semantics and will fall back to sequential processing when
-    # appropriate (fewer files, running in worker process, or parallel=False).
-    return load_previous_results_parallel(
-        base_output_dir=base_output_dir,
-        db_filename=db_filename,
-        composition=composition,
-        current_run_id=current_run_id,
-        prefer_final_unique=prefer_final_unique,
-    )
-
-
-def _run_id_from_db_path(db_path: str | Path) -> str:
-    """Resolve GO run ID from a database path (parent ``run_*`` dir when present)."""
-    parent_name = Path(db_path).parent.name
-    run_id = get_run_id_from_dir(parent_name)
-    if run_id is not None:
-        return run_id
-    if parent_name.startswith("run_"):
-        return parent_name
-    basename = os.path.basename(str(db_path))
-    logger.warning(
-        "Could not resolve run_id from path %s; using database basename %r as fallback",
-        db_path,
-        basename,
-    )
-    return basename
-
-
-def load_reference_structures(
-    db_glob_pattern: str,
-    composition: list[str] | None = None,
-    max_structures: int = 100,
-    base_dir: str | Path | None = None,
-) -> list[Atoms]:
-    """Load up to `max_structures` final minima from databases matching pattern.
-
-    If ``db_glob_pattern`` is relative, it is resolved against ``base_dir`` when
-    given, otherwise against the current working directory. Absolute patterns
-    are left unchanged (HPC submit-dir safe when callers pass an explicit base).
-    """
-    pattern_path = Path(db_glob_pattern)
-    if pattern_path.is_absolute():
-        search_glob = str(pattern_path)
-    else:
-        root = Path(base_dir) if base_dir is not None else Path.cwd()
-        search_glob = str(root / db_glob_pattern)
-    db_files = glob.glob(search_glob, recursive=True)
-
-    if not db_files:
-        logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
-        return []
-
-    # Prepare composition filter
-    target_counts = None
-    if composition is not None:
-        target_counts = get_composition_counts(composition)
-
-    # Use heap to efficiently select top-k structures by energy (P3.2)
-    heap: list[tuple[float, int, Atoms]] = []
-    counter = 0
-
-    # We prefer using the per-file extractor which can identify final-tagged minima
-    for db_file in db_files:
-        try:
-            minima = extract_minima_from_database_file(
-                db_file, run_id=_run_id_from_db_path(db_file)
-            )
-        except (sqlite3.DatabaseError, OSError, ValueError) as e:
-            logger.debug(f"Failed to extract minima from {db_file}: {e}")
-            continue
-
-        for energy, atoms in minima:
-            # Only include final-tagged minima for diversity references
-            if not get_metadata(atoms, "final_unique_minimum", False):
-                continue
-
-            # Composition filter
-            if target_counts is not None:
-                atoms_symbols = atoms.get_chemical_symbols()
-                atoms_counts = get_composition_counts(atoms_symbols)
-                if atoms_counts != target_counts:
-                    continue
-
-            # Add to heap if we haven't reached limit, or if this is a better structure
-            if len(heap) < max_structures:
-                heapq.heappush(heap, (-energy, counter, atoms))
-                counter += 1
-            elif energy < -heap[0][0]:
-                counter += 1
-                heapq.heapreplace(heap, (-energy, counter, atoms))
-
-    if not heap:
-        logger.warning("No final unique minima found in databases matching the pattern")
-        return []
-
-    # Convert heap to sorted list (lowest energy first)
-    sorted_structures = sorted(heap, key=lambda x: -x[0])
-
-    reference_atoms = [atoms for _, _, atoms in sorted_structures]
-
-    logger.info(
-        f"Loaded {len(reference_atoms)} final reference structures for diversity calculation "
-        f"from {len(db_files)} databases"
-    )
-
-    return reference_atoms
-
-
-def _filter_minima_by_composition(
-    minima: list[tuple[float, Atoms]],
-    composition: list[str] | None = None,
-) -> list[tuple[float, Atoms]]:
-    """Filter minima by stoichiometric composition.
-
-    Args:
-        minima: List of (energy, Atoms) tuples
-        composition: Optional list of atomic symbols to filter by
-
-    Returns:
-        Filtered list of (energy, Atoms) tuples
-    """
-    if composition is None:
-        return minima
-
-    target_counts = get_composition_counts(composition)
-    filtered = []
-    for energy, atoms in minima:
-        atoms_counts = get_composition_counts(atoms.get_chemical_symbols())
-        if atoms_counts == target_counts:
-            filtered.append((energy, atoms))
-
-    return filtered
-
-
-def _load_single_database_worker(
-    db_path: str,
-    composition: list[str] | None = None,
-    run_id: str | None = None,
-    require_final: bool = False,
-) -> list[tuple[float, Atoms]]:
-    """Load minima from a single database in subprocess.
-
-    Args:
-        db_path: Database file path.
-        composition: Optional composition filter.
-        run_id: Run ID for provenance.
-        require_final: If True, only return rows tagged as `final_unique_minimum`.
-
-    Returns:
-        List of (energy, Atoms) tuples with provenance.
-    """
-    # Convert to string in case it's a Path object
-    db_path = str(db_path)
-
-    if not os.path.exists(db_path):
-        return []
-
-    # Delegate to extract_minima_from_database_file (SCGO-stamped DBs only).
-    try:
-        minima = extract_minima_from_database_file(
-            db_path, run_id or "", require_final=require_final
-        )
-    except (sqlite3.DatabaseError, OSError, ValueError) as e:
-        logger.error(f"Failed to extract minima from {db_path} in worker: {e}")
-        return []
-
-    # Prepare composition filter if needed
-    target_counts = None
-    if composition is not None:
-        target_counts = get_composition_counts(composition)
-
-    # Filter by composition. Provenance is already added by the extractor.
-    filtered_minima = []
-    for energy, atoms in minima:
-        if target_counts is not None:
-            atoms_counts = get_composition_counts(atoms.get_chemical_symbols())
-            if atoms_counts != target_counts:
-                continue
-
-        filtered_minima.append((energy, atoms))
-
-    return filtered_minima
-
-
-def load_previous_results_parallel(
     base_output_dir: str,
     db_filename: str | None = None,
     composition: list[str] | None = None,
@@ -735,12 +477,7 @@ def load_previous_results_parallel(
     max_workers: int | None = None,
     prefer_final_unique: bool = True,
 ) -> list[tuple[float, Atoms]]:
-    """Parallel-capable loader for minima from previous runs.
-
-    By default only ``final_unique_minimum`` rows are loaded. Pass
-    ``prefer_final_unique=False`` to include all relaxed structures.
-    """
-    # First collect all database files to load
+    """Load minima from previous runs for a composition."""
     all_db_files: list[tuple[str, str | None]] = []
 
     if not os.path.exists(base_output_dir):
@@ -750,6 +487,7 @@ def load_previous_results_parallel(
         base_output_dir,
         composition=composition,
         use_cache=True,
+        db_filename=db_filename,
     )
 
     if discovered_entries:
@@ -774,36 +512,6 @@ def load_previous_results_parallel(
             all_db_files.extend((p, run_id) for p in db_list)
 
     if not all_db_files:
-        run_dir_pattern = os.path.join(base_output_dir, "run_*")
-        run_dirs = sorted(glob.glob(run_dir_pattern))
-
-        for run_dir in run_dirs:
-            run_dir_name = os.path.basename(run_dir)
-            if not run_dir_name.startswith("run_"):
-                continue
-
-            run_id_from_dir = run_dir_name
-            if run_id_from_dir == current_run_id:
-                continue
-
-            # Quick check: load metadata to verify composition matches
-            metadata = load_run_metadata(run_dir)
-            if composition is not None and metadata and metadata.formula:
-                expected_formula = get_cluster_formula(composition)
-                if metadata.formula != expected_formula:
-                    logger.debug(
-                        f"Skipping run {run_id_from_dir}: formula mismatch "
-                        f"({metadata.formula} != {expected_formula})"
-                    )
-                    continue
-
-            # Scan for database files directly under this run directory
-            pattern = db_filename if db_filename else "*.db"
-            db_files = glob.glob(os.path.join(run_dir, pattern))
-
-            all_db_files.extend((db_path, run_id_from_dir) for db_path in db_files)
-
-    if not all_db_files:
         logger.info(f"No databases found in {base_output_dir}")
         return []
 
@@ -816,7 +524,6 @@ def load_previous_results_parallel(
     all_minima: list[tuple[float, Atoms]] = []
 
     if use_parallel:
-        # Use parallel loading with ProcessPoolExecutor
         if max_workers is None:
             max_workers = max(1, multiprocessing.cpu_count() // 2)
 
@@ -842,7 +549,6 @@ def load_previous_results_parallel(
                     db_path, run_id = futures[future]
                     try:
                         minima = future.result(timeout=30)
-                        # minima are already filtered by composition and have provenance from worker
                         all_minima.extend(minima)
                         if minima:
                             logger.debug(
@@ -875,12 +581,10 @@ def load_previous_results_parallel(
             minima = extract_minima_from_database_file(
                 db_path, run_id or "", require_final=prefer_final_unique
             )
-            # Apply composition filter using helper function
-            filtered_minima = _filter_minima_by_composition(minima, composition)
-            all_minima.extend(filtered_minima)
-            if filtered_minima:
+            all_minima.extend(_filter_minima_by_composition(minima, composition))
+            if minima:
                 logger.debug(
-                    f"Loaded {len(filtered_minima)} minima from {os.path.basename(db_path)}"
+                    f"Loaded {len(minima)} minima from {os.path.basename(db_path)}"
                 )
 
     logger.info(
@@ -888,3 +592,111 @@ def load_previous_results_parallel(
         f"(excluding {current_run_id})"
     )
     return all_minima
+
+
+def load_reference_structures(
+    db_glob_pattern: str,
+    composition: list[str] | None = None,
+    max_structures: int = 100,
+    base_dir: str | Path | None = None,
+) -> list[Atoms]:
+    """Load up to `max_structures` final minima from databases matching pattern."""
+    pattern_path = Path(db_glob_pattern)
+    if pattern_path.is_absolute():
+        search_glob = str(pattern_path)
+    else:
+        root = Path(base_dir) if base_dir is not None else Path.cwd()
+        search_glob = str(root / db_glob_pattern)
+    db_files = glob.glob(search_glob, recursive=True)
+
+    if not db_files:
+        logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
+        return []
+
+    target_counts = None
+    if composition is not None:
+        target_counts = get_composition_counts(composition)
+
+    heap: list[tuple[float, int, Atoms]] = []
+    counter = 0
+
+    for db_file in db_files:
+        try:
+            minima = extract_minima_from_database_file(
+                db_file, run_id=resolve_run_id_from_db_path(db_file)
+            )
+        except (sqlite3.DatabaseError, OSError, ValueError) as e:
+            logger.debug(f"Failed to extract minima from {db_file}: {e}")
+            continue
+
+        for energy, atoms in minima:
+            if not get_metadata(atoms, "final_unique_minimum", False):
+                continue
+
+            if target_counts is not None:
+                atoms_symbols = atoms.get_chemical_symbols()
+                atoms_counts = get_composition_counts(atoms_symbols)
+                if atoms_counts != target_counts:
+                    continue
+
+            if len(heap) < max_structures:
+                heapq.heappush(heap, (-energy, counter, atoms))
+                counter += 1
+            elif energy < -heap[0][0]:
+                counter += 1
+                heapq.heapreplace(heap, (-energy, counter, atoms))
+
+    if not heap:
+        logger.warning("No final unique minima found in databases matching the pattern")
+        return []
+
+    sorted_structures = sorted(heap, key=lambda x: -x[0])
+    reference_atoms = [atoms for _, _, atoms in sorted_structures]
+
+    logger.info(
+        f"Loaded {len(reference_atoms)} final reference structures for diversity calculation "
+        f"from {len(db_files)} databases"
+    )
+
+    return reference_atoms
+
+
+def _filter_minima_by_composition(
+    minima: list[tuple[float, Atoms]],
+    composition: list[str] | None = None,
+) -> list[tuple[float, Atoms]]:
+    """Filter minima by stoichiometric composition."""
+    if composition is None:
+        return minima
+
+    target_counts = get_composition_counts(composition)
+    filtered = []
+    for energy, atoms in minima:
+        atoms_counts = get_composition_counts(atoms.get_chemical_symbols())
+        if atoms_counts == target_counts:
+            filtered.append((energy, atoms))
+
+    return filtered
+
+
+def _load_single_database_worker(
+    db_path: str,
+    composition: list[str] | None = None,
+    run_id: str | None = None,
+    require_final: bool = False,
+) -> list[tuple[float, Atoms]]:
+    """Load minima from a single database in subprocess."""
+    db_path = str(db_path)
+
+    if not os.path.exists(db_path):
+        return []
+
+    try:
+        minima = extract_minima_from_database_file(
+            db_path, run_id or "", require_final=require_final
+        )
+    except (sqlite3.DatabaseError, OSError, ValueError) as e:
+        logger.error(f"Failed to extract minima from {db_path} in worker: {e}")
+        return []
+
+    return _filter_minima_by_composition(minima, composition)

@@ -10,6 +10,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from scgo.utils.helpers import ensure_directory_exists, get_cluster_formula
@@ -170,6 +171,47 @@ def get_run_directories(base_output_dir: str) -> list[str]:
     ]
 
     return sorted(run_dirs)
+
+
+def resolve_run_id_from_db_path(
+    db_path: str | Path,
+    *,
+    base_dir: str | Path | None = None,
+) -> str:
+    """Resolve GO run ID from a database path (``run_*`` segment when present)."""
+    db_path_str = os.path.abspath(str(db_path))
+    if base_dir is not None:
+        base_s = os.path.abspath(str(base_dir))
+        try:
+            rel = os.path.relpath(db_path_str, base_s)
+            parts = rel.split(os.sep)
+        except ValueError:
+            parts = Path(db_path_str).parts
+    else:
+        parts = Path(db_path_str).parts
+
+    for part in parts:
+        resolved = get_run_id_from_dir(part)
+        if resolved is not None:
+            return resolved
+        if part.startswith("run_"):
+            return part
+
+    parent_name = Path(db_path_str).parent.name
+    resolved = get_run_id_from_dir(parent_name)
+    if resolved is not None:
+        return resolved
+    if parent_name.startswith("run_"):
+        return parent_name
+
+    basename = os.path.basename(db_path_str)
+    logger = get_logger(__name__)
+    logger.warning(
+        "Could not resolve run_id from path %s; using database basename %r as fallback",
+        db_path,
+        basename,
+    )
+    return basename
 
 
 def get_run_id_from_dir(run_dir: str) -> str | None:

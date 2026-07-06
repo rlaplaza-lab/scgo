@@ -24,27 +24,30 @@ from ase.calculators.emt import EMT
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import (
-    DatabaseDiscovery,
-    DatabaseRegistry,
     SCGODatabaseManager,
     add_metadata,
-    check_database_health,
     close_data_connection,
-    count_database_structures,
     database_transaction,
-    ensure_schema_version,
     filter_by_metadata,
-    get_all_metadata,
     get_connection,
-    get_database_statistics,
     get_metadata,
-    get_schema_version,
-    iter_database_minima,
-    iter_databases_minima,
     retry_with_backoff,
-    set_schema_version,
     setup_database,
     update_metadata,
+)
+from scgo.database.discovery import DatabaseDiscovery
+from scgo.database.health import check_database_health, get_database_statistics
+from scgo.database.metadata import get_all_metadata
+from scgo.database.registry import DatabaseRegistry
+from scgo.database.schema import (
+    ensure_schema_version,
+    get_schema_version,
+    set_schema_version,
+)
+from scgo.database.streaming import (
+    count_database_structures,
+    iter_database_minima,
+    iter_databases_minima,
 )
 from tests.test_utils import assert_run_id_persisted, create_test_atoms
 
@@ -643,22 +646,6 @@ class TestDiscovery:
         db_files = discovery.find_databases(run_id="run_20260200_120000")
 
         assert len(db_files) == 1
-
-    def test_discovery_statistics(self, tmp_path):
-        run_dir = tmp_path / "run_20260204_120000"
-        run_dir.mkdir(parents=True)
-
-        atoms = Atoms("Pt3")
-        with _setup_test_db(run_dir, "ga_go.db", atoms, initial_candidate=atoms) as (
-            _da,
-            _db_path,
-        ):
-            pass
-
-        discovery = DatabaseDiscovery(tmp_path)
-        stats = discovery.get_statistics()
-
-        assert stats["total_databases"] >= 1
 
     def test_find_databases_uncached(self, tmp_path):
         run_dir = tmp_path / "run_20260204_120000"

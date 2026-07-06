@@ -23,7 +23,7 @@ from scgo.utils.logging import TRACE, get_logger
 logger = get_logger(__name__)
 
 
-def _relaxed_rows_where_clause(
+def relaxed_rows_where_clause(
     *,
     require_final_minimum: bool = False,
     exclude_transition_states: bool = False,
@@ -44,42 +44,11 @@ def _relaxed_rows_where_clause(
     return " AND ".join(clauses)
 
 
-def _safe_get_atoms(da, row_id):
-    """Safely fetch atoms for a given row id.
-
-    Returns (Atoms, None) on success or (None, reason_str) on failure. Logs
-    a debug-level traceback and includes a truncated metadata snippet to aid
-    debugging without exposing large JSON blobs.
-    """
-    try:
-        return da.get_atoms(row_id), None
-    except (
-        KeyError,
-        IndexError,
-        sqlite3.DatabaseError,
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-    ) as e:
-        snippet = "<unavailable>"
-        try:
-            with da.c.managed_connection() as conn:
-                r = conn.execute(
-                    f"SELECT {SYSTEMS_JSON_COLUMN} FROM systems WHERE id=?",
-                    (row_id,),
-                ).fetchone()
-                if r:
-                    snippet = str(r[0] or "")[:200]
-        except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError, TypeError):
-            snippet = "<snippet_unavailable>"
-
-        logger.debug(
-            "Row fetch failed id=%s: %s; snippet=%s", row_id, e, snippet, exc_info=True
-        )
-        return None, f"{e!r} | meta_snippet={snippet}"
+# Backward-compatible alias for internal callers during transition.
+_relaxed_rows_where_clause = relaxed_rows_where_clause
 
 
-def _iter_relaxed_minima_from_da(
+def iter_relaxed_structures(
     da,
     db_path: Path,
     chunk_size: int = 100,
@@ -93,7 +62,7 @@ def _iter_relaxed_minima_from_da(
     if chunk_size is None or chunk_size <= 0:
         raise ValueError("chunk_size must be a positive integer")
 
-    where_sql = _relaxed_rows_where_clause(
+    where_sql = relaxed_rows_where_clause(
         require_final_minimum=require_final_minimum,
         exclude_transition_states=exclude_transition_states,
         require_transition_state=require_transition_state,
@@ -101,25 +70,30 @@ def _iter_relaxed_minima_from_da(
     )
 
     with da.c.managed_connection() as conn:
-        raw_score_col = SYSTEMS_JSON_COLUMN
+        json_col = SYSTEMS_JSON_COLUMN
 
-        try:
-            cur = conn.execute(f"SELECT COUNT(*) FROM systems WHERE {where_sql}")
-            total = int((cur.fetchone() or [0])[0] or 0)
-        except (sqlite3.DatabaseError, sqlite3.OperationalError, TypeError, ValueError):
-            total = 0
-
-        logger.debug(
-            "Streaming %s structures from %s (chunk_size=%s)",
-            total,
-            db_path,
-            chunk_size,
-        )
+        if logger.isEnabledFor(TRACE):
+            try:
+                cur = conn.execute(f"SELECT COUNT(*) FROM systems WHERE {where_sql}")
+                total = int((cur.fetchone() or [0])[0] or 0)
+            except (
+                sqlite3.DatabaseError,
+                sqlite3.OperationalError,
+                TypeError,
+                ValueError,
+            ):
+                total = 0
+            logger.debug(
+                "Streaming %s structures from %s (chunk_size=%s)",
+                total,
+                db_path,
+                chunk_size,
+            )
 
         try:
             cursor = conn.execute(
                 f"SELECT id FROM systems WHERE {where_sql} "
-                f"ORDER BY CAST(json_extract({raw_score_col}, '$.raw_score') AS REAL) DESC"
+                f"ORDER BY CAST(json_extract({json_col}, '$.raw_score') AS REAL) DESC"
             )
         except sqlite3.OperationalError:
             cursor = conn.execute(
@@ -131,9 +105,17 @@ def _iter_relaxed_minima_from_da(
             if not rows:
                 break
             for (row_id,) in rows:
-                candidate, reason = _safe_get_atoms(da, row_id)
-                if candidate is None:
-                    logger.warning("Failed to fetch atoms id=%s: %s", row_id, reason)
+                try:
+                    candidate = da.get_atoms(row_id)
+                except (
+                    KeyError,
+                    IndexError,
+                    sqlite3.DatabaseError,
+                    ValueError,
+                    TypeError,
+                    json.JSONDecodeError,
+                ) as e:
+                    logger.warning("Failed to fetch atoms id=%s: %s", row_id, e)
                     continue
 
                 energy = extract_energy_from_atoms(candidate)
@@ -142,7 +124,6 @@ def _iter_relaxed_minima_from_da(
                     continue
 
                 out = candidate.copy()
-                # Stable link back to the SQLite `systems.id` row (for TS ↔ minima traceability).
                 try:
                     add_metadata(out, systems_row_id=int(row_id))
                 except (TypeError, ValueError) as e:
@@ -153,23 +134,13 @@ def _iter_relaxed_minima_from_da(
 def iter_database_minima(
     db_path: str | Path,
     chunk_size: int = 100,
+    *,
+    require_final_minimum: bool = False,
+    exclude_transition_states: bool = False,
+    require_transition_state: bool = False,
+    require_final_ts: bool = False,
 ) -> Generator[tuple[float, Atoms], None, None]:
-    """Iterate over minima from database in memory-efficient chunks.
-
-    Yields structures one at a time without loading entire database into memory.
-    Useful for processing very large databases (1000+ structures).
-
-    Args:
-        db_path: Path to database file
-        chunk_size: Number of structures to load at once (default 100)
-
-    Yields:
-        tuple: (energy, atoms) for each minimum
-
-    Example:
-        >>> for energy, atoms in iter_database_minima("large_db.db"):
-        ...     process_structure(atoms)
-    """
+    """Iterate over minima from database in memory-efficient chunks."""
     db_path = Path(db_path)
 
     if not db_path.exists():
@@ -182,7 +153,15 @@ def iter_database_minima(
 
     try:
         with get_connection(str(db_path)) as da:
-            yield from _iter_relaxed_minima_from_da(da, db_path, chunk_size)
+            yield from iter_relaxed_structures(
+                da,
+                db_path,
+                chunk_size,
+                require_final_minimum=require_final_minimum,
+                exclude_transition_states=exclude_transition_states,
+                require_transition_state=require_transition_state,
+                require_final_ts=require_final_ts,
+            )
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         logger.error("Error streaming from %s: %s", db_path, e)
         raise
@@ -191,24 +170,9 @@ def iter_database_minima(
 def iter_databases_minima(
     db_paths: list[str | Path],
     max_structures: int | None = None,
+    **iter_kwargs,
 ) -> Generator[tuple[float, Atoms], None, None]:
-    """Iterate over minima from multiple databases.
-
-    Efficiently streams structures from multiple database files without
-    loading everything into memory.
-
-    Args:
-        db_paths: List of database file paths
-        max_structures: Optional limit on total structures to yield
-
-    Yields:
-        tuple: (energy, atoms) for each minimum across all databases
-
-    Example:
-        >>> db_files = ["db1.db", "db2.db", "db3.db"]
-        >>> for energy, atoms in iter_databases_minima(db_files, max_structures=1000):
-        ...     process_structure(atoms)
-    """
+    """Iterate over minima from multiple databases."""
     count = 0
 
     for db_path in db_paths:
@@ -216,7 +180,7 @@ def iter_databases_minima(
             logger.debug("Reached max_structures limit (%s)", max_structures)
             break
 
-        for energy, atoms in iter_database_minima(db_path):
+        for energy, atoms in iter_database_minima(db_path, **iter_kwargs):
             yield (energy, atoms)
             count += 1
 
@@ -227,16 +191,7 @@ def iter_databases_minima(
 
 
 def count_database_structures(db_path: str | Path) -> int:
-    """Count structures in database without loading them.
-
-    Fast counting operation that doesn't load actual atomic structures.
-
-    Args:
-        db_path: Path to database file
-
-    Returns:
-        int: Number of relaxed structures in database
-    """
+    """Count relaxed structures in database without loading them."""
     db_path = Path(db_path)
 
     if not db_path.exists():
@@ -246,12 +201,11 @@ def count_database_structures(db_path: str | Path) -> int:
         logger.debug("Skipping count for non-SCGO database: %s", db_path)
         return 0
 
+    where_sql = relaxed_rows_where_clause()
+
     try:
         with get_connection(str(db_path)) as da, da.c.managed_connection() as conn:
-            relaxed_col = SYSTEMS_JSON_COLUMN
-            cur = conn.execute(
-                f"SELECT COUNT(*) FROM systems WHERE json_extract({relaxed_col}, '$.relaxed') = 1"
-            )
+            cur = conn.execute(f"SELECT COUNT(*) FROM systems WHERE {where_sql}")
             res = cur.fetchone()
             return int((res or [0])[0] or 0)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:

@@ -15,6 +15,26 @@ logger = get_logger(__name__)
 
 CURRENT_SCHEMA_VERSION = 2
 
+SCGO_METADATA_DDL = """
+CREATE TABLE IF NOT EXISTS scgo_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
+"""
+
+
+def _upsert_scgo_metadata_keys(
+    conn: sqlite3.Connection, *, schema_version: int
+) -> None:
+    conn.execute(SCGO_METADATA_DDL)
+    conn.execute(
+        "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('created_by', 'scgo')"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('schema_version', ?)",
+        (str(schema_version),),
+    )
+
 
 def get_schema_version(db: DataConnection) -> int:
     """Get current schema version from database.
@@ -45,31 +65,7 @@ def set_schema_version(db: DataConnection, version: int) -> None:
         version: Schema version to set
     """
     with db.c.managed_connection() as conn:
-        # Create metadata table if it doesn't exist
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS scgo_metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Insert or update version
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO scgo_metadata (key, value)
-            VALUES ('schema_version', ?)
-        """,
-            (str(version),),
-        )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO scgo_metadata (key, value)
-            VALUES ('created_by', ?)
-        """,
-            ("scgo",),
-        )
-
+        _upsert_scgo_metadata_keys(conn, schema_version=version)
         conn.commit()
         logger.debug(f"Set schema version to {version}")
 
@@ -94,7 +90,6 @@ def migrate_database(db: DataConnection, target_version: int | None = None) -> b
         )
 
     try:
-        # Record the target schema version without running migration steps.
         set_schema_version(db, target_version)
         logger.info(
             f"Marked database schema version as {target_version} (no migrations applied)"
@@ -174,20 +169,6 @@ def stamp_scgo_database(
     path = str(db_path)
 
     def _stamp(conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scgo_metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('created_by', 'scgo')"
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO scgo_metadata (key, value) VALUES ('schema_version', ?)",
-            (str(ver),),
-        )
+        _upsert_scgo_metadata_keys(conn, schema_version=ver)
 
     _run_sqlite(path, _stamp)
