@@ -20,7 +20,14 @@ class PartiallyDisconnectingRelaxer:
         results = []
         for i, atoms in enumerate(batch):
             relaxed = atoms.copy()
-            if self._disconnect_remaining > 0 and len(relaxed) >= 2:
+            # Disconnect exactly one candidate in a multi-structure batch so at
+            # least one relaxed structure remains GA-eligible for this test.
+            if (
+                self._disconnect_remaining > 0
+                and len(batch) > 1
+                and i == len(batch) - 1
+                and len(relaxed) >= 2
+            ):
                 pos = relaxed.get_positions()
                 # Push mobile atoms far from slab to trigger connectivity failure.
                 pos[-2:, 2] += 10.0
@@ -42,7 +49,7 @@ def test_ga_go_disconnected_rows_persist_but_are_ineligible(
         calculator=EMT(),
         relaxer=PartiallyDisconnectingRelaxer(),
         niter=1,
-        population_size=4,
+        population_size=12,
         offspring_fraction=0.5,
         niter_local_relaxation=10,
         batch_size=2,

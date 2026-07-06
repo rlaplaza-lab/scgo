@@ -832,6 +832,7 @@ def test_find_ts_mace_cpu(cu3_triangle, cu3_linear, temp_output_dir):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_mace
 @pytest.mark.requires_cuda
 def test_find_ts_mace_gpu_torchsim(cu3_triangle, cu3_linear, temp_output_dir):
     """Test TS finding with MACE on GPU using TorchSim batching.
