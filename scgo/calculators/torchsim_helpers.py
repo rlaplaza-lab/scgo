@@ -257,6 +257,33 @@ def _load_default_mace_model(
     )
 
 
+def _ensure_torchsim_mace_wrapper(
+    model: object, device: object, dtype: object
+) -> object:
+    """Wrap a raw ASE/MACE ``ScaleShiftMACE`` for :func:`torch_sim.optimize``.
+
+    ``ga_go`` reuses the calculator's loaded weights via
+    :func:`try_extract_torchsim_model_from_mace_calculator`, which returns the
+    inner torch module. TorchSim expects a model exposing ``.device`` and
+    ``.dtype`` (e.g. :class:`torch_sim.models.mace.MaceModel`).
+    """
+    if hasattr(model, "device") and hasattr(model, "dtype"):
+        return model
+    mod = getattr(type(model), "__module__", "") or ""
+    name = type(model).__name__
+    if "mace" not in mod.lower() and "MACE" not in name:
+        return model
+    from torch_sim.models.mace import MaceModel  # type: ignore
+
+    return MaceModel(
+        model=model,
+        device=device,
+        dtype=dtype,
+        compute_forces=True,
+        compute_stress=False,
+    )
+
+
 def _load_default_fairchem_model(
     *,
     device,
@@ -435,6 +462,10 @@ class TorchSimBatchRelaxer:
                 raise ValueError(
                     f"Unknown model_kind {self.model_kind!r}; expected 'mace' or 'fairchem'"
                 )
+        else:
+            self.model = _ensure_torchsim_mace_wrapper(
+                self.model, self.device, self.dtype
+            )
         self._patch_model_for_cuda()
 
         # Store device string for cache key (e.g., "cuda" or "cpu")
@@ -639,15 +670,12 @@ class TorchSimBatchRelaxer:
                 "Running TorchSim single-point evaluation via optimize(max_steps=0)."
             )
         optimize_kwargs = runner_kwargs
-        if max_steps_now == 0:
-            warnings_ctx = warnings.catch_warnings()
-            warnings_ctx.filterwarnings(
-                "ignore",
-                message="All systems have reached the maximum number of steps",
-            )
-        else:
-            warnings_ctx = nullcontext()
-        with warnings_ctx:
+        with warnings.catch_warnings() if max_steps_now == 0 else nullcontext():
+            if max_steps_now == 0:
+                warnings.filterwarnings(
+                    "ignore",
+                    message="All systems have reached the maximum number of steps",
+                )
             state = self._ts.optimize(  # type: ignore[call-arg]
                 system=system_in,
                 model=self.model,
