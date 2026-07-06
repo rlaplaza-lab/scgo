@@ -61,15 +61,37 @@ jobs:
               with out.open("a", encoding="utf-8") as fh:
                   fh.write(f"{key}={value}\n")
 
-          if raw.startswith("{"):
-              data = json.loads(raw)
-              emit("api_token", "")
-              emit("username", str(data["username"]).strip())
-              emit("key", str(data["key"]).strip())
-          else:
-              emit("api_token", raw.replace("\n", "").replace("\r", "").strip())
+          def normalize_token(value: str) -> str:
+              return value.replace("\n", "").replace("\r", "").strip()
+
+          def emit_access_token(token: str) -> None:
+              emit("api_token", normalize_token(token))
               emit("username", "")
               emit("key", "")
+
+          def emit_legacy(username: str, key: str) -> None:
+              emit("api_token", "")
+              emit("username", normalize_token(username))
+              emit("key", normalize_token(key))
+
+          if raw.startswith("{"):
+              data = json.loads(raw)
+              token = normalize_token(
+                  str(data.get("token") or data.get("api_token") or data.get("key") or "")
+              )
+              username = normalize_token(str(data.get("username", "")))
+              if token.startswith("KGAT_"):
+                  emit_access_token(token)
+              elif token:
+                  emit_legacy(username, token)
+              else:
+                  raise SystemExit("KAGGLE_API_TOKEN JSON missing token/key field")
+          else:
+              token = normalize_token(raw)
+              if token.startswith("KGAT_"):
+                  emit_access_token(token)
+              else:
+                  emit_access_token(token)
           PY
 
       - name: Run tests on Kaggle GPU
