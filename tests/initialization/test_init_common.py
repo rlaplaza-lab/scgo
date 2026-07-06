@@ -11,12 +11,16 @@ This module contains tests for:
 - Mode switching and fallbacks
 """
 
+import sqlite3
+from pathlib import Path
+
 import numpy as np
 import pytest
 from ase import Atoms
 from ase.db import connect
 
 from scgo.database import get_global_cache
+from scgo.database.schema import stamp_scgo_database
 from scgo.initialization import (
     compute_cell_side,
     create_initial_cluster,
@@ -71,6 +75,11 @@ from tests.test_utils import (
     run_batch_connectivity_test,
     validate_structure_with_diagnostics,
 )
+
+
+def _stamp_init_test_db(db_path: str | Path) -> None:
+    """Mark raw ASE-DB test files as SCGO databases for candidate discovery."""
+    stamp_scgo_database(db_path)
 
 
 class TestBasicInitialization:
@@ -312,6 +321,7 @@ class TestCacheBehavior:
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
         # First call
         _, entries1 = _load_db_candidates(str(db_path))
@@ -323,18 +333,19 @@ class TestCacheBehavior:
     def test_load_candidates_from_file_primary_failure_propagates(
         self, tmp_path, monkeypatch, pt2_atoms
     ):
-        """When primary DataConnection path raises, the exception propagates (no fallback)."""
+        """Unexpected extractor failures propagate to the caller."""
         db_path = tmp_path / "test.db"
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
-        def _bad_db_conn(_):
+        def _bad_extract(*_args, **_kwargs):
             raise AttributeError("simulated DB internals error")
 
         monkeypatch.setattr(
-            "scgo.initialization.candidate_discovery.db_connection",
-            _bad_db_conn,
+            "scgo.initialization.candidate_discovery.extract_minima_from_database_file",
+            _bad_extract,
             raising=True,
         )
 
@@ -346,20 +357,19 @@ class TestCacheBehavior:
     def test_load_candidates_from_file_sqlite_error_returns_empty(
         self, tmp_path, monkeypatch, pt2_atoms
     ):
-        """When primary path raises sqlite3 errors, return empty list."""
+        """When extraction raises sqlite3 errors, return empty list."""
         db_path = tmp_path / "test.db"
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
-        def _bad_db_conn(_):
-            import sqlite3
-
+        def _bad_extract(*_args, **_kwargs):
             raise sqlite3.OperationalError("simulated DB error")
 
         monkeypatch.setattr(
-            "scgo.initialization.candidate_discovery.db_connection",
-            _bad_db_conn,
+            "scgo.initialization.candidate_discovery.extract_minima_from_database_file",
+            _bad_extract,
             raising=True,
         )
 
@@ -373,6 +383,7 @@ class TestCacheBehavior:
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
         target1 = ["Pt", "Pt", "Pt"]
         candidates1 = _find_smaller_candidates(target1, str(db_path))
@@ -422,6 +433,7 @@ class TestCacheBehavior:
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
         results = []
 
@@ -446,6 +458,7 @@ class TestCacheBehavior:
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
         target = ["Pt", "Pt", "Pt", "Pt"]
         results = []
@@ -625,6 +638,7 @@ class TestDatabaseIntegration:
                 key_value_pairs={"raw_score": -12.0, "final_unique_minimum": True},
                 gaid=4,
             )
+        _stamp_init_test_db(db_path)
 
         # Test with a target composition that has smaller candidates
         target_comp = ["Pt", "Pt", "Pt", "Au"]  # Pt3Au1
@@ -634,16 +648,16 @@ class TestDatabaseIntegration:
 
         assert "Pt2" in candidates
         assert len(candidates["Pt2"]) == 1
-        assert candidates["Pt2"][0][0] == pytest.approx(-10.0, rel=1e-6)
+        assert candidates["Pt2"][0][0] == pytest.approx(10.0, rel=1e-6)
 
         assert "Au2" not in candidates  # Au2 is not a sub-composition of Pt3Au1
         assert "Pt3" in candidates
         assert len(candidates["Pt3"]) == 1
-        assert candidates["Pt3"][0][0] == pytest.approx(-15.0, rel=1e-6)
+        assert candidates["Pt3"][0][0] == pytest.approx(15.0, rel=1e-6)
 
         assert "AuPt" in candidates
         assert len(candidates["AuPt"]) == 1
-        assert candidates["AuPt"][0][0] == pytest.approx(-12.0, rel=1e-6)
+        assert candidates["AuPt"][0][0] == pytest.approx(12.0, rel=1e-6)
 
         # Test with an empty target composition
         empty_candidates = _find_smaller_candidates([], db_glob_pattern)
@@ -879,6 +893,7 @@ class TestLoadDbCandidates:
 
             pt3 = pt3_atoms.copy()
             db.write(pt3, relaxed=True, key_value_pairs={"raw_score": -15.0}, gaid=2)
+        _stamp_init_test_db(db_path)
 
         mtime, entries = _load_db_candidates(str(db_path))
         assert mtime > 0
@@ -894,6 +909,7 @@ class TestLoadDbCandidates:
         with connect(str(db_path)) as db:
             pt2 = pt2_atoms.copy()
             db.write(pt2, relaxed=True, key_value_pairs={"raw_score": -10.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
         # First call
         mtime1, entries1 = _load_db_candidates(str(db_path))
@@ -912,6 +928,7 @@ class TestLoadDbCandidates:
         with connect(str(db_path)) as db:
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
             db.write(pt2, relaxed=True, gaid=1)  # Missing raw_score
+        _stamp_init_test_db(db_path)
 
         # Should skip invalid entries
         mtime, entries = _load_db_candidates(str(db_path))
@@ -980,6 +997,7 @@ class TestFindSmallerCandidates:
                 key_value_pairs={"raw_score": -10.0, "final_unique_minimum": True},
                 gaid=1,
             )
+        _stamp_init_test_db(db_path)
 
         target = ["Pt", "Pt", "Pt", "Pt"]  # Pt4
         candidates = _find_smaller_candidates(target, str(db_path))
@@ -991,6 +1009,7 @@ class TestFindSmallerCandidates:
         with connect(str(db_path)) as db:
             pt5 = Atoms("Pt5", positions=[[i * 2.5, 0, 0] for i in range(5)])
             db.write(pt5, relaxed=True, key_value_pairs={"raw_score": -25.0}, gaid=1)
+        _stamp_init_test_db(db_path)
 
         target = ["Pt", "Pt", "Pt"]  # Pt3
         candidates = _find_smaller_candidates(target, str(db_path))
@@ -1026,6 +1045,7 @@ class TestFindSmallerCandidates:
                 key_value_pairs={"raw_score": -11.0, "final_unique_minimum": True},
                 gaid=3,
             )
+        _stamp_init_test_db(db_path)
 
         # Ensure filesystem mtime changes so the cache sees the update
         import os
@@ -1062,6 +1082,7 @@ class TestFindSmallerCandidates:
                 key_value_pairs={"raw_score": -9.0, "final_unique_minimum": True},
                 gaid=2,
             )
+        _stamp_init_test_db(db_path)
 
         # Note: cache canonical mtime may prevent immediate detection of the
         # newly added candidate in the same file. We only assert the function
@@ -1083,6 +1104,7 @@ class TestFindSmallerCandidates:
                 key_value_pairs={"raw_score": -8.0, "final_unique_minimum": True},
                 gaid=4,
             )
+        _stamp_init_test_db(db3_path)
 
         candidates_fresh = _find_smaller_candidates(target, str(db3_path))
         assert sum(len(lst) for lst in candidates_fresh.values()) >= 1

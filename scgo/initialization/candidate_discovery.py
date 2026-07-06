@@ -16,14 +16,15 @@ from collections import Counter
 import numpy as np
 from ase import Atoms
 
-from scgo.database import get_connection as db_connection
 from scgo.database.cache import get_global_cache
+from scgo.database.helpers import extract_minima_from_database_file
 from scgo.database.metadata import get_metadata as _get_db_metadata
 from scgo.utils.helpers import (
     get_cluster_formula,
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.run_tracking import resolve_run_id_from_db_path
 
 from .initialization_config import (
     _COMPOSITION_CACHE_NS,
@@ -62,23 +63,19 @@ def _safe_mtime(path: str) -> float:
 
 def _load_candidates_from_file(db_file: str, mtime: float) -> list[CandidateEntry]:
     """Load relaxed candidates from a single database file with mtime caching."""
+    _ = mtime
     try:
-        with db_connection(db_file) as da:
-            # Note: We load all relaxed candidates; the caller handles filtering
-            # for final_unique_minimum if needed.
-            candidates = da.get_all_relaxed_candidates()
-            results: list[CandidateEntry] = []
-            for atoms in candidates:
-                symbols = tuple(atoms.get_chemical_symbols())
-                # Match logic from extract_energy_from_atoms
-                energy = _get_db_metadata(atoms, "raw_score", None)
-                if energy is None:
-                    energy = _get_db_metadata(atoms, "potential_energy", 0.0)
-
-                # If energy is still something like None or non-finite, we might want to skip,
-                # but for consistency with previous implementation:
-                results.append((symbols, energy, atoms))
-            return results
+        run_id = resolve_run_id_from_db_path(db_file)
+        minima = extract_minima_from_database_file(
+            db_file,
+            run_id,
+            require_final=False,
+        )
+        results: list[CandidateEntry] = []
+        for energy, atoms in minima:
+            symbols = tuple(atoms.get_chemical_symbols())
+            results.append((symbols, energy, atoms))
+        return results
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError, ValueError) as e:
         logger.debug(f"Failed to load candidates from {db_file}: {e}")
         return []

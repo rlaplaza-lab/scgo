@@ -65,4 +65,4 @@ def test_canonical_mtime_invalidation_and_refresh(tmp_path, pt2_atoms):
     assert len(seeds_after["Pt2"]) >= 1
     energy, atoms = seeds_after["Pt2"][0]
     assert atoms is not None
-    assert energy == pytest.approx(-9.0)
+    assert energy == pytest.approx(9.0)
