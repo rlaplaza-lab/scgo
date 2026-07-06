@@ -62,3 +62,23 @@ pytest tests/physics/test_reference_emt.py -v
 ```
 
 Install dev extras: `pip install -e ".[mace,dev]"` or `pip install -e ".[uma,dev]"`.
+
+## Kaggle GPU CI (manual)
+
+GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
+
+1. GitHub → Actions → **Kaggle GPU tests** → **Run workflow**
+2. Leave defaults (`ref=main`, `marker=requires_cuda and not benchmark`) unless testing a branch
+3. Requires repo secret `KAGGLE_API_TOKEN`
+
+Example-mimic GPU integration coverage: `tests/integration/test_gpu_examples_integration.py` (all four `system_type` values from `examples/`).
+
+### Local equivalents
+
+```bash
+# All GPU tests (skipped without CUDA)
+pytest tests/ -m "requires_cuda and not benchmark" -v
+
+# Example-mimic GPU integration only
+pytest tests/integration/test_gpu_examples_integration.py -v
+```

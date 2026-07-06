@@ -1,0 +1,56 @@
+name: Kaggle GPU tests
+
+# Manual GPU CI via Kaggle (see tests/README.md). CPU CI in ci.yml excludes requires_cuda.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to clone and test on Kaggle
+        required: false
+        default: main
+        type: string
+      marker:
+        description: pytest marker expression
+        required: false
+        default: requires_cuda and not benchmark
+        type: string
+
+jobs:
+  kaggle-gpu:
+    name: Kaggle GPU (${{ inputs.ref }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Render Kaggle runner script
+        env:
+          GIT_REF: ${{ inputs.ref }}
+          PYTEST_MARKER: ${{ inputs.marker }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          template = Path(".github/scripts/kaggle_gpu_runner.template.py").read_text()
+          rendered = (
+              template.replace("__GIT_REF__", os.environ["GIT_REF"])
+              .replace("__PYTEST_MARKER__", os.environ["PYTEST_MARKER"])
+          )
+          out = Path(".github/scripts/kaggle_gpu_runner.py")
+          out.write_text(rendered)
+          print(f"Wrote {out} ({len(rendered)} bytes)")
+          PY
+
+      - name: Run tests on Kaggle GPU
+        uses: Frederisk/kaggle-action@v2
+        with:
+          api_token: ${{ secrets.KAGGLE_API_TOKEN }}
+          title: ScgoGpuCI
+          code_file: .github/scripts/kaggle_gpu_runner.py
+          enable_gpu: enable
+          enable_internet: enable
+          is_private: true
+          fetch_time_seconds: "5"

@@ -3,7 +3,7 @@ name: CI
 # Marker contract (pytest -m):
 #   PR + main fast:  not slow and not integration
 #   PR + main slow:  slow and not benchmark
-#   excluded:        benchmark, requires_cuda (no GPU runner)
+#   excluded:        benchmark, requires_cuda (GPU: manual kaggle-gpu.yml)
 on:
   push:
     branches: [ main ]
