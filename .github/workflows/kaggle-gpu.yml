@@ -105,9 +105,9 @@ jobs:
           mkdir -p ~/.kaggle
           printf '%s' "$KAGGLE_API_TOKEN" > ~/.kaggle/access_token
           chmod 600 ~/.kaggle/access_token
-          tar -czf scgo-src.tar.gz --exclude=.git --exclude=scgo-src.tar.gz .
+          tar -czf /tmp/scgo-src.tar.gz --exclude=.git .
           mkdir -p scgo-dataset
-          mv scgo-src.tar.gz scgo-dataset/
+          cp /tmp/scgo-src.tar.gz scgo-dataset/
           cat > scgo-dataset/dataset-metadata.json <<'EOF'
           {
             "title": "SCGO CI Source",
@@ -161,7 +161,10 @@ jobs:
               )
           else:
               token = normalize_token(raw)
-          (kaggle_dir / "access_token").write_text(token, encoding="utf-8")
+          if token.startswith("KGAT_"):
+              (kaggle_dir / "access_token").write_text(token, encoding="utf-8")
+          else:
+              raise SystemExit("Expected KGAT access token in KAGGLE_API_TOKEN secret")
           PY
           chmod 600 ~/.kaggle/access_token
           kaggle kernels output scgogpuci -p /tmp/kaggle-log || true
