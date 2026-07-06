@@ -353,3 +353,33 @@ def test_validate_supported_cluster_deposit_allows_dissociation_when_integrity_d
         enforce_adsorbate_subgraph_integrity=False,
     )
     assert ok, msg
+
+
+def test_validate_supported_cluster_deposit_rejects_cross_fragment_adsorbate_bonding(
+    pt_slab: Atoms,
+) -> None:
+    n_slab = len(pt_slab)
+    z_top = slab_surface_extreme(pt_slab, 2, upper=True)
+    combined = _combined_core_ads_mobile(
+        pt_slab,
+        [[0.0, 0.0, z_top + 2.0], [0.0, 0.0, z_top + 4.0]],
+        [
+            [2.2, 0.4, z_top + 1.5],  # O (fragment 0)
+            [2.2, 0.4, z_top + 2.46],  # H (fragment 0) connected
+            [3.0, 0.4, z_top + 1.5],  # H (fragment 1) bonded to O (unwanted merge)
+        ],
+        core_symbols=["Pt", "Pt"],
+        ads_symbols=["O", "H", "H"],
+    )
+    ok, msg = validate_supported_cluster_deposit(
+        combined,
+        n_slab,
+        surface_normal_axis=2,
+        use_mic=False,
+        n_core_mobile=2,
+        adsorbate_fragment_lengths=[2, 1],
+        allow_cluster_fragmentation=True,
+        allow_adsorbate_surface_detachment=True,
+    )
+    assert not ok
+    assert "bonded to fragment" in msg

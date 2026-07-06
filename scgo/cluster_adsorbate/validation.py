@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from ase import Atoms
 
+from scgo.initialization.atomic_radii import get_covalent_radius
 from scgo.initialization.geometry_helpers import (
     _find_connected_components,
     validate_cluster_structure,
@@ -45,10 +46,11 @@ def validate_adsorbate_fragment_integrity(
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     use_mic: bool = False,
 ) -> tuple[bool, str]:
-    """Validate that each adsorbate fragment remains internally connected.
+    """Validate that adsorbate fragments preserve their chemical identities.
 
-    This check enforces non-dissociative adsorbate integrity for each fragment
-    independently. External bonds (to core or other fragments) are allowed.
+    Enforces two-way integrity:
+    1. each fragment remains internally connected (no dissociation)
+    2. no new bonds form between atoms that belong to different fragments
     """
     if not adsorbate_fragment_lengths:
         return True, ""
@@ -75,15 +77,17 @@ def validate_adsorbate_fragment_integrity(
 
     mobile_start = n_slab
     ads_start = mobile_start + n_core_mobile
+    fragment_index_ranges: list[list[int]] = []
     offset = 0
     for frag_idx, frag_len_raw in enumerate(adsorbate_fragment_lengths):
         frag_len = int(frag_len_raw)
-        if frag_len <= 1:
-            offset += frag_len
-            continue
         frag_global_indices = list(
             range(ads_start + offset, ads_start + offset + frag_len)
         )
+        fragment_index_ranges.append(frag_global_indices)
+        if frag_len <= 1:
+            offset += frag_len
+            continue
         fragment = atoms[frag_global_indices]
         components, _ = _find_connected_components(
             fragment,
@@ -99,5 +103,27 @@ def validate_adsorbate_fragment_integrity(
                 "components.",
             )
         offset += frag_len
+
+    if len(fragment_index_ranges) < 2:
+        return True, ""
+
+    symbols = atoms.get_chemical_symbols()
+    for i, fragment_i in enumerate(fragment_index_ranges):
+        for j in range(i + 1, len(fragment_index_ranges)):
+            fragment_j = fragment_index_ranges[j]
+            for idx_i in fragment_i:
+                radius_i = get_covalent_radius(symbols[idx_i])
+                for idx_j in fragment_j:
+                    radius_j = get_covalent_radius(symbols[idx_j])
+                    threshold = (radius_i + radius_j) * connectivity_factor
+                    distance = float(atoms.get_distance(idx_i, idx_j, mic=use_mic))
+                    if distance <= threshold:
+                        return (
+                            False,
+                            "Adsorbate fragment integrity check failed: "
+                            f"fragment {i} bonded to fragment {j} "
+                            f"(atoms {idx_i}-{idx_j}, distance={distance:.3f} Å, "
+                            f"threshold={threshold:.3f} Å).",
+                        )
 
     return True, ""
