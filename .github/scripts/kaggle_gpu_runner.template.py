@@ -157,6 +157,16 @@ def main() -> int:
         py = _resolve_python()
         pip = [*py, "-m", "pip"]
         run([*pip, "install", "--upgrade", "pip"])
+        run(
+            [
+                *pip,
+                "install",
+                "--no-cache-dir",
+                "torch>=2.12.0,<2.13",
+                "--index-url",
+                "https://download.pytorch.org/whl/cu124",
+            ]
+        )
         run([*pip, "install", "--no-cache-dir", "-e", ".[mace,dev]"])
 
         run(
