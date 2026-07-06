@@ -129,15 +129,14 @@ def test_run_go_ts_h2_has_no_ts_pairs(tmp_path) -> None:
 @pytest.mark.slow
 @pytest.mark.integration
 def test_run_go_surface_cluster_remains_chemisorbed(
-    tmp_path, surface_config_pt111
+    tmp_path, surface_config_pt111, minimal_ga_kwargs
 ) -> None:
     """Public run_go on a supported Pt cluster should stay bound to the slab."""
     params = get_testing_params()
     params["optimizer_params"]["ga"].update(
         {
-            "niter": 1,
-            "population_size": 4,
-            "niter_local_relaxation": 30,
+            **minimal_ga_kwargs,
+            "niter_local_relaxation": 400,
             "batch_size": 2,
             "surface_config": surface_config_pt111,
         }
