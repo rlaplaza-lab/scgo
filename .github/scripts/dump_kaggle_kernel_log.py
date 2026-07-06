@@ -4,9 +4,22 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+_REDACT_PATTERNS = (
+    re.compile(r"KGAT_[A-Za-z0-9_-]+"),
+    re.compile(r"(?i)(api[_-]?token|access[_-]?token|kaggle[_-]?key)\s*[:=]\s*\S+"),
+)
+
+
+def redact_text(text: str) -> str:
+    redacted = text
+    for pattern in _REDACT_PATTERNS:
+        redacted = pattern.sub("***", redacted)
+    return redacted
 
 
 def _render_log(log_path: Path) -> str:
@@ -48,10 +61,23 @@ def main() -> int:
     output_dir = Path(sys.argv[2])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(
+    completed = subprocess.run(
         ["kaggle", "kernels", "output", kernel, "-p", str(output_dir)],
         check=False,
+        capture_output=True,
+        text=True,
     )
+    if completed.stdout:
+        print(
+            redact_text(completed.stdout),
+            end="" if completed.stdout.endswith("\n") else "\n",
+        )
+    if completed.stderr:
+        print(
+            redact_text(completed.stderr),
+            end="" if completed.stderr.endswith("\n") else "\n",
+            file=sys.stderr,
+        )
 
     log_files = sorted(output_dir.rglob("*.log"))
     if not log_files:
@@ -59,12 +85,12 @@ def main() -> int:
         for path in sorted(output_dir.rglob("*")):
             if path.is_file():
                 print(f"===== {path} =====")
-                print(path.read_text(encoding="utf-8", errors="replace"))
+                print(redact_text(path.read_text(encoding="utf-8", errors="replace")))
         return 1
 
     for log_path in log_files:
         print(f"===== {log_path.name} =====")
-        print(_render_log(log_path))
+        print(redact_text(_render_log(log_path)))
     return 0
 
 

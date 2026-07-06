@@ -45,76 +45,26 @@ jobs:
           print(f"Wrote {out} ({len(rendered)} bytes)")
           PY
 
-      - name: Resolve Kaggle credentials
+      - name: Configure Kaggle credentials
         id: kaggle_creds
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          raw = os.environ["KAGGLE_API_TOKEN"].strip()
-          out = Path(os.environ["GITHUB_OUTPUT"])
-
-          def emit(key: str, value: str) -> None:
-              with out.open("a", encoding="utf-8") as fh:
-                  fh.write(f"{key}={value}\n")
-
-          def normalize_token(value: str) -> str:
-              return value.replace("\n", "").replace("\r", "").strip()
-
-          def emit_access_token(token: str) -> None:
-              normalized = normalize_token(token)
-              print(f"::add-mask::{normalized}")
-              emit("api_token", normalized)
-              emit("username", "")
-              emit("key", "")
-
-          def emit_legacy(username: str, key: str) -> None:
-              emit("api_token", "")
-              emit("username", normalize_token(username))
-              emit("key", normalize_token(key))
-
-          if raw.startswith("{"):
-              data = json.loads(raw)
-              token = normalize_token(
-                  str(data.get("token") or data.get("api_token") or data.get("key") or "")
-              )
-              username = normalize_token(str(data.get("username", "")))
-              if token.startswith("KGAT_"):
-                  emit_access_token(token)
-              elif token:
-                  emit_legacy(username, token)
-              else:
-                  raise SystemExit("KAGGLE_API_TOKEN JSON missing token/key field")
-          else:
-              token = normalize_token(raw)
-              if token.startswith("KGAT_"):
-                  emit_access_token(token)
-              else:
-                  raise SystemExit(
-                      "KAGGLE_API_TOKEN must be a KGAT_* access token or JSON "
-                      '{"username": "...", "key": "..."} for legacy credentials'
-                  )
-          PY
+        run: python .github/scripts/setup_kaggle_auth.py --emit-outputs
 
       - name: Publish CI source bundle to Kaggle dataset
         env:
-          KAGGLE_API_TOKEN: ${{ steps.kaggle_creds.outputs.api_token }}
-          KAGGLE_USERNAME: ${{ steps.kaggle_creds.outputs.username }}
-          KAGGLE_KEY: ${{ steps.kaggle_creds.outputs.key }}
           GIT_REF: ${{ inputs.ref }}
         run: |
           python -m pip install --upgrade kaggle
-          python .github/scripts/setup_kaggle_auth.py
           tar -czf /tmp/scgo-src.tar.gz \
             --exclude=.git \
             --exclude=./dist \
             --exclude=./Pt4_searches \
             --exclude='**/__pycache__' \
             --exclude='**/*.pyc' \
+            --exclude='./.kaggle' \
+            --exclude='**/kaggle.json' \
+            --exclude='./.env' \
             .
           mkdir -p scgo-dataset
           cp /tmp/scgo-src.tar.gz scgo-dataset/
@@ -160,11 +110,7 @@ jobs:
       - name: Dump Kaggle kernel log on failure
         if: failure()
         continue-on-error: true
-        env:
-          KAGGLE_API_TOKEN: ${{ steps.kaggle_creds.outputs.api_token }}
-          KAGGLE_USERNAME: ${{ steps.kaggle_creds.outputs.username }}
-          KAGGLE_KEY: ${{ steps.kaggle_creds.outputs.key }}
         run: |
           python -m pip install --upgrade kaggle
-          python .github/scripts/setup_kaggle_auth.py
+          python .github/scripts/setup_kaggle_auth.py --require-existing
           python .github/scripts/dump_kaggle_kernel_log.py scgogpuci /tmp/kaggle-log
