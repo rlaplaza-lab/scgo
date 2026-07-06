@@ -870,6 +870,7 @@ def test_find_ts_mace_gpu_torchsim(cu3_triangle, cu3_linear, temp_output_dir):
         assert "transition_state" in result
 
 
+@pytest.mark.requires_mace
 class TestTorchSimNEB:
     """TorchSim NEB with MACE (small clusters for fast tests)."""
 

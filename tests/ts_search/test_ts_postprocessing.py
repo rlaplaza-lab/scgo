@@ -688,6 +688,7 @@ def test_run_transition_state_search_resolves_neb_steps_auto(monkeypatch):
     )
 
 
+@pytest.mark.requires_mace
 def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch):
     """Ensure torchsim_params['max_steps']='auto' is resolved before NEB/TorchSim use."""
     from ase import Atoms

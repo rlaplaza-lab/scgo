@@ -17,6 +17,7 @@ from benchmark.benchmark_common import (
 from scgo.utils.timing_report import TIMING_JSON_FILENAME
 
 
+@pytest.mark.requires_mace
 def test_apply_ga_benchmark_overrides_enables_timing():
     params = get_benchmark_params(42, backend="mace")
     updated = apply_ga_benchmark_overrides(

@@ -328,6 +328,7 @@ def test_run_transition_state_search_parallel_neb_executes(
         assert "neb_converged" in r
 
 
+@pytest.mark.requires_mace
 def test_run_transition_state_search_parallel_neb_forwards_rng_and_perturb(
     monkeypatch, mock_database_dir
 ):

@@ -7,6 +7,7 @@ is now a mandatory dependency, these tests expect it to be available.
 import pytest
 
 
+@pytest.mark.requires_mace
 def test_infer_mace_model_name_from_calculator():
     from ase.calculators.calculator import Calculator
 
@@ -25,6 +26,7 @@ def test_infer_mace_model_name_from_calculator():
     assert infer_mace_model_name_from_calculator(calc) == "mace_matpes_0"
 
 
+@pytest.mark.requires_mace
 def test_try_extract_torchsim_model_from_mace_calculator():
     from unittest.mock import MagicMock
 
@@ -122,6 +124,7 @@ def test_force_dtype_conversion():
     assert np.allclose(atoms.calc.results["forces"][1], [-0.1, -0.2, -0.3])
 
 
+@pytest.mark.requires_mace
 def test_torchsim_basic_initialization():
     """Test basic TorchSimBatchRelaxer initialization."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
@@ -266,6 +269,7 @@ def test_torchsim_step_kwargs_removed():
         )
 
 
+@pytest.mark.requires_mace
 def test_torchsim_optimizer_kwargs_flatten_into_runner_kwargs():
     """``optimizer_kwargs`` should be forwarded flat as **optimizer_kwargs to ts.optimize."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
@@ -281,6 +285,7 @@ def test_torchsim_optimizer_kwargs_flatten_into_runner_kwargs():
     assert "step_kwargs" not in relaxer._runner_kwargs
 
 
+@pytest.mark.requires_mace
 def test_torchsim_autobatcher_default_off_on_cpu():
     """On CPU the default ``autobatcher=None`` disables autobatching (docs recommendation)."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
@@ -369,6 +374,7 @@ def test_torchsim_autobatcher_probe_cap_defaults_to_torchsim_when_unset(monkeypa
     assert "max_atoms_to_try" not in captured
 
 
+@pytest.mark.requires_mace
 def test_torchsim_autobatcher_true_on_cpu_warns_and_coerces(caplog):
     """Passing ``autobatcher=True`` on CPU logs warning and disables autobatching."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
@@ -382,6 +388,7 @@ def test_torchsim_autobatcher_true_on_cpu_warns_and_coerces(caplog):
     assert "autobatcher" not in relaxer._runner_kwargs
 
 
+@pytest.mark.requires_mace
 def test_torchsim_optimizer_set_correctly():
     """Test that TorchSimBatchRelaxer sets optimizer correctly for different torch-sim versions.
 
