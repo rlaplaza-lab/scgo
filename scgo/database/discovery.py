@@ -165,11 +165,15 @@ class DatabaseDiscovery:
 
         for db_path in db_files:
             try:
-                run_id = resolve_run_id_from_db_path(str(db_path), base_dir=str(self.base_dir))
+                run_id = resolve_run_id_from_db_path(
+                    str(db_path), base_dir=str(self.base_dir)
+                )
                 if run_id:
                     if run_id not in run_formula_cache:
                         metadata = load_run_metadata(str(self.base_dir / run_id))
-                        run_formula_cache[run_id] = metadata.formula if metadata else None
+                        run_formula_cache[run_id] = (
+                            metadata.formula if metadata else None
+                        )
                     known_formula = run_formula_cache[run_id]
                     if known_formula is not None:
                         if known_formula == target_formula:
@@ -217,7 +221,9 @@ def _glob_run_database_paths(
     pattern_name = db_filename if db_filename else "*.db"
     return sorted(
         Path(p)
-        for p in glob.glob(os.path.join(base_dir, "run_*", pattern_name), recursive=False)
+        for p in glob.glob(
+            os.path.join(base_dir, "run_*", pattern_name), recursive=False
+        )
     )
 
 

@@ -1268,7 +1268,9 @@ def _prepare_run_go_campaign_context(
     if params is not None:
         _reject_system_keys(params, context="run_go_campaign")
     params_prep = (
-        _with_surface_in_optimizers(params, surface_config=surface_config) if params else None
+        _with_surface_in_optimizers(params, surface_config=surface_config)
+        if params
+        else None
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=params)
     eff_params = _with_system_type_in_optimizer_params(params_prep, system_type=st)
@@ -1299,7 +1301,11 @@ def _prepare_run_go_campaign_context(
     campaign_root = (
         str(Path(out_path).expanduser().resolve())
         if out_path is not None
-        else str(resolve_go_searches_dir(None, get_cluster_formula(full_compositions[0])).parent)
+        else str(
+            resolve_go_searches_dir(
+                None, get_cluster_formula(full_compositions[0])
+            ).parent
+        )
     )
     return RunGOCampaignContext(
         compositions=full_compositions,
@@ -1444,7 +1450,9 @@ def _prepare_run_ts_search_context(
     )
     if ts_params is not None:
         _reject_system_keys(ts_params, context=context_name, kind="ts")
-    ts_mat = _resolve_ts_params(ts_params, system_type=st, surface_config=surface_config)
+    ts_mat = _resolve_ts_params(
+        ts_params, system_type=st, surface_config=surface_config
+    )
     ts_base = initialize_ts_params(None, system_type=st, surface_config=surface_config)
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     ts_kwargs = _coerce_ts_for_runner(
