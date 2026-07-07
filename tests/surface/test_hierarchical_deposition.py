@@ -68,18 +68,17 @@ def test_validate_rejects_bad_partition():
         )
 
 
-def test_validate_rejects_wrong_list_order_with_matching_multiset():
-    with pytest.raises(ValueError, match="composition must equal core_symbols"):
-        validate_adsorbate_definition(
-            system_type="gas_cluster_adsorbate",
-            composition=["O", "H", "Pt", "Pt", "Pt"],
-            adsorbate_definition={
-                "core_symbols": ["Pt", "Pt", "Pt"],
-                "adsorbate_symbols": ["O", "H"],
-                "adsorbate_fragment_lengths": [2],
-            },
-            context="test",
-        )
+def test_validate_accepts_wrong_list_order_with_matching_multiset():
+    validate_adsorbate_definition(
+        system_type="gas_cluster_adsorbate",
+        composition=["O", "H", "Pt", "Pt", "Pt"],
+        adsorbate_definition={
+            "core_symbols": ["Pt", "Pt", "Pt"],
+            "adsorbate_symbols": ["O", "H"],
+            "adsorbate_fragment_lengths": [2],
+        },
+        context="test",
+    )
 
 
 def test_hierarchical_deposition_ordering_and_slab_prefix():

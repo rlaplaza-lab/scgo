@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from ase import Atoms
 
@@ -17,13 +17,16 @@ from scgo.cluster_adsorbate.validation import (
     validate_adsorbate_fragment_integrity,
     validate_combined_cluster_structure,
 )
-from scgo.initialization.geometry_helpers import _find_connected_components
+from scgo.initialization.geometry_helpers import (
+    _find_connected_components,
+)
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.validation import (
     validate_supported_cluster_deposit,
     validate_surface_config_slab_prefix,
 )
+from scgo.utils.helpers import get_composition_counts
 
 SystemType = Literal[
     "gas_cluster",
@@ -369,35 +372,78 @@ def validate_structure_for_system_type(
                     raise ValueError(msg)
 
 
-def validate_composition_against_adsorbate(
-    composition: list[str],
+def _core_and_ads_lists(
     adsorbate_definition: AdsorbateDefinition,
     *,
     context: str = "",
 ) -> tuple[list[str], list[str]]:
-    """Check ordered partition and return ``(core_list, ads_list)`` as ``list[str]``.
-
-    Both ``core_symbols`` and ``adsorbate_symbols`` must be present (use ``[]`` if
-    empty). The run ``composition`` must equal ``core_symbols + adsorbate_symbols``
-    in order. Element symbols may repeat across core and adsorbate (e.g. lattice
-    O in an oxide core plus O in an OH adsorbate); partitioning is by atom index,
-    not by chemical element.
-
-    Raises:
-        ValueError: If keys are missing, both sides are empty for non-empty
-            composition, or the ordered partition does not match ``composition``.
-    """
     prefix = f"{context}: " if context else ""
-
     cr = adsorbate_definition.get("core_symbols", [])
     ad = adsorbate_definition.get("adsorbate_symbols", [])
     if not isinstance(cr, list) or not isinstance(ad, list):
         raise ValueError(
             f"{prefix}adsorbate_definition['core_symbols'] and ['adsorbate_symbols'] must be lists."
         )
+    return [str(s) for s in cr], [str(s) for s in ad]
 
-    core_list = [str(s) for s in cr]
-    ads_list = [str(s) for s in ad]
+
+def resolve_mobile_composition(
+    composition: list[str],
+    adsorbate_definition: AdsorbateDefinition,
+    *,
+    context: str = "",
+) -> list[str]:
+    """Return ``core_symbols + adsorbate_symbols`` for a matching composition."""
+    prefix = f"{context}: " if context else ""
+    core_list, ads_list = _core_and_ads_lists(adsorbate_definition, context=context)
+    expected = core_list + ads_list
+    comp = [str(s) for s in composition]
+
+    if comp == expected:
+        return expected
+
+    comp_counts = get_composition_counts(comp)
+    exp_counts = get_composition_counts(expected)
+    if comp_counts == exp_counts or (
+        ads_list and comp_counts == get_composition_counts(core_list)
+    ):
+        return expected
+
+    raise ValueError(
+        f"{prefix}composition must match core_symbols + adsorbate_symbols: "
+        f"got counts {dict(comp_counts)}, expected {dict(exp_counts)}."
+    )
+
+
+def extract_adsorbate_definition_from_params(
+    params: dict[str, Any] | None,
+) -> AdsorbateDefinition | None:
+    if not params:
+        return None
+    top = params.get("adsorbate_definition")
+    if isinstance(top, dict):
+        return top
+    for slot in (params.get("optimizer_params") or {}).values():
+        if isinstance(slot, dict):
+            ex = slot.get("adsorbate_definition")
+            if isinstance(ex, dict):
+                return ex
+    return None
+
+
+def validate_composition_against_adsorbate(
+    composition: list[str],
+    adsorbate_definition: AdsorbateDefinition,
+    *,
+    context: str = "",
+) -> tuple[list[str], list[str]]:
+    """Check composition against the core/adsorbate partition; return both lists.
+
+    ``composition`` may match ``core_symbols + adsorbate_symbols`` exactly, share
+    the same element counts in a different order, or list only ``core_symbols``.
+    """
+    prefix = f"{context}: " if context else ""
+    core_list, ads_list = _core_and_ads_lists(adsorbate_definition, context=context)
 
     if not composition and not core_list and not ads_list:
         return core_list, ads_list
@@ -406,12 +452,7 @@ def validate_composition_against_adsorbate(
             f"{prefix}core_symbols and adsorbate_symbols cannot both be empty unless composition is also empty."
         )
 
-    expected = core_list + ads_list
-    if list(composition) != expected:
-        raise ValueError(
-            f"{prefix}composition must equal core_symbols + adsorbate_symbols. Got {composition}, expected {expected}."
-        )
-
+    resolve_mobile_composition(list(composition), adsorbate_definition, context=context)
     return core_list, ads_list
 
 

@@ -34,6 +34,7 @@ from time import perf_counter
 from typing import Any, Literal
 
 from ase import Atoms
+from ase.formula import Formula
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.param_presets import get_default_params
@@ -43,8 +44,10 @@ from scgo.system_types import (
     AdsorbateDefinition,
     SystemType,
     build_adsorbate_definition_from_inputs,
+    extract_adsorbate_definition_from_params,
     get_system_policy,
     resolve_connectivity_factor,
+    resolve_mobile_composition,
     validate_adsorbate_definition,
     validate_system_type_settings,
 )
@@ -794,7 +797,7 @@ def _run_go_trials(
 def parse_composition_arg(comp_str: str) -> list[str]:
     """Supports two formats:
     - Comma-separated symbols: "Pt,Pt,Au"
-    - Compact formula: "Pt3Au" or "AuPt2"
+    - Compact formula: "Pt3Au", "HO2Ru9W2", etc. (via :class:`ase.formula.Formula`)
     """
     comp_str = comp_str.strip()
     if "," in comp_str:
@@ -803,28 +806,17 @@ def parse_composition_arg(comp_str: str) -> list[str]:
         normalized = [p[0].upper() + p[1:].lower() if len(p) > 0 else p for p in parts]
         return normalized
 
-    # Parse compact formula, e.g., "Pt3Au" or "pt3au" -> [("Pt", "3"), ("Au", "")]
-    # Accept lower- or upper-case element symbols and optional integer counts
-    token_re = re.compile(r"([A-Za-z]{1,2})(\d*)", flags=re.IGNORECASE)
-    matches = token_re.findall(comp_str)
-    if not matches:
+    if re.search(r"([A-Za-z]{1,2})0(?![0-9])", comp_str):
         raise ValueError(f"Unable to parse composition string: {comp_str}")
 
-    reconstructed = "".join(elem + count for elem, count in matches)
-    if reconstructed.lower() != comp_str.lower():
-        raise ValueError(f"Unable to parse composition string: {comp_str}")
-
-    composition: list[str] = []
-    for elem, count_str in matches:
-        # Normalize capitalization: first letter uppercase, rest lowercase
-        elem_norm = elem[0].upper() + elem[1:].lower() if len(elem) > 0 else elem
-        count = int(count_str) if count_str else 1
-        if count == 0:
-            raise ValueError(
-                f"Element '{elem_norm}' has zero count in composition string: '{comp_str}'"
-            )
-        composition.extend([elem_norm] * count)
-
+    try:
+        composition = [str(symbol) for symbol in Formula(comp_str, strict=True)]
+    except ValueError as exc:
+        raise ValueError(f"Unable to parse composition string: {comp_str}") from exc
+    if not composition:
+        raise ValueError(
+            f"Unable to parse composition string: {comp_str} (zero total atom count)"
+        )
     return composition
 
 
@@ -1274,14 +1266,35 @@ def _prepare_run_go_campaign_context(
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=params)
     eff_params = _with_system_type_in_optimizer_params(params_prep, system_type=st)
+    preset_ads_def = (
+        extract_adsorbate_definition_from_params(eff_params)
+        if adsorbates is None
+        else None
+    )
     full_compositions: list[list[str]] = []
+    ads_def: AdsorbateDefinition | None = None
+    ads_temp: list[Atoms] | Atoms | None = None
     for composition_item in _as_composition_list(compositions):
-        ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
-            system_type=st,
-            composition=composition_item,
-            adsorbates=adsorbates,
-            context="run_go_campaign",
-        )
+        comp = _as_composition(composition_item)
+        if adsorbates is not None:
+            ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
+                system_type=st,
+                composition=comp,
+                adsorbates=adsorbates,
+                context="run_go_campaign",
+            )
+        elif preset_ads_def is not None:
+            ads_def = preset_ads_def
+            full_comp = resolve_mobile_composition(
+                comp, preset_ads_def, context="run_go_campaign"
+            )
+        else:
+            ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
+                system_type=st,
+                composition=comp,
+                adsorbates=None,
+                context="run_go_campaign",
+            )
         validate_adsorbate_definition(
             system_type=st,
             composition=full_comp,
@@ -1289,9 +1302,11 @@ def _prepare_run_go_campaign_context(
             context="run_go_campaign",
         )
         full_compositions.append(full_comp)
-        eff_params["adsorbate_definition"] = ads_def
-        eff_params["adsorbate_fragment_template"] = ads_temp
-    if adsorbates is not None:
+        if ads_def is not None:
+            eff_params["adsorbate_definition"] = ads_def
+        if ads_temp is not None:
+            eff_params["adsorbate_fragment_template"] = ads_temp
+    if adsorbates is not None or preset_ads_def is not None:
         eff_params = _with_adsorbate_in_optimizers(
             eff_params,
             adsorbate_definition=eff_params.get("adsorbate_definition"),

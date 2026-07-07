@@ -207,6 +207,15 @@ def test_parse_composition_arg_case_insensitive():
     assert parse_composition_arg("pt,pt,au") == ["Pt", "Pt", "Au"]
 
 
+def test_parse_composition_arg_hydrogen_oxide_formulas():
+    assert parse_composition_arg("HO2") == ["H", "O", "O"]
+    assert parse_composition_arg("HO2Ru9W2") == ["H", "O", "O"] + ["Ru"] * 9 + [
+        "W",
+        "W",
+    ]
+    assert parse_composition_arg("H2O") == ["H", "H", "O"]
+
+
 def test_parse_composition_arg_zero_count():
     # Zero counts in compact formula should be rejected
     with pytest.raises(ValueError):

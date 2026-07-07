@@ -130,6 +130,20 @@ class TestIcosahedronGeneration:
         assert np.allclose(atoms1.get_positions(), atoms2.get_positions())
 
 
+class TestHcpElementTemplates:
+    """ASE cluster templates must work for HCP reference-structure elements."""
+
+    @pytest.mark.parametrize(
+        "generator",
+        [generate_icosahedron, generate_decahedron, generate_octahedron],
+    )
+    def test_ase_templates_work_for_hcp_element(self, generator, rng):
+        atoms = generator(["Mg"], 13, rng=rng)
+        assert atoms is not None
+        assert len(atoms) == 13
+        assert all(sym == "Mg" for sym in atoms.get_chemical_symbols())
+
+
 class TestDecahedronGeneration:
     """Tests for decahedral structure generation."""
 

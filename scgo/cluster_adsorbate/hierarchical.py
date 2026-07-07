@@ -116,7 +116,6 @@ def build_hierarchical_core_fragment_cluster(
     from scgo.system_types import resolve_adsorbate_fragments
 
     core_list = [str(s) for s in adsorbate_definition["core_symbols"]]
-    ads_list = [str(s) for s in adsorbate_definition["adsorbate_symbols"]]
     fragments = resolve_adsorbate_fragments(
         fragment_templates,
         adsorbate_definition,
@@ -133,14 +132,6 @@ def build_hierarchical_core_fragment_cluster(
         )
 
     ca = resolve_cluster_adsorbate_config(cluster_adsorbate_config)
-    expected_mobile = list(core_list) + list(ads_list)
-    if list(full_composition) != expected_mobile:
-        raise ValueError(
-            "Hierarchical init requires the mobile composition to be "
-            "core_symbols (in order) then adsorbate_symbols (in order). "
-            f"Got {list(full_composition)!r}, expected {expected_mobile!r}."
-        )
-
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
     for _ in range(max_placement_attempts):

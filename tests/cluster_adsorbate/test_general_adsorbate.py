@@ -15,7 +15,10 @@ from scgo.cluster_adsorbate import (
     place_fragment_on_cluster,
     relax_metal_cluster_with_adsorbate,
 )
-from scgo.system_types import validate_structure_for_system_type
+from scgo.system_types import (
+    resolve_mobile_composition,
+    validate_structure_for_system_type,
+)
 
 
 def _pt_triangle() -> Atoms:
@@ -250,3 +253,20 @@ def test_build_adsorbate_definition_allows_shared_oxygen_in_core_and_adsorbate()
     assert ads_def["core_symbols"] == core
     assert ads_def["adsorbate_symbols"] == ["O", "H"]
     assert full == core + ["O", "H"]
+
+
+@pytest.mark.parametrize(
+    "composition",
+    [
+        ["Ru"] * 9 + ["W", "W", "O", "O", "H"],
+        ["Ru"] * 9 + ["W", "W", "O"],
+    ],
+)
+def test_resolve_mobile_composition(composition: list[str]) -> None:
+    core = ["Ru"] * 9 + ["W", "W", "O"]
+    ads_def = {
+        "core_symbols": core,
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    assert resolve_mobile_composition(composition, ads_def) == core + ["O", "H"]

@@ -38,6 +38,7 @@ from scgo.surface.validation import (
 )
 from scgo.system_types import (
     get_system_policy,
+    resolve_mobile_composition,
     validate_adsorbate_definition,
     validate_system_type_settings,
 )
@@ -483,6 +484,9 @@ def scgo(
         if isinstance(surface_cfg, SurfaceSystemConfig)
         else None,
     )
+    ads_def = optimizer_kwargs.get("adsorbate_definition")
+    if isinstance(ads_def, dict) and policy.has_adsorbate:
+        composition = resolve_mobile_composition(composition, ads_def, context="scgo")
     validate_adsorbate_definition(
         system_type=system_type,
         composition=composition,

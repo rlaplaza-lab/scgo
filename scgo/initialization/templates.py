@@ -42,6 +42,7 @@ import numpy as np
 from ase import Atom, Atoms
 from ase.cluster import Decahedron, Icosahedron, Octahedron
 from ase.cluster.cluster import Cluster
+from ase.data import atomic_numbers, reference_states
 from ase.symbols import Symbols
 from numpy.random import Generator
 
@@ -124,6 +125,14 @@ def _get_typical_bond_length(composition: list[str]) -> float:
     radii: list[float] = [get_covalent_radius(elem) for elem in unique_elements]
     avg_radius: float = sum(radii) / len(radii)
     return 2.0 * avg_radius
+
+
+def _get_ase_lattice_constant(symbol: str) -> float:
+    """Lattice constant for ASE cluster builders (rescaled afterward anyway)."""
+    ref = reference_states[atomic_numbers[symbol]]
+    if ref is not None and "a" in ref:
+        return float(ref["a"])
+    return _get_typical_bond_length([symbol]) * np.sqrt(2.0)
 
 
 def get_nearest_magic_number(n_atoms: int) -> int | None:
@@ -797,8 +806,8 @@ def _generate_custom_template(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError) as exc:
-        logger.debug("Template creation from positions failed: %s", exc)
+    except (ValueError, RuntimeError, AttributeError):
+        # Expected during template discovery; logging here creates excessive noise.
         return None
 
 
@@ -860,14 +869,22 @@ def _register_ase_template(
 _register_ase_template(
     "icosahedron",
     find_params_func=_find_icosahedron_shells,
-    generate_base_func=lambda elem, params: Icosahedron(symbol=elem, noshells=params),
+    generate_base_func=lambda elem, params: Icosahedron(
+        symbol=elem,
+        noshells=params,
+        latticeconstant=_get_ase_lattice_constant(elem),
+    ),
 )
 
 _register_ase_template(
     "decahedron",
     find_params_func=_find_decahedron_params,
     generate_base_func=lambda elem, params: Decahedron(
-        symbol=elem, p=params[0], q=params[1], r=params[2]
+        symbol=elem,
+        p=params[0],
+        q=params[1],
+        r=params[2],
+        latticeconstant=_get_ase_lattice_constant(elem),
     ),
 )
 
@@ -875,7 +892,10 @@ _register_ase_template(
     "octahedron",
     find_params_func=_find_octahedron_params,
     generate_base_func=lambda elem, params: Octahedron(
-        symbol=elem, length=params[0], cutoff=params[1]
+        symbol=elem,
+        length=params[0],
+        cutoff=params[1],
+        latticeconstant=_get_ase_lattice_constant(elem),
     ),
 )
 
@@ -946,8 +966,8 @@ def _generate_ase_template_with_common_pattern(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError) as exc:
-        logger.debug("Template creation from positions failed: %s", exc)
+    except (ValueError, RuntimeError, AttributeError):
+        # Expected during template discovery; logging here creates excessive noise.
         return None
 
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.1
+
+### Fixed
+
+- ASE icosahedron/decahedron/octahedron templates for HCP elements by passing an
+  explicit lattice constant (structures are still rescaled to covalent bond length).
+- Compact formula parsing for hydrogen–oxide strings such as ``HO2Ru9W2`` (via ASE
+  ``Formula`` instead of mis-reading ``Ho`` as holmium).
+- Gas/surface adsorbate runs with a preset ``adsorbate_definition``: reconcile
+  campaign composition to ``core_symbols + adsorbate_symbols`` when counts match
+  but symbol order differs, or when only the core formula is supplied.
+
+### Changed
+
+- Template discovery failures no longer emit per-attempt debug noise for expected
+  ASE lattice-guess misses.
+
 ## 0.5.0
 
 ### Added
