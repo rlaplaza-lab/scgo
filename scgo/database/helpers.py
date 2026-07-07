@@ -618,7 +618,9 @@ def load_reference_structures(
     else:
         root = Path(base_dir) if base_dir is not None else Path.cwd()
         search_glob = str(root / db_glob_pattern)
-    db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_database(p)]
+    db_files = [
+        p for p in glob.glob(search_glob, recursive=True) if is_scgo_database(p)
+    ]
 
     if not db_files:
         logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
@@ -633,6 +635,7 @@ def load_reference_structures(
 
     for db_file in db_files:
         try:
+            resolved_run_id = resolve_run_id_from_db_path(db_file, base_dir=base_dir)
             for energy, atoms in iter_database_minima(
                 db_file,
                 chunk_size=200,
@@ -646,10 +649,26 @@ def load_reference_structures(
                         continue
 
                 if len(heap) < max_structures:
+                    add_metadata(
+                        atoms,
+                        run_id=resolved_run_id,
+                        source_db_relpath=os.path.relpath(
+                            db_file,
+                            str(base_dir) if base_dir is not None else os.getcwd(),
+                        ),
+                    )
                     heapq.heappush(heap, (-energy, counter, atoms))
                     counter += 1
                 elif energy < -heap[0][0]:
                     counter += 1
+                    add_metadata(
+                        atoms,
+                        run_id=resolved_run_id,
+                        source_db_relpath=os.path.relpath(
+                            db_file,
+                            str(base_dir) if base_dir is not None else os.getcwd(),
+                        ),
+                    )
                     heapq.heapreplace(heap, (-energy, counter, atoms))
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
             logger.debug(f"Failed to extract minima from {db_file}: {e}")

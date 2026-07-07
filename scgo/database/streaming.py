@@ -68,15 +68,19 @@ def _load_atoms_chunk(
     for row_id in row_ids:
         atoms = by_id.get(row_id)
         if atoms is None:
-            with contextlib.suppress(
+            try:
+                atoms = da.get_atoms(row_id)
+            except (
                 KeyError,
                 IndexError,
                 sqlite3.DatabaseError,
                 ValueError,
                 TypeError,
                 json.JSONDecodeError,
-            ):
-                atoms = da.get_atoms(row_id)
+            ) as exc:
+                logger.warning(
+                    "Failed to fetch atoms id=%s from chunked stream: %s", row_id, exc
+                )
         if atoms is not None:
             out.append((row_id, atoms))
     return out
