@@ -55,7 +55,11 @@ def configure_data_connection_settings(
     if backend is None:
         return
 
-    with backend.managed_connection() as conn:
+    _open_ase_db_backend(backend)
+    conn = getattr(backend, "connection", None)
+    try:
+        if conn is None:
+            return
         _ensure_sqlite_json1(conn=conn)
         apply_sqlite_pragmas(
             conn,
@@ -63,6 +67,12 @@ def configure_data_connection_settings(
             cache_size_mb=cache_size_mb,
             wal_mode=wal_mode,
         )
+    finally:
+        if getattr(backend, "connection", None) is not None:
+            with contextlib.suppress(
+                sqlite3.OperationalError, sqlite3.DatabaseError, AttributeError
+            ):
+                backend.__exit__(None, None, None)
 
 
 def activate_data_connection(
