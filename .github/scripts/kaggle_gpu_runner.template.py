@@ -365,6 +365,7 @@ def main() -> int:
 
         env = os.environ.copy()
         env["SCGO_BATCH_TEST_SAMPLES"] = "15"
+        env.setdefault("PYTHONUNBUFFERED", "1")
 
         pytest_cmd = [
             *py,
@@ -375,6 +376,11 @@ def main() -> int:
             PYTEST_MARKER,
             "-v",
             "--tb=short",
+            "--capture=tee-sys",
+            "--log-cli-level=INFO",
+            "--log-cli-format=%(asctime)s %(levelname)s %(name)s: %(message)s",
+            "-rA",
+            "--durations=25",
         ]
         log("+ " + " ".join(pytest_cmd))
         completed = subprocess.run(pytest_cmd, env=env)
