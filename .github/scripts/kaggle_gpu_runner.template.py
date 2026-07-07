@@ -318,7 +318,7 @@ def _assert_numpy_version(py: list[str]) -> None:
                 "    raise SystemExit(\n"
                 "        f'NumPy {np.__version__} does not satisfy {spec!r}'\n"
                 "    )\n"
-                f"print(f'NumPy {{np.__version__}} satisfies {spec!r}')\n"
+                "print(f'NumPy {np.__version__} satisfies {spec!r}')\n"
             ),
         ]
     )
