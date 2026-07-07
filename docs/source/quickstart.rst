@@ -625,6 +625,10 @@ To reload minima from completed searches without re-running GO:
    with SCGODatabaseManager(base_dir="Pt5_searches") as manager:
        refs = manager.load_reference_structures("**/*.db", composition=["Pt"] * 5)
 
+``SCGODatabaseManager`` caching uses both TTL and a lightweight filesystem
+fingerprint (database file count/path/mtime), so cached reads are invalidated
+when matching database files are added, removed, or updated.
+
 See :mod:`scgo.database` for HPC-oriented database access patterns.
 
 ----------

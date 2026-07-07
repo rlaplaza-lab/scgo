@@ -36,7 +36,7 @@ from scgo.database.schema import (
     is_scgo_database,
     stamp_scgo_database,
 )
-from scgo.database.streaming import iter_relaxed_structures
+from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock, retry_with_backoff
 from scgo.utils.helpers import (
     ensure_directory_exists,
@@ -48,6 +48,7 @@ from scgo.utils.logging import get_logger
 from scgo.utils.run_tracking import load_run_metadata, resolve_run_id_from_db_path
 
 logger = get_logger(__name__)
+_MIN_DB_PARALLEL_LOAD_TASKS = 4
 
 
 def _ensure_database_indices(
@@ -521,25 +522,28 @@ def load_previous_run_results(
         logger.info(f"No databases found in {base_output_dir}")
         return []
 
+    if max_workers is None:
+        resolved_max_workers = max(1, multiprocessing.cpu_count() // 2)
+    else:
+        resolved_max_workers = max_workers
+
     use_parallel = (
         parallel
-        and len(all_db_files) >= 4
+        and len(all_db_files) >= _MIN_DB_PARALLEL_LOAD_TASKS
         and multiprocessing.current_process().name == "MainProcess"
+        and resolved_max_workers > 1
     )
 
     all_minima: list[tuple[float, Atoms]] = []
 
     if use_parallel:
-        if max_workers is None:
-            max_workers = max(1, multiprocessing.cpu_count() // 2)
-
         logger.info(
             f"Loading {len(all_db_files)} databases in parallel "
-            f"with {max_workers} workers"
+            f"with {resolved_max_workers} workers"
         )
 
         try:
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            with ProcessPoolExecutor(max_workers=resolved_max_workers) as executor:
                 futures = {
                     executor.submit(
                         _load_single_database_worker,
@@ -614,7 +618,7 @@ def load_reference_structures(
     else:
         root = Path(base_dir) if base_dir is not None else Path.cwd()
         search_glob = str(root / db_glob_pattern)
-    db_files = glob.glob(search_glob, recursive=True)
+    db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_database(p)]
 
     if not db_files:
         logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
@@ -629,29 +633,27 @@ def load_reference_structures(
 
     for db_file in db_files:
         try:
-            minima = extract_minima_from_database_file(
-                db_file, run_id=resolve_run_id_from_db_path(db_file)
-            )
+            for energy, atoms in iter_database_minima(
+                db_file,
+                chunk_size=200,
+                require_final_minimum=True,
+                exclude_transition_states=True,
+            ):
+                if target_counts is not None:
+                    atoms_symbols = atoms.get_chemical_symbols()
+                    atoms_counts = get_composition_counts(atoms_symbols)
+                    if atoms_counts != target_counts:
+                        continue
+
+                if len(heap) < max_structures:
+                    heapq.heappush(heap, (-energy, counter, atoms))
+                    counter += 1
+                elif energy < -heap[0][0]:
+                    counter += 1
+                    heapq.heapreplace(heap, (-energy, counter, atoms))
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
             logger.debug(f"Failed to extract minima from {db_file}: {e}")
             continue
-
-        for energy, atoms in minima:
-            if not get_metadata(atoms, "final_unique_minimum", False):
-                continue
-
-            if target_counts is not None:
-                atoms_symbols = atoms.get_chemical_symbols()
-                atoms_counts = get_composition_counts(atoms_symbols)
-                if atoms_counts != target_counts:
-                    continue
-
-            if len(heap) < max_structures:
-                heapq.heappush(heap, (-energy, counter, atoms))
-                counter += 1
-            elif energy < -heap[0][0]:
-                counter += 1
-                heapq.heapreplace(heap, (-energy, counter, atoms))
 
     if not heap:
         logger.warning("No final unique minima found in databases matching the pattern")

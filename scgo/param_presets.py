@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from scgo.constants import (
@@ -129,6 +130,7 @@ def _assert_ts_defaults_match_system_policies() -> None:
 
 
 _assert_ts_defaults_match_system_policies()
+_DEFAULT_PARAMS_TEMPLATE: dict[str, Any] | None = None
 
 
 def get_ts_defaults(system_type: SystemType) -> dict[str, Any]:
@@ -152,81 +154,84 @@ def get_default_params() -> dict[str, Any]:
     as-is or override keys (omitted keys are filled via
     :func:`scgo.utils.run_helpers.initialize_params`).
     """
-    return {
-        "validate_with_hessian": False,
-        "calculator": "MACE",
-        "seed": None,  # Will be overridden by function parameter
-        "calculator_kwargs": {"model_name": "mace_matpes_0"},
-        "fmax_threshold": 0.05,
-        "check_hessian": True,
-        "imag_freq_threshold": 50.0,
-        "tag_final_minima": True,
-        "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
-        "allow_cluster_fragmentation": False,
-        "allow_adsorbate_surface_detachment": False,
-        "enforce_adsorbate_subgraph_integrity": True,
-        "freeze_adsorbate_internal_geometry": False,
-        "fitness_strategy": "low_energy",  # Default: minimize energy
-        "diversity_reference_db": None,  # For diversity strategy
-        "diversity_max_references": 100,  # Performance limit
-        "diversity_update_interval": 5,  # Update references every N iterations/generations
-        "optimizer_params": {
-            "simple": {
-                "optimizer": "FIRE",
-                "fmax": 0.05,
-                "niter": 1,
-                "niter_local_relaxation": "auto",
-                "system_type": "gas_cluster",
+    global _DEFAULT_PARAMS_TEMPLATE
+    if _DEFAULT_PARAMS_TEMPLATE is None:
+        _DEFAULT_PARAMS_TEMPLATE = {
+            "validate_with_hessian": False,
+            "calculator": "MACE",
+            "seed": None,  # Will be overridden by function parameter
+            "calculator_kwargs": {"model_name": "mace_matpes_0"},
+            "fmax_threshold": 0.05,
+            "check_hessian": True,
+            "imag_freq_threshold": 50.0,
+            "tag_final_minima": True,
+            "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
+            "allow_cluster_fragmentation": False,
+            "allow_adsorbate_surface_detachment": False,
+            "enforce_adsorbate_subgraph_integrity": True,
+            "freeze_adsorbate_internal_geometry": False,
+            "fitness_strategy": "low_energy",  # Default: minimize energy
+            "diversity_reference_db": None,  # For diversity strategy
+            "diversity_max_references": 100,  # Performance limit
+            "diversity_update_interval": 5,  # Update references every N iterations/generations
+            "optimizer_params": {
+                "simple": {
+                    "optimizer": "FIRE",
+                    "fmax": 0.05,
+                    "niter": 1,
+                    "niter_local_relaxation": "auto",
+                    "system_type": "gas_cluster",
+                },
+                "bh": {
+                    "optimizer": "FIRE",
+                    "temperature": 500 * 8.617e-5,  # 500K in eV
+                    "fmax": 0.05,
+                    "niter": "auto",
+                    "dr": 0.2,
+                    "move_fraction": 0.3,
+                    "niter_local_relaxation": "auto",
+                    "move_strategy": "random",
+                    "deduplicate": True,
+                    "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+                    "comparator_tol": DEFAULT_COMPARATOR_TOL,
+                    "comparator_pair_cor_max": DEFAULT_PAIR_COR_MAX,
+                    "comparator_n_top": None,
+                    "fitness_strategy": None,  # None = inherit from top-level
+                    "diversity_reference_db": None,  # For diversity strategy
+                    "diversity_max_references": 100,  # Performance limit
+                    "diversity_update_interval": 5,  # Update references every N iterations
+                    "system_type": "gas_cluster",
+                },
+                "ga": {
+                    "optimizer": "FIRE",
+                    "population_size": "auto",
+                    "niter": "auto",
+                    "niter_local_relaxation": "auto",
+                    "mutation_probability": 0.4,
+                    "offspring_fraction": 0.5,
+                    "fmax": 0.05,
+                    "vacuum": 10.0,
+                    "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+                    "use_adaptive_mutations": True,
+                    "stagnation_trigger": 4,
+                    "stagnation_full_trigger": 8,
+                    "recovery_window": 2,
+                    "aggressive_burst_multiplier": 1.8,
+                    "max_mutation_probability": 0.65,
+                    "early_stopping_niter": 10,  # Stop if no improvement after N generations
+                    "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
+                    "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
+                    "batch_size": None,
+                    "relaxer": None,
+                    "fitness_strategy": None,  # None = inherit from top-level
+                    "diversity_reference_db": None,  # For diversity strategy
+                    "diversity_max_references": 100,  # Performance limit
+                    "diversity_update_interval": 5,  # Update references every N generations
+                    "system_type": "gas_cluster",
+                },
             },
-            "bh": {
-                "optimizer": "FIRE",
-                "temperature": 500 * 8.617e-5,  # 500K in eV
-                "fmax": 0.05,
-                "niter": "auto",
-                "dr": 0.2,
-                "move_fraction": 0.3,
-                "niter_local_relaxation": "auto",
-                "move_strategy": "random",
-                "deduplicate": True,
-                "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
-                "comparator_tol": DEFAULT_COMPARATOR_TOL,
-                "comparator_pair_cor_max": DEFAULT_PAIR_COR_MAX,
-                "comparator_n_top": None,
-                "fitness_strategy": None,  # None = inherit from top-level
-                "diversity_reference_db": None,  # For diversity strategy
-                "diversity_max_references": 100,  # Performance limit
-                "diversity_update_interval": 5,  # Update references every N iterations
-                "system_type": "gas_cluster",
-            },
-            "ga": {
-                "optimizer": "FIRE",
-                "population_size": "auto",
-                "niter": "auto",
-                "niter_local_relaxation": "auto",
-                "mutation_probability": 0.4,
-                "offspring_fraction": 0.5,
-                "fmax": 0.05,
-                "vacuum": 10.0,
-                "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
-                "use_adaptive_mutations": True,
-                "stagnation_trigger": 4,
-                "stagnation_full_trigger": 8,
-                "recovery_window": 2,
-                "aggressive_burst_multiplier": 1.8,
-                "max_mutation_probability": 0.65,
-                "early_stopping_niter": 10,  # Stop if no improvement after N generations
-                "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
-                "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
-                "batch_size": None,
-                "relaxer": None,
-                "fitness_strategy": None,  # None = inherit from top-level
-                "diversity_reference_db": None,  # For diversity strategy
-                "diversity_max_references": 100,  # Performance limit
-                "diversity_update_interval": 5,  # Update references every N generations
-                "system_type": "gas_cluster",
-            },
-        },
-    }
+        }
+    return copy.deepcopy(_DEFAULT_PARAMS_TEMPLATE)
 
 
 def get_minimal_ga_params(

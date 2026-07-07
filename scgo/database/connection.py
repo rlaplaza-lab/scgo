@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -87,18 +86,11 @@ def activate_data_connection(
     Used by :func:`get_connection` where the caller holds one persistent handle for
     the entire context and closes it via :func:`close_data_connection`.
     """
-    configure_data_connection_settings(
-        da,
-        busy_timeout=busy_timeout,
-        wal_mode=wal_mode,
-        cache_size_mb=cache_size_mb,
-    )
-
     _open_ase_db_backend(getattr(da, "c", None))
-    _apply_busy_timeout(da, busy_timeout)
 
     conn = getattr(getattr(da, "c", None), "connection", None)
     if conn is not None:
+        _ensure_sqlite_json1(conn=conn)
         apply_sqlite_pragmas(
             conn,
             busy_timeout=busy_timeout,
@@ -160,20 +152,6 @@ def get_connection(
         cache_size_mb: SQLite page cache size hint in MiB.
     """
     db_path = str(db_path)
-    # Configure SQLite before opening DataConnection
-    if wal_mode and os.path.exists(db_path):
-        try:
-            with sqlite3.connect(db_path, timeout=busy_timeout / 1000.0) as conn:
-                apply_sqlite_pragmas(
-                    conn,
-                    wal_mode=True,
-                    busy_timeout=busy_timeout,
-                    cache_size_mb=cache_size_mb,
-                )
-                conn.commit()
-        except sqlite3.OperationalError as e:
-            logger.warning(f"Failed to configure SQLite for {db_path}: {e}")
-
     da = DataConnection(db_path)
 
     activate_data_connection(
@@ -284,15 +262,3 @@ def _ensure_sqlite_json1(
             "SQLite JSON1 extension is required but not available. "
             "Please use a Python build or system SQLite with JSON1 support (e.g., install a sqlite3 package with JSON1 enabled)."
         ) from e
-
-
-def _apply_busy_timeout(da, busy_timeout: int) -> None:
-    """Apply PRAGMA busy_timeout to the connection used by DataConnection.
-
-    Ensures that even when ASE has already created a connection, we configure it
-    for concurrent access (retry on lock instead of failing immediately).
-    """
-    conn = getattr(getattr(da, "c", None), "connection", None)
-    if conn is not None:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute(f"PRAGMA busy_timeout={busy_timeout};")

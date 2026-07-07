@@ -6,12 +6,14 @@ everything into memory at once.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 
 from ase import Atoms
+from ase.db.row import AtomsRow
 
 from scgo.database.connection import get_connection
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
@@ -21,6 +23,63 @@ from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import TRACE, get_logger
 
 logger = get_logger(__name__)
+
+
+def _load_atoms_chunk(
+    conn: sqlite3.Connection, row_ids: list[int], da
+) -> list[tuple[int, Atoms]]:
+    """Load atom rows for a chunk using one SQL query."""
+    if not row_ids:
+        return []
+    placeholders = ",".join("?" for _ in row_ids)
+    by_id: dict[int, Atoms] = {}
+    try:
+        old_row_factory = conn.row_factory
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(
+                f"SELECT * FROM systems WHERE id IN ({placeholders})",
+                tuple(row_ids),
+            )
+            rows = cur.fetchall()
+        finally:
+            conn.row_factory = old_row_factory
+        for row in rows:
+            row_dict = dict(row)
+            for key in ("key_value_pairs", "data", "constraints"):
+                value = row_dict.get(key)
+                if isinstance(value, str):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        row_dict[key] = json.loads(value)
+            with contextlib.suppress(
+                TypeError,
+                ValueError,
+                KeyError,
+                json.JSONDecodeError,
+                sqlite3.DatabaseError,
+            ):
+                by_id[int(row["id"])] = AtomsRow(row_dict).toatoms(
+                    add_additional_information=True
+                )
+    except (sqlite3.DatabaseError, sqlite3.OperationalError, TypeError, ValueError):
+        by_id = {}
+
+    out: list[tuple[int, Atoms]] = []
+    for row_id in row_ids:
+        atoms = by_id.get(row_id)
+        if atoms is None:
+            with contextlib.suppress(
+                KeyError,
+                IndexError,
+                sqlite3.DatabaseError,
+                ValueError,
+                TypeError,
+                json.JSONDecodeError,
+            ):
+                atoms = da.get_atoms(row_id)
+        if atoms is not None:
+            out.append((row_id, atoms))
+    return out
 
 
 def relaxed_rows_where_clause(
@@ -105,20 +164,8 @@ def iter_relaxed_structures(
             rows = cursor.fetchmany(chunk_size)
             if not rows:
                 break
-            for (row_id,) in rows:
-                try:
-                    candidate = da.get_atoms(row_id)
-                except (
-                    KeyError,
-                    IndexError,
-                    sqlite3.DatabaseError,
-                    ValueError,
-                    TypeError,
-                    json.JSONDecodeError,
-                ) as e:
-                    logger.warning("Failed to fetch atoms id=%s: %s", row_id, e)
-                    continue
-
+            row_ids = [int(row_id) for (row_id,) in rows]
+            for row_id, candidate in _load_atoms_chunk(conn, row_ids, da):
                 energy = extract_energy_from_atoms(candidate)
                 if energy is None:
                     logger.log(TRACE, "Skipping candidate id=%s: no energy", row_id)

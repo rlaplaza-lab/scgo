@@ -280,9 +280,23 @@ def test_database(tmp_path):
     return str(db_path)
 
 
+def _needs_initialization_cache_isolation(request: pytest.FixtureRequest) -> bool:
+    """Return True when a test is likely to depend on clean initialization caches."""
+    node = request.node
+    if node.get_closest_marker("requires_cache_isolation") is not None:
+        return True
+    if node.get_closest_marker("reproducibility") is not None:
+        return True
+    return "reproducibility" in node.nodeid
+
+
 @pytest.fixture(autouse=True)
-def clear_initialization_caches():
-    """Clear template-rotation and geometry caches so reproducibility tests stay isolated."""
+def clear_initialization_caches(request: pytest.FixtureRequest):
+    """Clear expensive initialization caches only for isolation-sensitive tests."""
+    if not _needs_initialization_cache_isolation(request):
+        yield
+        return
+
     from scgo.database.cache import get_global_cache
     from scgo.initialization import geometry_helpers, initializers
     from scgo.initialization.initialization_config import _COMPOSITION_CACHE_NS

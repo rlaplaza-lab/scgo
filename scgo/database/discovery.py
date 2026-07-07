@@ -15,9 +15,9 @@ from scgo.database.connection import get_connection
 from scgo.database.registry import get_registry
 from scgo.database.schema import clear_scgo_database_cache, is_scgo_database
 from scgo.database.streaming import relaxed_rows_where_clause
-from scgo.utils.helpers import get_composition_counts
+from scgo.utils.helpers import get_cluster_formula, get_composition_counts
 from scgo.utils.logging import get_logger
-from scgo.utils.run_tracking import resolve_run_id_from_db_path
+from scgo.utils.run_tracking import load_run_metadata, resolve_run_id_from_db_path
 
 logger = get_logger(__name__)
 
@@ -159,10 +159,22 @@ class DatabaseDiscovery:
     ) -> list[Path]:
         """Filter database files by composition."""
         target_counts = get_composition_counts(composition)
+        target_formula = get_cluster_formula(composition)
         filtered = []
+        run_formula_cache: dict[str, str | None] = {}
 
         for db_path in db_files:
             try:
+                run_id = resolve_run_id_from_db_path(str(db_path), base_dir=str(self.base_dir))
+                if run_id:
+                    if run_id not in run_formula_cache:
+                        metadata = load_run_metadata(str(self.base_dir / run_id))
+                        run_formula_cache[run_id] = metadata.formula if metadata else None
+                    known_formula = run_formula_cache[run_id]
+                    if known_formula is not None:
+                        if known_formula == target_formula:
+                            filtered.append(db_path)
+                        continue
                 with get_connection(db_path) as db:
                     first_candidate = self._get_first_relaxed_candidate(db)
 
@@ -203,11 +215,10 @@ def _glob_run_database_paths(
 ) -> list[Path]:
     """Filesystem fallback when registry-backed discovery returns nothing."""
     pattern_name = db_filename if db_filename else "*.db"
-    run_dir_pattern = os.path.join(base_dir, "run_*")
-    out: list[Path] = []
-    for run_dir in sorted(glob.glob(run_dir_pattern)):
-        out.extend(Path(p) for p in glob.glob(os.path.join(run_dir, pattern_name)))
-    return out
+    return sorted(
+        Path(p)
+        for p in glob.glob(os.path.join(base_dir, "run_*", pattern_name), recursive=False)
+    )
 
 
 def list_discovered_db_paths_with_run(

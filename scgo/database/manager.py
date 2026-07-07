@@ -6,6 +6,7 @@ caching and consistent error handling.
 
 from __future__ import annotations
 
+import glob
 import time
 from pathlib import Path
 
@@ -54,13 +55,35 @@ class SCGODatabaseManager:
         self._cache = get_global_cache()
         self._cache_namespace = "db_manager"
         self._cache_timestamps: dict[tuple, float] = {}
+        self._cache_fingerprints: dict[tuple, tuple[int, int, tuple[str, ...]]] = {}
 
         logger.debug(
             f"Initialized SCGODatabaseManager: base_dir={base_dir}, "
             f"caching={'enabled' if enable_caching else 'disabled'}"
         )
 
-    def _is_cache_valid(self, cache_key: tuple) -> bool:
+    def _compute_files_fingerprint(
+        self, paths: list[Path]
+    ) -> tuple[int, int, tuple[str, ...]]:
+        max_mtime_ns = 0
+        stable_paths: list[str] = []
+        count = 0
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            count += 1
+            max_mtime_ns = max(max_mtime_ns, int(stat.st_mtime_ns))
+            if len(stable_paths) < 8:
+                stable_paths.append(str(path))
+        if count == 0:
+            return (0, 0, ())
+        return (count, max_mtime_ns, tuple(sorted(stable_paths)))
+
+    def _is_cache_valid(
+        self, cache_key: tuple, fingerprint: tuple[int, int, tuple[str, ...]]
+    ) -> bool:
         """Check if cache entry is still valid based on TTL.
 
         Args:
@@ -74,6 +97,10 @@ class SCGODatabaseManager:
 
         if cache_key not in self._cache_timestamps:
             return False
+        if self._cache.get(self._cache_namespace, cache_key) is None:
+            return False
+        if self._cache_fingerprints.get(cache_key) != fingerprint:
+            return False
 
         age = time.time() - self._cache_timestamps[cache_key]
         return age < self.cache_ttl_seconds
@@ -82,6 +109,7 @@ class SCGODatabaseManager:
         """Clear all cached results."""
         self._cache.clear_namespace(self._cache_namespace)
         self._cache_timestamps.clear()
+        self._cache_fingerprints.clear()
         logger.info("Cleared all caches")
 
     def load_previous_results(
@@ -115,9 +143,13 @@ class SCGODatabaseManager:
             db_filename,
             prefer_final_unique,
         )
+        db_paths = list(self.base_dir.glob("run_*/*.db"))
+        if db_filename:
+            db_paths = [p for p in db_paths if p.name == db_filename]
+        fp = self._compute_files_fingerprint(db_paths)
 
         # Check cache
-        if not force_reload and self._is_cache_valid(cache_key):
+        if not force_reload and self._is_cache_valid(cache_key, fp):
             logger.debug("Using cached previous results for %s", formula)
             return self._cache.get(self._cache_namespace, cache_key)
 
@@ -135,6 +167,7 @@ class SCGODatabaseManager:
         if self.enable_caching:
             self._cache.set(self._cache_namespace, cache_key, minima)
             self._cache_timestamps[cache_key] = time.time()
+            self._cache_fingerprints[cache_key] = fp
 
         logger.info("Loaded %s minima from previous runs", len(minima))
         return minima
@@ -165,9 +198,12 @@ class SCGODatabaseManager:
             tuple(composition) if composition else None,
             max_structures,
         )
+        full_pattern = str(self.base_dir / db_glob_pattern)
+        matched_paths = [Path(p) for p in glob.glob(full_pattern, recursive=True)]
+        fp = self._compute_files_fingerprint(matched_paths)
 
         # Check cache
-        if not force_reload and self._is_cache_valid(cache_key):
+        if not force_reload and self._is_cache_valid(cache_key, fp):
             if composition:
                 formula = get_cluster_formula(composition)
                 logger.debug("Using cached reference structures for %s", formula)
@@ -181,9 +217,6 @@ class SCGODatabaseManager:
         else:
             logger.info("Loading reference structures (all compositions)")
 
-        # Make glob pattern relative to base_dir
-        full_pattern = str(self.base_dir / db_glob_pattern)
-
         structures = load_reference_structures(
             db_glob_pattern=full_pattern,
             composition=composition,
@@ -195,6 +228,7 @@ class SCGODatabaseManager:
         if self.enable_caching:
             self._cache.set(self._cache_namespace, cache_key, structures)
             self._cache_timestamps[cache_key] = time.time()
+            self._cache_fingerprints[cache_key] = fp
 
         logger.info("Loaded %s reference structures", len(structures))
         return structures

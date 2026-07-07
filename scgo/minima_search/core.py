@@ -71,6 +71,7 @@ _DEFAULT_REQUIRED_METHODS = ["get_potential_energy", "get_forces"]
 _SURFACE_SYSTEM_TYPES = frozenset({"surface_cluster", "surface_cluster_adsorbate"})
 
 _VALIDATION_CALCULATOR: Calculator | None = None
+_MIN_PARALLEL_VALIDATION_CANDIDATES = 4
 
 
 def _init_validation_worker(calculator: Calculator) -> None:
@@ -791,7 +792,10 @@ def run_trials(
             for energy, atoms in unique_candidates
         ]
 
-        if n_validate_workers > 1 and len(payloads) > 1:
+        if (
+            n_validate_workers > 1
+            and len(payloads) >= _MIN_PARALLEL_VALIDATION_CANDIDATES
+        ):
             logger.info(
                 "Validating %d unique candidates with %d parallel workers...",
                 len(payloads),
