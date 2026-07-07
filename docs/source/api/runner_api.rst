@@ -43,7 +43,7 @@ All functions accept:
 - ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, or ``"surface_cluster_adsorbate"`` (run argument only — not inside preset dicts)
 - ``surface_config``: required for surface system types; must agree across run argument and preset dicts when both are set
 - ``adsorbates``: ASE Atoms or list of Atoms, required for adsorbate system types
-- ``verbosity``: 0=quiet (warnings only), 1=normal (parameter merge and timing summaries), 2=debug (library detail), 3=trace (custom TRACE level for deep diagnostics). Progress bars are shown when ``verbosity >= 1`` (see :func:`~scgo.utils.logging.should_show_progress`).
+- ``verbosity``: 0=quiet (warnings only), 1=normal (parameter merge and timing summaries), 2=debug (library detail), 3=trace (custom TRACE level for deep diagnostics). Progress bars are shown when ``verbosity >= 1`` (see :func:`~scgo.utils.logging.should_show_progress` in :doc:`/api/utils`).
 
 See :doc:`/parameters` (*Parameter resolution*) for merge rules and logging behaviour.
 
@@ -132,8 +132,7 @@ Timing and Profiling
 **GO+TS pipeline rollup** — when timing JSON is enabled in ``go_params`` and/or
 ``ts_params``, ``run_go_ts`` also writes ``go_ts_timing.json`` at the campaign root.
 
-See :mod:`scgo.utils.timing_report` for JSON layout and
-:mod:`scgo.utils.output_paths` for directory helpers. On-disk layout and
+See :doc:`/api/utils` for timing JSON layout and output-path helpers. On-disk layout and
 provenance: :doc:`/quickstart` (*On-disk layout*).
 
 ----------------

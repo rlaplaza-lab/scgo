@@ -92,8 +92,9 @@ filesystems may add contention for registry lock files. For large parallel
 campaigns, prefer one output directory per job (or job-local scratch, then copy
 results back).
 
-For performance-sensitive GA/BH runs on local storage, optional DB/GA tuning
-knobs:
+For performance-sensitive workflows that call ``ga_go`` or ``bh_go`` directly
+(not the high-level ``run_go`` / ``run_go_ts`` runners), optional tuning knobs
+are available on those algorithm entry points:
 
 - ``db_enable_expression_indexes=True`` — JSON expression indexes for metadata
   filtering/sorting paths.
@@ -102,6 +103,9 @@ knobs:
   budgets without hard-capping exploration.
 - ``ga_fast_prefilter_enabled=True`` (default) — low-cost clash rejection before
   full structural validation.
+
+These keys are **not** accepted inside ``go_params`` / ``params`` passed to
+``run_*``; use the algorithm functions directly if you need them.
 
 HPC and shared filesystems
 --------------------------

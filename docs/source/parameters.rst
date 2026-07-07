@@ -30,7 +30,7 @@ All high-level ``run_*`` functions share the same contract:
    * - Run kwargs
      - ``system_type``, ``surface_config``, ``adsorbates``, ``seed``, ``verbosity``, ``output_*`` belong on the ``run_*`` call, not inside preset dicts (except ``surface_config`` may also appear in presets when it must agree with the run argument).
 
-**Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list of user overrides, then the resolved GO optimizer settings or TS NEB configuration. See :mod:`scgo.utils.run_helpers`.
+**Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list of user overrides, then the resolved GO optimizer settings or TS NEB configuration. See :doc:`/api/utils`.
 
 Verbosity levels (``run_*`` ``verbosity=`` argument):
 
@@ -49,7 +49,7 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
    * - 3
      - TRACE-level diagnostics (deepest SCGO logging)
 
-Configure the root logger with :func:`~scgo.utils.logging.configure_logging`. Set
+Configure the root logger with :func:`~scgo.configure_logging`. Set
 ``SCGO_LOCAL_DEV=1`` for milder third-party log suppression during local
 development (see :doc:`/installation`).
 
@@ -264,6 +264,12 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``comparator_n_top``
      - ``None``
      - Optional ``n_top`` for comparator
+   * - ``write_timing_json``
+     - ``False``
+     - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
+   * - ``detailed_timing``
+     - ``False``
+     - Include per-iteration timing breakdown
 
 -------------
 TS Parameters

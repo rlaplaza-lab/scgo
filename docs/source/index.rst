@@ -46,11 +46,13 @@ Contents
    :caption: API Reference
 
    api/runner_api
+   api/database
    api/initialization
    api/surface
    api/cluster_adsorbate
    api/param_presets
    api/system_types
+   api/utils
 
 Indices and tables
 ==================

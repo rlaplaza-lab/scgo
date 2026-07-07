@@ -25,6 +25,9 @@ structures for ``surface_cluster`` and ``surface_cluster_adsorbate``:
 .. autofunction:: scgo.surface.make_surface_config
 .. autofunction:: scgo.surface.make_graphite_surface_config
 .. autofunction:: scgo.surface.describe_surface_config
+.. autofunction:: scgo.surface.create_deposited_cluster
+.. autofunction:: scgo.surface.create_deposited_cluster_batch
+.. autofunction:: scgo.surface.adsorption_energy
 
 Composition builders for campaigns live in :mod:`scgo.runner_api`
 (``build_one_element_compositions``, ``build_two_element_compositions``);

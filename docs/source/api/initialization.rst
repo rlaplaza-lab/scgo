@@ -109,3 +109,5 @@ Module reference
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. autofunction:: scgo.initialization.geometry_helpers.reorder_cluster_to_composition

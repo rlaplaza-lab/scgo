@@ -555,7 +555,7 @@ UTC-based):
      - TS mints a fresh ``run_*`` under ``{formula}_ts_results/`` (independent of GO)
 
 Repeat ``run_go`` to add sibling ``run_*`` directories; SCGO merges prior minima
-via database discovery and deduplication. :func:`scgo.utils.run_tracking.get_run_directories`
+via database discovery and deduplication. :func:`~scgo.utils.run_tracking.get_run_directories`
 lists only datetime-pattern ``run_*`` dirs; custom IDs work at runtime but are
 omitted by that helper.
 
@@ -629,7 +629,7 @@ To reload minima from completed searches without re-running GO:
 fingerprint (database file count/path/mtime), so cached reads are invalidated
 when matching database files are added, removed, or updated.
 
-See :mod:`scgo.database` for HPC-oriented database access patterns.
+See :doc:`/api/database` for HPC-oriented database access patterns.
 
 ----------
 Parameters
@@ -658,7 +658,7 @@ See :doc:`/parameters` for all options and :doc:`/api/param_presets` for details
 Examples
 ----------
 
-Working examples in the repository:
+Working examples in the repository (see also ``examples/README.md``):
 
 - ``examples/example_pt5_gas.py``: Pt5 in gas phase (timing JSON + on-disk layout documented in-script)
 - ``examples/example_pt5_graphite.py``: Pt5 on graphite
