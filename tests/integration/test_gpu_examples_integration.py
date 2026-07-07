@@ -158,7 +158,8 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
     ):
         assert key in summary
 
-    minima = summary["minima_by_formula"]["Pt5"]
+    formula = summary["formula"]
+    minima = summary["minima_by_formula"][formula]
     assert len(minima) >= 1
     assert all(np.isfinite(energy) for energy, _atoms in minima)
 
