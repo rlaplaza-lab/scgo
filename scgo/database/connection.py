@@ -37,6 +37,34 @@ def _unwrap_data_connection(da: DataConnection | object) -> DataConnection:
     return getattr(da, "_da", da)
 
 
+def configure_data_connection_settings(
+    da: DataConnection,
+    *,
+    busy_timeout: int = 30000,
+    wal_mode: bool = False,
+    cache_size_mb: int = 64,
+) -> None:
+    """Apply SCGO SQLite settings without leaving ASE's backend connection open.
+
+    ASE's ``with backend:`` context manager requires ``backend.connection`` to be
+    ``None`` on entry. Use this for long-lived :class:`~ase_ga.data.DataConnection`
+    objects (e.g. from :func:`~scgo.database.helpers.setup_database`) that will
+    manage connections via ``with da.c:`` or ``managed_connection()``.
+    """
+    backend = getattr(da, "c", None)
+    if backend is None:
+        return
+
+    with backend.managed_connection() as conn:
+        _ensure_sqlite_json1(conn=conn)
+        apply_sqlite_pragmas(
+            conn,
+            busy_timeout=busy_timeout,
+            cache_size_mb=cache_size_mb,
+            wal_mode=wal_mode,
+        )
+
+
 def activate_data_connection(
     da: DataConnection,
     *,
@@ -44,13 +72,19 @@ def activate_data_connection(
     wal_mode: bool = False,
     cache_size_mb: int = 64,
 ) -> None:
-    """Open ASE's backend once and apply SCGO SQLite settings."""
-    _open_ase_db_backend(getattr(da, "c", None))
+    """Open ASE's backend once and apply SCGO SQLite settings for a scoped session.
 
-    _ensure_sqlite_json1(
-        conn=getattr(getattr(da, "c", None), "connection", None),
+    Used by :func:`get_connection` where the caller holds one persistent handle for
+    the entire context and closes it via :func:`close_data_connection`.
+    """
+    configure_data_connection_settings(
+        da,
+        busy_timeout=busy_timeout,
+        wal_mode=wal_mode,
+        cache_size_mb=cache_size_mb,
     )
 
+    _open_ase_db_backend(getattr(da, "c", None))
     _apply_busy_timeout(da, busy_timeout)
 
     conn = getattr(getattr(da, "c", None), "connection", None)

@@ -22,9 +22,9 @@ from ase_ga.data import DataConnection
 from scgo.constants import PENALTY_ENERGY
 from scgo.database.connection import (
     _run_sqlite,
-    activate_data_connection,
     apply_sqlite_pragmas,
     close_data_connection,
+    configure_data_connection_settings,
     get_connection,
 )
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
@@ -233,7 +233,7 @@ def setup_database(
 
         da = _open_connection()
 
-        activate_data_connection(
+        configure_data_connection_settings(
             da,
             wal_mode=enable_wal_mode,
         )
