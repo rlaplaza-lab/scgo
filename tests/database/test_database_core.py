@@ -12,7 +12,6 @@ import multiprocessing as mp
 import os
 import sqlite3
 import threading
-import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -25,9 +24,11 @@ from ase.calculators.emt import EMT
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import (
+    RetryConfig,
     SCGODatabaseManager,
     add_metadata,
     close_data_connection,
+    database_retry,
     database_transaction,
     filter_by_metadata,
     get_connection,
@@ -100,6 +101,14 @@ def _count_open_files() -> int:
     return -1
 
 
+_CONCURRENT_WRITE_RETRY = RetryConfig(
+    max_retries=8,
+    initial_delay=0.05,
+    backoff_factor=1.7,
+    max_delay=5.0,
+)
+
+
 def _write_to_database(args):
     """Helper function for multiprocess database writing."""
     db_path, n_structures, worker_id = args
@@ -116,22 +125,16 @@ def _write_to_database(args):
 
     with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
         for atoms in atoms_list:
-            # Concurrent SQLite writers can still transiently contend under CI load.
-            # Retry only lock-related write failures with bounded exponential backoff.
-            delay_s = 0.05
-            for attempt in range(8):
-                try:
+            database_retry(
+                lambda _a=atoms: (
                     da.add_unrelaxed_candidate(
-                        atoms, description=f"concurrent_stress:w{worker_id}"
-                    )
-                    da.add_relaxed_step(atoms)
-                    break
-                except sqlite3.OperationalError as exc:
-                    is_last_attempt = attempt == 7
-                    if "locked" not in str(exc).lower() or is_last_attempt:
-                        raise
-                    time.sleep(delay_s)
-                    delay_s *= 1.7
+                        _a, description=f"concurrent_stress:w{worker_id}"
+                    ),
+                    da.add_relaxed_step(_a),
+                ),
+                config=_CONCURRENT_WRITE_RETRY,
+                operation_name=f"concurrent_stress_write:w{worker_id}",
+            )
     return True, worker_id
 
 
