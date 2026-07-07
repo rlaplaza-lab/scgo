@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- Manual Kaggle GPU workflow for CUDA/MACE integration tests on T4 hardware.
+- GPU example integration tests aligned with real example workloads.
+- SQLite PRAGMA debug logging for easier HPC filesystem troubleshooting.
+
+### Changed
+
+- Refactored runner/database workflow to reduce repeated overhead and unify
+  discovery, streaming, and candidate-loading paths.
+- Fail-fast validation at API boundaries; reduced silent defensive fallbacks.
+- Strengthened physics assertions, reproducibility checks, and CI strictness.
+- Dual MACE/UMA CI matrix with marker-based test partitioning.
+- Capped NumPy below 2.5 and aligned Kaggle GPU dependency installs with CI.
+- Corrected algorithm selection docs: 3-atom adsorbate systems use GA, not BH.
+- Docs version fallback now reads from ``scgo.__version__`` instead of a stale literal.
+
+### Fixed
+
+- SQLite connection handle leaks in ``setup_database`` and DB configuration paths.
+- Concurrent SQLite write stress test stability in CI.
+- Reference run provenance and streaming warning behavior.
+- TorchSim warnings API usage and raw MACE model wrapping for ``optimize()``.
+- Kaggle runner resilience (conda detection, source tarball, log redaction, CUDA torch).
+- Empty GA population crash and surface ``run_go`` e2e test stability.
+- Cross-fragment adsorbate bonding rejection in integrity checks.
+- Adsorption height checks and CI disk cleanup for UMA installs.
+
+## 0.4.1
+
+### Fixed
+
+- Adsorbate partition overlap handling and ``source_db_relpath`` provenance fields.
+
+### Documentation
+
+- Minor documentation fixes following the 0.4.0 release.
+
 ## 0.4.0
 
 ### Changed

@@ -85,7 +85,8 @@ Passed as ``params`` or ``go_params`` to ``run_go``, ``run_go_campaign``, ``run_
 Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically:
 
 - ``gas_cluster`` only, ≤2 mobile atoms → ``simple`` (``simple_go.db``)
-- 3 atoms → Basin Hopping (``bh_go.db``) for all system types
+- 3 atoms, no adsorbate → Basin Hopping (``bh_go.db``)
+- 3 atoms, adsorbate system types → Genetic Algorithm (``ga_go.db``)
 - ≥4 atoms → Genetic Algorithm (``ga_go.db``)
 
 **Top-Level:**

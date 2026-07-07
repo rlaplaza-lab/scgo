@@ -24,7 +24,7 @@ try:
 
     release = _pkg_version("scgo")
 except Exception:
-    release = "0.4.1"
+    from scgo import __version__ as release
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -106,4 +106,4 @@ intersphinx_mapping = {
 # -- Options for todo extension -----------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/todo.html
 
-todo_include_todos = True
+todo_include_todos = False

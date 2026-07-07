@@ -84,7 +84,9 @@ def _conda_exe() -> str:
     ):
         if candidate and (candidate == "conda" or os.path.isfile(candidate)):
             return candidate
-    return "conda"
+    raise RuntimeError(
+        "conda not found on PATH; set CONDA_EXE or install Miniconda/Anaconda"
+    )
 
 
 def _conda_python() -> list[str]:
@@ -124,10 +126,8 @@ def _resolve_python() -> list[str]:
 
 
 def _safe_extractall(tar: tarfile.TarFile, path: Path) -> None:
-    if hasattr(tarfile, "data_filter"):
-        tar.extractall(path=path, filter="data")
-    else:
-        tar.extractall(path=path)
+    # Python 3.12+ (project minimum) provides tarfile.data_filter.
+    tar.extractall(path=path, filter="data")
 
 
 def _extract_dataset_archive(archive: Path) -> None:
@@ -263,6 +263,7 @@ def _install_torch_stack(py: list[str], pip: list[str]) -> None:
             *pip,
             "install",
             "--no-cache-dir",
+            # Last-resort Kaggle workaround: unpinned torch when cu124 index lacks 2.12.x.
             "torch",
             "torchvision",
             "--index-url",

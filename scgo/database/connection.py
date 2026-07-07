@@ -99,6 +99,14 @@ def activate_data_connection(
         )
 
 
+def _apply_pragma(conn: sqlite3.Connection, statement: str) -> None:
+    """Execute a PRAGMA statement, logging failures at debug level."""
+    try:
+        conn.execute(statement)
+    except sqlite3.OperationalError as exc:
+        logger.debug("SQLite PRAGMA failed (%s): %s", statement, exc)
+
+
 def apply_sqlite_pragmas(
     conn: sqlite3.Connection,
     *,
@@ -113,22 +121,17 @@ def apply_sqlite_pragmas(
       wal_mode=True: write-ahead-logging, normal sync, autocheckpoint.
     """
     if wal_mode:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.execute(f"PRAGMA busy_timeout={busy_timeout};")
-            conn.execute("PRAGMA temp_store=MEMORY;")
-            conn.execute(f"PRAGMA cache_size=-{cache_size_mb * 1024};")
-            conn.execute("PRAGMA wal_autocheckpoint=1000;")
+        _apply_pragma(conn, "PRAGMA journal_mode=WAL;")
+        _apply_pragma(conn, "PRAGMA synchronous=NORMAL;")
+        _apply_pragma(conn, f"PRAGMA busy_timeout={busy_timeout};")
+        _apply_pragma(conn, "PRAGMA temp_store=MEMORY;")
+        _apply_pragma(conn, f"PRAGMA cache_size=-{cache_size_mb * 1024};")
+        _apply_pragma(conn, "PRAGMA wal_autocheckpoint=1000;")
     else:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute(f"PRAGMA busy_timeout={busy_timeout};")
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("PRAGMA journal_mode=DELETE;")
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("PRAGMA temp_store=MEMORY;")
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute(f"PRAGMA cache_size=-{cache_size_mb * 1024};")
+        _apply_pragma(conn, f"PRAGMA busy_timeout={busy_timeout};")
+        _apply_pragma(conn, "PRAGMA journal_mode=DELETE;")
+        _apply_pragma(conn, "PRAGMA temp_store=MEMORY;")
+        _apply_pragma(conn, f"PRAGMA cache_size=-{cache_size_mb * 1024};")
 
 
 @contextmanager
