@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 import traceback
 import urllib.request
 from pathlib import Path
@@ -229,6 +230,21 @@ def _fetch_repo() -> None:
     _fetch_repo_from_network()
 
 
+def _numpy_requirement() -> str:
+    """Match pyproject.toml so Kaggle uses the same NumPy pin as CI tests."""
+    data = tomllib.loads((WORKDIR / "pyproject.toml").read_text(encoding="utf-8"))
+    for dep in data["project"]["dependencies"]:
+        if dep.startswith("numpy"):
+            return dep
+    raise RuntimeError("numpy requirement missing from pyproject.toml")
+
+
+def _install_numpy(py: list[str], pip: list[str]) -> None:
+    """Install project NumPy before torch/torchvision (Kaggle base image ships 2.0.x)."""
+    spec = _numpy_requirement()
+    run([*pip, "install", "--no-cache-dir", spec])
+
+
 def _install_torch_stack(py: list[str], pip: list[str]) -> None:
     """Install CUDA torch on Kaggle where cu124 wheels may be 2.4–2.6 only."""
     attempts = (
@@ -263,27 +279,47 @@ def _install_torch_stack(py: list[str], pip: list[str]) -> None:
 
 
 def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
-    """Install SCGO + MACE without pyproject's torch>=2.12 pin (unavailable on Kaggle)."""
-    run([*pip, "install", "--no-cache-dir", "-e", ".", "--no-deps"])
+    """Install SCGO + MACE like CI's pip install -e '.[mace,dev]' (torch pre-installed)."""
+    data = tomllib.loads((WORKDIR / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = list(data["project"]["dependencies"])
+    deps.extend(data["project"]["optional-dependencies"]["mace"])
+    deps.extend(data["project"]["optional-dependencies"]["dev"])
+    # Torch comes from Kaggle's CUDA index; lint tooling is not needed on the kernel.
+    skip_prefixes = ("ruff", "pre-commit")
+    install_deps = [
+        dep
+        for dep in deps
+        if not dep.startswith(skip_prefixes) and not dep.startswith("torch>=")
+    ]
+
+    run([*pip, "install", "--no-cache-dir", "-e", ".[mace,dev]", "--no-deps"])
+    run([*pip, "install", "--no-cache-dir", *install_deps])
+
+
+def _assert_numpy_version(py: list[str]) -> None:
+    spec = _numpy_requirement()
     run(
         [
-            *pip,
-            "install",
-            "--no-cache-dir",
-            "ase>=3.22.0",
-            "ase-ga>=0.1.0",
-            "numpy>=2.2",
-            "scipy>=1.14,<3",
-            "tqdm>=4.60.0",
-            "e3nn==0.4.4",
-            "mace-torch==0.3.16",
-            "nvalchemi-toolkit-ops==0.3.1",
-            "nvidia-nccl-cu12>=2.28",
-            "torch-sim-atomistic[mace]==0.6.0",
-            "pytest>=7.0.0",
-            "pytest-xdist>=3.0.0",
-            "pytest-cov>=4.0.0",
-            "psutil>=7.0.0",
+            *py,
+            "-c",
+            (
+                "import re\n"
+                "import numpy as np\n"
+                f"spec = {spec!r}\n"
+                "match = re.fullmatch(r'numpy>=(\\d+)\\.(\\d+)(?:,<(\\d+)\\.(\\d+))?', spec)\n"
+                "if match is None:\n"
+                "    raise SystemExit(f'Unsupported numpy spec: {spec!r}')\n"
+                "lo_major, lo_minor, hi_major, hi_minor = match.groups()\n"
+                "lo = (int(lo_major), int(lo_minor))\n"
+                "hi = (int(hi_major), int(hi_minor)) if hi_major else None\n"
+                "parts = [int(part) for part in np.__version__.split('.')[:2]]\n"
+                "version = (parts[0], parts[1])\n"
+                "if version < lo or (hi is not None and version >= hi):\n"
+                "    raise SystemExit(\n"
+                "        f'NumPy {np.__version__} does not satisfy {spec!r}'\n"
+                "    )\n"
+                f"print(f'NumPy {{np.__version__}} satisfies {spec!r}')\n"
+            ),
         ]
     )
 
@@ -321,8 +357,10 @@ def main() -> int:
         py = _resolve_python()
         pip = [*py, "-m", "pip"]
         run([*pip, "install", "--upgrade", "pip"])
+        _install_numpy(py, pip)
         _install_torch_stack(py, pip)
         _install_scgo_mace(py, pip)
+        _assert_numpy_version(py)
         _assert_cuda_usable(py)
 
         env = os.environ.copy()
