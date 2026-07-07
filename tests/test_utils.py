@@ -780,6 +780,7 @@ def assert_supported_cluster_binding(
     *,
     n_core_mobile: int | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
+    connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
@@ -791,16 +792,21 @@ def assert_supported_cluster_binding(
     """
     from scgo.surface.validation import validate_supported_cluster_deposit
 
+    kwargs: dict[str, object] = {
+        "n_core_mobile": n_core_mobile,
+        "adsorbate_fragment_lengths": adsorbate_fragment_lengths,
+        "allow_cluster_fragmentation": allow_cluster_fragmentation,
+        "allow_adsorbate_surface_detachment": allow_adsorbate_surface_detachment,
+        "enforce_adsorbate_subgraph_integrity": enforce_adsorbate_subgraph_integrity,
+    }
+    if connectivity_factor is not None:
+        kwargs["connectivity_factor"] = connectivity_factor
     ok, msg = validate_supported_cluster_deposit(
         atoms,
         len(surface_config.slab),
         surface_normal_axis=surface_config.surface_normal_axis,
         use_mic=surface_config.comparator_use_mic,
-        n_core_mobile=n_core_mobile,
-        adsorbate_fragment_lengths=adsorbate_fragment_lengths,
-        allow_cluster_fragmentation=allow_cluster_fragmentation,
-        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        **kwargs,
     )
     assert ok, msg
 

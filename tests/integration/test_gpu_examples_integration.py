@@ -152,9 +152,10 @@ def _build_ts_params(case: GpuExampleCase) -> dict:
 def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> None:
     """End-to-end GO+TS with MACE/TorchSim for each example system type."""
     output_dir = tmp_path / f"gpu_{case.system_type}"
+    go_params = _build_go_params(case)
     summary = run_go_ts(
         COMPOSITION,
-        go_params=_build_go_params(case),
+        go_params=go_params,
         ts_params=_build_ts_params(case),
         seed=SEED,
         verbosity=0,
@@ -194,6 +195,7 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
             case.surface_config,
             n_core_mobile=5,
             adsorbate_fragment_lengths=case.adsorbate_fragment_lengths,
+            connectivity_factor=go_params["connectivity_factor"],
         )
 
     assert summary["ts_total_count"] >= 0
