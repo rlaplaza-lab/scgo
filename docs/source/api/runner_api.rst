@@ -111,7 +111,8 @@ Utility Functions
    * - ``build_two_element_compositions(el1, el2, min_atoms, max_atoms)``
      - Symbol lists for bimetallic size scans (all ``el1``/``el2`` splits per atom count)
    * - ``parse_composition_arg(comp_str)``
-     - Parse a compact formula (``"Pt5"``) or comma-separated symbols (``"Pt,Pt,Au"``)
+     - Parse a compact formula with chemical capitalization (``"Pt5"``, ``"HO2Ru9W2"``)
+      or comma-separated symbols (``"Pt,Pt,Au"``; unambiguous, case-insensitive)
    * - ``resolve_workflow_seed(*, seed_kw, go_params, ts_params)``
      - Ensure seed consistency across params
    * - ``log_go_ts_summary(logger, summary, *, wall_time_s=None)``

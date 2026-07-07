@@ -203,8 +203,17 @@ def test_run_trials_validations(rng):
 
 def test_parse_composition_arg_case_insensitive():
     assert parse_composition_arg("pt3") == ["Pt", "Pt", "Pt"]
-    assert parse_composition_arg("pt3au") == ["Pt", "Pt", "Pt", "Au"]
+    assert parse_composition_arg("Pt3Au") == ["Pt", "Pt", "Pt", "Au"]
     assert parse_composition_arg("pt,pt,au") == ["Pt", "Pt", "Au"]
+
+
+def test_parse_composition_arg_rejects_ambiguous_lowercase_compact():
+    with pytest.raises(ValueError, match="pt3au|multiple elements"):
+        parse_composition_arg("pt3au")
+    with pytest.raises(ValueError, match="ho2|Ambiguous"):
+        parse_composition_arg("ho2")
+    with pytest.raises(ValueError, match="cu|Ambiguous"):
+        parse_composition_arg("cu")
 
 
 def test_parse_composition_arg_hydrogen_oxide_formulas():
@@ -217,12 +226,11 @@ def test_parse_composition_arg_hydrogen_oxide_formulas():
 
 
 def test_parse_composition_arg_zero_count():
-    # Zero counts in compact formula should be rejected
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Pt0|Zero atom count"):
         parse_composition_arg("Pt0")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="pt0au|Zero atom count"):
         parse_composition_arg("pt0au")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="AuPt0|Zero atom count"):
         parse_composition_arg("AuPt0")
 
 

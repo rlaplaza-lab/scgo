@@ -34,6 +34,7 @@ from time import perf_counter
 from typing import Any, Literal
 
 from ase import Atoms
+from ase.data import atomic_numbers
 from ase.formula import Formula
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
@@ -55,7 +56,7 @@ from scgo.ts_search.transition_state_run import (
     run_transition_state_campaign as _ts_campaign,
     run_transition_state_search as _ts_search,
 )
-from scgo.utils.helpers import get_cluster_formula
+from scgo.utils.helpers import get_cluster_formula, get_composition_counts
 from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
@@ -794,53 +795,82 @@ def _run_go_trials(
     return final_unique_minima
 
 
-def _canonicalize_lowercase_formula(comp_str: str) -> str:
-    """Map ``pt3au`` → ``Pt3Au`` so ASE :class:`~ase.formula.Formula` can parse it."""
-    out: list[str] = []
-    i = 0
-    s = comp_str.lower()
-    while i < len(s):
-        if not s[i].isalpha():
-            raise ValueError(f"Unable to parse composition string: {comp_str}")
-        j = i + 1
-        if j < len(s) and s[j].isalpha():
-            j += 1
-        sym = s[i:j]
-        out.append(sym[0].upper() + sym[1:])
-        i = j
-        while i < len(s) and s[i].isdigit():
-            out.append(s[i])
-            i += 1
-    return "".join(out)
+def _compact_formula_error(comp_str: str, detail: str) -> ValueError:
+    return ValueError(
+        f"Unable to parse composition string: {comp_str}. {detail} "
+        "Use chemical capitalization for compact formulas (e.g. Pt3Au, HO2Ru9W2) "
+        "or comma-separated symbols (e.g. Pt,Pt,Pt,Au)."
+    )
+
+
+def _parse_lowercase_single_element(comp_str: str) -> list[str] | None:
+    """Parse ``pt3``-style single-element formulas, or ``None`` if not applicable."""
+    m = re.fullmatch(r"([a-z]{1,2})(\d+)?", comp_str.strip())
+    if not m:
+        return None
+
+    raw, count_str = m.group(1), m.group(2)
+    count = int(count_str) if count_str else 1
+    if count == 0:
+        raise _compact_formula_error(comp_str, "Zero atom count is not allowed.")
+
+    sym = raw[0].upper() + raw[1:]
+    if sym not in atomic_numbers:
+        return None
+
+    if len(raw) == 2:
+        one_char = raw[0].upper()
+        if one_char in atomic_numbers:
+            tail = raw[1:] + (count_str or "")
+            alt_str = one_char + (tail[0].upper() + tail[1:] if tail else "")
+            try:
+                alt = list(Formula(alt_str, strict=True))
+            except ValueError:
+                pass
+            else:
+                if get_composition_counts(alt) != get_composition_counts([sym] * count):
+                    raise _compact_formula_error(
+                        comp_str,
+                        f"Ambiguous with {alt_str!r} under chemical capitalization rules.",
+                    )
+
+    return [sym] * count
 
 
 def parse_composition_arg(comp_str: str) -> list[str]:
     """Supports two formats:
-    - Comma-separated symbols: "Pt,Pt,Au"
-    - Compact formula: "Pt3Au", "HO2Ru9W2", etc. (via :class:`ase.formula.Formula`)
+    - Comma-separated symbols: "Pt,Pt,Au" (case-insensitive per symbol)
+    - Compact formula with chemical capitalization: "Pt3Au", "HO2Ru9W2"
+      (parsed via :class:`ase.formula.Formula`; ``HO2`` is H + O2, not holmium)
+
+    All-lowercase compact formulas are accepted only for unambiguous single-element
+    inputs such as ``pt3``. Multi-element lowercase strings (``pt3au``) and
+    ambiguous two-letter forms (``ho2`` as H+O2 vs holmium) are rejected.
     """
     comp_str = comp_str.strip()
     if "," in comp_str:
         parts = [p.strip() for p in comp_str.split(",") if p.strip()]
-        # Normalize element symbols (e.g., 'pt' -> 'Pt')
         normalized = [p[0].upper() + p[1:].lower() if len(p) > 0 else p for p in parts]
         return normalized
 
     if re.search(r"([A-Za-z]{1,2})0(?![0-9])", comp_str):
-        raise ValueError(f"Unable to parse composition string: {comp_str}")
+        raise _compact_formula_error(comp_str, "Zero atom count is not allowed.")
 
-    formula_str = comp_str
-    if not any(ch.isupper() for ch in comp_str):
-        formula_str = _canonicalize_lowercase_formula(comp_str)
+    if comp_str == comp_str.lower():
+        single = _parse_lowercase_single_element(comp_str)
+        if single is not None:
+            return single
+        raise _compact_formula_error(
+            comp_str,
+            "Lowercase compact formulas with multiple elements are not supported.",
+        )
 
     try:
-        composition = [str(symbol) for symbol in Formula(formula_str, strict=True)]
+        composition = [str(symbol) for symbol in Formula(comp_str, strict=True)]
     except ValueError as exc:
-        raise ValueError(f"Unable to parse composition string: {comp_str}") from exc
+        raise _compact_formula_error(comp_str, "Invalid compact formula.") from exc
     if not composition:
-        raise ValueError(
-            f"Unable to parse composition string: {comp_str} (zero total atom count)"
-        )
+        raise _compact_formula_error(comp_str, "Zero atom count is not allowed.")
     return composition
 
 
