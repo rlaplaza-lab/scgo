@@ -32,6 +32,37 @@ def _open_ase_db_backend(backend) -> None:
         backend.__enter__()
 
 
+def _unwrap_data_connection(da: DataConnection | object) -> DataConnection:
+    """Return the underlying :class:`~ase_ga.data.DataConnection` when wrapped."""
+    return getattr(da, "_da", da)
+
+
+def activate_data_connection(
+    da: DataConnection,
+    *,
+    busy_timeout: int = 30000,
+    wal_mode: bool = False,
+    cache_size_mb: int = 64,
+) -> None:
+    """Open ASE's backend once and apply SCGO SQLite settings."""
+    _open_ase_db_backend(getattr(da, "c", None))
+
+    _ensure_sqlite_json1(
+        conn=getattr(getattr(da, "c", None), "connection", None),
+    )
+
+    _apply_busy_timeout(da, busy_timeout)
+
+    conn = getattr(getattr(da, "c", None), "connection", None)
+    if conn is not None:
+        apply_sqlite_pragmas(
+            conn,
+            busy_timeout=busy_timeout,
+            cache_size_mb=cache_size_mb,
+            wal_mode=wal_mode,
+        )
+
+
 def apply_sqlite_pragmas(
     conn: sqlite3.Connection,
     *,
@@ -101,24 +132,12 @@ def get_connection(
 
     da = DataConnection(db_path)
 
-    _open_ase_db_backend(getattr(da, "c", None))
-
-    # Fail fast: ensure JSON1 is available since many DB helpers use json_extract.
-    _ensure_sqlite_json1(
-        conn=getattr(getattr(da, "c", None), "connection", None),
+    activate_data_connection(
+        da,
+        busy_timeout=busy_timeout,
+        wal_mode=wal_mode,
+        cache_size_mb=cache_size_mb,
     )
-
-    # Apply busy_timeout to ASE's active connection.
-    _apply_busy_timeout(da, busy_timeout)
-
-    conn = getattr(getattr(da, "c", None), "connection", None)
-    if conn is not None:
-        apply_sqlite_pragmas(
-            conn,
-            busy_timeout=busy_timeout,
-            cache_size_mb=cache_size_mb,
-            wal_mode=wal_mode,
-        )
 
     try:
         yield da
@@ -151,6 +170,7 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
     if da is None:
         return
 
+    da = _unwrap_data_connection(da)
     backend = getattr(da, "c", None)
     if backend is None:
         return

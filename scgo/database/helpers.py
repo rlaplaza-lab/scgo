@@ -22,6 +22,7 @@ from ase_ga.data import DataConnection
 from scgo.constants import PENALTY_ENERGY
 from scgo.database.connection import (
     _run_sqlite,
+    activate_data_connection,
     apply_sqlite_pragmas,
     close_data_connection,
     get_connection,
@@ -231,6 +232,11 @@ def setup_database(
         )(_open_connection_impl)
 
         da = _open_connection()
+
+        activate_data_connection(
+            da,
+            wal_mode=enable_wal_mode,
+        )
 
         _ensure_database_indices(
             db_file,

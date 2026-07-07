@@ -7,12 +7,12 @@ the current SCGO database APIs.
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import multiprocessing as mp
 import os
 import sqlite3
 import threading
-import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -74,11 +74,25 @@ def _setup_test_db(
         initial_candidate=initial_candidate,
         **setup_kwargs,
     )
+    db_file = Path(tmp_path) / filename
     try:
-        yield da, (Path(tmp_path) / filename)
+        yield da, db_file
     finally:
-        close_data_connection(da)
+        underlying = getattr(da, "_da", da)
+        close_data_connection(underlying)
         gc.collect()
+
+
+def _checkpoint_wal(db_file: Path) -> None:
+    """Flush WAL state so forked/spawned workers do not inherit stale locks."""
+    try:
+        with (
+            sqlite3.connect(str(db_file), timeout=30.0) as conn,
+            contextlib.suppress(sqlite3.OperationalError),
+        ):
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except (sqlite3.OperationalError, OSError):
+        pass
 
 
 def _register_unrelaxed(da, atoms: Atoms, *, description: str = "test:insert") -> None:
@@ -113,22 +127,36 @@ def _write_to_database(args):
         atoms.info["data"] = {"worker_tag": f"w{worker_id}"}
         atoms_list.append(atoms)
 
-    max_attempts = 5
-    for attempt in range(max_attempts):
-        try:
-            with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
-                for atoms in atoms_list:
+    def _write_all() -> None:
+        with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
+            for atoms in atoms_list:
+
+                def _write_one(candidate: Atoms = atoms) -> None:
                     da.add_unrelaxed_candidate(
-                        atoms, description=f"concurrent_stress:w{worker_id}"
+                        candidate, description=f"concurrent_stress:w{worker_id}"
                     )
-                    da.add_relaxed_step(atoms)
-            return True, worker_id
-        except sqlite3.OperationalError as exc:
-            if "locked" in str(exc).lower() and attempt < max_attempts - 1:
-                time.sleep(0.25 * (attempt + 1))
-                continue
-            raise
-    return False, worker_id
+                    da.add_relaxed_step(candidate)
+
+                retry_with_backoff(
+                    _write_one,
+                    max_retries=8,
+                    initial_delay=0.1,
+                    backoff_factor=2.0,
+                    exception_types=(sqlite3.OperationalError,),
+                    operation_name=f"concurrent stress write (worker {worker_id})",
+                    log_level="warning",
+                )
+
+    retry_with_backoff(
+        _write_all,
+        max_retries=5,
+        initial_delay=0.25,
+        backoff_factor=2.0,
+        exception_types=(sqlite3.OperationalError,),
+        operation_name=f"concurrent stress session (worker {worker_id})",
+        log_level="warning",
+    )
+    return True, worker_id
 
 
 class TestDatabaseSetupAndFlow:
@@ -762,15 +790,16 @@ class TestRobustness:
             pt2_atoms,
             initial_candidate=None,
             enable_wal_mode=True,
-        ) as (_da, _db_path):
+        ) as (_da, db_file):
             pass
-        gc.collect()  # Ensure connection released before workers start
+        _checkpoint_wal(db_file)
+        gc.collect()
 
-        db_file = tmp_path / "concurrent.db"
         n_workers = 2
         n_structures = 10
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        mp_ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp_ctx) as executor:
             futures = [
                 executor.submit(_write_to_database, (str(db_file), n_structures, wid))
                 for wid in range(n_workers)
