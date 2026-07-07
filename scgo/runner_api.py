@@ -794,6 +794,26 @@ def _run_go_trials(
     return final_unique_minima
 
 
+def _canonicalize_lowercase_formula(comp_str: str) -> str:
+    """Map ``pt3au`` → ``Pt3Au`` so ASE :class:`~ase.formula.Formula` can parse it."""
+    out: list[str] = []
+    i = 0
+    s = comp_str.lower()
+    while i < len(s):
+        if not s[i].isalpha():
+            raise ValueError(f"Unable to parse composition string: {comp_str}")
+        j = i + 1
+        if j < len(s) and s[j].isalpha():
+            j += 1
+        sym = s[i:j]
+        out.append(sym[0].upper() + sym[1:])
+        i = j
+        while i < len(s) and s[i].isdigit():
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
 def parse_composition_arg(comp_str: str) -> list[str]:
     """Supports two formats:
     - Comma-separated symbols: "Pt,Pt,Au"
@@ -809,8 +829,12 @@ def parse_composition_arg(comp_str: str) -> list[str]:
     if re.search(r"([A-Za-z]{1,2})0(?![0-9])", comp_str):
         raise ValueError(f"Unable to parse composition string: {comp_str}")
 
+    formula_str = comp_str
+    if not any(ch.isupper() for ch in comp_str):
+        formula_str = _canonicalize_lowercase_formula(comp_str)
+
     try:
-        composition = [str(symbol) for symbol in Formula(comp_str, strict=True)]
+        composition = [str(symbol) for symbol in Formula(formula_str, strict=True)]
     except ValueError as exc:
         raise ValueError(f"Unable to parse composition string: {comp_str}") from exc
     if not composition:
