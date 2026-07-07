@@ -1,4 +1,10 @@
-"""GPU integration tests mirroring examples/ at minimal GA/TS scale."""
+"""GPU integration tests mirroring examples/ at reduced GA/TS scale for Kaggle CI.
+
+Per-case knobs are derived from the matching ``examples/example_pt5_*.py`` scripts
+(~20–25% of their niter / population_size / max_pairs, with heavier surface NEB
+budgets preserved). Targets ~30 min for the full ``requires_cuda and requires_mace``
+Kaggle suite (vs ~10 min with the prior minimal settings).
+"""
 
 from __future__ import annotations
 
@@ -24,26 +30,23 @@ from tests.test_utils import assert_supported_cluster_binding
 SEED = 42
 COMPOSITION = "Pt5"
 
-MINIMAL_GA = {
-    "niter": 2,
-    "population_size": 4,
+# Shared GA/TS base; per-case overrides mirror example_pt5_*.py ratios.
+CI_EXAMPLE_GA_BASE = {
     "offspring_fraction": 0.5,
-    "niter_local_relaxation": 50,
+    "niter_local_relaxation": 70,
     "n_jobs_population_init": 1,
     "early_stopping_niter": 0,
     "write_timing_json": False,
     "detailed_timing": False,
 }
 
-MINIMAL_TS = {
-    "max_pairs": 1,
-    "neb_n_images": 3,
-    "neb_steps": 50,
+CI_EXAMPLE_TS_BASE = {
+    "neb_n_images": 5,
     "write_timing_json": False,
 }
 
 CONNECTIVITY = 1.8
-SLAB_LAYERS = 2
+SLAB_LAYERS = 3
 
 
 def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
@@ -66,6 +69,8 @@ class GpuExampleCase:
     adsorbates: list[Atoms] | None = None
     connectivity_factor: float | None = None
     freeze_adsorbate_internal_geometry: bool = False
+    ga_overrides: dict = field(default_factory=dict)
+    ts_overrides: dict = field(default_factory=dict)
     extra_ts: dict = field(default_factory=dict)
     expected_mobile_atoms: int = 5
     adsorbate_fragment_lengths: list[int] | None = None
@@ -76,26 +81,40 @@ def _graphite_config() -> SurfaceSystemConfig:
 
 
 GPU_EXAMPLE_CASES = [
-    GpuExampleCase(system_type="gas_cluster"),
+    # example_pt5_gas.py: NITER=10, POPULATION_SIZE=50, MAX_PAIRS=15
+    GpuExampleCase(
+        system_type="gas_cluster",
+        ga_overrides={"niter": 3, "population_size": 7},
+        ts_overrides={"max_pairs": 2, "neb_steps": 70},
+    ),
+    # example_pt5_graphite.py: NITER=6, POPULATION_SIZE=24, MAX_PAIRS=10
     GpuExampleCase(
         system_type="surface_cluster",
         surface_config=_graphite_config(),
         connectivity_factor=CONNECTIVITY,
+        ga_overrides={"niter": 2, "population_size": 6},
+        ts_overrides={"max_pairs": 2, "neb_steps": 90},
     ),
+    # example_pt5_oh_gas.py: NITER=8, POPULATION_SIZE=40, MAX_PAIRS=12
     GpuExampleCase(
         system_type="gas_cluster_adsorbate",
         adsorbates=_adsorbates_oh(n=1),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
+        ga_overrides={"niter": 3, "population_size": 6},
+        ts_overrides={"max_pairs": 2, "neb_steps": 70},
         expected_mobile_atoms=7,
         adsorbate_fragment_lengths=[2],
     ),
+    # example_pt5_2oh_graphite.py: NITER=6, POP=24, MAX_PAIRS=10, neb 7/800
     GpuExampleCase(
         system_type="surface_cluster_adsorbate",
         surface_config=_graphite_config(),
         adsorbates=_adsorbates_oh(n=2),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
+        ga_overrides={"niter": 2, "population_size": 6},
+        ts_overrides={"max_pairs": 2, "neb_n_images": 5, "neb_steps": 120},
         extra_ts={"energy_gap_threshold": 1.0},
         expected_mobile_atoms=9,
         adsorbate_fragment_lengths=[2, 2],
@@ -111,7 +130,9 @@ def _build_go_params(case: GpuExampleCase) -> dict:
     )
     if case.connectivity_factor is not None:
         go_params["connectivity_factor"] = case.connectivity_factor
-    go_params["optimizer_params"]["ga"].update(MINIMAL_GA)
+    ga_params = dict(CI_EXAMPLE_GA_BASE)
+    ga_params.update(case.ga_overrides)
+    go_params["optimizer_params"]["ga"].update(ga_params)
     if case.freeze_adsorbate_internal_geometry:
         go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
@@ -137,7 +158,8 @@ def _build_ts_params(case: GpuExampleCase) -> dict:
         surface_config=case.surface_config,
         seed=SEED,
     )
-    ts_params.update(MINIMAL_TS)
+    ts_params.update(CI_EXAMPLE_TS_BASE)
+    ts_params.update(case.ts_overrides)
     if case.connectivity_factor is not None:
         ts_params["connectivity_factor"] = case.connectivity_factor
     ts_params.update(case.extra_ts)
