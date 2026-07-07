@@ -10,13 +10,15 @@ import pytest
 from ase import Atoms
 
 from scgo import (
+    get_cluster_formula,
     get_torchsim_ga_params,
     get_ts_search_params,
     make_graphite_surface_config,
+    parse_composition_arg,
     run_go_ts,
 )
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.system_types import SystemType
+from scgo.system_types import SystemType, build_adsorbate_definition_from_inputs
 from tests.test_utils import assert_supported_cluster_binding
 
 SEED = 42
@@ -115,6 +117,20 @@ def _build_go_params(case: GpuExampleCase) -> dict:
     return go_params
 
 
+def _expected_formula(case: GpuExampleCase) -> str:
+    """Match run_go_ts: core composition plus adsorbate symbols when present."""
+    core = parse_composition_arg(COMPOSITION)
+    if case.adsorbates is None:
+        return get_cluster_formula(core)
+    _ads_def, _fragments, full_mobile = build_adsorbate_definition_from_inputs(
+        system_type=case.system_type,
+        composition=core,
+        adsorbates=case.adsorbates,
+        context="test_run_go_ts_gpu_example_smoke",
+    )
+    return get_cluster_formula(full_mobile)
+
+
 def _build_ts_params(case: GpuExampleCase) -> dict:
     ts_params = get_ts_search_params(
         system_type=case.system_type,
@@ -151,6 +167,7 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
 
     assert isinstance(summary, dict)
     for key in (
+        "formula",
         "minima_by_formula",
         "ts_results",
         "ts_total_count",
@@ -158,8 +175,9 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
     ):
         assert key in summary
 
-    formula = summary["formula"]
-    minima = summary["minima_by_formula"][formula]
+    expected_formula = _expected_formula(case)
+    assert summary["formula"] == expected_formula
+    minima = summary["minima_by_formula"][expected_formula]
     assert len(minima) >= 1
     assert all(np.isfinite(energy) for energy, _atoms in minima)
 
