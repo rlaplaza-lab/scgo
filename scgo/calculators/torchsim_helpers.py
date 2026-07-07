@@ -117,6 +117,20 @@ class MemoryScalerCache:
         self._cache[key] = value
         self._save_cache()
 
+    def delete(
+        self,
+        n_atoms: int,
+        model_name: str,
+        memory_scales_with: str,
+        device: str,
+    ) -> None:
+        """Remove one cached scaler entry (e.g. when it is too tight for a batch)."""
+        key = self._make_key(n_atoms, model_name, memory_scales_with, device)
+        if key not in self._cache:
+            return
+        del self._cache[key]
+        self._save_cache()
+
     def clear(self) -> None:
         """Clear the cache."""
         self._cache = {}
@@ -399,6 +413,7 @@ class TorchSimBatchRelaxer:
     autobatcher: bool | None = None
     memory_scales_with: str = "n_atoms_x_density"
     max_memory_scaler: float | None = None
+    max_memory_padding: float = 1.05
     expected_max_atoms: int | None = (
         None  # Probe memory upfront with this atom count (cluster_size * pop_size)
     )
@@ -499,6 +514,7 @@ class TorchSimBatchRelaxer:
                 "model": self.model,
                 "memory_scales_with": self.memory_scales_with,
                 "max_memory_scaler": self.max_memory_scaler,
+                "max_memory_padding": self.max_memory_padding,
             }
             if probe_cap is not None:
                 autobatcher_kwargs["max_atoms_to_try"] = probe_cap
@@ -545,6 +561,35 @@ class TorchSimBatchRelaxer:
             return False
         autobatcher.max_memory_scaler = cached_scaler
         return True
+
+    def _invalidate_memory_scaler_cache(self, n_atoms: int) -> None:
+        _GLOBAL_MEMORY_SCALER_CACHE.delete(**self._memory_scaler_cache_key(n_atoms))
+
+    def _recreate_autobatcher(self) -> None:
+        if "autobatcher" not in self._runner_kwargs:
+            return
+        probe_cap = self.max_atoms_to_try
+        if probe_cap is None and self.expected_max_atoms is not None:
+            probe_cap = int(self.expected_max_atoms)
+        autobatcher_kwargs: dict = {
+            "model": self.model,
+            "memory_scales_with": self.memory_scales_with,
+            "max_memory_scaler": self.max_memory_scaler,
+            "max_memory_padding": self.max_memory_padding,
+        }
+        if probe_cap is not None:
+            autobatcher_kwargs["max_atoms_to_try"] = probe_cap
+        self._runner_kwargs["autobatcher"] = self._ts.InFlightAutoBatcher(
+            **autobatcher_kwargs
+        )
+
+    def _reset_autobatcher_memory_scaler(self) -> None:
+        self.max_memory_scaler = None
+        self._recreate_autobatcher()
+
+    @staticmethod
+    def _is_max_metric_value_error(exc: BaseException) -> bool:
+        return isinstance(exc, ValueError) and "max_metric" in str(exc)
 
     def _persist_autobatcher_scaler(self, n_atoms: int) -> None:
         """Persist the current autobatcher's ``max_memory_scaler`` to the disk cache.
@@ -615,6 +660,7 @@ class TorchSimBatchRelaxer:
             AttributeError,
             torch.cuda.OutOfMemoryError,
         ) as e:
+            self._reset_autobatcher_memory_scaler()
             logger.warning(
                 f"Memory probing failed (non-fatal): {e}. Will retry on first relax_batch()."
             )
@@ -635,9 +681,32 @@ class TorchSimBatchRelaxer:
         if not atoms_list:
             return []
 
-        # Use max atom count in batch for smarter memory caching (worst-case estimate)
         max_atoms_in_batch = max(len(atoms) for atoms in atoms_list)
+        for attempt in range(2):
+            try:
+                return self._relax_batch_once(
+                    atoms_list, steps=steps, max_atoms_in_batch=max_atoms_in_batch
+                )
+            except ValueError as exc:
+                if attempt == 0 and self._is_max_metric_value_error(exc):
+                    logger.warning(
+                        "Cached or probed max_memory_scaler too tight (%s); "
+                        "invalidating cache and re-estimating.",
+                        exc,
+                    )
+                    self._invalidate_memory_scaler_cache(max_atoms_in_batch)
+                    self._reset_autobatcher_memory_scaler()
+                    continue
+                raise
+        raise RuntimeError("relax_batch retry loop exited without returning")
 
+    def _relax_batch_once(
+        self,
+        atoms_list: Sequence[Atoms],
+        *,
+        steps: int | None,
+        max_atoms_in_batch: int,
+    ) -> list[tuple[float, Atoms]]:
         # Try to apply cached memory scaler to avoid expensive re-probing (~70s per new cluster size)
         if self.max_memory_scaler is None and "autobatcher" in self._runner_kwargs:
             self._apply_cached_memory_scaler(max_atoms_in_batch)

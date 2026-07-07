@@ -429,3 +429,40 @@ def test_torchsim_optimizer_set_correctly():
         assert not isinstance(relaxer.optimizer, str)
     else:
         pytest.fail("Neither ts.Optimizer nor ts.optimizers found")
+
+
+def test_torchsim_relax_batch_retries_after_max_metric_error(monkeypatch):
+    """Stale cached scalers should trigger one retry with a fresh autobatcher."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.max_memory_scaler = None
+    relaxer._runner_kwargs = {"autobatcher": object()}
+    calls = {"count": 0}
+
+    def fake_once(atoms_list, *, steps, max_atoms_in_batch):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ValueError(
+                "Max metric of system with index 0 in states: 914.0 is greater "
+                "than max_metric 605.0, please set a larger max_metric"
+            )
+        return [(0.0, atoms_list[0])]
+
+    invalidated: list[int] = []
+
+    monkeypatch.setattr(relaxer, "_relax_batch_once", fake_once)
+    monkeypatch.setattr(
+        relaxer,
+        "_invalidate_memory_scaler_cache",
+        lambda n_atoms: invalidated.append(n_atoms),
+    )
+    monkeypatch.setattr(relaxer, "_reset_autobatcher_memory_scaler", lambda: None)
+
+    from ase import Atoms
+
+    atoms = Atoms("H", positions=[[0, 0, 0]])
+    results = relaxer.relax_batch([atoms])
+    assert calls["count"] == 2
+    assert invalidated == [1]
+    assert len(results) == 1
