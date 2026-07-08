@@ -1,9 +1,10 @@
 """SCGO Database Module
 
 Designed for **HPC** use: SQLite on shared filesystems (Lustre, GPFS, NFS-class),
-batch jobs, and optional multi-process access. WAL mode is off by default; the
-registry uses a cross-process lock file (``.scgo_db_registry.lock``) on Linux.
-Prefer job-local scratch for heavy I/O when your site supports it.
+batch jobs, and optional multi-process access. WAL mode is off by default.
+Database discovery uses an in-process registry with a filesystem fallback when
+the registry has no entries. Prefer job-local scratch for heavy I/O when your
+site supports it.
 """
 
 from __future__ import annotations

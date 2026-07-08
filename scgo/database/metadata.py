@@ -261,6 +261,7 @@ def mark_final_minima_in_db(
                 retry_transaction(
                     db,
                     operation_name="mark_final_minima",
+                    isolation_level="IMMEDIATE",
                 ) as conn,
             ):
                 kvp = SYSTEMS_JSON_COLUMN
@@ -313,7 +314,6 @@ def mark_final_minima_in_db(
                     rows_updated_this_db += 1
 
                 if rows_updated_this_db > 0:
-                    conn.commit()
                     total_rows_updated += rows_updated_this_db
                     dbs_touched.add(db_key)
                     details[db_key] = details.get(db_key, 0) + rows_updated_this_db

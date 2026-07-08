@@ -21,12 +21,11 @@ from ase_ga.data import DataConnection
 
 from scgo.constants import PENALTY_ENERGY
 from scgo.database.connection import (
-    _create_data_connection_with_retry,
     _run_sqlite,
     apply_sqlite_pragmas,
     close_data_connection,
-    configure_data_connection_settings,
     get_connection,
+    open_data_connection_for_setup,
 )
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.discovery import list_discovered_db_paths_with_run
@@ -38,7 +37,7 @@ from scgo.database.schema import (
     stamp_scgo_database,
 )
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
-from scgo.database.sync import database_retry, retry_with_backoff
+from scgo.database.sync import PRESET_AGGRESSIVE, database_retry, retry_with_backoff
 from scgo.utils.helpers import (
     ensure_directory_exists,
     ensure_final_id,
@@ -93,7 +92,11 @@ def _ensure_database_indices(
                         f"ON systems(json_extract({json_col}, '$.final_unique_minimum'))"
                     )
 
-        _run_sqlite(db_path, _create_indices)
+        database_retry(
+            lambda: _run_sqlite(db_path, _create_indices),
+            config=PRESET_AGGRESSIVE,
+            operation_name=f"create indices on {db_path}",
+        )
         logger.debug(f"Database indices created for {db_path}")
     except sqlite3.OperationalError as e:
         if enable_wal_mode:
@@ -223,11 +226,13 @@ def setup_database(
             prep_db.vacuum()
 
     try:
-        da = _create_data_connection_with_retry(db_file)
-
-        configure_data_connection_settings(
-            da,
-            wal_mode=enable_wal_mode,
+        da = database_retry(
+            lambda: open_data_connection_for_setup(
+                db_file,
+                wal_mode=enable_wal_mode,
+            ),
+            config=PRESET_AGGRESSIVE,
+            operation_name=f"setup database connection for {db_file}",
         )
 
         _ensure_database_indices(
@@ -248,13 +253,15 @@ def setup_database(
             enable_wal_mode,
         )
 
-        with contextlib.suppress(
+        try:
+            stamp_scgo_database(db_file)
+        except (
             sqlite3.DatabaseError,
             sqlite3.OperationalError,
             OSError,
             ValueError,
-        ):
-            stamp_scgo_database(db_file)
+        ) as e:
+            logger.warning("Failed to stamp SCGO database %s: %s", db_file, e)
 
         _register_database_best_effort(output_dir_str, db_file, atoms_template, run_id)
 

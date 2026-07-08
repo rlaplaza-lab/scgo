@@ -162,15 +162,23 @@ def retry_transaction(
     db_connection,
     config: RetryConfig | None = None,
     operation_name: str = "transaction",
+    isolation_level: str = "DEFERRED",
 ):
-    """Retry opening ``database_transaction`` on transient lock errors."""
+    """Retry ``database_transaction`` on transient lock errors.
+
+    Re-enters the transaction from scratch when a retryable
+    :exc:`~sqlite3.OperationalError` occurs during begin, body, or commit.
+    """
     effective_config = config or PRESET_AGGRESSIVE
     for attempt in range(effective_config.max_retries):
         try:
             # Lazy import avoids circular imports.
             from scgo.database.transactions import database_transaction
 
-            with database_transaction(db_connection) as conn:
+            with database_transaction(
+                db_connection,
+                isolation_level=isolation_level,
+            ) as conn:
                 yield conn
                 return
         except sqlite3.OperationalError as e:

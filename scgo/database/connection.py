@@ -135,15 +135,27 @@ def apply_sqlite_pragmas(
         _apply_pragma(conn, f"PRAGMA cache_size=-{cache_size_mb * 1024};")
 
 
-def _create_data_connection(db_path: str) -> DataConnection:
-    """Construct an ASE :class:`~ase_ga.data.DataConnection` without opening it."""
-    return DataConnection(db_path)
+def open_data_connection_for_setup(
+    db_path: str | Path,
+    *,
+    wal_mode: bool = False,
+    busy_timeout: int = 30000,
+    cache_size_mb: int = 64,
+) -> DataConnection:
+    """Open a long-lived :class:`~ase_ga.data.DataConnection` for ``setup_database``.
 
-
-_create_data_connection_with_retry = retry_on_lock(
-    config=PRESET_AGGRESSIVE,
-    operation_name="open DataConnection",
-)(_create_data_connection)
+    Applies SCGO PRAGMAs via :func:`configure_data_connection_settings`, which performs
+    the first SQLite open. Callers should wrap this in :func:`~scgo.database.sync.database_retry`
+    when running on shared or contended filesystems.
+    """
+    da = DataConnection(str(db_path))
+    configure_data_connection_settings(
+        da,
+        busy_timeout=busy_timeout,
+        wal_mode=wal_mode,
+        cache_size_mb=cache_size_mb,
+    )
+    return da
 
 
 def _open_data_connection(
