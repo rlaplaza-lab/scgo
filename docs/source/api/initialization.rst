@@ -24,14 +24,18 @@ deposition:
        seeds for reproducible parallel runs.
    * - ``seed+growth``
      - Grow from low-energy candidates in prior ``*.db`` searches (Boltzmann
-       sampling by composition counts). Falls back to random_spherical when no
-       suitable seed exists.
+       sampling by composition counts). Chain: DB combine+grow → random-seed
+       growth → ``random_spherical`` when earlier stages yield no suitable
+       structure.
    * - ``random_spherical``
      - Iterative random placement with clash and connectivity checks; retries
        relax placement radii within user bounds.
    * - ``template``
      - Icosahedral / decahedral / octahedral templates when available for the
-       target size.
+       target size. Exact magic-number shells are preferred; near-match
+       adjustment from the nearest magic number is only attempted when the
+       size is within ``MAGIC_NUMBER_TOLERANCE`` (default ±2). Falls back to
+       ``random_spherical`` when no usable template is produced.
 
 Atom ordering (multi-element GA)
 --------------------------------

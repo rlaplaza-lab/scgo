@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from scgo.initialization import create_initial_cluster_batch
+from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.initialization.geometry_helpers import (
     format_composition_counts_short,
     format_placement_error_message,
@@ -14,6 +14,7 @@ from scgo.initialization.geometry_helpers import (
 from scgo.initialization.initializers import (
     _sample_suitable_seed,
     _SeedSamplingLogCollector,
+    _try_strategies_in_order,
 )
 
 
@@ -119,3 +120,37 @@ def test_batch_seed_failures_are_grouped_not_repeated(caplog):
         assert "after attempts" not in caplog.text
     else:
         pytest.skip("No seed failures in this run; database may have suitable seeds")
+
+
+def test_single_structure_smart_logs_strategy_allocation(caplog):
+    """Single-structure smart mode should emit allocation INFO at least once."""
+    caplog.set_level(logging.INFO)
+    atoms = create_initial_cluster(
+        ["Pt"] * 4,
+        mode="smart",
+        rng=np.random.default_rng(0),
+    )
+    assert len(atoms) == 4
+    assert "Initialization for 4-atom clusters" in caplog.text
+    assert "Strategy allocation (1 structure" in caplog.text
+
+
+def test_all_strategies_none_emits_warning_before_raise(caplog):
+    """Terminal all-None path should WARNING before raising RuntimeError."""
+    caplog.set_level(logging.WARNING)
+
+    def always_none():
+        return None
+
+    with pytest.raises(RuntimeError, match="All initialization strategies returned None"):
+        _try_strategies_in_order(
+            [("primary", always_none), ("fallback", always_none)],
+            composition=["Pt", "Pt"],
+            connectivity_factor=1.4,
+        )
+
+    assert any(
+        "All initialization strategies returned None" in r.getMessage()
+        and r.levelno == logging.WARNING
+        for r in caplog.records
+    )

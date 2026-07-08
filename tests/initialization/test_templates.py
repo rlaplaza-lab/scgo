@@ -531,10 +531,25 @@ class TestGenerateNearMatchTemplates:
             include_near=True,
         )
         assert isinstance(matches, list)
+        assert is_near_magic_number(12)
         # May have matches from nearby magic numbers (13, 11, etc.)
         for atoms in matches:
             assert atoms is not None
             assert len(atoms) == 12
+
+    def test_generate_near_matches_outside_tolerance_returns_empty(self, rng):
+        """Sizes far from any magic number must not produce near-match templates."""
+        # Nearest magic to 100 is outside MAGIC_NUMBER_TOLERANCE (=2).
+        assert is_near_magic_number(100) is False
+        matches = generate_template_matches(
+            ["Pt"] * 100,
+            100,
+            rng=rng,
+            connectivity_factor=TEMPLATE_GENERATION_FACTOR,
+            include_exact=False,
+            include_near=True,
+        )
+        assert matches == []
 
     def test_generate_near_matches_exact_magic(self, rng):
         """Test generating near matches for exact magic number."""

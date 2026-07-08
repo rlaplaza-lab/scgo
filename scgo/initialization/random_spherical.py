@@ -11,13 +11,17 @@ from collections import Counter, defaultdict
 
 import numpy as np
 from ase import Atom, Atoms
-from ase.data import atomic_masses, atomic_numbers, covalent_radii
+from ase.data import atomic_masses, atomic_numbers
 from scipy.spatial import KDTree
 
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 
-from .atomic_radii import cluster_passes_ga_blmin, resolve_steric_floor
+from .atomic_radii import (
+    cluster_passes_ga_blmin,
+    get_covalent_radius_by_z,
+    resolve_steric_floor,
+)
 from .geometry_helpers import (
     _check_composition_feasibility,
     _generate_batch_positions_on_convex_hull,
@@ -873,7 +877,7 @@ def _add_atoms_single_mode(
                 # Special handling for 2-atom clusters: bond length must respect
                 # both the steric floor and connectivity_factor (not raw r_i+r_j).
                 if is_two_atom_cluster and n_current == 1:
-                    existing_radius = covalent_radii[new_atoms.numbers[0]]
+                    existing_radius = get_covalent_radius_by_z(new_atoms.numbers[0])
                     bond_distance, _, _ = compute_bond_distance_params(
                         existing_radius,
                         atom_radius,
@@ -888,7 +892,7 @@ def _add_atoms_single_mode(
                         anchor_pos, bond_distance, rng
                     )
                 elif n_current == 1:
-                    existing_radius = covalent_radii[new_atoms.numbers[0]]
+                    existing_radius = get_covalent_radius_by_z(new_atoms.numbers[0])
                     base_extent = existing_radius
                     placement_distance = (
                         existing_radius + atom_radius * effective_scaling
@@ -908,7 +912,7 @@ def _add_atoms_single_mode(
                         continue
 
                     current_radii = np.array(
-                        [covalent_radii[n] for n in new_atoms.numbers]
+                        [get_covalent_radius_by_z(n) for n in new_atoms.numbers]
                     )
                     max_existing_radius = (
                         np.max(current_radii) if len(current_radii) > 0 else atom_radius
@@ -940,7 +944,9 @@ def _add_atoms_single_mode(
                         # bond_distance is measured from a real neighbour, not the COM.
                         anchor_idx = int(rng.integers(n_current))
                         anchor_pos = current_positions[anchor_idx]
-                        anchor_radius = covalent_radii[new_atoms.numbers[anchor_idx]]
+                        anchor_radius = get_covalent_radius_by_z(
+                            new_atoms.numbers[anchor_idx]
+                        )
                         anchor_bond_distance, _, _ = compute_bond_distance_params(
                             anchor_radius,
                             atom_radius,
@@ -957,7 +963,9 @@ def _add_atoms_single_mode(
                         candidate_pos = candidates[0]
 
             if len(current_positions) > 0:
-                current_radii = np.array([covalent_radii[n] for n in new_atoms.numbers])
+                current_radii = np.array(
+                    [get_covalent_radius_by_z(n) for n in new_atoms.numbers]
+                )
 
                 # Use KDTree for large clusters to optimize distance checks
                 if use_kdtree and tree is not None:
@@ -1128,7 +1136,9 @@ def _add_atoms_batch_mode(
         current_positions = new_atoms.get_positions()
 
         # Calculate placement parameters
-        current_radii = np.array([covalent_radii[n] for n in new_atoms.numbers])
+        current_radii = np.array(
+            [get_covalent_radius_by_z(n) for n in new_atoms.numbers]
+        )
         max_existing_radius = float(
             np.max(current_radii) if len(current_radii) > 0 else 0.0
         )

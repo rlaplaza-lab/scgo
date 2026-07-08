@@ -501,6 +501,11 @@ def _try_template_generation(
     )
 
     if not template_candidates:
+        logger.debug(
+            "template: no usable templates for %d atoms (composition=%s)",
+            n_atoms,
+            composition,
+        )
         return None
 
     # Deduplicate templates to remove duplicates between exact and near-match templates
@@ -929,12 +934,14 @@ def _try_seed_growth(
                     formula,
                     reason,
                 )
+                seeds_to_combine = []
                 break
 
             seeds_to_combine.append(seed)
             existing_geometries.append(_classify_seed_geometry(seed))
 
-        if not seeds_to_combine:
+        # Require a complete combo; do not grow from a partial seed set.
+        if len(seeds_to_combine) != len(combo):
             continue
 
         out = combine_and_grow(
@@ -950,12 +957,14 @@ def _try_seed_growth(
         if out is not None:
             return out
 
-    # All seed combination strategies failed
+    # All DB combination strategies failed; still try random-seed growth before
+    # yielding None (outer chain may then fall back to random_spherical).
     logger.info(
-        "seed+growth: all %d combination strategies failed; trying next strategy",
+        "seed+growth: all %d combination strategies failed; "
+        "DB combinations exhausted; trying random-seed growth",
         SEED_COMBINATION_STRATEGY_COUNT,
     )
-    return None
+    return _grow_from_random_seed(**random_seed_kwargs)
 
 
 def _discover_available_strategies(
@@ -1115,6 +1124,13 @@ def _try_strategies_in_order(
             continue
 
     strategy_names = [name for name, _ in strategies]
+    logger.warning(
+        "All initialization strategies returned None: composition=%s, "
+        "n_atoms=%s, strategies=%s",
+        composition,
+        len(composition),
+        strategy_names,
+    )
     raise RuntimeError(
         f"All initialization strategies returned None: composition={composition}, "
         f"n_atoms={len(composition)}, strategies={strategy_names}"

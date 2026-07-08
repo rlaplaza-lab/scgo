@@ -57,3 +57,28 @@ class TestAtomicRadii:
         side = compute_cell_side(["Pt", "Pt", "Pt", "Pt", "Co"], vacuum=10.0)
         assert np.isfinite(side)
         assert side > 0
+
+
+def test_random_spherical_uses_get_covalent_radius_by_z(monkeypatch, rng):
+    """Placement must resolve radii through gap-filled helpers, not raw ASE tables."""
+    import importlib
+
+    from scgo.initialization.atomic_radii import get_covalent_radius_by_z
+
+    rs_mod = importlib.import_module("scgo.initialization.random_spherical")
+    calls: list[int] = []
+    real_by_z = get_covalent_radius_by_z
+
+    def tracking_by_z(z: int) -> float:
+        calls.append(int(z))
+        return real_by_z(z)
+
+    monkeypatch.setattr(rs_mod, "get_covalent_radius_by_z", tracking_by_z)
+
+    atoms = rs_mod.random_spherical(
+        composition=["Pt", "Pt", "Pt", "Au"],
+        cell_side=20.0,
+        rng=rng,
+    )
+    assert len(atoms) == 4
+    assert calls, "expected placement path to call get_covalent_radius_by_z"

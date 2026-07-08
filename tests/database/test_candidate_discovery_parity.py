@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+
 from ase import Atoms
 from ase.db import connect
 
 from scgo.database.helpers import extract_minima_from_database_file
 from scgo.database.schema import stamp_scgo_database
-from scgo.initialization.candidate_discovery import _load_candidates_from_file
+from scgo.initialization.candidate_discovery import (
+    _find_smaller_candidates,
+    _load_candidates_from_file,
+)
 
 
 def test_candidate_discovery_matches_extract_minima(tmp_path):
@@ -49,3 +54,37 @@ def test_candidate_discovery_matches_extract_minima(tmp_path):
     ):
         assert energy == exp_energy
         assert atoms.get_chemical_symbols() == exp_atoms.get_chemical_symbols()
+
+
+def test_find_smaller_candidates_logs_unparseable_path_summary(
+    tmp_path, monkeypatch, caplog
+):
+    """Aggregated INFO should report unmatched/unparseable *_searches paths."""
+    parseable_dir = tmp_path / "Pt2_searches"
+    parseable_dir.mkdir()
+    parseable_db = parseable_dir / "run.db"
+    parseable_db.write_text("")
+
+    unparseable_dir = tmp_path / "misc_results"
+    unparseable_dir.mkdir()
+    unparseable_db = unparseable_dir / "run.db"
+    unparseable_db.write_text("")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "scgo.initialization.candidate_discovery.glob.glob",
+        lambda *args, **kwargs: [str(parseable_db), str(unparseable_db)],
+    )
+    # Avoid reading the empty stub DBs; we only assert discovery summary logging.
+    monkeypatch.setattr(
+        "scgo.initialization.candidate_discovery._load_db_candidates",
+        lambda db_file: (0.0, []),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = _find_smaller_candidates(["Pt", "Pt", "Pt"], "**/*.db")
+
+    assert result == {}
+    assert "Candidate discovery:" in caplog.text
+    assert "2 DB path(s) matched glob" in caplog.text
+    assert "1 skipped (unparseable *_searches path)" in caplog.text

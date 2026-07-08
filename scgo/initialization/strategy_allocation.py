@@ -205,20 +205,19 @@ def _allocate_initialization_strategies(
         targets, n_structures, templates, n_seed_combinations, rng
     )
 
-    # Logging
+    # Logging (include single-structure runs for operational visibility)
     template_count = sum(1 for s, _ in allocations if s == "template")
     seed_count = sum(1 for s, _ in allocations if s == "seed+growth")
     random_count = sum(1 for s, _ in allocations if s == "random_spherical")
 
-    if n_structures > 1:
-        logger.info(
-            f"Initialization for {n_atoms}-atom clusters: "
-            f"{n_templates} template(s), {n_seed_formulas} seed formula(s), "
-            f"{n_seed_combinations} seed combination(s) available"
-        )
-        logger.info(
-            f"Strategy allocation ({len(allocations)} structures): "
-            f"{template_count} template, {seed_count} seed+growth, {random_count} random"
-        )
+    logger.info(
+        f"Initialization for {n_atoms}-atom clusters: "
+        f"{n_templates} template(s), {n_seed_formulas} seed formula(s), "
+        f"{n_seed_combinations} seed combination(s) available"
+    )
+    logger.info(
+        f"Strategy allocation ({len(allocations)} structure(s)): "
+        f"{template_count} template, {seed_count} seed+growth, {random_count} random"
+    )
 
     return allocations

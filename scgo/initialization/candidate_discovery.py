@@ -217,11 +217,30 @@ def _find_smaller_candidates(
     target_counts = get_composition_counts(target_composition)
     n_target_atoms = len(target_composition)
 
-    filtered_matches = [
-        db_file
-        for db_file in matches
-        if _could_path_contain_relevant_candidates(db_file, target_counts)
-    ]
+    skipped_unparseable = 0
+    filtered_matches: list[str] = []
+    for db_file in matches:
+        path_comp = _parse_composition_from_path(db_file)
+        if path_comp is None:
+            skipped_unparseable += 1
+            logger.debug(
+                "Cannot parse composition from path %s; skipping candidate discovery scan",
+                db_file,
+            )
+            continue
+        path_counts = get_composition_counts(path_comp)
+        if is_composition_subset(path_counts, target_counts):
+            filtered_matches.append(db_file)
+
+    if matches:
+        logger.info(
+            "Candidate discovery: %d DB path(s) matched glob, "
+            "%d relevant after composition filter, "
+            "%d skipped (unparseable *_searches path)",
+            len(matches),
+            len(filtered_matches),
+            skipped_unparseable,
+        )
 
     signature_tuple = _compute_files_signature(filtered_matches)
     cache_key = (
@@ -250,7 +269,13 @@ def _find_smaller_candidates(
     for db_file in filtered_matches:
         try:
             _mtime, entries = _load_db_candidates(db_file)
-        except (sqlite3.Error, OSError, RuntimeError):
+        except (sqlite3.Error, OSError, RuntimeError) as e:
+            logger.debug(
+                "Failed to load candidates from %s during discovery scan: %s: %s",
+                db_file,
+                type(e).__name__,
+                e,
+            )
             continue
 
         for symbols, energy, atoms in entries:

@@ -294,6 +294,10 @@ def remove_atoms_from_vertices(
             f"Cannot remove {n_remove} atoms from cluster with {len(cluster)} atoms"
         )
     if len(cluster) < 4:
+        logger.debug(
+            "remove_atoms_from_vertices: cluster has %d atoms (<4); skipping removal",
+            len(cluster),
+        )
         return None
 
     initial_len: int = len(cluster)
@@ -312,6 +316,12 @@ def remove_atoms_from_vertices(
             base_composition, final_composition, operation="reduce"
         )
         if not is_feasible:
+            logger.debug(
+                "remove_atoms_from_vertices: composition-preserving removal "
+                "infeasible (n_remove=%d, target=%s)",
+                n_remove,
+                target_composition,
+            )
             return None
     else:
         final_counts = None
@@ -324,6 +334,12 @@ def remove_atoms_from_vertices(
             get_convex_hull_vertex_indices(current)
         )
         if len(vertices) == 0:
+            logger.debug(
+                "remove_atoms_from_vertices: no convex-hull vertices remaining "
+                "(removed %d/%d)",
+                total_removed,
+                n_remove,
+            )
             return None
 
         positions: Any | np.ndarray[tuple[Any, ...], np.dtype[Any]] = (
@@ -394,6 +410,11 @@ def remove_atoms_from_vertices(
                 ]
                 remove_indices.extend(el_verts[:count])
             if not remove_indices and total_to_remove_this > 0:
+                logger.debug(
+                    "remove_atoms_from_vertices: no composition-matching vertices "
+                    "for required removals %s",
+                    remove_counts,
+                )
                 return None
             to_remove_this = min(total_to_remove_this, len(remove_indices), 1)
             remove_indices = remove_indices[:to_remove_this]
@@ -410,6 +431,10 @@ def remove_atoms_from_vertices(
         )
 
         if not safe_candidates:
+            logger.debug(
+                "remove_atoms_from_vertices: no safe removal candidates "
+                "(would disconnect cluster)"
+            )
             return None
 
         remove_indices = safe_candidates[:to_remove_this]
@@ -437,6 +462,10 @@ def remove_atoms_from_vertices(
             use_mic=False,
         )
         if not is_valid:
+            logger.debug(
+                "remove_atoms_from_vertices: validation failed after removal: %s",
+                err or "unknown validation error",
+            )
             return None
 
         current = new_cluster
@@ -1591,10 +1620,20 @@ def _generate_template_with_atom_adjustment(
         base_template_type
     )
     if gen_func is None:
+        logger.debug(
+            "Template adjustment skipped: unknown base type %s",
+            base_template_type,
+        )
         return None
 
     base_cluster: Atoms | None = gen_func(base_composition, base_n_atoms, rng)
     if base_cluster is None:
+        logger.debug(
+            "Template adjustment skipped: base generator returned None "
+            "(%s, n=%d)",
+            base_template_type,
+            base_n_atoms,
+        )
         return None
 
     base_cluster.set_cell([cell_side, cell_side, cell_side])
@@ -1612,6 +1651,14 @@ def _generate_template_with_atom_adjustment(
         n_remove: int = -n_diff
         removal_ratio: float = n_remove / base_n_atoms
         if removal_ratio >= 0.5:
+            logger.debug(
+                "Template shrink refused: removing %d/%d atoms (%.0f%% >= 50%%) "
+                "from %s base",
+                n_remove,
+                base_n_atoms,
+                100.0 * removal_ratio,
+                base_template_type,
+            )
             return None
 
         max_removal_attempts: int = min(3, base_n_atoms)
@@ -1630,6 +1677,14 @@ def _generate_template_with_atom_adjustment(
             if adjusted is None:
                 if attempt < max_removal_attempts - 1:
                     continue
+                logger.debug(
+                    "Template shrink failed after %d removal attempts "
+                    "(%s: %d -> %d)",
+                    max_removal_attempts,
+                    base_template_type,
+                    base_n_atoms,
+                    target_n_atoms,
+                )
                 return None
             return adjusted
         return None
@@ -1698,6 +1753,12 @@ def _validate_and_add_template(
         results.append(validated_atoms)
         return True
     else:
+        logger_instance.debug(
+            "Template validation failed for %s %s: %s",
+            template_type,
+            template_description,
+            error_message or "unknown validation error",
+        )
         return False
 
 
@@ -1715,8 +1776,10 @@ def generate_template_matches(
     """Generate template structures for the target size.
 
     Provides both exact and near-match template generation in a single interface.
-    Exact matches when n_atoms is a magic number; near matches by adjusting from
-    the nearest magic number.
+    Exact matches when ``n_atoms`` is a magic number; near matches by adjusting
+    from the nearest magic number only when ``n_atoms`` is within
+    :data:`~scgo.initialization.initialization_config.MAGIC_NUMBER_TOLERANCE`
+    of that magic number.
 
     Args:
         composition: Target composition
@@ -1727,7 +1790,8 @@ def generate_template_matches(
         min_distance_factor: Factor for minimum distance checks
         connectivity_factor: Factor for connectivity threshold
         include_exact: If True, generate exact matches when n_atoms is a magic number
-        include_near: If True, generate near matches from nearest magic number
+        include_near: If True, generate near matches when n_atoms is within
+            ``MAGIC_NUMBER_TOLERANCE`` of a magic number
 
     Returns:
         List of Atoms objects with template structures
@@ -1770,7 +1834,7 @@ def generate_template_matches(
                     e,
                 )
 
-    if include_near and not is_exact_match:
+    if include_near and not is_exact_match and is_near_magic_number(n_atoms):
         valid_types = _find_valid_template_types(nearest_magic)
         for template_type in valid_types:
             try:
