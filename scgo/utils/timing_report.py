@@ -19,6 +19,9 @@ import logging
 import os
 from typing import Any
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.utils.logging import get_logger
 from scgo.utils.ts_provenance import ts_output_provenance
 
@@ -141,7 +144,7 @@ def load_run_timing_payload(run_dir: str) -> dict[str, Any] | None:
 def flatten_run_timing_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Return a flat timing payload (legacy multi-trial documents are rejected)."""
     if "trials" in payload:
-        raise ValueError(
+        raise SCGOValidationError(
             "Multi-trial timing documents are no longer supported; "
             "expected a flat timing.json at run root."
         )

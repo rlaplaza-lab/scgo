@@ -21,6 +21,14 @@ Logging
    :undoc-members:
    :show-inheritance:
 
+Phase logging
+-------------
+
+.. automodule:: scgo.utils.phase_logging
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Run directories and metadata
 ----------------------------
 

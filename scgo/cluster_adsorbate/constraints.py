@@ -8,6 +8,7 @@ from ase import Atoms
 from ase.constraints import FixBondLength
 
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
+from scgo.exceptions import SCGOValidationError
 
 
 def attach_fix_bond_lengths(
@@ -20,14 +21,16 @@ def attach_fix_bond_lengths(
     new_constraints: list = list(atoms.constraints) if atoms.constraints else []
     for a, b in bond_pairs:
         if not (0 <= a < n and 0 <= b < n):
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Invalid bond pair ({a}, {b}) for structure with {n} atoms"
             )
         if a == b:
-            raise ValueError(f"bond pair ({a}, {b}) must be two distinct atoms")
+            raise SCGOValidationError(
+                f"bond pair ({a}, {b}) must be two distinct atoms"
+            )
         key = (min(a, b), max(a, b))
         if key in seen:
-            raise ValueError(f"duplicate bond pair {key}")
+            raise SCGOValidationError(f"duplicate bond pair {key}")
         seen.add(key)
         new_constraints.append(FixBondLength(int(a), int(b)))
     if new_constraints:
@@ -49,7 +52,7 @@ def attach_adsorbate_internal_geometry_constraints(
         return
     core_symbols = adsorbate_definition.get("core_symbols", [])
     if not isinstance(core_symbols, list):
-        raise ValueError("adsorbate_definition.core_symbols must be a list")
+        raise SCGOValidationError("adsorbate_definition.core_symbols must be a list")
     fragment_lengths = parse_positive_fragment_lengths(
         adsorbate_definition.get("adsorbate_fragment_lengths", [])
     )

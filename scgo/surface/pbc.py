@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,7 +31,7 @@ def normalize_slab_pbc(
         The same ``slab`` instance (for chaining).
     """
     if surface_normal_axis not in (0, 1, 2):
-        raise ValueError("surface_normal_axis must be 0, 1, or 2")
+        raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
 
     pbc = np.asarray(slab.pbc, dtype=bool).copy()
     in_plane = [i for i in range(3) if i != surface_normal_axis]

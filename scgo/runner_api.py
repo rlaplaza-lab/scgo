@@ -34,10 +34,13 @@ from time import perf_counter
 from typing import Any, Literal
 
 from ase import Atoms
+from ase.calculators.calculator import Calculator
 from ase.data import atomic_numbers
 from ase.formula import Formula
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.exceptions import SCGOValidationError
+from scgo.minima_search import run_trials
 from scgo.param_presets import get_default_params
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
@@ -61,9 +64,6 @@ from scgo.utils.output_paths import (
     resolve_go_searches_dir,
     resolve_go_ts_pipeline_paths,
 )
-from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
-
-from scgo.minima_search import run_trials
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
@@ -87,6 +87,7 @@ from scgo.utils.timing_report import (
     sum_neb_seconds_from_ts_results,
     write_timing_file,
 )
+from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 from scgo.utils.validation import validate_composition
 
 type CompositionInput = str | list[str] | Atoms
@@ -105,7 +106,7 @@ class RunGOContext:
     clean: bool
     output_dir: Path | None
     verbosity: int
-    calculator_for_global_optimization: Any | None
+    calculator_for_global_optimization: Calculator | None
     output_summary_dir: str
 
 
@@ -175,10 +176,10 @@ def _as_composition(composition: CompositionInput) -> list[str]:
         return parse_composition_arg(composition)
     elif isinstance(composition, list):
         if not composition:
-            raise ValueError("composition list must not be empty")
+            raise SCGOValidationError("composition list must not be empty")
         return [str(s) for s in composition]
     else:
-        raise TypeError(
+        raise SCGOValidationError(
             f"composition must be str, list[str], or Atoms, got {type(composition).__name__}"
         )
 
@@ -186,7 +187,7 @@ def _as_composition(composition: CompositionInput) -> list[str]:
 def _as_composition_list(items: Iterable[CompositionInput]) -> list[list[str]]:
     out = [_as_composition(x) for x in items]
     if not out:
-        raise ValueError("compositions iterable must not be empty")
+        raise SCGOValidationError("compositions iterable must not be empty")
     return out
 
 
@@ -196,7 +197,7 @@ def _resolved_path(path: str | Path | None) -> Path | None:
 
 def _require_system_type(system_type: SystemType | None, fn_name: str) -> SystemType:
     if system_type is None:
-        raise ValueError(f"system_type is required for {fn_name}.")
+        raise SCGOValidationError(f"system_type is required for {fn_name}.")
     return system_type
 
 
@@ -255,7 +256,7 @@ def _validate_go_ts_surface_config(
     if not get_system_policy(system_type).uses_surface:
         return
     if not isinstance(surface_config, SurfaceSystemConfig):
-        raise ValueError(
+        raise SCGOValidationError(
             f"system_type={system_type!r} requires the run surface_config argument "
             "to be a SurfaceSystemConfig."
         )
@@ -266,7 +267,7 @@ def _validate_go_ts_surface_config(
         go_slot = {}
     go_sc = go_slot.get("surface_config")
     if go_sc is not None and go_sc != surface_config:
-        raise ValueError(
+        raise SCGOValidationError(
             "run surface_config and go_params['optimizer_params']["
             f"'{chosen}']['surface_config'] disagree."
         )
@@ -284,7 +285,7 @@ def _validate_go_ts_param_coherence(
     go_surface_config = go_prepared.get("surface_config") or surface_config
     if policy.uses_surface:
         if not isinstance(go_surface_config, SurfaceSystemConfig):
-            raise ValueError(
+            raise SCGOValidationError(
                 "GO/TS coherence error: surface system types require "
                 "go_params['surface_config'] or run surface_config=."
             )
@@ -293,12 +294,12 @@ def _validate_go_ts_param_coherence(
             and go_prepared.get("surface_config") is not None
             and go_prepared.get("surface_config") != surface_config
         ):
-            raise ValueError(
+            raise SCGOValidationError(
                 "GO/TS coherence error: go_params['surface_config'] disagrees with "
                 "run surface_config."
             )
     elif go_surface_config is not None:
-        raise ValueError(
+        raise SCGOValidationError(
             "GO/TS coherence error: go_params['surface_config'] is set but "
             f"run system_type={system_type!r} is non-surface."
         )
@@ -309,7 +310,9 @@ def _validate_go_ts_param_coherence(
         if slot is None:
             continue
         if not isinstance(slot, dict):
-            raise ValueError(f"go_params['optimizer_params']['{algo}'] must be a dict.")
+            raise SCGOValidationError(
+                f"go_params['optimizer_params']['{algo}'] must be a dict."
+            )
         slot_system_type = slot.get("system_type")
         default_slot_st = _default_optimizer_system_type(algo)
         if (
@@ -317,7 +320,7 @@ def _validate_go_ts_param_coherence(
             and slot_system_type != system_type
             and slot_system_type != default_slot_st
         ):
-            raise ValueError(
+            raise SCGOValidationError(
                 "GO/TS coherence error: "
                 f"go_params['optimizer_params']['{algo}']['system_type']="
                 f"{slot_system_type!r} disagrees with run system_type={system_type!r}."
@@ -329,13 +332,13 @@ def _validate_go_ts_param_coherence(
                 and surface_config is not None
                 and slot_surface_config != surface_config
             ):
-                raise ValueError(
+                raise SCGOValidationError(
                     "GO/TS coherence error: "
                     f"go_params['optimizer_params']['{algo}']['surface_config'] "
                     "disagrees with run surface_config."
                 )
         elif slot_surface_config is not None:
-            raise ValueError(
+            raise SCGOValidationError(
                 "GO/TS coherence error: go_params surface_config is set but "
                 f"run system_type={system_type!r} is non-surface."
             )
@@ -343,7 +346,7 @@ def _validate_go_ts_param_coherence(
     ts_surface_config = ts_params.get("surface_config") or surface_config
     if policy.uses_surface:
         if not isinstance(ts_surface_config, SurfaceSystemConfig):
-            raise ValueError(
+            raise SCGOValidationError(
                 "GO/TS coherence error: surface system types require "
                 "ts_params['surface_config'] or run surface_config=."
             )
@@ -352,12 +355,12 @@ def _validate_go_ts_param_coherence(
             and ts_params.get("surface_config") is not None
             and ts_params.get("surface_config") != surface_config
         ):
-            raise ValueError(
+            raise SCGOValidationError(
                 "GO/TS coherence error: ts_params['surface_config'] disagrees with "
                 "run surface_config."
             )
     elif ts_surface_config is not None:
-        raise ValueError(
+        raise SCGOValidationError(
             "GO/TS coherence error: ts_params['surface_config'] is set but "
             f"run system_type={system_type!r} is non-surface."
         )
@@ -399,7 +402,7 @@ def _coerce_ts_for_runner(
     surface_config: SurfaceSystemConfig | None,
 ) -> dict[str, Any]:
     if not ts_params:
-        raise ValueError(
+        raise SCGOValidationError(
             f"ts_params is required for {fn_name}. Build with get_ts_search_params(...)."
         )
     _reject_system_keys(ts_params, context=fn_name, kind="ts")
@@ -491,7 +494,7 @@ def _as_int_seed(label: str, value: Any) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as e:
-        raise TypeError(f"{label} must be int-like, got {value!r}") from e
+        raise SCGOValidationError(f"{label} must be int-like, got {value!r}") from e
 
 
 def resolve_workflow_seed(
@@ -523,7 +526,7 @@ def resolve_workflow_seed(
     values = {v for _, v in parts}
     if len(values) > 1:
         desc = ", ".join(f"{name}={v}" for name, v in parts)
-        raise ValueError(f"Inconsistent random seeds: {desc}")
+        raise SCGOValidationError(f"Inconsistent random seeds: {desc}")
     return next(iter(values))
 
 
@@ -536,7 +539,7 @@ def _with_surface_in_optimizers(
         if out.get("surface_config") is None:
             out["surface_config"] = surface_config
         elif out.get("surface_config") != surface_config:
-            raise ValueError(
+            raise SCGOValidationError(
                 "run argument surface_config must match go_params['surface_config'] "
                 "when both are set."
             )
@@ -546,14 +549,14 @@ def _with_surface_in_optimizers(
                 continue
             slot = op[key]
             if not isinstance(slot, dict):
-                raise ValueError(
+                raise SCGOValidationError(
                     f"optimizer_params['{key}'] must be a dict when using go_params['surface_config']"
                 )
             ex = slot.get("surface_config")
             if ex is None:
                 slot["surface_config"] = surface_config
             elif ex != surface_config:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"run argument surface_config must match "
                     f"go_params['optimizer_params']['{key}']['surface_config'] when both are set."
                 )
@@ -580,7 +583,7 @@ def _with_adsorbate_in_optimizers(
         for key in _ALGO_KEYS:
             slot = op.setdefault(key, {})
             if not isinstance(slot, dict):
-                raise ValueError(
+                raise SCGOValidationError(
                     f"optimizer_params['{key}'] must be a dict when using adsorbate parameters"
                 )
             if adsorbate_definition is not None:
@@ -615,7 +618,7 @@ def _reject_system_keys(
                     "Use the run function system_type argument; "
                     "ts_params['surface_config'] is allowed."
                 )
-            raise ValueError(
+            raise SCGOValidationError(
                 f"{context} does not allow top-level {kind}_params['{key}']. {guidance}"
             )
 
@@ -652,7 +655,7 @@ def _run_go_trials(
     run_id: str | None = None,
     clean: bool = False,
     output_dir: str | Path | None = None,
-    calculator_for_global_optimization: Any | None = None,
+    calculator_for_global_optimization: Calculator | None = None,
     *,
     params_already_merged: bool = False,
 ) -> list[tuple[float, Atoms]]:
@@ -676,7 +679,7 @@ def _run_go_trials(
     for algo in ["bh", "ga"]:
         algo_params = params["optimizer_params"].get(algo, {})
         if "rng" in algo_params:
-            raise ValueError(
+            raise SCGOValidationError(
                 f'"rng" should not be in params["optimizer_params"]["{algo}"]. '
                 f'Use the "seed" parameter instead.'
             )
@@ -753,7 +756,7 @@ def _run_go_trials(
     }
     unexpected_keys = set(params.keys()) - expected_top_level_keys
     if unexpected_keys:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unexpected parameter keys: {sorted(unexpected_keys)}. "
             f"Expected keys: {sorted(expected_top_level_keys)}"
         )
@@ -896,11 +899,11 @@ def build_one_element_compositions(
 ) -> list[list[str]]:
     """Composition list for mono-element size scans (min_atoms..max_atoms)."""
     if not element or not isinstance(element, str):
-        raise ValueError("element must be a non-empty string")
+        raise SCGOValidationError("element must be a non-empty string")
     if min_atoms < 1:
-        raise ValueError("min_atoms must be >= 1")
+        raise SCGOValidationError("min_atoms must be >= 1")
     if max_atoms < min_atoms:
-        raise ValueError("max_atoms must be >= min_atoms")
+        raise SCGOValidationError("max_atoms must be >= min_atoms")
     return [[element] * n_atoms for n_atoms in range(min_atoms, max_atoms + 1)]
 
 
@@ -909,13 +912,13 @@ def build_two_element_compositions(
 ) -> list[list[str]]:
     """Composition list for bimetallic size scans (min_atoms..max_atoms)."""
     if not element1 or not isinstance(element1, str):
-        raise ValueError("element1 must be a non-empty string")
+        raise SCGOValidationError("element1 must be a non-empty string")
     if not element2 or not isinstance(element2, str):
-        raise ValueError("element2 must be a non-empty string")
+        raise SCGOValidationError("element2 must be a non-empty string")
     if min_atoms < 1:
-        raise ValueError("min_atoms must be >= 1")
+        raise SCGOValidationError("min_atoms must be >= 1")
     if max_atoms < min_atoms:
-        raise ValueError("max_atoms must be >= min_atoms")
+        raise SCGOValidationError("max_atoms must be >= min_atoms")
     compositions: list[list[str]] = []
     for n_atoms in range(min_atoms, max_atoms + 1):
         for i in range(n_atoms + 1):
@@ -949,7 +952,7 @@ def _run_go_campaign_compositions(
     for algo in ["bh", "ga"]:
         algo_params = params["optimizer_params"].get(algo, {})
         if "rng" in algo_params:
-            raise ValueError(
+            raise SCGOValidationError(
                 f'"rng" should not be in params["optimizer_params"]["{algo}"]. '
                 f'Use the "seed" parameter instead.'
             )
@@ -968,7 +971,7 @@ def _run_go_campaign_compositions(
     all_results = {}
     compositions_list = list(compositions)
     if not compositions_list:
-        raise ValueError("compositions iterable must not be empty")
+        raise SCGOValidationError("compositions iterable must not be empty")
     num_compositions = len(compositions_list)
     logger.info("Starting campaign for %d compositions.", num_compositions)
 
@@ -1243,9 +1246,9 @@ def _run_one_element_go_ts_pipeline(
 ) -> dict[str, Any]:
     """Run one-element GO then TS and return a compact run summary."""
     if not element or not isinstance(element, str):
-        raise ValueError("element must be a non-empty string")
+        raise SCGOValidationError("element must be a non-empty string")
     if n_atoms < 1:
-        raise ValueError("n_atoms must be >= 1")
+        raise SCGOValidationError("n_atoms must be >= 1")
     composition = [element] * n_atoms
     return _run_go_ts_pipeline(
         composition,
@@ -1267,7 +1270,7 @@ def _prepare_run_go_context(
     run_id: str | None,
     clean: bool,
     output_dir: str | Path | None,
-    calculator_for_global_optimization: Any | None,
+    calculator_for_global_optimization: Calculator | None,
     surface_config: SurfaceSystemConfig | None,
     system_type: SystemType | None,
     adsorbates: AdsorbatesInput | None,
@@ -1552,7 +1555,7 @@ def run_go(
     run_id: str | None = None,
     clean: bool = False,
     output_dir: str | Path | None = None,
-    calculator_for_global_optimization: Any | None = None,
+    calculator_for_global_optimization: Calculator | None = None,
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,

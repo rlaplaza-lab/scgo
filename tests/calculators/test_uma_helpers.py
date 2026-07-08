@@ -6,6 +6,7 @@ import importlib.util
 
 import pytest
 
+from scgo.exceptions import SCGORuntimeError
 from tests.conftest import skip_uma_in_github_actions
 
 skip_uma_in_github_actions(allow_module_level=True)
@@ -62,5 +63,5 @@ def test_both_mlip_stacks_raises_when_both_importable():
 
     from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
-    with pytest.raises(RuntimeError, match="MACE stack"):
+    with pytest.raises(SCGORuntimeError, match="MACE stack"):
         ensure_mace_uma_not_both_installed()

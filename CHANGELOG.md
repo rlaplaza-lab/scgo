@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.5.2
+
+### Added
+
+- Verbosity-level logging for GA runs with v1 phase headers and aggregated
+  initialization/generation summaries, v2 per-individual detail. New
+  :func:`~scgo.configure_logging` helper and
+  :class:`~scgo.utils.phase_logging.InitDiagnosticsCollector` for batched
+  initialization messages. Standardized %-style logging across runners and
+  TS code paths.
+- Typed parameter dicts: :class:`~scgo.system_types.GLOptimizerParams` and
+  :class:`~scgo.system_types.TSParams` TypedDicts for GO and TS parameters,
+  with :class:`~scgo.system_types.CalculatorKwargs` and
+  :class:`~scgo.system_types.OptimizerSlotParams` for nested configuration.
+
+### Changed
+
+- Adsorbate/core partition reconciliation now routes through all runner paths
+  via centralized ``resolve_adsorbate_run_composition``, sharing the same
+  core/adsorbate stripping logic across gas and surface runs, ``run_go``,
+  campaigns, GO+TS, and TS entry points.
+- Simplified adsorbate/core reconciliation logic: use list-based stripping,
+  drop redundant count checks, consolidate test coverage.
+- Deduplicated candidate-discovery path filtering via shared path relevance
+  helper, cleaning up parse/filter branches while preserving unparseable-path
+  accounting.
+- Hardened initialization fallback chains with coherent seed+growth behavior,
+  magic-number tolerance for near templates, aligned radii usage in placement,
+  and targeted logging/regression tests to prevent silent skips.
+- Improved initialization logging: grouped seed-sampling failures into single
+  INFO summaries with specific reasons; compact, consistently formatted placement
+  error messages for large runs.
+- Hardened database operations: production retries for reads, connection opens,
+  structure extraction, and count queries via unified ``retry_on_lock`` /
+  ``database_retry`` machinery; IMMEDIATE isolation for final-minima tagging;
+  backoff on transient lock/I/O OperationalErrors; retry actual SQLite open
+  during setup; log stamp failures instead of suppressing them.
+- Aligned database retry logic: ``database_retry`` now only backs off on
+  transient lock/I/O OperationalErrors, matching ``retry_on_lock`` and
+  ``retry_transaction``; shared retried ``DataConnection`` factory between
+  ``setup_database`` and ``get_connection``.
+- Hardened composition parsing with explicit errors for empty and unknown
+  symbols; expanded regression tests covering ``HO2Ru9W2`` adsorbate resolution
+  and edge cases.
+- Made compact formula parsing unambiguous: use ASE ``Formula`` with required
+  chemical capitalization for multi-element strings; allow lowercase only for
+  unambiguous single-element forms (``pt3``); reject ambiguous cases (``ho2``,
+  ``cu``, ``pt3au``) with actionable errors; comma-separated symbols remain the
+  fully unambiguous input format.
+- Validation and configuration failures across SCGO now raise typed exceptions
+  (``SCGOValidationError``, ``SCGORuntimeError``, etc.) instead of bare
+  ``ValueError`` / ``RuntimeError``. Downstream code should catch
+  ``SCGOValidationError`` (or ``SCGOError``) rather than ``ValueError``.
+- ``SCGOValidationError`` is logged at ERROR when logging is configured.
+- Preset dicts are documented as ``GLOptimizerParams`` and ``TSParams`` TypedDicts;
+  default GO params template is cached via ``@cache``.
+
+### Fixed
+
+- MACE import on PyTorch 2.6+: patch ``torch.load`` before ``mace``/e3nn import so
+  checkpoint and constants loading no longer fails with ``weights_only`` unpickling errors.
+- Fix lowercase compact formula parsing by normalizing all-lowercase strings
+  (e.g., ``pt3`` → ``Pt3``) before calling ASE ``Formula``, preserving case-
+  sensitive ``HO2``-style formulas unchanged.
+- Fix ``parse_composition_arg`` docstring for Sphinx ``-W`` builds by removing
+  indented bullet continuation that docutils treated as invalid RST.
+- Fix adsorbate/core partition reconciliation for oxide campaigns by deriving
+  ``core_symbols`` from full mobile formulas when preset cores disagree,
+  updating ``adsorbate_definition`` in place, and deep-copying preset definitions
+  per campaign composition.
+- SQLite connection handle leaks in database setup and configuration paths.
+
 ## 0.5.1
 
 ### Fixed

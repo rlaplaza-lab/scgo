@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.logging import get_logger
 from scgo.utils.timing_report import (
     RUN_TIMING_SCHEMA_VERSION,
@@ -113,7 +114,7 @@ def test_flatten_run_timing_payload_rejects_multi_trial():
             {"backend": "ga", "timings_s": {"total_wall_s": 1.0}},
         ],
     }
-    with pytest.raises(ValueError, match="Multi-trial timing"):
+    with pytest.raises(SCGOValidationError, match="Multi-trial timing"):
         flatten_run_timing_payload(doc)
 
 

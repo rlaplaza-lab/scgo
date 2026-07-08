@@ -15,6 +15,7 @@ from scgo.cluster_adsorbate import (
     place_fragment_on_cluster,
     relax_metal_cluster_with_adsorbate,
 )
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.ts_provenance import CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION
 from tests.test_utils import assert_pt_o_distance_reasonable
 
@@ -66,7 +67,7 @@ def test_place_oh_succeeds_pt3_fixed_seed() -> None:
 def test_attach_fix_bond_lengths_on_oh() -> None:
     a = Atoms("OH", positions=[[0, 0, 0], [0.96, 0, 0]], cell=[10, 10, 10], pbc=False)
     attach_fix_bond_lengths(a, [(0, 1)])
-    with pytest.raises(ValueError, match="Invalid"):
+    with pytest.raises(SCGOValidationError, match="Invalid"):
         attach_fix_bond_lengths(a, [(0, 5)])
 
 
@@ -134,7 +135,7 @@ def test_relax_metal_cluster_with_adsorbate_oh_placement_emt() -> None:
 def test_preplaced_wrong_length_raises() -> None:
     core = _pt_linear_dimer()
     bad = Atoms("O", positions=[[0, 0, 0]], cell=[10, 10, 10], pbc=False)
-    with pytest.raises(ValueError, match="fragment_template"):
+    with pytest.raises(SCGOValidationError, match="fragment_template"):
         relax_metal_cluster_with_adsorbate(
             core, EMT(), _oh_template(), preplaced=bad, anchor_index=0, bond_axis=(0, 1)
         )

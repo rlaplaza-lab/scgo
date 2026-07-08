@@ -374,7 +374,7 @@ Run multiple compositions in one call. Composition builders
    )
    # results is dict[formula, list[(energy, Atoms)]]
 
-Failed compositions (e.g. initialization ``ValueError`` on extreme
+Failed compositions (e.g. initialization ``SCGOValidationError`` on extreme
 stoichiometries) are logged, recorded as empty lists in the returned dict, and
 skipped so the rest of the campaign continues. See :doc:`/api/initialization`
 for multi-element atom ordering and placement behaviour.

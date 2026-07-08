@@ -13,6 +13,7 @@ from ase.calculators.emt import EMT
 from ase_ga.data import DataConnection
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
+from scgo.exceptions import SCGOValidationError
 from scgo.ts_search.transition_state_io import (
     load_minima_by_composition,
     save_transition_state_results,
@@ -259,7 +260,7 @@ def test_run_transition_state_search_with_climb(mock_database_dir):
 def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_database_dir):
     params = {"calculator": "EMT"}
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         run_transition_state_search(
             composition=["Cu", "Cu"],
             system_type="gas_cluster",

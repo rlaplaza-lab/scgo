@@ -30,6 +30,10 @@ from ase.build import bulk
 from ase.constraints import FixAtoms as ASEFixAtoms
 
 from scgo.database.metadata import update_metadata
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.utils.helpers import ensure_float64_forces
 from scgo.utils.logging import get_logger
 
@@ -447,7 +451,7 @@ class TorchSimBatchRelaxer:
                 self.optimizer = getattr(ts.Optimizer, self.optimizer_name.lower())
             except AttributeError as exc:
                 available = [x for x in dir(ts.Optimizer) if not x.startswith("_")]
-                raise ValueError(
+                raise SCGOValidationError(
                     f"Unknown TorchSim optimizer '{self.optimizer_name}'. "
                     f"Available: {available}",
                 ) from exc
@@ -464,7 +468,7 @@ class TorchSimBatchRelaxer:
                 )
             elif mk in ("fairchem", "uma"):
                 if not self.fairchem_model_name:
-                    raise ValueError(
+                    raise SCGOValidationError(
                         "TorchSimBatchRelaxer(model_kind='fairchem') requires fairchem_model_name"
                     )
                 self.model = _load_default_fairchem_model(
@@ -474,7 +478,7 @@ class TorchSimBatchRelaxer:
                     fairchem_task_name=self.fairchem_task_name,
                 )
             else:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"Unknown model_kind {self.model_kind!r}; expected 'mace' or 'fairchem'"
                 )
         else:
@@ -698,7 +702,7 @@ class TorchSimBatchRelaxer:
                     self._reset_autobatcher_memory_scaler()
                     continue
                 raise
-        raise RuntimeError("relax_batch retry loop exited without returning")
+        raise SCGORuntimeError("relax_batch retry loop exited without returning")
 
     def _relax_batch_once(
         self,
@@ -770,7 +774,9 @@ class TorchSimBatchRelaxer:
 
         energies_tensor = getattr(state, "energy", None)
         if energies_tensor is None:
-            raise RuntimeError("TorchSim optimize did not return energy information")
+            raise SCGORuntimeError(
+                "TorchSim optimize did not return energy information"
+            )
 
         energies = [float(val) for val in energies_tensor.detach().cpu().tolist()]
 
@@ -781,7 +787,7 @@ class TorchSimBatchRelaxer:
 
         relaxed_atoms = state.to_atoms()
         if len(relaxed_atoms) != len(energies):
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 "TorchSim returned mismatched counts for atoms and energies",
             )
 
@@ -798,7 +804,7 @@ class TorchSimBatchRelaxer:
                 offset += n_atoms
 
             if offset != forces_np.shape[0]:
-                raise RuntimeError(
+                raise SCGORuntimeError(
                     f"Forces shape mismatch: expected {offset} total atoms, "
                     f"got {forces_np.shape[0]} forces"
                 )

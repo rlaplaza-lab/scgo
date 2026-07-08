@@ -51,6 +51,7 @@ from scgo.database.streaming import (
     iter_database_minima,
     iter_databases_minima,
 )
+from scgo.exceptions import SCGOValidationError
 from tests.test_utils import assert_run_id_persisted, create_test_atoms
 
 
@@ -447,7 +448,7 @@ class TestTransactions:
 
         if raise_inside:
             with (
-                pytest.raises(ValueError),
+                pytest.raises(SCGOValidationError),
                 get_connection(tmp_path / "test.db") as db,
                 database_transaction(db) as conn,
             ):

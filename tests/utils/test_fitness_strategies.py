@@ -5,6 +5,7 @@ import pytest
 from ase import Atoms
 from ase.calculators.emt import EMT
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
@@ -36,13 +37,13 @@ def test_validate_fitness_strategy_valid(strategy):
 
 def test_validate_fitness_strategy_invalid():
     """Test validation rejects invalid strategies."""
-    with pytest.raises(ValueError, match="must be one of"):
+    with pytest.raises(SCGOValidationError, match="must be one of"):
         validate_fitness_strategy("invalid_strategy")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         validate_fitness_strategy("energy")  # Missing prefix
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         validate_fitness_strategy("")
 
 
@@ -56,7 +57,7 @@ def test_resolve_fitness_strategy_inherits_from_top_level():
 
 def test_ensure_fitness_strategy_resolved_rejects_none():
     """Unresolved preset sentinels must fail at algorithm boundaries."""
-    with pytest.raises(ValueError, match="cannot be None"):
+    with pytest.raises(SCGOValidationError, match="cannot be None"):
         ensure_fitness_strategy_resolved(None)
 
 
@@ -178,7 +179,7 @@ def test_fitness_strategy_unknown():
     energy = atoms.get_potential_energy()
 
     # This should not happen in practice due to enum, but test error handling
-    with pytest.raises(ValueError, match="must be one of"):
+    with pytest.raises(SCGOValidationError, match="must be one of"):
         # Force invalid enum value (shouldn't happen in practice)
         calculate_fitness(energy, atoms, "invalid")  # Will fail validation first
 
@@ -235,7 +236,7 @@ def test_comparator_different_composition_error():
     atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     atoms2 = Atoms("Au3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     comp = PureInteratomicDistanceComparator()
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         comp.looks_like(atoms1, atoms2)
 
 

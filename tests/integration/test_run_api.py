@@ -7,6 +7,7 @@ from ase.build import fcc111
 from ase.calculators.emt import EMT
 
 from scgo import parse_composition_arg
+from scgo.exceptions import SCGOValidationError
 from scgo.minima_search import run_trials
 from scgo.param_presets import (
     get_default_params,
@@ -133,7 +134,7 @@ def test_parse_composition_arg_formats():
     ],
 )
 def test_run_campaign_invalid_inputs(fn, args):
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         fn(*args)
 
 
@@ -143,7 +144,7 @@ def test_rng_in_optimizer_params_raises():
     params["optimizer_params"]["ga"] = params["optimizer_params"].get("ga", {})
     params["optimizer_params"]["ga"]["rng"] = "not-allowed"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         _run_go_trials(["Pt"] * 4, "gas_cluster", params=params)
 
 
@@ -151,13 +152,13 @@ def test_scgo_validations(rng):
     # Use deterministic rng fixture from conftest
 
     # Invalid RNG
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         from scgo.minima_search import scgo
 
         scgo(["Pt"], "ga", {}, "out_dir", None)
 
     # Invalid optimizer name
-    with pytest.raises(ValueError, match="Unknown global_optimizer"):
+    with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
         from scgo.minima_search import scgo
 
         scgo(
@@ -170,7 +171,7 @@ def test_scgo_validations(rng):
         )
 
     # Invalid system_type in optimizer kwargs
-    with pytest.raises(ValueError, match="system_type must be set"):
+    with pytest.raises(SCGOValidationError, match="system_type must be set"):
         from scgo.minima_search import scgo
 
         scgo(
@@ -184,22 +185,22 @@ def test_scgo_validations(rng):
 
 
 def test_run_trials_validations(rng):
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         run_trials([], "ga", {}, "out", rng)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], 123, {}, "out", rng)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], "ga", {}, "", rng)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], "ga", {}, "out", None)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], "ga", {}, "out", rng, verbosity=5)
 
-    with pytest.raises(ValueError, match="system_type must be set"):
+    with pytest.raises(SCGOValidationError, match="system_type must be set"):
         run_trials(["Pt"], "ga", {}, "out", rng)
 
 
@@ -432,12 +433,12 @@ def test_system_policy_surface_neb_defaults():
 
 
 def test_run_go_requires_system_type():
-    with pytest.raises(ValueError, match="system_type is required"):
+    with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_go("Pt3", params=None, verbosity=0)
 
 
 def test_run_go_requires_adsorbates_for_adsorbate_system_types():
-    with pytest.raises(ValueError, match="adsorbates is required"):
+    with pytest.raises(SCGOValidationError, match="adsorbates is required"):
         run_go(
             "Pt5",
             params=None,
@@ -541,12 +542,12 @@ def test_run_go_campaign_reconciles_wrong_preset_core_surface() -> None:
 
 
 def test_run_go_campaign_empty_raises():
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(SCGOValidationError, match="empty"):
         run_go_campaign([], params=None, verbosity=0, system_type="gas_cluster")
 
 
 def test_run_go_campaign_requires_system_type():
-    with pytest.raises(ValueError, match="system_type is required"):
+    with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_go_campaign(["Pt2"], params=None, verbosity=0)
 
 
@@ -640,12 +641,12 @@ def test_run_ts_search_passes_system_type(monkeypatch):
 
 
 def test_run_ts_search_requires_system_type():
-    with pytest.raises(ValueError, match="system_type is required"):
+    with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_ts_search("Pt2", ts_params=_emt_ts_gasc(), verbosity=0)
 
 
 def test_run_ts_search_requires_adsorbates_for_adsorbate_system_types():
-    with pytest.raises(ValueError, match="adsorbates is required"):
+    with pytest.raises(SCGOValidationError, match="adsorbates is required"):
         run_ts_search(
             "Pt5",
             ts_params={
@@ -731,7 +732,7 @@ def test_run_ts_campaign_empty_ts_params_uses_defaults(monkeypatch):
 
 
 def test_run_ts_campaign_requires_system_type():
-    with pytest.raises(ValueError, match="system_type is required"):
+    with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_ts_campaign(
             [Atoms("Au2"), "Pt"],
             ts_params=_emt_ts_gasc(),
@@ -958,7 +959,7 @@ def test_run_go_ts_campaign_empty_ts_params_uses_defaults(monkeypatch):
 
 
 def test_run_go_ts_campaign_requires_system_type():
-    with pytest.raises(ValueError, match="system_type is required"):
+    with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_go_ts_campaign(
             ["H2"],
             go_params={},
@@ -1067,7 +1068,7 @@ def test_run_ts_search_default_ts_preset_matches_builder(monkeypatch):
 
 
 def test_run_go_ts_rejects_ts_system_type_mismatch():
-    with pytest.raises(ValueError, match="ts_params\\['system_type'\\]"):
+    with pytest.raises(SCGOValidationError, match="ts_params\\['system_type'\\]"):
         run_go_ts(
             "H2",
             go_params={"optimizer_params": {"ga": {}}},
@@ -1078,7 +1079,7 @@ def test_run_go_ts_rejects_ts_system_type_mismatch():
 
 
 def test_run_ts_search_rejects_ts_system_type_mismatch():
-    with pytest.raises(ValueError, match="ts_params\\['system_type'\\]"):
+    with pytest.raises(SCGOValidationError, match="ts_params\\['system_type'\\]"):
         run_ts_search(
             "Pt2",
             ts_params={
@@ -1092,7 +1093,7 @@ def test_run_ts_search_rejects_ts_system_type_mismatch():
 
 
 def test_run_go_ts_rejects_go_optimizer_system_type_mismatch():
-    with pytest.raises(ValueError, match="coherence error"):
+    with pytest.raises(SCGOValidationError, match="coherence error"):
         run_go_ts(
             "Pt2",
             go_params={
@@ -1109,7 +1110,7 @@ def test_run_go_ts_rejects_go_optimizer_system_type_mismatch():
 
 
 def test_run_go_ts_rejects_ts_surface_config_for_gas_system():
-    with pytest.raises(ValueError, match="coherence error"):
+    with pytest.raises(SCGOValidationError, match="coherence error"):
         run_go_ts(
             "Pt2",
             go_params={"optimizer_params": {"ga": {}}},
@@ -1120,7 +1121,7 @@ def test_run_go_ts_rejects_ts_surface_config_for_gas_system():
 
 
 def test_get_ts_search_params_requires_surface_config_for_surface_systems():
-    with pytest.raises(ValueError, match="requires surface_config"):
+    with pytest.raises(SCGOValidationError, match="requires surface_config"):
         get_ts_search_params(system_type="surface_cluster", calculator="EMT")
 
 
@@ -1133,12 +1134,12 @@ def test_resolve_workflow_seed_unifies():
 
 
 def test_resolve_workflow_seed_rejects_mismatch():
-    with pytest.raises(ValueError, match="Inconsistent random seeds"):
+    with pytest.raises(SCGOValidationError, match="Inconsistent random seeds"):
         resolve_workflow_seed(seed_kw=1, go_params={"seed": 2})
 
 
 def test_run_go_rejects_top_level_go_system_type():
-    with pytest.raises(ValueError, match="does not allow top-level go_params"):
+    with pytest.raises(SCGOValidationError, match="does not allow top-level go_params"):
         run_go(
             "Pt3",
             params={"system_type": "gas_cluster", "optimizer_params": {"ga": {}}},
@@ -1148,7 +1149,7 @@ def test_run_go_rejects_top_level_go_system_type():
 
 
 def test_run_go_ts_rejects_top_level_go_system_type():
-    with pytest.raises(ValueError, match="does not allow top-level go_params"):
+    with pytest.raises(SCGOValidationError, match="does not allow top-level go_params"):
         run_go_ts(
             "H2",
             go_params={"system_type": "gas_cluster", "optimizer_params": {"ga": {}}},
@@ -1159,7 +1160,7 @@ def test_run_go_ts_rejects_top_level_go_system_type():
 
 
 def test_run_go_ts_rejects_mismatched_seeds():
-    with pytest.raises(ValueError, match="Inconsistent random seeds"):
+    with pytest.raises(SCGOValidationError, match="Inconsistent random seeds"):
         run_go_ts(
             "H2",
             go_params={"seed": 1, "optimizer_params": {"ga": {}}},
@@ -1175,7 +1176,7 @@ def test_run_go_ts_rejects_mismatched_go_run_surface_config():
     slab_b = fcc111("Pt", size=(4, 4, 1), vacuum=6.0, orthogonal=True)
     slab_b.pbc = [True, True, True]
     cfg_b = SurfaceSystemConfig(slab=slab_b, fix_all_slab_atoms=True)
-    with pytest.raises(ValueError, match="surface_config"):
+    with pytest.raises(SCGOValidationError, match="surface_config"):
         run_go_ts(
             ["Pt", "Pt", "Pt", "Pt", "Pt"],
             go_params={"surface_config": cfg_a, "optimizer_params": {"ga": {}}},
@@ -1192,7 +1193,7 @@ def test_run_go_ts_rejects_mismatched_ts_run_surface_config():
     slab_b = fcc111("Pt", size=(4, 4, 1), vacuum=6.0, orthogonal=True)
     slab_b.pbc = [True, True, True]
     cfg_b = SurfaceSystemConfig(slab=slab_b, fix_all_slab_atoms=True)
-    with pytest.raises(ValueError, match="surface_config"):
+    with pytest.raises(SCGOValidationError, match="surface_config"):
         run_go_ts(
             ["Pt", "Pt", "Pt", "Pt", "Pt"],
             go_params={"surface_config": cfg, "optimizer_params": {"ga": {}}},

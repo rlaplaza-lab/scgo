@@ -5,6 +5,7 @@ from ase.build import fcc111
 
 import scgo.param_presets as param_presets_module
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_NEB_TANGENT_METHOD
+from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import (
     TS_DEFAULTS_BY_SYSTEM_TYPE,
     get_default_params,
@@ -155,7 +156,7 @@ def test_coerce_ts_surface_config_defaults_to_none():
 
 def test_coerce_ts_requires_valid_system_type():
     ts = get_ts_search_params(system_type="gas_cluster")
-    with pytest.raises(ValueError, match="Unsupported system_type"):
+    with pytest.raises(SCGOValidationError, match="Unsupported system_type"):
         coerce_ts_params_to_runner_kwargs(ts, system_type="not_a_real_type")
 
 

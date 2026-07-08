@@ -16,6 +16,9 @@ from scgo.constants import (
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_PAIR_COR_MAX,
 )
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 
 
 def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarray]:
@@ -103,26 +106,28 @@ def get_shared_mobile_atom_indices(
     metadata fallback when constraints are missing. Raises if the chosen set is empty.
     """
     if len(a1) != len(a2):
-        raise ValueError(
+        raise SCGOValidationError(
             f"The two configurations must have the same number of atoms: {len(a1)} vs {len(a2)}",
         )
 
     if n_slab is not None:
         n_slab_i = int(n_slab)
         if n_slab_i < 0 or n_slab_i >= len(a1):
-            raise ValueError(
+            raise SCGOValidationError(
                 f"n_slab={n_slab_i} invalid for structure comparison (len={len(a1)})."
             )
         mobile = np.arange(n_slab_i, len(a1), dtype=int)
         if mobile.size == 0:
-            raise ValueError("No mobile atoms after applying surface n_slab partition.")
+            raise SCGOValidationError(
+                "No mobile atoms after applying surface n_slab partition."
+            )
         return mobile
 
     idx1 = get_mobile_atom_indices(a1)
     idx2 = get_mobile_atom_indices(a2)
     shared = np.intersect1d(idx1, idx2, assume_unique=False)
     if shared.size == 0:
-        raise ValueError("No shared mobile atoms across endpoints.")
+        raise SCGOValidationError("No shared mobile atoms across endpoints.")
     return shared.astype(int, copy=False)
 
 
@@ -195,7 +200,7 @@ class PureInteratomicDistanceComparator:
             ValueError: If the two Atoms objects do not have the same number of atoms.
         """
         if len(a1) != len(a2):
-            raise ValueError(
+            raise SCGOValidationError(
                 "The two configurations must have the same number of atoms",
             )
 
@@ -215,7 +220,9 @@ class PureInteratomicDistanceComparator:
             A tuple containing the cumulative difference and the maximum difference.
         """
         if set(a1.numbers) != set(a2.numbers):
-            raise ValueError("The two configurations must have the same composition")
+            raise SCGOValidationError(
+                "The two configurations must have the same composition"
+            )
 
         p1 = get_sorted_dist_list(a1, mic=self.mic)
         p2 = get_sorted_dist_list(a2, mic=self.mic)
@@ -229,7 +236,9 @@ class PureInteratomicDistanceComparator:
 
             if len(c1) != len(c2):
                 # This should not happen if compositions are the same
-                raise ValueError("Mismatch in number of distances being compared.")
+                raise SCGOValidationError(
+                    "Mismatch in number of distances being compared."
+                )
 
             if len(c1) == 0:
                 continue

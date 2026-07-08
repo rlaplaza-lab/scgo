@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import (
@@ -21,7 +24,7 @@ from scgo.cluster_adsorbate.validation import validate_combined_cluster_structur
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Callable[..., Any]:
     if name in {
         "enforce_frozen_adsorbate_geometry",
         "restore_rigid_adsorbate_fragments",

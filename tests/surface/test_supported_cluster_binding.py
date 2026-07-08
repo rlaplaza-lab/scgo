@@ -6,6 +6,7 @@ import pytest
 from ase import Atoms
 from ase.build import fcc111
 
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.deposition import combine_slab_adsorbate, slab_surface_extreme
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import validate_structure_for_system_type
@@ -273,7 +274,7 @@ def test_validate_structure_for_system_type_respects_connectivity_flags(
     )
     surface_config = make_surface_config(pt_slab, comparator_use_mic=False)
 
-    with pytest.raises(ValueError, match="Adsorbate validation failed"):
+    with pytest.raises(SCGOValidationError, match="Adsorbate validation failed"):
         validate_structure_for_system_type(
             combined,
             system_type="surface_cluster",

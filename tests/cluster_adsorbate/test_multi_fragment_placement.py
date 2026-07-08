@@ -10,6 +10,7 @@ from numpy.random import default_rng
 from scgo.cluster_adsorbate.feasibility import validate_adsorbate_placement_feasibility
 from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
+from scgo.exceptions import SCGOValidationError
 from scgo.system_types import (
     build_adsorbate_definition_from_inputs,
     resolve_adsorbate_fragments,
@@ -31,7 +32,7 @@ def test_resolve_rejects_combined_template_for_multiple_fragments() -> None:
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "adsorbate_fragment_lengths": [2, 2],
     }
-    with pytest.raises(ValueError, match="one combined adsorbate template"):
+    with pytest.raises(SCGOValidationError, match="one combined adsorbate template"):
         resolve_adsorbate_fragments(combined, ads_def)
 
 
@@ -65,7 +66,7 @@ def test_gas_hierarchical_places_two_oh_separately() -> None:
 
 
 def test_feasibility_rejects_too_many_fragments_on_tiny_core() -> None:
-    with pytest.raises(ValueError, match="heuristic site capacity"):
+    with pytest.raises(SCGOValidationError, match="heuristic site capacity"):
         validate_adsorbate_placement_feasibility(
             ["Pt"],
             [1, 1, 1],
@@ -74,7 +75,7 @@ def test_feasibility_rejects_too_many_fragments_on_tiny_core() -> None:
 
 
 def test_build_adsorbate_definition_runs_feasibility() -> None:
-    with pytest.raises(ValueError, match="heuristic site capacity"):
+    with pytest.raises(SCGOValidationError, match="heuristic site capacity"):
         build_adsorbate_definition_from_inputs(
             system_type="gas_cluster_adsorbate",
             composition=["Pt"],

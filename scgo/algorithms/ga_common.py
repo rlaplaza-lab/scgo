@@ -14,6 +14,11 @@ import typing
 import numpy as np
 from numpy.random import Generator
 
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
+
 if typing.TYPE_CHECKING:
     from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
     from scgo.utils.diversity_scorer import DiversityScorer
@@ -252,7 +257,7 @@ def apply_mobile_core_ads_tags(
     n = len(atoms)
     n_ads = int(sum(int(x) for x in ads_fragment_lengths))
     if n_slab + n_core + n_ads != n:
-        raise ValueError(
+        raise SCGOValidationError(
             f"apply_mobile_core_ads_tags: len(atoms)={n}, n_slab={n_slab}, "
             f"n_core={n_core}, n_ads={n_ads} (must sum to len)"
         )
@@ -261,7 +266,7 @@ def apply_mobile_core_ads_tags(
     for frag_idx, frag_len in enumerate(ads_fragment_lengths):
         next_offset = offset + int(frag_len)
         if next_offset > n:
-            raise ValueError("adsorbate fragment lengths exceed atom count")
+            raise SCGOValidationError("adsorbate fragment lengths exceed atom count")
         tags[offset:next_offset] = frag_idx + 1
         offset = next_offset
     atoms.set_tags(tags)
@@ -299,11 +304,11 @@ def validate_ga_common_params(
     validate_integer("population_size", population_size)
     validate_positive("population_size", population_size, strict=True)
     if n_jobs_population_init not in (-1, -2) and n_jobs_population_init < 1:
-        raise ValueError(
+        raise SCGOValidationError(
             f"n_jobs_population_init must be -1, -2, or >= 1, got {n_jobs_population_init}"
         )
     if calculator is None:
-        raise ValueError("calculator is required for genetic algorithm")
+        raise SCGOValidationError("calculator is required for genetic algorithm")
     if fmax is not None:
         validate_positive("fmax", fmax, strict=True)
     validate_in_range("mutation_probability", mutation_probability, 0.0, 1.0)
@@ -370,13 +375,15 @@ class ClusterStartGenerator(StartGenerator):
         """
         st_pol = get_system_policy(system_type)
         if st_pol.uses_surface:
-            raise TypeError("ClusterStartGenerator is for gas-phase runs only")
+            raise SCGOValidationError(
+                "ClusterStartGenerator is for gas-phase runs only"
+            )
         if not st_pol.has_adsorbate and (
             adsorbate_definition is not None
             or adsorbate_fragment_template is not None
             or cluster_adsorbate_config is not None
         ):
-            raise ValueError(
+            raise SCGOValidationError(
                 "adsorbate_definition, adsorbate_fragment_template, and "
                 "cluster_adsorbate_config are only valid for system_type=gas_cluster_adsorbate"
             )
@@ -384,12 +391,12 @@ class ClusterStartGenerator(StartGenerator):
             adsorbate_fragment_template is not None
             or cluster_adsorbate_config is not None
         ) and adsorbate_definition is None:
-            raise ValueError(
+            raise SCGOValidationError(
                 "adsorbate_fragment_template and cluster_adsorbate_config require "
                 "adsorbate_definition"
             )
         if st_pol.has_adsorbate and adsorbate_definition is None:
-            raise ValueError(
+            raise SCGOValidationError(
                 "adsorbate_definition is required in ClusterStartGenerator for "
                 "system_type=gas_cluster_adsorbate"
             )
@@ -423,7 +430,7 @@ class ClusterStartGenerator(StartGenerator):
             "facet": 0,
         }
         if st_pol.has_adsorbate and self.adsorbate_fragment_template is None:
-            raise ValueError(
+            raise SCGOValidationError(
                 "adsorbate_fragment_template is required for hierarchical "
                 "gas_cluster_adsorbate initialization."
             )
@@ -459,7 +466,7 @@ class ClusterStartGenerator(StartGenerator):
                         placement_metadata=placement_metadata,
                     )
                     if a is None:
-                        raise RuntimeError(
+                        raise SCGORuntimeError(
                             "ClusterStartGenerator: hierarchical gas seed could not be "
                             "placed; increase max_hierarchical_attempts or relax "
                             "ClusterAdsorbateConfig."
@@ -520,7 +527,7 @@ class ClusterStartGenerator(StartGenerator):
                     batch_site_counts=self._batch_site_type_counts,
                 )
                 if atoms is None:
-                    raise RuntimeError(
+                    raise SCGORuntimeError(
                         "ClusterStartGenerator: hierarchical gas seed could not be placed; "
                         "increase max_hierarchical_attempts or relax ClusterAdsorbateConfig."
                     )
@@ -637,7 +644,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 batch_site_counts=self._batch_site_type_counts,
             )
             if atoms is None:
-                raise RuntimeError(
+                raise SCGORuntimeError(
                     "SurfaceClusterStartGenerator could not place a valid structure; "
                     "increase max_placement_attempts or height range."
                 )
@@ -686,16 +693,18 @@ def create_ga_pairing(
         :class:`~scgo.ase_ga_patches.cutandsplicepairing.DualCutAndSplicePairing`.
     """
     if not uses_surface(system_type) and slab_atoms is not None and len(slab_atoms) > 0:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Received non-empty slab_atoms with non-surface system_type={system_type!r}. "
             "Use surface_cluster or surface_cluster_adsorbate."
         )
     n_template = len(atoms_template)
     if uses_surface(system_type):
         if slab_atoms is None or len(slab_atoms) == 0:
-            raise ValueError("Surface system types require slab_atoms for pairing.")
+            raise SCGOValidationError(
+                "Surface system types require slab_atoms for pairing."
+            )
         if n_template != len(slab_atoms) + n_to_optimize:
-            raise ValueError(
+            raise SCGOValidationError(
                 "atoms_template length must equal len(slab_atoms) + n_to_optimize "
                 f"for surface GA, got {n_template}, slab={len(slab_atoms)}, "
                 f"n_to_optimize={n_to_optimize}"
@@ -703,7 +712,7 @@ def create_ga_pairing(
         idx_top = range(len(slab_atoms), n_template)
     else:
         if n_template != n_to_optimize:
-            raise ValueError(
+            raise SCGOValidationError(
                 "atoms_template length must equal n_to_optimize for gas-phase GA"
             )
         idx_top = range(n_to_optimize)
@@ -894,7 +903,7 @@ def create_mutation_operators(
         Tuple of (operators_list, operator_name_to_index_map).
     """
     if not uses_surface(system_type) and n_slab > 0:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Received n_slab > 0 with non-surface system_type={system_type!r}. "
             "Use surface_cluster or surface_cluster_adsorbate."
         )
@@ -1397,7 +1406,7 @@ def setup_diversity_scorer(
         return None
 
     if diversity_reference_db is None:
-        raise ValueError(
+        raise SCGOValidationError(
             "diversity_reference_db is required when fitness_strategy='diversity'"
         )
 

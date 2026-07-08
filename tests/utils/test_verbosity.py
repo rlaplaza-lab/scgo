@@ -4,6 +4,7 @@ import logging
 
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.logging import (
     TRACE,
     VERBOSITY_LEVELS,
@@ -47,7 +48,7 @@ class TestVerbosityLevels:
 
     def test_configure_logging_invalid_level(self):
         """Test that invalid verbosity levels raise ValueError."""
-        with pytest.raises(ValueError, match="Invalid verbosity level"):
+        with pytest.raises(SCGOValidationError, match="Invalid verbosity level"):
             configure_logging(4)
 
     def test_configure_logging_removes_existing_handlers(self):

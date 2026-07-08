@@ -23,6 +23,10 @@ from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.geometry_helpers import (
     _generate_rotation_matrix,
@@ -341,7 +345,7 @@ def create_deposited_cluster(
             )
         else:
             if adsorbate_fragment_template is None:
-                raise ValueError(
+                raise SCGOValidationError(
                     "create_deposited_cluster requires adsorbate_fragment_template "
                     "for hierarchical adsorbate initialization."
                 )
@@ -500,7 +504,7 @@ def create_deposited_cluster_batch(
             if struct is not None:
                 out.append(struct)
         if len(out) < n_structures:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 f"Could only generate {len(out)} of {n_structures} deposited structures; "
                 "try widening height range or increasing max_placement_attempts."
             )
@@ -545,7 +549,7 @@ def create_deposited_cluster_batch(
             if structure is not None:
                 _record_batch_site_type(structure)
                 return structure
-        raise RuntimeError(
+        raise SCGORuntimeError(
             "Could not generate deposited structure in parallel worker; "
             "try widening height range or increasing max_placement_attempts."
         )
@@ -563,5 +567,5 @@ def create_deposited_cluster_batch(
         for future in as_completed(futures):
             ordered_results[futures[future]] = future.result()
     if any(result is None for result in ordered_results):
-        raise RuntimeError("Parallel batch returned too few structures")
+        raise SCGORuntimeError("Parallel batch returned too few structures")
     return [result for result in ordered_results if result is not None]

@@ -12,6 +12,7 @@ This module consolidates all tests for seed+growth initialization including:
 import pytest
 from ase import Atoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import (
     combine_and_grow,
     create_initial_cluster,
@@ -489,7 +490,7 @@ class TestRefactoredSeedGrowth:
                 abs(e - energy) < 1e-6 and len(a) == len(atoms) for e, a in candidates
             )
 
-        with pytest.raises(ValueError, match="Invalid seed sampling strategy"):
+        with pytest.raises(SCGOValidationError, match="Invalid seed sampling strategy"):
             _sample_seed_with_strategy(candidates, 99, rng)
 
 

@@ -26,6 +26,8 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from scgo.exceptions import SCGOValidationError
+
 K = TypeVar("K")
 V = TypeVar("V")
 
@@ -59,7 +61,7 @@ class UnifiedCache:
                      before LRU eviction begins
         """
         if max_size <= 0:
-            raise ValueError("max_size must be a positive integer")
+            raise SCGOValidationError("max_size must be a positive integer")
 
         self._cache: OrderedDict[tuple[str, Any], Any] = OrderedDict()
         self._lock = threading.Lock()

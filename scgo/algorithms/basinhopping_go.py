@@ -36,6 +36,7 @@ from scgo.constants import (
 from scgo.database import HPC_DATABASE_EXCEPTIONS, SCGODatabaseManager, setup_database
 from scgo.database.metadata import add_metadata, persist_provenance
 from scgo.database.sync import retry_with_backoff
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
@@ -151,7 +152,7 @@ def _move_atoms(
             else:  # lowest_force
                 indices_to_move = sorted_indices[:n_to_move]
         else:
-            raise ValueError(f"Unknown move_strategy: {move_strategy}")
+            raise SCGOValidationError(f"Unknown move_strategy: {move_strategy}")
 
     positions = atoms_new.get_positions()
     cm = atoms_new.get_center_of_mass()
@@ -337,19 +338,19 @@ def bh_go(
     if surface_mode:
         if n_slab <= 0:
             if surface_config is None:
-                raise ValueError(
+                raise SCGOValidationError(
                     "Surface system type requires n_slab > 0 or surface_config."
                 )
             n_slab = len(surface_config.slab)
         movable_indices = list(range(n_slab, len(atoms)))
         if not movable_indices:
-            raise ValueError("Surface system has no movable atoms above slab.")
+            raise SCGOValidationError("Surface system has no movable atoms above slab.")
 
     # Load reference structures and create DiversityScorer for diversity strategy
     diversity_scorer = None
     if fitness_strategy == FitnessStrategy.DIVERSITY:
         if diversity_reference_db is None:
-            raise ValueError(
+            raise SCGOValidationError(
                 "diversity_reference_db is required when fitness_strategy='diversity'. "
                 "Provide a glob pattern (e.g., '**/*.db') to find reference databases."
             )

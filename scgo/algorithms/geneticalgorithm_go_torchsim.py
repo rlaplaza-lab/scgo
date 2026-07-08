@@ -68,6 +68,7 @@ from scgo.database.metadata import (
     get_metadata,
     update_metadata,
 )
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization import compute_cell_side
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
@@ -526,7 +527,7 @@ def _relax_unrelaxed_candidates(
         )
     _record_relax_batch_steps(relaxer, profiling, counters, len(batch))
     if len(relaxed_results) != len(batch):
-        raise RuntimeError("TorchSim relaxer returned mismatched batch size")
+        raise SCGORuntimeError("TorchSim relaxer returned mismatched batch size")
 
     # Batch write results under a single database connection.
     # Disconnected structures are persisted but marked ineligible for GA evolution.
@@ -774,7 +775,7 @@ def ga_go(
         fmax=fmax,
     )
     if n_jobs_offspring not in (-1, -2) and n_jobs_offspring < 1:
-        raise ValueError(
+        raise SCGOValidationError(
             f"n_jobs_offspring must be -1, -2, or >= 1, got {n_jobs_offspring}"
         )
 
@@ -794,7 +795,7 @@ def ga_go(
     surface_mode = uses_surface(system_type)
     if surface_mode:
         if not isinstance(surface_config, SurfaceSystemConfig):
-            raise TypeError(
+            raise SCGOValidationError(
                 "surface_config must be a SurfaceSystemConfig instance or None"
             )
         slab_ref = surface_config.slab.copy()
@@ -827,7 +828,7 @@ def ga_go(
                 if model_name is None and calculator.name.startswith("UMA-"):
                     model_name = calculator.name.removeprefix("UMA-")
                 if not model_name:
-                    raise ValueError(
+                    raise SCGOValidationError(
                         "Cannot infer UMA model_name from calculator for TorchSim relaxer."
                     )
                 relaxer = TorchSimBatchRelaxer(
@@ -847,7 +848,7 @@ def ga_go(
 
                 mace_model_name = infer_mace_model_name_from_calculator(calculator)
                 if not mace_model_name:
-                    raise ValueError(
+                    raise SCGOValidationError(
                         "Cannot infer MACE model_name from calculator for TorchSim relaxer."
                     )
                 shared_model = try_extract_torchsim_model_from_mace_calculator(
@@ -1206,7 +1207,9 @@ def ga_go(
                 relaxer, profile_timings, profile_counters, len(batch)
             )
             if len(relaxed_results) != len(batch):
-                raise RuntimeError("TorchSim relaxer returned mismatched batch size")
+                raise SCGORuntimeError(
+                    "TorchSim relaxer returned mismatched batch size"
+                )
 
             t_start = perf_counter()
             database_retry(
@@ -1478,7 +1481,7 @@ def ga_go(
                         if not all(
                             isinstance(e, ValueError) for e in worker_exceptions
                         ):
-                            raise RuntimeError(
+                            raise SCGORuntimeError(
                                 f"All {len(jobs)} parallel offspring workers failed"
                             ) from first
                     t_offspring_parallel_wall_gen += perf_counter() - t_parallel

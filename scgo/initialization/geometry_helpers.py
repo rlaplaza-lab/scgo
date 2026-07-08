@@ -19,6 +19,9 @@ from scipy.spatial import (
 )
 
 from scgo.database.cache import get_global_cache
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 
@@ -160,7 +163,7 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
         ValueError: If positions array has fewer than 4 points (insufficient for 3D hull)
     """
     if len(positions) < 4:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Convex hull requires at least 4 points in 3D, got {len(positions)}"
         )
 
@@ -172,7 +175,7 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
             return ConvexHull(positions)
         except (QhullError, ValueError) as e:
             # Handle degenerate cases (collinear/coplanar points)
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Convex hull computation failed for {len(positions)} points: {e}"
             ) from e
 
@@ -189,7 +192,7 @@ def try_convex_hull(positions: np.ndarray) -> ConvexHull | None:
         return None
     try:
         return _get_cached_hull(positions)
-    except (ValueError, QhullError) as exc:
+    except (SCGOValidationError, ValueError, QhullError) as exc:
         get_logger(__name__).debug(
             "Convex hull unavailable for %d points: %s", len(positions), exc
         )
@@ -795,7 +798,7 @@ def get_largest_facets(
 
     try:
         hull = _get_cached_hull(atoms.get_positions())
-    except (ValueError, RuntimeError, QhullError):
+    except (SCGOValidationError, ValueError, RuntimeError, QhullError):
         # Convex hull computation failed (degenerate geometry, collinear points, etc.)
         center = atoms.get_center_of_mass()
         geometry = _classify_seed_geometry(atoms)
@@ -1442,7 +1445,7 @@ def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -
     for sym in desired:
         matching = by_symbol.get(sym)
         if not matching:
-            raise ValueError(
+            raise SCGOValidationError(
                 "Generated cluster symbols do not match requested composition."
             )
         selection.append(matching.pop(0))
@@ -1508,7 +1511,7 @@ def validate_cluster(
             f"got {atoms.get_chemical_symbols()} (counts: {actual_counts})"
         )
         if raise_on_failure:
-            raise ValueError(error_msg)
+            raise SCGOValidationError(error_msg)
         return atoms, False, error_msg
 
     # Canonicalize atom order for GA-compatible pairing
@@ -1532,7 +1535,7 @@ def validate_cluster(
         if not is_valid:
             full_error = f"{'[' + source + '] ' if source else ''}{error_message}"
             if raise_on_failure:
-                raise ValueError(full_error)
+                raise SCGOValidationError(full_error)
             return atoms, False, full_error
 
     return atoms, True, ""
@@ -1649,7 +1652,7 @@ def _cycle_composition_to_length(
         ["Pt", "Au", "Pt", "Au", "Pt"]
     """
     if not composition:
-        raise ValueError("Cannot cycle empty composition to target length")
+        raise SCGOValidationError("Cannot cycle empty composition to target length")
 
     if target_length <= 0:
         return []
@@ -1689,14 +1692,14 @@ def _assign_exact_composition(
         n_atoms = len(cluster)
 
     if len(cluster) != n_atoms:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Cannot assign composition: cluster has {len(cluster)} atoms "
             f"but target is {n_atoms} atoms"
         )
 
     # Assign exact composition
     if not composition:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Cannot assign empty composition to cluster with {n_atoms} atoms"
         )
     elif len(composition) == n_atoms:
@@ -1718,7 +1721,7 @@ def _assign_exact_composition(
         # Verify the assignment produced exact counts
         actual_counts = get_composition_counts(cluster.get_chemical_symbols())
         if actual_counts != expected_counts:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Composition assignment failed: expected counts {expected_counts}, "
                 f"got {actual_counts} after assignment"
             )

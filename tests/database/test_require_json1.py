@@ -1,6 +1,7 @@
 import pytest
 
 import scgo.database.connection as conn_mod
+from scgo.exceptions import SCGORuntimeError
 
 
 def test_get_connection_raises_runtime_error_when_json1_missing(monkeypatch, tmp_path):
@@ -14,7 +15,7 @@ def test_get_connection_raises_runtime_error_when_json1_missing(monkeypatch, tmp
     monkeypatch.setattr(conn_mod, "_ensure_sqlite_json1", fake_ensure_sqlite_json1)
 
     with (
-        pytest.raises(RuntimeError, match="SQLite JSON1 extension is required"),
+        pytest.raises(SCGORuntimeError, match="SQLite JSON1 extension is required"),
         conn_mod.get_connection(db_path),
     ):
         pass

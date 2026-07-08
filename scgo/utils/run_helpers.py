@@ -16,6 +16,9 @@ from ase.calculators.emt import EMT
 
 from scgo.cluster_adsorbate.config import resolve_cluster_adsorbate_config
 from scgo.constants import BOLTZMANN_K_EV_PER_K, SURFACE_GA_MIN_LOCAL_RELAX_STEPS
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.param_presets import get_default_params, get_ts_search_params
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
@@ -189,14 +192,14 @@ def get_calculator_class(calculator_name: str) -> type:
     """
     calculators = _get_calculators()
     if calculator_name not in calculators:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unknown calculator: {calculator_name}. "
             f"Available calculators: {list(calculators.keys())}",
         )
 
     calculator_class = calculators[calculator_name]
     if calculator_class is None:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Calculator {calculator_name} is not available. "
             "Install the matching optional dependencies."
         )
@@ -293,7 +296,7 @@ def validate_algorithm_params(
     if chosen_go in valid_algo_params:
         unexpected_algo_keys = set(algo_params.keys()) - valid_algo_params[chosen_go]
         if unexpected_algo_keys:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Unexpected {chosen_go.upper()} algorithm parameters: "
                 f"{sorted(unexpected_algo_keys)}. "
                 f"Allowed keys: {sorted(valid_algo_params[chosen_go])}"
@@ -412,7 +415,7 @@ def resolve_diversity_params(
         algo_reference_db = params.get("diversity_reference_db")
 
     if algo_reference_db is None:
-        raise ValueError(
+        raise SCGOValidationError(
             f"diversity_reference_db is required for fitness_strategy='diversity'. "
             f"Set params['diversity_reference_db'] or "
             f"params['optimizer_params']['{chosen_go}']['diversity_reference_db']"
@@ -463,7 +466,7 @@ def prepare_algorithm_kwargs(
     if surface_config is None:
         surface_config = params.get("surface_config")
     if system_type == "gas_cluster" and surface_config is not None:
-        raise ValueError(
+        raise SCGOValidationError(
             "system_type='gas_cluster' does not allow surface_config. "
             "Use surface_cluster or surface_cluster_adsorbate."
         )
@@ -474,7 +477,7 @@ def prepare_algorithm_kwargs(
     if chosen_go == "simple":
         policy = get_system_policy(system_type)
         if policy.uses_surface or policy.has_adsorbate:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"simple optimizer only supports system_type='gas_cluster', got {system_type!r}."
             )
 

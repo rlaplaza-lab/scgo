@@ -14,6 +14,7 @@ from ase.calculators.emt import EMT
 
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster, random_spherical
 from scgo.initialization.geometry_helpers import validate_cluster_structure
 from scgo.minima_search import run_trials, scgo
@@ -38,9 +39,9 @@ from scgo.utils.validation import (
 
 # Parametrized test cases for atoms validation
 ATOMS_INVALID_CASES = [
-    ("not atoms", TypeError),
-    (None, TypeError),
-    ([1, 2, 3], TypeError),
+    ("not atoms", SCGOValidationError),
+    (None, SCGOValidationError),
+    ([1, 2, 3], SCGOValidationError),
 ]
 
 
@@ -79,7 +80,9 @@ class TestValidateCalculatorAttached:
         atoms = pt2_atoms.copy()
         atoms.calc = None
 
-        with pytest.raises(ValueError, match="must have a calculator attached"):
+        with pytest.raises(
+            SCGOValidationError, match="must have a calculator attached"
+        ):
             validate_calculator_attached(atoms, "basin hopping")
 
     @pytest.mark.parametrize("algorithm", [c[0] for c in CALCULATOR_ALGORITHM_CASES])
@@ -88,7 +91,7 @@ class TestValidateCalculatorAttached:
         atoms = pt2_atoms.copy()
         atoms.calc = None
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             validate_calculator_attached(atoms, algorithm)
 
         assert algorithm in str(exc_info.value)
@@ -118,12 +121,12 @@ class TestValidatePositive:
         if should_pass:
             validate_positive("test_param", value, strict=strict)
         else:
-            with pytest.raises(ValueError, match=error_msg):
+            with pytest.raises(SCGOValidationError, match=error_msg):
                 validate_positive("test_param", value, strict=strict)
 
     def test_error_includes_name(self):
         """Test error message includes parameter name."""
-        with pytest.raises(ValueError, match="my_param"):
+        with pytest.raises(SCGOValidationError, match="my_param"):
             validate_positive("my_param", -5.0, strict=True)
 
 
@@ -147,13 +150,13 @@ class TestValidateInRangeInvalid:
     @pytest.mark.parametrize("value,min_val,max_val", RANGE_INVALID_CASES)
     def test_invalid_in_range_raises(self, value, min_val, max_val):
         """Test validate_in_range raises error for out-of-range values."""
-        with pytest.raises(ValueError, match="must be between"):
+        with pytest.raises(SCGOValidationError, match="must be between"):
             validate_in_range("test_param", value, min_val, max_val)
 
     @pytest.mark.parametrize("value,min_val,max_val", RANGE_INVALID_CASES)
     def test_error_includes_range(self, value, min_val, max_val):
         """Test error message includes range values."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             validate_in_range("test_param", value, min_val, max_val)
 
         error_msg = str(exc_info.value)
@@ -164,9 +167,9 @@ class TestValidateInRangeInvalid:
 
 # Parametrized test cases for integer validation
 INTEGER_VALID_STRICT = [0, 1, -5, 100]
-INTEGER_INVALID_STRICT = [(5.0, TypeError), ("5", TypeError)]
+INTEGER_INVALID_STRICT = [(5.0, SCGOValidationError), ("5", SCGOValidationError)]
 INTEGER_VALID_NONSTRICT = [(5.0, True), (10.0, True)]
-INTEGER_INVALID_NONSTRICT = [(5.5, TypeError)]
+INTEGER_INVALID_NONSTRICT = [(5.5, SCGOValidationError)]
 
 
 class TestValidateIntegerStrict:
@@ -179,7 +182,7 @@ class TestValidateIntegerStrict:
 
     def test_error_includes_type(self):
         """Test error message includes type name."""
-        with pytest.raises(TypeError, match="must be an integer"):
+        with pytest.raises(SCGOValidationError, match="must be an integer"):
             validate_integer("test_param", "5", strict=True)
 
 
@@ -239,13 +242,13 @@ class TestValidateInChoicesInvalid:
     @pytest.mark.parametrize("value,choices", CHOICES_INVALID_CASES)
     def test_invalid_choice_raises(self, value, choices):
         """Test validate_in_choices raises error for invalid choice."""
-        with pytest.raises(ValueError, match="must be one of"):
+        with pytest.raises(SCGOValidationError, match="must be one of"):
             validate_in_choices("test_param", value, choices)
 
     @pytest.mark.parametrize("value,choices", CHOICES_INVALID_CASES)
     def test_error_includes_choices(self, value, choices):
         """Test error message includes all valid choices."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             validate_in_choices("test_param", value, choices)
 
         error_msg = str(exc_info.value)
@@ -261,13 +264,13 @@ COMPOSITION_VALID_CASES = [
     (("Pt", "Pt"), False, True),  # allow_tuple=True
 ]
 COMPOSITION_INVALID_CASES = [
-    (None, TypeError, "cannot be None"),
-    ([], ValueError, "cannot be empty"),
-    (("Pt", "Pt"), TypeError, "must be a list"),  # allow_tuple=False
-    (["Pt", 5, "Au"], TypeError, "must contain only string"),
-    (["Pt", None, "Au"], TypeError, "must contain only string"),
-    ("PtPt", TypeError, "must be a list"),
-    ({"Pt": 2}, TypeError, "must be a list"),
+    (None, SCGOValidationError, "cannot be None"),
+    ([], SCGOValidationError, "cannot be empty"),
+    (("Pt", "Pt"), SCGOValidationError, "must be a list"),  # allow_tuple=False
+    (["Pt", 5, "Au"], SCGOValidationError, "must contain only string"),
+    (["Pt", None, "Au"], SCGOValidationError, "must contain only string"),
+    ("PtPt", SCGOValidationError, "must be a list"),
+    ({"Pt": 2}, SCGOValidationError, "must be a list"),
 ]
 
 
@@ -308,7 +311,7 @@ class TestCompositionValidationIntegration:
 
     def test_invalid_composition_raises(self, comp, desc, rng):
         """Test handling of invalid composition types."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(SCGOValidationError):
             create_initial_cluster(comp, rng=rng)
 
     def test_empty_composition_validation(self, comp, desc, rng):
@@ -333,7 +336,7 @@ class TestNumericParameterValidationIntegration:
     def test_negative_parameters_raise(self, param_name, invalid_values):
         """Test that negative parameters raise appropriate errors."""
         for invalid_val in invalid_values:
-            with pytest.raises(ValueError):
+            with pytest.raises(SCGOValidationError):
                 create_initial_cluster(
                     ["Pt", "Pt"], rng=None, **{param_name: invalid_val}
                 )
@@ -355,7 +358,7 @@ class TestOptimizationParameterValidation:
     def test_optimization_parameters_raise(self, param_name, invalid_values):
         """Test optimization parameter validation."""
         for invalid_val in invalid_values:
-            with pytest.raises((ValueError, TypeError)):
+            with pytest.raises(TypeError):
                 bh_go(
                     composition=["Pt", "Pt"],
                     niter=invalid_val if param_name == "niter" else 10,
@@ -373,7 +376,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
     calc = EMT()
 
     # Invalid: zero or negative
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_0"),
@@ -386,7 +389,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
         )
 
     # Invalid: > 1
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_1"),
@@ -406,7 +409,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
         def relax_batch(self, batch: list):
             return [(0.0, a.copy()) for a in batch]
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_ts"),
@@ -445,7 +448,7 @@ class TestCalculatorValidationIntegration:
 
     def test_invalid_calculator_raises(self, calc, desc):
         """Test handling of invalid calculator."""
-        with pytest.raises((TypeError, ValueError, AttributeError)):
+        with pytest.raises(TypeError):
             bh_go(
                 composition=["Pt", "Pt"],
                 calculator_for_global_optimization=calc,
@@ -479,21 +482,21 @@ class TestHelperFunctionValidationIntegration:
     def test_perform_local_relaxation_invalid_calc(self, pt2_atoms):
         """Test perform_local_relaxation with invalid calculator."""
         atoms = pt2_atoms.copy()
-        with pytest.raises((TypeError, ValueError, AttributeError)):
+        with pytest.raises(TypeError):
             perform_local_relaxation(atoms, calculator="invalid", fmax=0.01, steps=100)
 
     @pytest.mark.parametrize("fmax", [-0.01])
     def test_perform_local_relaxation_invalid_fmax(self, fmax, pt2_atoms):
         """Test perform_local_relaxation with invalid fmax."""
         atoms = pt2_atoms.copy()
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             perform_local_relaxation(atoms, calculator=EMT(), fmax=fmax, steps=100)
 
     @pytest.mark.parametrize("steps", [-1])
     def test_perform_local_relaxation_invalid_steps(self, steps, pt2_atoms):
         """Test perform_local_relaxation with invalid steps."""
         atoms = pt2_atoms.copy()
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             perform_local_relaxation(atoms, calculator=EMT(), fmax=0.01, steps=steps)
 
 
@@ -502,7 +505,7 @@ class TestGlobalOptimizerValidationIntegration:
 
     def test_bh_go_invalid_composition(self):
         """Test bh_go with invalid composition."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             bh_go(
                 composition="invalid", calculator_for_global_optimization=EMT(), niter=1
             )
@@ -510,7 +513,7 @@ class TestGlobalOptimizerValidationIntegration:
     @pytest.mark.parametrize("niter", [-1])
     def test_bh_go_invalid_niter(self, niter):
         """Test bh_go with invalid niter."""
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             bh_go(
                 composition=["Pt", "Pt"],
                 calculator_for_global_optimization=EMT(),
@@ -520,7 +523,7 @@ class TestGlobalOptimizerValidationIntegration:
     @pytest.mark.parametrize("temp", [-1.0])
     def test_bh_go_invalid_temperature(self, temp):
         """Test bh_go with invalid temperature."""
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             bh_go(
                 composition=["Pt", "Pt"],
                 calculator_for_global_optimization=EMT(),
@@ -530,7 +533,7 @@ class TestGlobalOptimizerValidationIntegration:
 
     def test_ga_go_invalid_composition(self):
         """Test ga_go with invalid composition."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             ga_go(
                 composition="invalid",
                 calculator_for_global_optimization=EMT(),
@@ -541,7 +544,7 @@ class TestGlobalOptimizerValidationIntegration:
     @pytest.mark.parametrize("pop_size", [-1])
     def test_ga_go_invalid_population_size(self, pop_size):
         """Test ga_go with invalid population_size."""
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             ga_go(
                 composition=["Pt", "Pt"],
                 calculator_for_global_optimization=EMT(),
@@ -552,7 +555,7 @@ class TestGlobalOptimizerValidationIntegration:
     @pytest.mark.parametrize("mut_prob", [1.5])
     def test_ga_go_invalid_mutation_probability(self, mut_prob):
         """Test ga_go with invalid mutation_probability."""
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             ga_go(
                 composition=["Pt", "Pt"],
                 calculator_for_global_optimization=EMT(),
@@ -567,7 +570,7 @@ class TestCampaignFunctionValidationIntegration:
 
     def test_run_trials_invalid_composition(self):
         """Test run_trials with invalid composition."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             run_trials(
                 composition="invalid",
                 global_optimizer="bh",
@@ -576,7 +579,7 @@ class TestCampaignFunctionValidationIntegration:
 
     def test_run_trials_invalid_optimizer(self):
         """Test run_trials with invalid global_optimizer."""
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             run_trials(
                 composition=["Pt", "Pt"],
                 global_optimizer="invalid",
@@ -585,7 +588,7 @@ class TestCampaignFunctionValidationIntegration:
 
     def test_run_trials_missing_system_type(self, rng):
         """Test run_trials requires system_type in global_optimizer_kwargs."""
-        with pytest.raises(ValueError, match="system_type must be set"):
+        with pytest.raises(SCGOValidationError, match="system_type must be set"):
             run_trials(
                 composition=["Pt", "Pt"],
                 global_optimizer="bh",
@@ -596,7 +599,7 @@ class TestCampaignFunctionValidationIntegration:
 
     def test_scgo_invalid_composition(self):
         """Test scgo with invalid composition."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             scgo(
                 composition="invalid",
                 global_optimizer="bh",
@@ -605,7 +608,7 @@ class TestCampaignFunctionValidationIntegration:
 
     def test_scgo_invalid_optimizer(self):
         """Test scgo with invalid global_optimizer."""
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="invalid",
@@ -614,7 +617,7 @@ class TestCampaignFunctionValidationIntegration:
 
     def test_scgo_missing_system_type(self, rng):
         """Test scgo requires system_type in global_optimizer_kwargs."""
-        with pytest.raises(ValueError, match="system_type must be set"):
+        with pytest.raises(SCGOValidationError, match="system_type must be set"):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="bh",
@@ -641,17 +644,17 @@ class TestEdgeCaseValidationIntegration:
     @pytest.mark.parametrize("invalid_param", ["1.0", "invalid"])
     def test_mixed_type_parameters(self, invalid_param):
         """Test handling of mixed type parameters."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises((SCGOValidationError, TypeError)):
             create_initial_cluster(
                 ["Pt", "Pt"], rng=None, placement_radius_scaling=invalid_param
             )
 
     def test_none_parameters_raise(self):
         """Test handling of None parameters."""
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(SCGOValidationError):
             create_initial_cluster(None, rng=None)
 
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError):
             create_initial_cluster(
                 ["Pt", "Pt"], rng=None, placement_radius_scaling=None
             )
@@ -678,10 +681,10 @@ class TestInitializationParameterValidationIntegration:
     def test_invalid_init_params_raise(self, param_name, value, error_match, rng):
         """Test initialization parameter validation."""
         if param_name == "cell_side":
-            with pytest.raises(ValueError, match=error_match):
+            with pytest.raises(SCGOValidationError, match=error_match):
                 random_spherical(["Pt", "Pt"], cell_side=value, rng=rng)
         else:
-            with pytest.raises(ValueError, match=error_match):
+            with pytest.raises(SCGOValidationError, match=error_match):
                 create_initial_cluster(["Pt", "Pt"], **{param_name: value}, rng=rng)
 
 
@@ -690,28 +693,28 @@ class TestInitializationCompositionValidation:
 
     def test_composition_none_raises(self, rng):
         """Test composition = None."""
-        with pytest.raises(TypeError, match="cannot be None"):
+        with pytest.raises(SCGOValidationError, match="cannot be None"):
             create_initial_cluster(None, rng=rng)
 
     def test_composition_not_list_raises(self, rng):
         """Test composition that is not list/tuple."""
-        with pytest.raises(TypeError, match="must be a list or tuple"):
+        with pytest.raises(SCGOValidationError, match="must be a list or tuple"):
             create_initial_cluster("Pt", rng=rng)
 
     def test_composition_non_string_elements_raises(self, rng):
         """Test composition with non-string elements."""
-        with pytest.raises(TypeError, match="must contain only string"):
+        with pytest.raises(SCGOValidationError, match="must contain only string"):
             create_initial_cluster([1, 2, 3], rng=rng)
 
     def test_unknown_mode_raises(self, rng):
         """Test unknown mode parameter."""
-        with pytest.raises(ValueError, match="Unsupported mode"):
+        with pytest.raises(SCGOValidationError, match="Unsupported mode"):
             create_initial_cluster(["Pt", "Pt"], mode="invalid_mode", rng=rng)
 
     def test_placement_error_message(self, rng):
         """Test that placement errors include diagnostic information."""
         comp = ["Pt"] * 20
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             random_spherical(
                 comp,
                 cell_side=5.0,
@@ -874,7 +877,7 @@ class TestValidationIntegrationFinal:
             )
             assert len(atoms) == 2
             assert atoms.get_chemical_formula() == "Pt2"
-        except ValueError as e:
+        except SCGOValidationError as e:
             assert "Final validation failed" in str(e)
 
     def test_random_spherical_validation(self, rng):
@@ -889,7 +892,7 @@ class TestValidationIntegrationFinal:
             )
             assert len(atoms) == 2
             assert atoms.get_chemical_formula() == "Pt2"
-        except ValueError as e:
+        except SCGOValidationError as e:
             assert "Final validation failed in random_spherical" in str(e)
 
     def test_validation_catches_invalid_structures(self):

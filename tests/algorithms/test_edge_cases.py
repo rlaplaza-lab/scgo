@@ -13,6 +13,7 @@ from ase.optimize import LBFGS
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database.metadata import get_metadata
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.utils.helpers import perform_local_relaxation
 
@@ -140,7 +141,7 @@ def test_bh_no_movement(tmp_path, rng):
     atoms.calc = EMT()
 
     # With dr = 0, should raise ValueError
-    with pytest.raises(ValueError, match="dr must be positive"):
+    with pytest.raises(SCGOValidationError, match="dr must be positive"):
         bh_go(
             atoms=atoms,
             output_dir=str(tmp_path / "bh_no_move"),

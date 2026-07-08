@@ -29,6 +29,10 @@ from scgo.constants import (
     PENALTY_ENERGY,
 )
 from scgo.database.metadata import get_metadata
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.utils.logging import get_logger
 
 
@@ -279,7 +283,7 @@ def ensure_float64_forces(atoms: Atoms) -> np.ndarray:
         if "forces" in atoms.arrays:
             forces = atoms.arrays["forces"]  # type: ignore[assignment]
         else:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 "Atoms object has no calculator and no forces in arrays."
             )
 
@@ -334,9 +338,11 @@ def validate_pair_id(pair_id: str) -> tuple[int, int]:
         ValueError: if `pair_id` is not a string matching "^\d+_\d+$".
     """
     if not isinstance(pair_id, str):
-        raise ValueError(f"Invalid pair_id type: {pair_id!r}")
+        raise SCGOValidationError(f"Invalid pair_id type: {pair_id!r}")
     if not re.fullmatch(r"\d+_\d+", pair_id):
-        raise ValueError(f"Invalid pair_id format: {pair_id!r} (expected 'i_j')")
+        raise SCGOValidationError(
+            f"Invalid pair_id format: {pair_id!r} (expected 'i_j')"
+        )
     i_str, j_str = pair_id.split("_")
     return int(i_str), int(j_str)
 

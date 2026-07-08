@@ -7,6 +7,7 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 from ase.io import read as ase_read
 
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.ts_search.transition_state_io import write_final_unique_ts
 from scgo.ts_search.transition_state_run import integrate_ts_to_database
@@ -190,7 +191,7 @@ def test_validate_pair_id_valid(pair, expected):
 def test_validate_pair_id_invalid(bad):
     from scgo.utils.helpers import validate_pair_id
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         validate_pair_id(bad)
 
 
@@ -202,7 +203,7 @@ def test_write_final_unique_ts_rejects_malformed_pair_id(tmp_path):
     ]
     out = str(tmp_path / "Pt2_ts_results")
     os.makedirs(out, exist_ok=True)
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         write_final_unique_ts(ts_results, out, ["Pt", "Pt"])
 
 

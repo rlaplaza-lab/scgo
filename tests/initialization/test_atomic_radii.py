@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from ase.data import atomic_numbers, vdw_radii
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import (
     clear_atomic_radii_cache,
     get_covalent_radius,
@@ -50,7 +51,7 @@ class TestAtomicRadii:
         assert "interpolated" in co_messages[0]
 
     def test_unknown_element_raises(self):
-        with pytest.raises(ValueError, match="Unknown element symbol"):
+        with pytest.raises(SCGOValidationError, match="Unknown element symbol"):
             get_vdw_radius("Xx")
 
     def test_compute_cell_side_uses_patched_vdw(self):

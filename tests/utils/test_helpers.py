@@ -8,6 +8,7 @@ import pytest
 from ase import Atoms
 from ase.constraints import FixAtoms
 
+from scgo.exceptions import SCGORuntimeError
 from scgo.utils.helpers import (
     auto_niter,
     auto_niter_local_relaxation,
@@ -391,7 +392,7 @@ class TestEnsureFloat64Forces:
         # No calculator attached
 
         # Should raise RuntimeError when no calculator is attached
-        with pytest.raises(RuntimeError, match="no calculator"):
+        with pytest.raises(SCGORuntimeError, match="no calculator"):
             ensure_float64_forces(atoms)
 
     def test_ensure_float64_forces_preserves_values(self):

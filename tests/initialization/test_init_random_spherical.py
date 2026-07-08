@@ -16,6 +16,7 @@ from ase_ga.utilities import (
     get_all_atom_types,
 )
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import (
     is_cluster_connected,
     random_spherical,
@@ -62,7 +63,7 @@ class TestRandomSphericalInitialization:
         # Try to place many atoms in a very small space, should result in a ValueError.
         comp = ["H"] * 20  # Many small atoms
         side = 5.0  # Very small cell
-        with pytest.raises(ValueError):
+        with pytest.raises(SCGOValidationError):
             random_spherical(
                 comp, placement_radius_scaling=0.1, cell_side=side, rng=rng
             )
@@ -241,7 +242,7 @@ class TestRandomSphericalStressAndPerformance:
         """Test that retry exhaustion provides helpful error message."""
         # Try to place many atoms in very small space
         comp = ["H"] * 50  # Many small atoms
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             random_spherical(
                 comp, cell_side=5.0, placement_radius_scaling=0.01, rng=rng
             )

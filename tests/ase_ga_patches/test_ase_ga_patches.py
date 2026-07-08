@@ -13,6 +13,7 @@ from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 
 from scgo.ase_ga_patches.cutandsplicepairing import CutAndSplicePairing
 from scgo.ase_ga_patches.population import Population
+from scgo.exceptions import SCGOValidationError
 from tests.test_utils import create_ga_comparator, create_paired_rngs, create_preparedb
 
 
@@ -106,7 +107,7 @@ def test_cutandsplicepairing_incompatible_compositions(pt3_atoms, au2pt2_atoms, 
 
     # Try to pair incompatible structures (different compositions)
     # Should raise ValueError for incompatible compositions
-    with pytest.raises(ValueError, match="same length"):
+    with pytest.raises(SCGOValidationError, match="same length"):
         pairing.get_new_individual([pt3_atoms, au2pt2_atoms])
 
 

@@ -9,6 +9,9 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 from scipy.cluster.hierarchy import fclusterdata
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.validation import validate_surface_config_slab_prefix
 from scgo.utils.logging import get_logger
@@ -97,7 +100,7 @@ def attach_slab_constraints(
         surface_normal_axis: Cartesian axis for layer grouping.
     """
     if n_slab > len(atoms):
-        raise ValueError(
+        raise SCGOValidationError(
             f"attach_slab_constraints: n_slab={n_slab} exceeds len(atoms)={len(atoms)}"
         )
 
@@ -106,7 +109,7 @@ def attach_slab_constraints(
         return
 
     if n_relax_top_slab_layers is not None and n_fix_bottom_slab_layers is not None:
-        raise ValueError(
+        raise SCGOValidationError(
             "attach_slab_constraints: use at most one of "
             "n_fix_bottom_slab_layers and n_relax_top_slab_layers"
         )

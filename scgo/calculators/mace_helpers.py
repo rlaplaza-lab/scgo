@@ -11,19 +11,13 @@ from enum import StrEnum
 from typing import Any
 
 import torch
-from ase import Atoms
-from ase.calculators.calculator import Calculator, all_changes
-from mace.calculators import mace_mp
 
-from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import (
     clear_torch_force_no_weights_only_load_env,
     ensure_mace_uma_not_both_installed,
 )
 
 _torch_load_patched = False
-
-clear_torch_force_no_weights_only_load_env()
 
 
 def _ensure_torch_load_mace_checkpoints() -> None:
@@ -46,6 +40,16 @@ def _ensure_torch_load_mace_checkpoints() -> None:
         return _orig_load(*args, **kwargs)
 
     torch.load = _load  # type: ignore[method-assign]
+
+
+clear_torch_force_no_weights_only_load_env()
+_ensure_torch_load_mace_checkpoints()
+
+from ase import Atoms
+from ase.calculators.calculator import Calculator, all_changes
+from mace.calculators import mace_mp
+
+from scgo.utils.logging import get_logger
 
 
 class MaceUrls(StrEnum):

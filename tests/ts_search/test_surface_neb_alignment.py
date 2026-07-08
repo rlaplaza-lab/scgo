@@ -8,6 +8,7 @@ from ase import Atoms
 from ase.build import fcc111
 from ase.constraints import FixAtoms
 
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.system_types import get_system_policy
 from scgo.ts_search import transition_state as ts_mod
@@ -36,7 +37,7 @@ def test_validate_lattice_compatible_rotation_rejects_out_of_plane():
         [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
         dtype=float,
     )
-    with pytest.raises(ValueError, match="surface normal"):
+    with pytest.raises(SCGOValidationError, match="surface normal"):
         _validate_lattice_compatible_rotation(rot_bad, normal_axis=2)
 
 
@@ -155,7 +156,7 @@ def test_kabsch_align_rejects_slab_systems():
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
     slab.pbc = [True, True, False]
     a = slab.copy() + Atoms("Pt", positions=[[0.0, 0.0, 8.0]])
-    with pytest.raises(RuntimeError, match="Slab NEB endpoints must use"):
+    with pytest.raises(SCGORuntimeError, match="Slab NEB endpoints must use"):
         _align_product_kabsch_to_reactant(a, a.get_positions(), n_slab=len(slab))
 
 

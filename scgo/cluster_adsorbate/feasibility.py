@@ -8,6 +8,7 @@ import numpy as np
 from ase import Atoms
 
 from scgo.cluster_adsorbate.sites import compute_surface_site_candidates
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius, get_vdw_radius
 
 
@@ -67,7 +68,7 @@ def validate_adsorbate_placement_feasibility(
             min_sep = 2.0 * max(radii) if radii else 0.0
             span = sum(2.0 * r for r in radii) + max(0, n_frags - 1) * min_sep
             if span > 40.0:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"{prefix}adsorbate-only system with {n_frags} fragments appears "
                     f"too extended for reliable placement (estimated span {span:.1f} Å)."
                 )
@@ -76,7 +77,7 @@ def validate_adsorbate_placement_feasibility(
     max_by_size = max(1, n_core) if n_core < 4 else max(1, (n_core + 1) // 2)
 
     if n_frags > max_by_size:
-        raise ValueError(
+        raise SCGOValidationError(
             f"{prefix}cannot place {n_frags} adsorbate fragments on a core with "
             f"{n_core} atoms: heuristic site capacity is about {max_by_size}."
         )
@@ -90,7 +91,7 @@ def validate_adsorbate_placement_feasibility(
         ]
         largest_frag = max(frag_radii) if frag_radii else 0.0
         if largest_frag > 2.5 * core_radius and n_frags > 1:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"{prefix}largest adsorbate fragment footprint ({largest_frag:.1f} Å) "
                 f"is large compared to the {n_core}-atom core; multiple fragments "
                 "are unlikely to fit without overlap."
@@ -101,7 +102,7 @@ def validate_adsorbate_placement_feasibility(
             _proxy_core_from_symbols(core_symbols)
         )
         if hull_capacity > 0 and n_frags > hull_capacity:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"{prefix}cannot place {n_frags} fragments: convex-hull site "
                 f"estimate for a {n_core}-atom core is about {hull_capacity} "
                 f"(minimum spacing ~{min_site_spacing:.1f} Å per fragment)."

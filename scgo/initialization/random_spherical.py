@@ -14,6 +14,9 @@ from ase import Atom, Atoms
 from ase.data import atomic_masses, atomic_numbers
 from scipy.spatial import KDTree
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import InitDiagnosticsCollector
@@ -380,7 +383,7 @@ def _raise_if_connectivity_below_steric_floor(
 ) -> None:
     """Reject parameter combinations that cannot yield a connected, clash-free cluster."""
     if connectivity_factor + 1e-9 < steric_floor:
-        raise ValueError(
+        raise SCGOValidationError(
             f"connectivity_factor ({connectivity_factor}) must be >= steric floor "
             f"({steric_floor}) when GA blmin enforcement is active: bonded pairs "
             f"need distance <= connectivity_factor*(r_i+r_j) and >= "
@@ -508,17 +511,17 @@ def random_spherical(
         return Atoms()
 
     if placement_radius_scaling <= 0:
-        raise ValueError(
+        raise SCGOValidationError(
             f"placement_radius_scaling must be positive, got {placement_radius_scaling}"
         )
 
     if min_distance_factor < 0:
-        raise ValueError(
+        raise SCGOValidationError(
             f"min_distance_factor must be non-negative, got {min_distance_factor}"
         )
 
     if cell_side <= 0:
-        raise ValueError(f"cell_side must be positive, got {cell_side}")
+        raise SCGOValidationError(f"cell_side must be positive, got {cell_side}")
 
     n_atoms = len(composition)
     if n_atoms == 0:
@@ -565,7 +568,7 @@ def random_spherical(
                         "placement volume or distance/connectivity constraints may be too strict"
                     ),
                 )
-                raise ValueError(error_msg)
+                raise SCGOValidationError(error_msg)
             continue  # Try again with different random placement
 
         if len(final_atoms) > 2 and not is_cluster_connected(
@@ -585,7 +588,7 @@ def random_spherical(
                     diagnostics=diagnostics,
                     additional_info="The cluster is disconnected.",
                 )
-                raise ValueError(error_msg)
+                raise SCGOValidationError(error_msg)
             continue  # Try again with different random placement
 
         final_atoms.center()
@@ -616,7 +619,7 @@ def random_spherical(
             validated_atoms, blmin_ratio
         ):
             if retry_attempt == max_connectivity_retries - 1:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"[random_spherical] Cluster failed GA blmin validation at "
                     f"ratio={blmin_ratio} after {max_connectivity_retries} attempts."
                 )
@@ -625,7 +628,7 @@ def random_spherical(
         return validated_atoms
 
     # Should never reach here; raise to indicate placement failure
-    raise ValueError(
+    raise SCGOValidationError(
         "Failed to place atoms into a connected cluster within allowed attempts"
     )
 
@@ -721,7 +724,7 @@ def grow_from_seed(
         if not _verify_exact_composition(final_atoms, target_composition):
             expected_counts = get_composition_counts(target_composition)
             actual_counts = get_composition_counts(final_atoms.get_chemical_symbols())
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Growth operation produced incorrect composition. "
                 f"Expected {target_composition} (counts: {expected_counts}), "
                 f"got {final_atoms.get_chemical_symbols()} (counts: {actual_counts})"

@@ -11,6 +11,7 @@ from ase.io import read
 
 import scgo.minima_search.core as main_mod
 from scgo.database.metadata import add_metadata
+from scgo.exceptions import SCGOValidationError
 from scgo.minima_search import run_trials, scgo
 from scgo.utils.helpers import ensure_directory_exists
 from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
@@ -146,7 +147,7 @@ class TestScgoFunction:
         assert isinstance(results, list)
 
     def test_scgo_requires_system_type(self, tmp_path, rng):
-        with pytest.raises(ValueError, match="system_type must be set"):
+        with pytest.raises(SCGOValidationError, match="system_type must be set"):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="simple",
@@ -275,7 +276,7 @@ class TestScgoFunction:
         composition = ["Pt", "Pt"]
         output_dir = str(tmp_path / "test_unknown")
 
-        with pytest.raises(ValueError, match="Unknown global_optimizer"):
+        with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
             scgo(
                 composition=composition,
                 global_optimizer="unknown",
@@ -295,7 +296,7 @@ class TestScgoFunction:
         composition = ["Pt", "Pt"]
         output_dir = str(tmp_path / "test_bad_calc")
 
-        with pytest.raises(ValueError, match="Calculator validation failed"):
+        with pytest.raises(SCGOValidationError, match="Calculator validation failed"):
             scgo(
                 composition=composition,
                 global_optimizer="bh",
@@ -349,7 +350,7 @@ class TestScgoFunction:
         composition = []
         output_dir = str(tmp_path / "test_empty")
 
-        with pytest.raises(ValueError, match="Composition cannot be empty"):
+        with pytest.raises(SCGOValidationError, match="Composition cannot be empty"):
             scgo(
                 composition=composition,
                 global_optimizer="simple",
@@ -417,7 +418,7 @@ class TestRunTrials:
         composition = ["Pt", "Pt"]
         output_dir = str(tmp_path / "trials_missing_st")
 
-        with pytest.raises(ValueError, match="system_type must be set"):
+        with pytest.raises(SCGOValidationError, match="system_type must be set"):
             run_trials(
                 composition=composition,
                 global_optimizer="bh",

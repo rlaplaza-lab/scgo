@@ -17,6 +17,7 @@ from scgo.constants import (
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_NEB_TANGENT_METHOD,
 )
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
@@ -546,7 +547,7 @@ def run_transition_state_search(
     rng = ensure_rng(seed)
 
     if use_parallel_neb and not use_torchsim:
-        raise ValueError("use_parallel_neb requires use_torchsim=True")
+        raise SCGOValidationError("use_parallel_neb requires use_torchsim=True")
 
     path_key_formula = (
         get_cluster_formula(adsorbate_composition)
@@ -561,12 +562,12 @@ def run_transition_state_search(
     )
 
     if params is None:
-        raise ValueError(
+        raise SCGOValidationError(
             "params is required for transition-state search. Build with "
             "get_ts_search_params(system_type=...) or initialize_ts_params()."
         )
     if "calculator" not in params:
-        raise ValueError(
+        raise SCGOValidationError(
             "params must include 'calculator'. Build with get_ts_search_params()."
         )
     calculator_name = str(params["calculator"])
@@ -582,7 +583,7 @@ def run_transition_state_search(
         calculator_class = get_calculator_class(calculator_name)
     except ValueError as e:
         logger.error("Failed to locate calculator class %s: %s", calculator_name, e)
-        raise ValueError(f"Cannot initialize calculator: {e}") from e
+        raise SCGOValidationError(f"Cannot initialize calculator: {e}") from e
 
     if verbosity >= 1:
         logger.info("Loading minima for composition %s", formula)

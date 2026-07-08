@@ -6,6 +6,7 @@ import numpy as np
 from ase import Atoms
 from ase.build import graphene
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.pbc import normalize_slab_pbc
@@ -30,7 +31,7 @@ def build_graphite_slab(
     with the graphite interlayer distance.
     """
     if layers < 1:
-        raise ValueError(f"layers must be >= 1, got {layers}")
+        raise SCGOValidationError(f"layers must be >= 1, got {layers}")
 
     single_layer = graphene(formula="C2", vacuum=0.0)
     single_layer = single_layer.repeat((repeat_xy, repeat_xy, 1))

@@ -1,5 +1,7 @@
 """Energy metrics for adsorption (optional objectives)."""
 
+from __future__ import annotations
+
 
 def adsorption_energy(
     e_adsorbate_slab: float,

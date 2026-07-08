@@ -11,6 +11,7 @@ from scgo.cluster_adsorbate.constraints import (
     attach_adsorbate_internal_geometry_constraints,
 )
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
+from scgo.exceptions import SCGOValidationError
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
@@ -21,7 +22,7 @@ from scgo.system_types import (
 def _kabsch_place_template(template: np.ndarray, target: np.ndarray) -> np.ndarray:
     """Place ``template`` onto ``target`` preserving target centroid and orientation."""
     if len(template) != len(target):
-        raise ValueError("template and target must have the same length")
+        raise SCGOValidationError("template and target must have the same length")
     if len(template) == 1:
         return target.copy()
 

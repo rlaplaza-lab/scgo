@@ -16,6 +16,7 @@ from scgo.cluster_adsorbate import (
     place_fragment_on_cluster,
     relax_metal_cluster_with_adsorbate,
 )
+from scgo.exceptions import SCGOValidationError
 from scgo.system_types import (
     resolve_mobile_composition,
     validate_structure_for_system_type,
@@ -111,7 +112,7 @@ def test_attach_fix_bond_lengths_rejects_duplicate() -> None:
     from scgo.cluster_adsorbate import attach_fix_bond_lengths
 
     a = Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]], cell=[10, 10, 10], pbc=False)
-    with pytest.raises(ValueError, match="duplicate"):
+    with pytest.raises(SCGOValidationError, match="duplicate"):
         attach_fix_bond_lengths(a, [(0, 1), (1, 0)])
 
 
@@ -133,7 +134,7 @@ def test_gas_adsorbate_subgraph_integrity_optional_flag() -> None:
         "adsorbate_fragment_lengths": [2],
     }
 
-    with pytest.raises(ValueError, match="fragment integrity check failed"):
+    with pytest.raises(SCGOValidationError, match="fragment integrity check failed"):
         validate_structure_for_system_type(
             atoms,
             system_type="gas_cluster_adsorbate",
@@ -168,7 +169,7 @@ def test_gas_adsorbate_subgraph_integrity_rejects_cross_fragment_bonding() -> No
         "adsorbate_fragment_lengths": [2, 1],
     }
 
-    with pytest.raises(ValueError, match="fragment 0 bonded to fragment 1"):
+    with pytest.raises(SCGOValidationError, match="fragment 0 bonded to fragment 1"):
         validate_structure_for_system_type(
             atoms,
             system_type="gas_cluster_adsorbate",
@@ -281,7 +282,7 @@ def test_resolve_mobile_composition_rejects_count_mismatch() -> None:
         "adsorbate_fragment_lengths": [2],
     }
     composition = ["Ru"] * 9 + ["W", "W", "O", "O"]
-    with pytest.raises(ValueError, match="got counts|expected"):
+    with pytest.raises(SCGOValidationError, match="got counts|expected"):
         resolve_mobile_composition(composition, ads_def, context="test")
 
 

@@ -1,5 +1,7 @@
 """Transition state search."""
 
+from __future__ import annotations
+
 from .parallel_neb import ParallelNEBBatch
 from .transition_state_run import (
     run_transition_state_campaign,

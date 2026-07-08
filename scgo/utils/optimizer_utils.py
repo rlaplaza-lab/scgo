@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from ase.optimize import BFGS, FIRE, LBFGS
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 
 def get_optimizer_class(optimizer_name: str) -> type:
     """Convert optimizer string name to ASE optimizer class.
@@ -23,7 +27,7 @@ def get_optimizer_class(optimizer_name: str) -> type:
         ValueError: If optimizer_name is None or not supported.
     """
     if optimizer_name is None:
-        raise ValueError("optimizer_name cannot be None")
+        raise SCGOValidationError("optimizer_name cannot be None")
 
     # Map optimizer names to classes
     OPTIMIZERS = {
@@ -35,7 +39,7 @@ def get_optimizer_class(optimizer_name: str) -> type:
     optimizer_upper = optimizer_name.upper()
     if optimizer_upper not in OPTIMIZERS:
         supported = ", ".join(OPTIMIZERS.keys())
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unknown optimizer '{optimizer_name}'. Supported optimizers: {supported}",
         )
 

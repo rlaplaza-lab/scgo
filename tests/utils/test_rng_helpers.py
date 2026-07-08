@@ -7,6 +7,7 @@ from scgo.ase_ga_patches.standardmutations import (
     CustomPermutationMutation,
     RattleMutation,
 )
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.rng_helpers import create_child_rng, ensure_rng, offspring_rng_triple
 
 
@@ -177,12 +178,12 @@ def test_rattle_mutation_deterministic_and_accepts_generator(pt3_atoms, rng):
 def test_mutation_constructors_reject_legacy_randomstate():
     import numpy as _np
 
-    with pytest.raises(TypeError):
+    with pytest.raises(SCGOValidationError):
         RattleMutation(
             blmin={}, n_top=2, system_type="gas_cluster", rng=_np.random.RandomState(1)
         )
 
-    with pytest.raises(TypeError):
+    with pytest.raises(SCGOValidationError):
         CustomPermutationMutation(
             n_top=2, system_type="gas_cluster", rng=_np.random.RandomState(1)
         )
@@ -194,7 +195,7 @@ def test_ga_go_rejects_legacy_randomstate():
 
     from scgo.algorithms import ga_go
 
-    with pytest.raises(TypeError):
+    with pytest.raises(SCGOValidationError):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=".",

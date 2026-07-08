@@ -21,6 +21,7 @@ from ase.db import connect
 
 from scgo.database import get_global_cache
 from scgo.database.schema import stamp_scgo_database
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import (
     compute_cell_side,
     create_initial_cluster,
@@ -222,18 +223,18 @@ class TestInvalidElementSymbols:
     def test_invalid_element_symbol(self, rng):
         """Test with invalid element symbol."""
         # compute_cell_side should raise ValueError for unknown elements
-        with pytest.raises(ValueError, match="Unknown element symbol"):
+        with pytest.raises(SCGOValidationError, match="Unknown element symbol"):
             compute_cell_side(["Xx"], vacuum=10.0)
         # create_initial_cluster should also raise error for invalid elements
-        with pytest.raises(ValueError):
+        with pytest.raises(SCGOValidationError):
             create_initial_cluster(["Xx"], rng=rng)
 
     def test_mixed_valid_invalid_symbols(self, rng):
         """Test with mix of valid and invalid symbols."""
-        with pytest.raises(ValueError, match="Unknown element symbol"):
+        with pytest.raises(SCGOValidationError, match="Unknown element symbol"):
             compute_cell_side(["Pt", "Xx"], vacuum=10.0)
         # create_initial_cluster should also raise error
-        with pytest.raises(ValueError):
+        with pytest.raises(SCGOValidationError):
             create_initial_cluster(["Pt", "Xx"], rng=rng)
 
 
@@ -433,7 +434,7 @@ class TestCacheBehavior:
 
         # Test with 3 points (insufficient for 3D convex hull)
         positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-        with pytest.raises(ValueError, match="at least 4 points"):
+        with pytest.raises(SCGOValidationError, match="at least 4 points"):
             _get_cached_hull(positions)
 
     def test_concurrent_db_cache_access(self, tmp_path, pt2_atoms):
@@ -766,7 +767,7 @@ class TestBoltzmannSample:
         atoms_pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
         atoms_pt3 = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]])
         candidates = [(-10.0, atoms_pt2), (-10.0, atoms_pt3)]
-        with pytest.raises(ValueError, match="same composition"):
+        with pytest.raises(SCGOValidationError, match="same composition"):
             _boltzmann_sample(candidates, rng)
 
     def test_same_composition_multiple_candidates(self, rng):

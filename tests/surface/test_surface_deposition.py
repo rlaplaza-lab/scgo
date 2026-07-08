@@ -12,6 +12,7 @@ from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_ga_pairing
+from scgo.exceptions import SCGOValidationError
 from scgo.surface import deposition as deposition_module
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
@@ -83,7 +84,7 @@ def test_create_ga_pairing_surface_requires_matching_template(pt_slab: Atoms) ->
     composition = ["Pt"]
     n_slab = len(pt_slab)
     wrong = Atoms("Pt", positions=[[0, 0, 0]], cell=pt_slab.cell, pbc=pt_slab.pbc)
-    with pytest.raises(ValueError, match="surface GA"):
+    with pytest.raises(SCGOValidationError, match="surface GA"):
         create_ga_pairing(
             wrong,
             len(composition),

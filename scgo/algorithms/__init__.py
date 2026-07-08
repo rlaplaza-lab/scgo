@@ -7,10 +7,10 @@ adapted for atomic cluster structure search:
 - Basin Hopping: Random perturbations with Metropolis acceptance
 - Genetic Algorithm: Population-based evolution with batched relaxations
 
-.. warning::
+Warning:
     These functions are primarily for internal use. Most users should use the
-    high-level API in :mod:`scgo.runner_api` (e.g., :func:`~scgo.runner_api.run_go`) instead
-    of calling these algorithm functions directly.
+    high-level API in :mod:`scgo.runner_api` (e.g., :func:`~scgo.runner_api.run_go`)
+    instead of calling these algorithm functions directly.
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.constraints import FixAtoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.ts_search.transition_state import (
     calculate_structure_similarity,
     find_transition_state,
@@ -552,7 +553,7 @@ def test_find_ts_different_lengths_fails(temp_output_dir):
     atoms1.calc = EMT()
     atoms2.calc = EMT()
 
-    with pytest.raises(ValueError, match="different lengths"):
+    with pytest.raises(SCGOValidationError, match="different lengths"):
         find_transition_state(
             atoms1,
             atoms2,
@@ -568,7 +569,9 @@ def test_find_ts_no_calculator_fails(h2_reactant, h2_product, temp_output_dir):
     h2_reactant.calc = None
     h2_product.calc = None
 
-    with pytest.raises(ValueError):  # Should fail validation without calculator
+    with pytest.raises(
+        SCGOValidationError
+    ):  # Should fail validation without calculator
         find_transition_state(
             h2_reactant,
             h2_product,

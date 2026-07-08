@@ -11,6 +11,10 @@ from pathlib import Path
 from ase_ga.data import DataConnection
 
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -302,7 +306,7 @@ def _ensure_sqlite_json1(
             _ = cur.fetchone()
             return
         if db_path is None:
-            raise ValueError("db_path is required when conn is not provided")
+            raise SCGOValidationError("db_path is required when conn is not provided")
 
         def _probe(active_conn: sqlite3.Connection) -> None:
             cur = active_conn.execute("SELECT json_extract('{\"a\": 1}', '$.a')")
@@ -310,7 +314,7 @@ def _ensure_sqlite_json1(
 
         _run_sqlite(db_path, _probe, timeout=5.0)
     except sqlite3.OperationalError as e:
-        raise RuntimeError(
+        raise SCGORuntimeError(
             "SQLite JSON1 extension is required but not available. "
             "Please use a Python build or system SQLite with JSON1 support (e.g., install a sqlite3 package with JSON1 enabled)."
         ) from e

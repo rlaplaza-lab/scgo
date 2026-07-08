@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 
 def resolve_n_jobs_to_workers(n_jobs: int) -> int:
     """Map batch-parallel ``n_jobs`` to a concrete worker count (``>= 1``).
@@ -16,7 +20,7 @@ def resolve_n_jobs_to_workers(n_jobs: int) -> int:
     - ``-2``: all logical CPUs except one.
     """
     if n_jobs < 1 and n_jobs not in (-1, -2):
-        raise ValueError(f"n_jobs must be >= 1, -1, or -2, got {n_jobs}")
+        raise SCGOValidationError(f"n_jobs must be >= 1, -1, or -2, got {n_jobs}")
     cpu = os.cpu_count() or 1
     if n_jobs == -1:
         return cpu

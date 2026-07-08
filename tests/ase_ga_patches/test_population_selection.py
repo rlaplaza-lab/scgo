@@ -3,6 +3,7 @@ from ase import Atoms
 
 from scgo.ase_ga_patches.population import Population
 from scgo.database.metadata import add_metadata
+from scgo.exceptions import SCGOValidationError
 from tests.test_utils import create_paired_rngs
 
 
@@ -56,7 +57,7 @@ def test_population_constructor_rejects_legacy_randomstate():
     import numpy as _np
 
     dc = FakeDC([])
-    with pytest.raises(TypeError):
+    with pytest.raises(SCGOValidationError):
         Population(dc, population_size=2, rng=_np.random.RandomState(1))
 
 

@@ -46,6 +46,9 @@ from ase.data import atomic_numbers, reference_states
 from ase.symbols import Symbols
 from numpy.random import Generator
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.rng_helpers import ensure_rng_or_create
@@ -98,7 +101,7 @@ def _get_base_element(composition: list[str]) -> str:
         ValueError: If composition is empty
     """
     if not composition:
-        raise ValueError("Cannot get base element from empty composition")
+        raise SCGOValidationError("Cannot get base element from empty composition")
     return composition[0]
 
 
@@ -119,7 +122,7 @@ def _get_typical_bond_length(composition: list[str]) -> float:
         ValueError: If composition is empty
     """
     if not composition:
-        raise ValueError("Cannot calculate bond length from empty composition")
+        raise SCGOValidationError("Cannot calculate bond length from empty composition")
 
     unique_elements: set[str] = set(composition)
     radii: list[float] = [get_covalent_radius(elem) for elem in unique_elements]
@@ -290,7 +293,7 @@ def remove_atoms_from_vertices(
     if n_remove <= 0:
         return cluster.copy()
     if n_remove >= len(cluster):
-        raise ValueError(
+        raise SCGOValidationError(
             f"Cannot remove {n_remove} atoms from cluster with {len(cluster)} atoms"
         )
     if len(cluster) < 4:
@@ -388,7 +391,7 @@ def remove_atoms_from_vertices(
             remove_counts = {k: v for k, v in rc.items() if v > 0}
             total_to_remove_this = sum(remove_counts.values())
             if total_to_remove_this != remaining_to_remove:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"Cannot preserve target composition: need to remove "
                     f"{total_to_remove_this} atoms this round but "
                     f"{remaining_to_remove} remaining. "
@@ -476,7 +479,7 @@ def remove_atoms_from_vertices(
     if target_composition is not None:
         actual: Counter[str] = get_composition_counts(current.get_chemical_symbols())
         if actual != final_counts:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Vertex removal did not preserve exact composition. "
                 f"Expected {final_composition} (counts: {final_counts}), "
                 f"got counts {actual}."
@@ -661,7 +664,7 @@ def grow_template_via_facets(
     if not _verify_exact_composition(current, target_composition):
         expected: Counter[str] = get_composition_counts(target_composition)
         actual: Counter[str] = get_composition_counts(current.get_chemical_symbols())
-        raise ValueError(
+        raise SCGOValidationError(
             f"grow_template_via_facets produced wrong composition: "
             f"expected {target_composition} (counts {expected}), "
             f"got counts {actual}"
@@ -690,7 +693,7 @@ def _create_balanced_base_composition(
         ValueError: If composition is empty
     """
     if not composition:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Cannot create balanced base composition from empty composition "
             f"for {base_n_atoms} atoms"
         )
@@ -1424,7 +1427,7 @@ def generate_truncated_octahedron(
             _deduplicate_positions(positions, bond_length)
         )
         if len(unique_positions) != 24:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"generate_truncated_octahedron requires exactly 24 positions, "
                 f"got {len(unique_positions)}"
             )
@@ -1608,7 +1611,7 @@ def _generate_template_with_atom_adjustment(
 
     # Generate base template
     if not composition:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Cannot generate template with empty composition for {target_n_atoms} atoms"
         )
     elif len(composition) >= base_n_atoms:

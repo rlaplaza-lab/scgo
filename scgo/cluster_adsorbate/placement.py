@@ -24,6 +24,7 @@ from scgo.cluster_adsorbate.sites import (
     compute_surface_site_candidates,
 )
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs, get_covalent_radius
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
@@ -221,25 +222,27 @@ def place_fragment_on_cluster(
     if config is None:
         config = ClusterAdsorbateConfig()
     if len(core) == 0:
-        raise ValueError("core must contain at least one atom")
+        raise SCGOValidationError("core must contain at least one atom")
     n_frag = len(fragment_template)
     if n_frag == 0:
-        raise ValueError("fragment_template must contain at least one atom")
+        raise SCGOValidationError("fragment_template must contain at least one atom")
     if not (0 <= anchor_index < n_frag):
-        raise ValueError(
+        raise SCGOValidationError(
             f"anchor_index={anchor_index} invalid for fragment with {n_frag} atoms"
         )
     if bond_axis is not None:
         i, j = bond_axis
         if not (0 <= i < n_frag and 0 <= j < n_frag) or i == j:
-            raise ValueError(f"bond_axis={bond_axis} invalid for this fragment")
+            raise SCGOValidationError(
+                f"bond_axis={bond_axis} invalid for this fragment"
+            )
 
     site_atoms = site_core if site_core is not None else core
     clash_target = clash_atoms if clash_atoms is not None else core
     if len(site_atoms) == 0:
-        raise ValueError("site_core must contain at least one atom")
+        raise SCGOValidationError("site_core must contain at least one atom")
     if len(clash_target) == 0:
-        raise ValueError("clash_atoms must contain at least one atom")
+        raise SCGOValidationError("clash_atoms must contain at least one atom")
 
     site_pos = site_atoms.get_positions()
     com = np.mean(site_pos, axis=0)

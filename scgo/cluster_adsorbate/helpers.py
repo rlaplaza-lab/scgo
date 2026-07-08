@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from scgo.exceptions import SCGOValidationError
+
 
 def resolve_fragment_anchor_and_bond_axis(
     adsorbate_definition: Mapping[str, object],
@@ -24,10 +26,12 @@ def parse_positive_fragment_lengths(raw: object) -> list[int]:
         ValueError: If *raw* is not a list or contains no positive integer lengths.
     """
     if not isinstance(raw, list):
-        raise ValueError(
+        raise SCGOValidationError(
             f"adsorbate_fragment_lengths must be a list of positive ints, got {type(raw).__name__}"
         )
     lengths = [int(x) for x in raw if isinstance(x, int) and int(x) > 0]
     if not lengths:
-        raise ValueError("adsorbate_fragment_lengths must contain positive integers")
+        raise SCGOValidationError(
+            "adsorbate_fragment_lengths must contain positive integers"
+        )
     return lengths

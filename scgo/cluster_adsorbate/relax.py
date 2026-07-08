@@ -21,6 +21,7 @@ from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import attach_fix_bond_lengths
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.utils.rng_helpers import ensure_rng_or_create
 from scgo.utils.ts_provenance import (
     CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION,
@@ -68,18 +69,18 @@ def relax_metal_cluster_with_adsorbate(
     n_core = len(core_work)
     n_frag = len(fragment_template)
     if n_frag == 0:
-        raise ValueError("fragment_template must be non-empty")
+        raise SCGOValidationError("fragment_template must be non-empty")
 
     ref_syms = fragment_template.get_chemical_symbols()
 
     if preplaced is not None:
         if len(preplaced) != n_frag:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"preplaced must have {n_frag} atoms like fragment_template, "
                 f"got {len(preplaced)}"
             )
         if preplaced.get_chemical_symbols() != ref_syms:
-            raise ValueError(
+            raise SCGOValidationError(
                 "preplaced chemical symbols must match fragment_template: "
                 f"{preplaced.get_chemical_symbols()!r} vs {ref_syms!r}"
             )
@@ -95,7 +96,7 @@ def relax_metal_cluster_with_adsorbate(
             bond_axis=bond_axis,
         )
         if frag is None:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 "Adsorbate placement failed; increase max_placement_attempts "
                 "or adjust height range"
             )
@@ -107,7 +108,7 @@ def relax_metal_cluster_with_adsorbate(
     if config.validate_combined_structure:
         ok0, err0 = _validate_combined(combined, config)
         if not ok0:
-            raise ValueError(
+            raise SCGOValidationError(
                 "Combined core+adsorbate failed structure validation before relax: "
                 + err0
             )
@@ -135,7 +136,7 @@ def relax_metal_cluster_with_adsorbate(
     if config.validate_combined_structure:
         ok1, err1 = _validate_combined(combined, config)
         if not ok1:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 "Combined structure failed validation after relax: " + err1
             )
 

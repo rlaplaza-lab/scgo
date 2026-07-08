@@ -38,6 +38,7 @@ from scgo.database.schema import (
 )
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, database_retry, retry_with_backoff
+from scgo.exceptions import SCGORuntimeError
 from scgo.utils.helpers import (
     ensure_directory_exists,
     ensure_final_id,
@@ -584,7 +585,7 @@ def load_previous_run_results(
             RuntimeError,
             ValueError,
         ) as e:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 f"Parallel minima loading failed for {base_output_dir}: {type(e).__name__}: {e}"
             ) from e
 

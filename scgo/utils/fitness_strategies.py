@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING
 
 from ase import Atoms
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_in_choices
 
@@ -57,7 +60,7 @@ _UNRESOLVED_FITNESS_STRATEGY_MSG = (
 def ensure_fitness_strategy_resolved(strategy: str | None) -> str:
     """Require a concrete fitness strategy at algorithm and orchestration boundaries."""
     if strategy is None:
-        raise ValueError(_UNRESOLVED_FITNESS_STRATEGY_MSG)
+        raise SCGOValidationError(_UNRESOLVED_FITNESS_STRATEGY_MSG)
     validate_fitness_strategy(strategy)
     return strategy
 
@@ -105,7 +108,7 @@ def calculate_fitness(
         return float(diversity_scorer.score(atoms))
 
     else:
-        raise ValueError(f"Unknown fitness strategy: {strategy}")
+        raise SCGOValidationError(f"Unknown fitness strategy: {strategy}")
 
 
 def get_fitness_from_atoms(atoms: Atoms, default: float | None = None) -> float | None:

@@ -27,6 +27,10 @@ from scgo.database.metadata import (
     get_metadata,
     mark_final_minima_in_db,
 )
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
@@ -85,7 +89,7 @@ def _validate_minimum_worker(
 ) -> tuple[float, Atoms] | None:
     energy, atoms, fmax_threshold, check_hessian, imag_freq_threshold = payload
     if _VALIDATION_CALCULATOR is None:
-        raise RuntimeError("Validation worker calculator not initialized")
+        raise SCGORuntimeError("Validation worker calculator not initialized")
     if is_true_minimum(
         atoms=atoms,
         calculator=_VALIDATION_CALCULATOR,
@@ -131,7 +135,7 @@ def _create_surface_initialized_atoms(
         cluster_adsorbate_config=cluster_adsorbate_config,
     )
     if deposited is None:
-        raise RuntimeError("Failed to create initial surface-supported structure.")
+        raise SCGORuntimeError("Failed to create initial surface-supported structure.")
     return deposited
 
 
@@ -164,7 +168,7 @@ def _create_gas_cluster_adsorbate_initial_atoms(
         max_placement_attempts=max_hierarchical_attempts,
     )
     if atoms is None:
-        raise RuntimeError(
+        raise SCGORuntimeError(
             "Failed to build hierarchical gas-phase core+fragment seed; "
             "increase max_hierarchical_attempts or relax fragment placement."
         )
@@ -186,7 +190,7 @@ def _resolve_surface_alignment_kwargs(
     """Resolve slab final-write alignment knobs from GO kwargs and system policy."""
     system_type = global_optimizer_kwargs.get("system_type")
     if not isinstance(system_type, str):
-        raise ValueError(
+        raise SCGOValidationError(
             "system_type must be set in global_optimizer_kwargs for surface alignment."
         )
     policy = get_system_policy(system_type)  # type: ignore[arg-type]
@@ -274,7 +278,7 @@ def _sanitize_global_optimizer_kwargs_for_metadata(
     surface_config = gok.pop("surface_config", None)
     if surface_config is not None:
         if not isinstance(surface_config, SurfaceSystemConfig):
-            raise TypeError(
+            raise SCGOValidationError(
                 "surface_config must be a SurfaceSystemConfig instance or None"
             )
         slab = surface_config.slab
@@ -314,7 +318,7 @@ _ALGORITHM_REGISTRY: dict[str, dict[str, Any]] = {
 def _require_calculator(calculator: Calculator | None) -> Calculator:
     """Require an explicit ASE calculator for global optimization."""
     if calculator is None:
-        raise ValueError(
+        raise SCGOValidationError(
             "calculator_for_global_optimization is required. "
             "Pass an ASE calculator (e.g. EMT() in tests)."
         )
@@ -335,27 +339,27 @@ def _validate_common_run_inputs(
     validate_composition(composition, allow_empty=False, allow_tuple=False)
 
     if not isinstance(global_optimizer, str):
-        raise ValueError("global_optimizer must be a string")
+        raise SCGOValidationError("global_optimizer must be a string")
 
     if not isinstance(global_optimizer_kwargs, dict):
-        raise ValueError("global_optimizer_kwargs must be a dictionary")
+        raise SCGOValidationError("global_optimizer_kwargs must be a dictionary")
 
     if require_system_type and not isinstance(
         global_optimizer_kwargs.get("system_type"), str
     ):
-        raise ValueError(
+        raise SCGOValidationError(
             "system_type must be set in global_optimizer_kwargs "
             "(e.g. 'gas_cluster', 'surface_cluster')."
         )
 
     if not isinstance(output_dir, str) or not output_dir:
-        raise ValueError("output_dir must be a non-empty string")
+        raise SCGOValidationError("output_dir must be a non-empty string")
 
     if not isinstance(rng, np.random.Generator):
-        raise ValueError("rng must be a numpy.random.Generator")
+        raise SCGOValidationError("rng must be a numpy.random.Generator")
 
     if not isinstance(verbosity, int) or verbosity not in (0, 1, 2, 3):
-        raise ValueError("verbosity must be one of 0, 1, 2, or 3")
+        raise SCGOValidationError("verbosity must be one of 0, 1, 2, or 3")
 
 
 def _validate_calculator_compatibility(
@@ -443,7 +447,7 @@ def scgo(
     if not is_valid:
         calc_type = type(calculator_for_global_optimization).__name__
         calc_module = type(calculator_for_global_optimization).__module__
-        raise ValueError(
+        raise SCGOValidationError(
             f"Calculator validation failed: {error_msg}. "
             f"Calculator type: {calc_type} (from {calc_module}). "
             f"Ensure the calculator implements get_potential_energy() and get_forces() methods."
@@ -453,7 +457,7 @@ def scgo(
     # override explicit run_id/clean.
     optimizer_name_lower = global_optimizer.lower()
     if optimizer_name_lower not in _ALGORITHM_REGISTRY:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unknown global_optimizer: {global_optimizer}. "
             f"Must be one of {list(_ALGORITHM_REGISTRY.keys())}"
         )
@@ -472,7 +476,7 @@ def scgo(
         )
     system_type = optimizer_kwargs.get("system_type")
     if not isinstance(system_type, str):
-        raise ValueError(
+        raise SCGOValidationError(
             "system_type must be set in global_optimizer_kwargs "
             "(e.g. 'gas_cluster', 'surface_cluster')."
         )
@@ -524,7 +528,7 @@ def scgo(
         if policy.uses_surface:
             surface_config = optimizer_kwargs.get("surface_config")
             if not isinstance(surface_config, SurfaceSystemConfig):
-                raise ValueError(
+                raise SCGOValidationError(
                     f"system_type={system_type!r} requires surface_config for "
                     f"{optimizer_name_lower.upper()} initialization."
                 )
@@ -544,12 +548,12 @@ def scgo(
         elif policy.has_adsorbate:
             ads_def = optimizer_kwargs.get("adsorbate_definition")
             if not isinstance(ads_def, dict):
-                raise ValueError(
+                raise SCGOValidationError(
                     f"system_type={system_type!r} requires adsorbate_definition in "
                     f"global_optimizer_kwargs for {optimizer_name_lower.upper()}."
                 )
             if optimizer_kwargs.get("adsorbate_fragment_template") is None:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"system_type={system_type!r} requires adsorbate_fragment_template "
                     "for hierarchical adsorbate initialization."
                 )
@@ -648,7 +652,7 @@ def run_trials(
     )
 
     if not isinstance(validate_with_hessian, bool):
-        raise ValueError("validate_with_hessian must be a boolean")
+        raise SCGOValidationError("validate_with_hessian must be a boolean")
 
     calculator_for_global_optimization = _require_calculator(
         calculator_for_global_optimization
@@ -881,7 +885,7 @@ def run_trials(
 
     align_kwargs_source = dict(global_optimizer_kwargs)
     if not isinstance(align_kwargs_source.get("system_type"), str):
-        raise ValueError(
+        raise SCGOValidationError(
             "system_type must be set in global_optimizer_kwargs for result alignment."
         )
     surface_align_kwargs = _resolve_surface_alignment_kwargs(align_kwargs_source)
@@ -921,7 +925,7 @@ def run_trials(
             if allow_metadata_mismatch:
                 logger.warning("Structure metadata check before write: %s", e)
             else:
-                raise ValueError(
+                raise SCGOValidationError(
                     f"Refusing to write minimum with invalid metadata: {e}"
                 ) from e
         aligned_to_surface_reference = False

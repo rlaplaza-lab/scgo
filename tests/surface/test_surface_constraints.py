@@ -8,6 +8,7 @@ from ase import Atoms
 from ase.build import fcc111
 
 from scgo.algorithms.geneticalgorithm_go_torchsim import _torchsim_prepare_relaxed_copy
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
     attach_slab_constraints,
@@ -111,7 +112,7 @@ def test_attach_slab_constraints_both_layer_modes_rejected() -> None:
     pos = _three_layer_slab_positions()
     slab = Atoms("Pt6", positions=pos, cell=[10, 10, 10], pbc=True)
     combined = slab + Atoms("Pt", positions=[[0, 0, 5]], cell=slab.cell, pbc=True)
-    with pytest.raises(ValueError, match="at most one"):
+    with pytest.raises(SCGOValidationError, match="at most one"):
         attach_slab_constraints(
             combined,
             len(slab),
@@ -124,7 +125,7 @@ def test_attach_slab_constraints_both_layer_modes_rejected() -> None:
 
 def test_surface_config_relax_top_with_fix_all_rejected() -> None:
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
-    with pytest.raises(ValueError, match="incompatible"):
+    with pytest.raises(SCGOValidationError, match="incompatible"):
         SurfaceSystemConfig(
             slab=slab,
             fix_all_slab_atoms=True,
@@ -134,7 +135,7 @@ def test_surface_config_relax_top_with_fix_all_rejected() -> None:
 
 def test_surface_config_both_layer_specs_rejected() -> None:
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
-    with pytest.raises(ValueError, match="at most one"):
+    with pytest.raises(SCGOValidationError, match="at most one"):
         SurfaceSystemConfig(
             slab=slab,
             fix_all_slab_atoms=False,

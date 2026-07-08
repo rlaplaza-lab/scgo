@@ -18,6 +18,7 @@ from ase.optimize.optimize import Optimizer
 from scgo.database import HPC_DATABASE_EXCEPTIONS, close_data_connection, setup_database
 from scgo.database.metadata import persist_provenance
 from scgo.database.sync import retry_with_backoff
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.helpers import (
     extract_minima_from_database,
     perform_local_relaxation,
@@ -75,7 +76,9 @@ def simple_go(
 
     n_atoms = len(atoms)
     if n_atoms < 1 or n_atoms > 2:
-        raise ValueError(f"simple_go only supports 1-2 atoms, got {n_atoms} atoms")
+        raise SCGOValidationError(
+            f"simple_go only supports 1-2 atoms, got {n_atoms} atoms"
+        )
 
     del kwargs  # unused keys from shared presets (e.g. GA-only options)
     # Detach calculator temporarily for DB setup to avoid pickling issues

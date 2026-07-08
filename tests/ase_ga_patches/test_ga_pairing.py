@@ -7,6 +7,7 @@ from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
 )
+from scgo.exceptions import SCGOValidationError
 from tests.test_utils import create_paired_rngs
 
 
@@ -103,7 +104,7 @@ def test_create_ga_pairing_returns_single_operator_when_explore_probability_zero
 def test_cut_and_splice_constructor_rejects_legacy_randomstate():
     import numpy as _np
 
-    with pytest.raises(TypeError):
+    with pytest.raises(SCGOValidationError):
         # Legacy RandomState should be rejected after enforcing Generator-only policy
         CutAndSplicePairing(
             slab=Atoms(),

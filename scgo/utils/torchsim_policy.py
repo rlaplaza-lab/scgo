@@ -17,6 +17,10 @@ import importlib.util
 
 from ase.calculators.calculator import Calculator
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 
 def mace_torchsim_stack_available() -> bool:
     """True if ``torch_sim`` (``scgo[mace]``) is importable."""
@@ -80,7 +84,7 @@ def resolve_ts_torchsim_flags(
 
     name = calculator_name.strip().upper()
     if not calculator_name_supports_torchsim_batched_neb(calculator_name):
-        raise ValueError(
+        raise SCGOValidationError(
             f"Calculator {calculator_name!r} does not support TorchSim NEB."
         )
     if name == "UMA":

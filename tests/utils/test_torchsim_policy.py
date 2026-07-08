@@ -6,6 +6,7 @@ import importlib.util
 
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import get_ts_search_params
 from scgo.utils.torchsim_policy import (
     calculator_name_supports_torchsim_batched_neb,
@@ -48,7 +49,7 @@ def test_resolve_ts_torchsim_flags_uma_requires_stacks(monkeypatch):
 
 
 def test_resolve_ts_torchsim_flags_emt_rejects_torchsim_request():
-    with pytest.raises(ValueError, match="does not support TorchSim"):
+    with pytest.raises(SCGOValidationError, match="does not support TorchSim"):
         resolve_ts_torchsim_flags("EMT", True, False)
 
 

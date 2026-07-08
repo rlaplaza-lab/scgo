@@ -93,7 +93,7 @@ from scgo.utils.logging import (
 )
 from scgo.utils.rng_helpers import get_child_rng_or_none
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 
 def __dir__() -> list[str]:

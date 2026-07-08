@@ -8,6 +8,9 @@ from contextlib import contextmanager
 
 from ase_ga.data import DataConnection
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,10 +30,10 @@ def database_transaction(
         sqlite3.Connection: Raw connection. Commits on success; rolls back on error.
     """
     if not hasattr(db, "c") or db.c is None:
-        raise ValueError("Invalid database connection")
+        raise SCGOValidationError("Invalid database connection")
 
     if isolation_level.upper() not in _VALID_ISOLATION_LEVELS:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Invalid isolation level: {isolation_level!r}. "
             f"Must be one of {sorted(_VALID_ISOLATION_LEVELS)}"
         )

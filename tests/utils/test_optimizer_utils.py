@@ -6,6 +6,7 @@ to their corresponding ASE optimizer classes.
 
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.optimizer_utils import get_optimizer_class
 
 
@@ -44,27 +45,27 @@ class TestGetOptimizerClass:
 
     def test_none_input_raises_error(self):
         """Test that None input raises ValueError."""
-        with pytest.raises(ValueError, match="optimizer_name cannot be None"):
+        with pytest.raises(SCGOValidationError, match="optimizer_name cannot be None"):
             get_optimizer_class(None)
 
     def test_unknown_optimizer_raises_error(self):
         """Test that unknown optimizer raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown optimizer"):
+        with pytest.raises(SCGOValidationError, match="Unknown optimizer"):
             get_optimizer_class("UNKNOWN_OPTIMIZER")
 
     def test_empty_string_raises_error(self):
         """Test that empty string raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown optimizer"):
+        with pytest.raises(SCGOValidationError, match="Unknown optimizer"):
             get_optimizer_class("")
 
     def test_numeric_string_raises_error(self):
         """Test that numeric string raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown optimizer"):
+        with pytest.raises(SCGOValidationError, match="Unknown optimizer"):
             get_optimizer_class("123")
 
     def test_error_message_suggests_supported_optimizers(self):
         """Test that error message lists supported optimizers."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             get_optimizer_class("INVALID")
 
         error_msg = str(exc_info.value)

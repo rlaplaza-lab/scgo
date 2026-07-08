@@ -1,6 +1,7 @@
 import pytest
 from ase import Atoms
 
+from scgo.exceptions import SCGORuntimeError
 from scgo.ts_search.transition_state import TorchSimNEB
 
 
@@ -38,7 +39,7 @@ def test_get_forces_handles_attributeerror_from_calc():
     neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
 
     # Expect the outer call to raise RuntimeError when no forces are available
-    with pytest.raises(RuntimeError, match="TorchSim did not return forces"):
+    with pytest.raises(SCGORuntimeError, match="TorchSim did not return forces"):
         neb.get_forces()
 
 
@@ -51,7 +52,7 @@ def test_get_forces_handles_notimplementederror_from_calc():
     relaxer = _FakeRelaxer([relaxed] * len(images))
     neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
 
-    with pytest.raises(RuntimeError, match="TorchSim did not return forces"):
+    with pytest.raises(SCGORuntimeError, match="TorchSim did not return forces"):
         neb.get_forces()
 
 

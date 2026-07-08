@@ -20,6 +20,7 @@ from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.metadata import add_metadata
 from scgo.database.schema import is_scgo_database
 from scgo.database.sync import database_retry
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import TRACE, get_logger
 
@@ -124,7 +125,7 @@ def iter_relaxed_structures(
 ):
     """Yield (energy, atoms_copy) for relaxed rows using chunked id queries."""
     if chunk_size is None or chunk_size <= 0:
-        raise ValueError("chunk_size must be a positive integer")
+        raise SCGOValidationError("chunk_size must be a positive integer")
 
     where_sql = relaxed_rows_where_clause(
         require_final_minimum=require_final_minimum,

@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.param_presets import get_ts_defaults
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SystemType, get_system_policy
@@ -38,13 +41,13 @@ def coerce_ts_params_to_runner_kwargs(
     :data:`scgo.param_presets.TS_DEFAULTS_BY_SYSTEM_TYPE` as a safety net.
     """
     if ts_params is None:
-        raise ValueError(
+        raise SCGOValidationError(
             "ts_params is required. Build with get_ts_search_params(system_type=...)."
         )
 
     calc_name = str(ts_params["calculator"])
     if system_type not in SystemType.__args__:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unsupported system_type={system_type!r}; "
             f"expected one of {SystemType.__args__!r}."
         )
@@ -60,14 +63,16 @@ def coerce_ts_params_to_runner_kwargs(
         and ts_surface_config is not None
         and surface_config != ts_surface_config
     ):
-        raise ValueError("run surface_config and ts_params['surface_config'] disagree.")
+        raise SCGOValidationError(
+            "run surface_config and ts_params['surface_config'] disagree."
+        )
     resolved_surface_config = (
         surface_config if surface_config is not None else ts_surface_config
     )
     if get_system_policy(system_type).uses_surface and not isinstance(
         resolved_surface_config, SurfaceSystemConfig
     ):
-        raise ValueError(
+        raise SCGOValidationError(
             f"system_type={system_type!r} requires surface_config in ts_params "
             "or as the run surface_config argument."
         )
@@ -92,7 +97,7 @@ def coerce_ts_params_to_runner_kwargs(
         model_name = ck.get("model_name")
         task_name = ck.get("task_name")
         if not model_name or not task_name:
-            raise ValueError(
+            raise SCGOValidationError(
                 "UMA transition-state search requires calculator_kwargs with "
                 "'model_name' and 'task_name' (set via get_ts_search_params())."
             )

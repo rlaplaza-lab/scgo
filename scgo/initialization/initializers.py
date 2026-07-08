@@ -19,6 +19,10 @@ import numpy as np
 from ase import Atoms
 
 from scgo.database.cache import get_global_cache
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.utils.helpers import (
     get_composition_counts,
 )
@@ -198,7 +202,7 @@ def _boltzmann_sample(
     first_counts = get_composition_counts(candidates[0][1].get_chemical_symbols())
     for _energy, atoms in candidates[1:]:
         if get_composition_counts(atoms.get_chemical_symbols()) != first_counts:
-            raise ValueError(
+            raise SCGOValidationError(
                 "All candidates must have the same composition for Boltzmann sampling. "
                 f"Found {first_counts} vs "
                 f"{get_composition_counts(atoms.get_chemical_symbols())}"
@@ -232,7 +236,7 @@ def _boltzmann_sample(
 
     # Validate temperature
     if temperature <= 0:
-        raise ValueError(f"Temperature must be positive, got {temperature}")
+        raise SCGOValidationError(f"Temperature must be positive, got {temperature}")
 
     # Compute Boltzmann weights: exp(-E/kT)
     # Shift energies to avoid overflow (subtract min_energy)
@@ -665,7 +669,9 @@ def _sample_seed_with_strategy(
 
     handler = strategy_handlers.get(strategy)
     if handler is None:
-        raise ValueError(f"Invalid seed sampling strategy: {strategy!r} (expected 0-4)")
+        raise SCGOValidationError(
+            f"Invalid seed sampling strategy: {strategy!r} (expected 0-4)"
+        )
 
     return handler()
 
@@ -1074,7 +1080,7 @@ def _try_strategies_in_order(
         RuntimeError: If the final fallback strategy fails
     """
     if not strategies:
-        raise ValueError("No strategies provided to _try_strategies_in_order")
+        raise SCGOValidationError("No strategies provided to _try_strategies_in_order")
 
     primary_strategy = strategies[0][0]
 
@@ -1131,7 +1137,7 @@ def _try_strategies_in_order(
         len(composition),
         strategy_names,
     )
-    raise RuntimeError(
+    raise SCGORuntimeError(
         f"All initialization strategies returned None: composition={composition}, "
         f"n_atoms={len(composition)}, strategies={strategy_names}"
     )
@@ -1203,17 +1209,17 @@ def create_initial_cluster(
         return Atoms()
 
     if placement_radius_scaling <= 0:
-        raise ValueError(
+        raise SCGOValidationError(
             f"placement_radius_scaling must be positive, got {placement_radius_scaling}"
         )
 
     if min_distance_factor < 0:
-        raise ValueError(
+        raise SCGOValidationError(
             f"min_distance_factor must be non-negative, got {min_distance_factor}"
         )
 
     if vacuum < 0:
-        raise ValueError(f"vacuum must be non-negative, got {vacuum}")
+        raise SCGOValidationError(f"vacuum must be non-negative, got {vacuum}")
 
     results = create_initial_cluster_batch(
         composition=composition,
@@ -1372,7 +1378,7 @@ def create_initial_cluster_batch(
     Validated structures are reordered to match ``composition`` for GA pairing.
     """
     if n_structures < 1:
-        raise ValueError(f"n_structures must be >= 1, got {n_structures}")
+        raise SCGOValidationError(f"n_structures must be >= 1, got {n_structures}")
 
     validate_composition(composition, allow_empty=True, allow_tuple=True)
 
@@ -1424,7 +1430,7 @@ def create_initial_cluster_batch(
     elif mode in ("template", "seed+growth", "random_spherical"):
         allocations = [(mode, None)] * n_structures
     else:
-        raise ValueError(f'Unsupported mode: "{mode}"')
+        raise SCGOValidationError(f'Unsupported mode: "{mode}"')
 
     batch_base_seed = rng.integers(0, 2**31)
     structure_assignments = []

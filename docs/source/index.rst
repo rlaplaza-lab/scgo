@@ -47,6 +47,7 @@ Contents
 
    api/runner_api
    api/database
+   api/exceptions
    api/initialization
    api/surface
    api/cluster_adsorbate

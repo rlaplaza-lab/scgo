@@ -29,6 +29,7 @@ from scgo.constants import (
     DEFAULT_PAIR_COR_MAX,
 )
 from scgo.database.metadata import get_metadata
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import get_logger
@@ -74,7 +75,7 @@ def attach_singlepoint_from_relax_output(
         atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
         return
     if require_forces:
-        raise RuntimeError(
+        raise SCGORuntimeError(
             "TorchSim did not return forces. Ensure the model is loaded with compute_forces=True."
         )
     atoms.calc = SinglePointCalculator(atoms, energy=energy)
@@ -109,7 +110,7 @@ def calculate_structure_similarity(
     )
 
     if len(atoms1) != len(atoms2):
-        raise ValueError(
+        raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
         )
 
@@ -251,7 +252,7 @@ def _match_atoms_by_fingerprint(
     distances (required for slab endpoints near periodic boundaries).
     """
     if len(a1) != len(a2):
-        raise ValueError("Atoms objects have different lengths")
+        raise SCGOValidationError("Atoms objects have different lengths")
 
     mapping = [-1] * len(a1)
     use_mic = mic_cell is not None and mic_pbc is not None
@@ -266,7 +267,7 @@ def _match_atoms_by_fingerprint(
         idx1 = [i for i, x in enumerate(a1.numbers) if x == z]
         idx2 = [i for i, x in enumerate(a2.numbers) if x == z]
         if len(idx1) != len(idx2):
-            raise ValueError("Composition mismatch during endpoint matching")
+            raise SCGOValidationError("Composition mismatch during endpoint matching")
 
         fp1 = fp1_all[idx1]
         fp2 = fp2_all[idx2]
@@ -323,9 +324,9 @@ def _align_endpoints_blockwise(
     """Match product to reactant per block (slab indices unchanged; core/ads via fingerprint)."""
     n = len(a1)
     if len(a2) != n:
-        raise ValueError("align blockwise: endpoint length mismatch")
+        raise SCGOValidationError("align blockwise: endpoint length mismatch")
     if n_slab + n_core + n_ads != n:
-        raise ValueError(
+        raise SCGOValidationError(
             f"align blockwise: n_slab+n_core+n_ads={n_slab + n_core + n_ads} != len={n}"
         )
     p2 = a2.get_positions().copy()
@@ -363,7 +364,7 @@ def _kabsch_rotation_in_plane(
 ) -> np.ndarray:
     """Return 3x3 rotation that aligns Q to P using only in-plane degrees of freedom."""
     if surface_normal_axis not in (0, 1, 2):
-        raise ValueError("surface_normal_axis must be 0, 1, or 2")
+        raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
     plane_axes = [i for i in range(3) if i != surface_normal_axis]
     r2 = _kabsch_rotation(P[:, plane_axes], Q[:, plane_axes])
     rot = np.eye(3)
@@ -455,18 +456,20 @@ def _validate_lattice_compatible_rotation(
 ) -> None:
     """Fail-fast when a rotation would alter the vacuum axis or handedness."""
     if normal_axis not in (0, 1, 2):
-        raise ValueError("normal_axis must be 0, 1, or 2")
+        raise SCGOValidationError("normal_axis must be 0, 1, or 2")
     if abs(float(rot[normal_axis, normal_axis]) - 1.0) > tol:
-        raise ValueError(
+        raise SCGOValidationError(
             "Rotation must preserve the surface normal axis (energy-equivalent)."
         )
     for i in range(3):
         if i != normal_axis and abs(float(rot[normal_axis, i])) > tol:
-            raise ValueError(
+            raise SCGOValidationError(
                 "Rotation must not mix the surface normal with in-plane axes."
             )
     if abs(float(np.linalg.det(rot)) - 1.0) > tol:
-        raise ValueError("Rotation determinant must be +1 for rigid alignment.")
+        raise SCGOValidationError(
+            "Rotation determinant must be +1 for rigid alignment."
+        )
 
 
 def _inplane_rotation_matrix_3d(angle: float, normal_axis: int) -> np.ndarray:
@@ -491,7 +494,7 @@ def _lattice_translation_candidates(
 ) -> list[np.ndarray]:
     """Integer in-plane lattice translations (Cartesian vectors)."""
     if max_shift < 0:
-        raise ValueError("max_shift must be non-negative")
+        raise SCGOValidationError("max_shift must be non-negative")
     candidates: list[np.ndarray] = []
     for nx in range(-max_shift, max_shift + 1):
         for ny in range(-max_shift, max_shift + 1):
@@ -738,7 +741,7 @@ def _align_product_kabsch_to_reactant(
 ) -> np.ndarray:
     """Rigidly align product to reactant (gas-phase clusters without periodic endpoints)."""
     if n_slab > 0:
-        raise RuntimeError(
+        raise SCGORuntimeError(
             "Slab NEB endpoints must use _align_product_surface_pbc, not Kabsch-only alignment."
         )
     ref_pos = reactant.get_positions()
@@ -883,7 +886,7 @@ def interpolate_path(
     if align_endpoints and system_type is not None:
         system_policy = get_system_policy(system_type)
         if system_policy.neb_disable_alignment:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Endpoint alignment is not allowed for {system_type!r}; set align_endpoints=False."
             )
         surface_cell_remap = (
@@ -1065,12 +1068,12 @@ def _finalize_neb_result(
             ts_atoms = atoms
 
     if result.get("reactant_energy") is None or result.get("product_energy") is None:
-        raise RuntimeError(
+        raise SCGORuntimeError(
             f"Missing endpoint energies after NEB for pair {pair_id}: "
             f"reactant={result.get('reactant_energy')}, product={result.get('product_energy')}"
         )
     if ts_atoms is None:
-        raise RuntimeError(f"No TS energy found after NEB for pair {pair_id}")
+        raise SCGORuntimeError(f"No TS energy found after NEB for pair {pair_id}")
 
     reactant_energy = float(result["reactant_energy"])
     product_energy = float(result["product_energy"])
@@ -1170,7 +1173,7 @@ def find_transition_state(
         validate_calculator_attached(atoms2, "NEB product")
 
     if len(atoms1) != len(atoms2):
-        raise ValueError(
+        raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
         )
 
@@ -1185,11 +1188,11 @@ def find_transition_state(
     # relaxer computes them below.
     if not use_torchsim:
         if reactant_energy is None:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Cannot extract energy from reactant atoms for pair {pair_id}"
             )
         if product_energy is None:
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Cannot extract energy from product atoms for pair {pair_id}"
             )
 
@@ -1222,7 +1225,7 @@ def find_transition_state(
     try:
         t_wall0 = perf_counter()
         if np.allclose(atoms1.get_positions(), atoms2.get_positions(), atol=1e-8):
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Endpoints are identical for pair {pair_id}; no interior TS"
             )
 
@@ -1252,7 +1255,7 @@ def find_transition_state(
         if np.allclose(
             images[0].get_positions(), images[-1].get_positions(), atol=1e-8
         ):
-            raise ValueError(
+            raise SCGOValidationError(
                 f"Endpoints are identical for pair {pair_id}; no interior TS"
             )
 
@@ -1284,7 +1287,7 @@ def find_transition_state(
             )
         else:
             if calculator is None:
-                raise ValueError("Calculator required when use_torchsim=False")
+                raise SCGOValidationError("Calculator required when use_torchsim=False")
             for img in images:
                 try:
                     img.calc = deepcopy(calculator)

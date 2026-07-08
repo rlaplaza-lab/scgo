@@ -7,6 +7,7 @@ import pytest
 from ase import Atoms
 from ase.build import fcc111
 
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.deposition import combine_slab_adsorbate
 from scgo.system_types import (
     validate_mobile_symbols_match_adsorbate_definition,
@@ -56,7 +57,7 @@ def test_validate_mobile_symbols_gas_reject_wrong_order() -> None:
         cell=[20, 20, 20],
         pbc=False,
     )
-    with pytest.raises(ValueError, match="Mobile symbols mismatch"):
+    with pytest.raises(SCGOValidationError, match="Mobile symbols mismatch"):
         validate_mobile_symbols_match_adsorbate_definition(atoms, 0, _def_pt5_oh())
 
 
@@ -108,5 +109,5 @@ def test_validate_mobile_symbols_after_slab_prefix_rejects_wrong_block_order() -
         "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
         "adsorbate_symbols": ["O", "H", "O", "H"],
     }
-    with pytest.raises(ValueError, match="Mobile symbols mismatch"):
+    with pytest.raises(SCGOValidationError, match="Mobile symbols mismatch"):
         validate_mobile_symbols_match_adsorbate_definition(combined, n_s, ad_def)

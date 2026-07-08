@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 """Implementation of the cut-and-splice paring operator."""
 import numpy as np
 from ase import Atoms
@@ -186,7 +190,7 @@ class CutAndSplicePairing(OffspringCreator):
         self.last_attempt_count = 0
         self.last_cell_attempt_count = 0
         if len(self.slab) > 0 and not uses_surface(system_type):
-            raise ValueError(
+            raise SCGOValidationError(
                 "CutAndSplicePairing received slab atoms with non-surface "
                 f"system_type={system_type!r}. Set system_type to "
                 "'surface_cluster' or 'surface_cluster_adsorbate'."
@@ -368,9 +372,9 @@ class CutAndSplicePairing(OffspringCreator):
     def cross(self, a1, a2):
         """Crosses the two atoms objects and returns one"""
         if len(a1) != len(self.slab) + self.n_top:
-            raise ValueError("Wrong size of structure to optimize")
+            raise SCGOValidationError("Wrong size of structure to optimize")
         if len(a1) != len(a2):
-            raise ValueError("The two structures do not have the same length")
+            raise SCGOValidationError("The two structures do not have the same length")
 
         N = self.n_top
 
@@ -380,11 +384,11 @@ class CutAndSplicePairing(OffspringCreator):
 
         if not np.array_equal(a1.numbers, a2.numbers):
             err = "Trying to pair two structures with different stoichiometry"
-            raise ValueError(err)
+            raise SCGOValidationError(err)
 
         if self.use_tags and not np.array_equal(a1.get_tags(), a2.get_tags()):
             err = "Trying to pair two structures with different tags"
-            raise ValueError(err)
+            raise SCGOValidationError(err)
 
         cell1 = a1.get_cell()
         cell2 = a2.get_cell()

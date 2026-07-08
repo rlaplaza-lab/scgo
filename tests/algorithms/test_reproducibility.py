@@ -14,6 +14,7 @@ from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.algorithms.ga_common import update_mutation_weights
 from scgo.database import close_data_connection
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.minima_search import run_trials, scgo
 from scgo.param_presets import get_testing_params
@@ -102,7 +103,7 @@ def test_rng_in_params_raises_error(tmp_path, rng):
     # This should now raise an error (before any I/O)
     params["optimizer_params"]["bh"]["rng"] = rng
 
-    with pytest.raises(ValueError, match=r'"rng" should not be in params'):
+    with pytest.raises(SCGOValidationError, match=r'"rng" should not be in params'):
         _run_go_campaign_compositions(
             build_one_element_compositions(element, n_atoms, n_atoms),
             "gas_cluster",
@@ -230,7 +231,7 @@ def test_update_mutation_weights_requires_explicit_rng():
         "rattle_strength": 0.5,
         "rattle_prop": 0.5,
     }
-    with pytest.raises(TypeError):
+    with pytest.raises(SCGOValidationError):
         update_mutation_weights(ops, name_map, adaptive)  # type: ignore[call-arg]
 
 
@@ -430,7 +431,7 @@ def test__run_go_campaign_compositions_smoke(tmp_path):
 def test_scgo_unknown_optimizer(tmp_path, rng):
     """Test that unknown optimizer raises error."""
     outdir = str(tmp_path / "out")
-    with pytest.raises(ValueError, match="Unknown global_optimizer"):
+    with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
         scgo(
             ["Pt", "Pt"],
             global_optimizer="unknown",
@@ -444,7 +445,7 @@ def test_scgo_unknown_optimizer(tmp_path, rng):
 def test_run_trials_missing_system_type(tmp_path, rng):
     """Test that missing system_type raises error."""
     outdir = str(tmp_path / "campaign")
-    with pytest.raises(ValueError, match="system_type must be set"):
+    with pytest.raises(SCGOValidationError, match="system_type must be set"):
         run_trials(
             ["Pt"],
             global_optimizer="bh",

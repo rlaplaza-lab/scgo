@@ -102,6 +102,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "scgo/__init__.py" = ["E402"]  # set PYTORCH_CUDA_ALLOC_CONF before torch/torch_sim and scgo imports
+"scgo/calculators/mace_helpers.py" = ["E402"]  # patch torch.load before mace/e3nn import
 # PEP 695 ``type CompositionInput = ...`` after imports confuses isort's import-block span (I001).
 "scgo/runner_api.py" = ["I001"]
 "tests/**/*" = ["B011"]

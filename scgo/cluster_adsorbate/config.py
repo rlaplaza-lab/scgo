@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
@@ -31,9 +32,9 @@ class ClusterAdsorbateConfig:
         validate_positive("height_min", self.height_min, strict=True)
         validate_positive("height_max", self.height_max, strict=True)
         if self.height_max < self.height_min:
-            raise ValueError("height_max must be >= height_min")
+            raise SCGOValidationError("height_max must be >= height_min")
         if self.max_placement_attempts < 1:
-            raise ValueError("max_placement_attempts must be positive")
+            raise SCGOValidationError("max_placement_attempts must be positive")
         validate_positive("blmin_ratio", self.blmin_ratio, strict=True)
         validate_positive("cell_margin", self.cell_margin, strict=True)
         validate_positive(

@@ -12,10 +12,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 
 from scgo.database.cache import UnifiedCache, reset_global_cache
+from scgo.exceptions import SCGOValidationError
 
 
 def test_unified_cache_max_size_validation():
-    with pytest.raises(ValueError):
+    with pytest.raises(SCGOValidationError):
         UnifiedCache(max_size=0)
 
 

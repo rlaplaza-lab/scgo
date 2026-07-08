@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from scgo.exceptions import SCGOValidationError
+
 """Implementation of a population for maintaining a GA population and
 proposing structures to pair.
 """
@@ -23,7 +25,7 @@ def _raw_score(a):
     """Return GA raw_score from SCGO metadata or ASE ``key_value_pairs``."""
     raw = get_metadata(a, "raw_score", default=None)
     if raw is None:
-        raise ValueError(
+        raise SCGOValidationError(
             "Population candidate missing raw_score in metadata or key_value_pairs",
         )
     return float(raw)

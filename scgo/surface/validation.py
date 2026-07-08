@@ -9,6 +9,9 @@ from ase import Atoms
 
 from scgo.cluster_adsorbate.validation import validate_adsorbate_fragment_integrity
 from scgo.database.metadata import get_metadata
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.initialization.geometry_helpers import (
     _find_connected_components,
     get_covalent_radius,
@@ -38,7 +41,7 @@ def validate_surface_config_slab_prefix(
     """
     n = len(config.slab)
     if len(atoms) < n:
-        raise ValueError(
+        raise SCGOValidationError(
             "Slab-first ordering: combined system must have at least "
             f"{n} atoms (slab size from surface_config.slab); got len(atoms)={len(atoms)}"
         )
@@ -46,7 +49,7 @@ def validate_surface_config_slab_prefix(
     got = atoms.get_chemical_symbols()[:n]
     if got != ref:
         ref_head, got_head = ref[:12], got[:12]
-        raise ValueError(
+        raise SCGOValidationError(
             "Slab-first ordering contract violated: the first len(slab) atoms must "
             "match surface_config.slab chemical symbols in order (same count and "
             "sequence as the template slab). "
@@ -68,11 +71,11 @@ def validate_stored_slab_adsorbate_metadata(atoms: Atoms) -> None:
         return
     n_meta = int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
     if n_meta <= 0:
-        raise ValueError(
+        raise SCGOValidationError(
             "surface_cluster structures require n_slab_atoms > 0 in metadata"
         )
     if len(atoms) < n_meta:
-        raise ValueError(
+        raise SCGOValidationError(
             "Slab metadata expects at least "
             f"{n_meta} atoms (n_slab_atoms), got len(atoms)={len(atoms)}"
         )
@@ -82,7 +85,7 @@ def validate_stored_slab_adsorbate_metadata(atoms: Atoms) -> None:
     expected = json.loads(js)
     got = atoms.get_chemical_symbols()[:n_meta]
     if list(expected) != got:
-        raise ValueError(
+        raise SCGOValidationError(
             "Loaded structure disagrees with stored slab_chemical_symbols_json prefix; "
             "atom ordering may have been scrambled when reading/writing the file."
         )
@@ -108,7 +111,7 @@ def validate_stored_mobile_partition_metadata(atoms: Atoms) -> None:
     )
     mobile = atoms.get_chemical_symbols()[n_slab:]
     if len(mobile) < n_core + n_ads:
-        raise ValueError(
+        raise SCGOValidationError(
             "Mobile region shorter than n_core_atoms + n_adsorbate_fragment_atoms: "
             f"len(mobile)={len(mobile)}, n_core={n_core}, n_ads={n_ads}"
         )
@@ -119,14 +122,14 @@ def validate_stored_mobile_partition_metadata(atoms: Atoms) -> None:
     core_exp = json.loads(core_js)
     ads_exp = json.loads(ads_js)
     if mobile[:n_core] != list(core_exp):
-        raise ValueError(
+        raise SCGOValidationError(
             "Loaded structure disagrees with stored core_chemical_symbols_json for the "
             f"mobile region (after slab). Expected core prefix (len {n_core}): "
             f"{core_exp[:12]}{'...' if len(core_exp) > 12 else ''}; "
             f"got: {mobile[: min(12, n_core)]!r}."
         )
     if mobile[n_core : n_core + n_ads] != list(ads_exp):
-        raise ValueError(
+        raise SCGOValidationError(
             "Loaded structure disagrees with stored "
             "adsorbate_fragment_chemical_symbols_json for the mobile region."
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from functools import cache
 from typing import Any
 
 from scgo.constants import (
@@ -12,8 +13,17 @@ from scgo.constants import (
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_PAIR_COR_MAX,
 )
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.system_types import SYSTEM_TYPE_POLICIES, SystemType, get_system_policy
+from scgo.system_types import (
+    SYSTEM_TYPE_POLICIES,
+    GLOptimizerParams,
+    SystemType,
+    get_system_policy,
+)
 
 # Available MACE model names for use in calculator_kwargs["model_name"]
 AVAILABLE_MACE_MODELS = [
@@ -101,7 +111,7 @@ def _assert_ts_defaults_match_system_policies() -> None:
     missing = set(SYSTEM_TYPE_POLICIES) - set(TS_DEFAULTS_BY_SYSTEM_TYPE)
     extra = set(TS_DEFAULTS_BY_SYSTEM_TYPE) - set(SYSTEM_TYPE_POLICIES)
     if missing or extra:
-        raise RuntimeError(
+        raise SCGORuntimeError(
             "TS_DEFAULTS_BY_SYSTEM_TYPE keys must match SYSTEM_TYPE_POLICIES "
             f"(missing={sorted(missing)!r}, extra={sorted(extra)!r})."
         )
@@ -109,20 +119,20 @@ def _assert_ts_defaults_match_system_policies() -> None:
         policy = SYSTEM_TYPE_POLICIES[st]
         expected_align = not policy.neb_disable_alignment
         if defaults["neb_align_endpoints"] is not expected_align:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]['neb_align_endpoints']="
                 f"{defaults['neb_align_endpoints']!r} disagrees with "
                 f"SystemPolicy.neb_disable_alignment={policy.neb_disable_alignment!r}."
             )
         if defaults["neb_interpolation_mic"] != policy.neb_force_mic:
-            raise RuntimeError(
+            raise SCGORuntimeError(
                 f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]['neb_interpolation_mic']="
                 f"{defaults['neb_interpolation_mic']!r} disagrees with "
                 f"SystemPolicy.neb_force_mic={policy.neb_force_mic!r}."
             )
         for key in ("neb_surface_cell_remap", "neb_surface_lattice_rotation"):
             if defaults.get(key, False) != getattr(policy, key):
-                raise RuntimeError(
+                raise SCGORuntimeError(
                     f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}][{key!r}]="
                     f"{defaults.get(key)!r} disagrees with "
                     f"SystemPolicy.{key}={getattr(policy, key)!r}."
@@ -130,7 +140,90 @@ def _assert_ts_defaults_match_system_policies() -> None:
 
 
 _assert_ts_defaults_match_system_policies()
-_DEFAULT_PARAMS_TEMPLATE: dict[str, Any] | None = None
+
+
+@cache
+def _get_default_params_template() -> GLOptimizerParams:
+    """Return the default SCGO parameter dictionary template.
+
+    This is a cached function to avoid recreating the large dict on every call.
+    Thread-safe and immutable pattern.
+    """
+    return {
+        "validate_with_hessian": False,
+        "calculator": "MACE",
+        "seed": None,  # Will be overridden by function parameter
+        "calculator_kwargs": {"model_name": "mace_matpes_0"},
+        "fmax_threshold": 0.05,
+        "check_hessian": True,
+        "imag_freq_threshold": 50.0,
+        "tag_final_minima": True,
+        "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
+        "allow_cluster_fragmentation": False,
+        "allow_adsorbate_surface_detachment": False,
+        "enforce_adsorbate_subgraph_integrity": True,
+        "freeze_adsorbate_internal_geometry": False,
+        "fitness_strategy": "low_energy",  # Default: minimize energy
+        "diversity_reference_db": None,  # For diversity strategy
+        "diversity_max_references": 100,  # Performance limit
+        "diversity_update_interval": 5,  # Update references every N iterations/generations
+        "optimizer_params": {
+            "simple": {
+                "optimizer": "FIRE",
+                "fmax": 0.05,
+                "niter": 1,
+                "niter_local_relaxation": "auto",
+                "system_type": "gas_cluster",
+            },
+            "bh": {
+                "optimizer": "FIRE",
+                "temperature": 500 * 8.617e-5,  # 500K in eV
+                "fmax": 0.05,
+                "niter": "auto",
+                "dr": 0.2,
+                "move_fraction": 0.3,
+                "niter_local_relaxation": "auto",
+                "move_strategy": "random",
+                "deduplicate": True,
+                "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+                "comparator_tol": DEFAULT_COMPARATOR_TOL,
+                "comparator_pair_cor_max": DEFAULT_PAIR_COR_MAX,
+                "comparator_n_top": None,
+                "fitness_strategy": None,  # None = inherit from top-level
+                "diversity_reference_db": None,  # For diversity strategy
+                "diversity_max_references": 100,  # Performance limit
+                "diversity_update_interval": 5,  # Update references every N iterations
+                "system_type": "gas_cluster",
+            },
+            "ga": {
+                "optimizer": "FIRE",
+                "population_size": "auto",
+                "niter": "auto",
+                "niter_local_relaxation": "auto",
+                "mutation_probability": 0.4,
+                "offspring_fraction": 0.5,
+                "fmax": 0.05,
+                "vacuum": 10.0,
+                "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+                "use_adaptive_mutations": True,
+                "stagnation_trigger": 4,
+                "stagnation_full_trigger": 8,
+                "recovery_window": 2,
+                "aggressive_burst_multiplier": 1.8,
+                "max_mutation_probability": 0.65,
+                "early_stopping_niter": 10,  # Stop if no improvement after N generations
+                "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
+                "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
+                "batch_size": None,
+                "relaxer": None,
+                "fitness_strategy": None,  # None = inherit from top-level
+                "diversity_reference_db": None,  # For diversity strategy
+                "diversity_max_references": 100,  # Performance limit
+                "diversity_update_interval": 5,  # Update references every N generations
+                "system_type": "gas_cluster",
+            },
+        },
+    }
 
 
 def get_ts_defaults(system_type: SystemType) -> dict[str, Any]:
@@ -140,104 +233,27 @@ def get_ts_defaults(system_type: SystemType) -> dict[str, Any]:
     :func:`scgo.utils.ts_runner_kwargs.coerce_ts_params_to_runner_kwargs`.
     """
     if system_type not in TS_DEFAULTS_BY_SYSTEM_TYPE:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unsupported system_type={system_type!r}; expected one of "
             f"{sorted(TS_DEFAULTS_BY_SYSTEM_TYPE)!r}."
         )
     return dict(TS_DEFAULTS_BY_SYSTEM_TYPE[system_type])
 
 
-def get_default_params() -> dict[str, Any]:
+def get_default_params() -> GLOptimizerParams:
     """Return the default SCGO parameter dictionary for global optimization.
 
     Suitable for ``run_go`` / ``run_go_ts`` as ``params`` / ``go_params``; pass
     as-is or override keys (omitted keys are filled via
     :func:`scgo.utils.run_helpers.initialize_params`).
     """
-    global _DEFAULT_PARAMS_TEMPLATE
-    if _DEFAULT_PARAMS_TEMPLATE is None:
-        _DEFAULT_PARAMS_TEMPLATE = {
-            "validate_with_hessian": False,
-            "calculator": "MACE",
-            "seed": None,  # Will be overridden by function parameter
-            "calculator_kwargs": {"model_name": "mace_matpes_0"},
-            "fmax_threshold": 0.05,
-            "check_hessian": True,
-            "imag_freq_threshold": 50.0,
-            "tag_final_minima": True,
-            "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
-            "allow_cluster_fragmentation": False,
-            "allow_adsorbate_surface_detachment": False,
-            "enforce_adsorbate_subgraph_integrity": True,
-            "freeze_adsorbate_internal_geometry": False,
-            "fitness_strategy": "low_energy",  # Default: minimize energy
-            "diversity_reference_db": None,  # For diversity strategy
-            "diversity_max_references": 100,  # Performance limit
-            "diversity_update_interval": 5,  # Update references every N iterations/generations
-            "optimizer_params": {
-                "simple": {
-                    "optimizer": "FIRE",
-                    "fmax": 0.05,
-                    "niter": 1,
-                    "niter_local_relaxation": "auto",
-                    "system_type": "gas_cluster",
-                },
-                "bh": {
-                    "optimizer": "FIRE",
-                    "temperature": 500 * 8.617e-5,  # 500K in eV
-                    "fmax": 0.05,
-                    "niter": "auto",
-                    "dr": 0.2,
-                    "move_fraction": 0.3,
-                    "niter_local_relaxation": "auto",
-                    "move_strategy": "random",
-                    "deduplicate": True,
-                    "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
-                    "comparator_tol": DEFAULT_COMPARATOR_TOL,
-                    "comparator_pair_cor_max": DEFAULT_PAIR_COR_MAX,
-                    "comparator_n_top": None,
-                    "fitness_strategy": None,  # None = inherit from top-level
-                    "diversity_reference_db": None,  # For diversity strategy
-                    "diversity_max_references": 100,  # Performance limit
-                    "diversity_update_interval": 5,  # Update references every N iterations
-                    "system_type": "gas_cluster",
-                },
-                "ga": {
-                    "optimizer": "FIRE",
-                    "population_size": "auto",
-                    "niter": "auto",
-                    "niter_local_relaxation": "auto",
-                    "mutation_probability": 0.4,
-                    "offspring_fraction": 0.5,
-                    "fmax": 0.05,
-                    "vacuum": 10.0,
-                    "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
-                    "use_adaptive_mutations": True,
-                    "stagnation_trigger": 4,
-                    "stagnation_full_trigger": 8,
-                    "recovery_window": 2,
-                    "aggressive_burst_multiplier": 1.8,
-                    "max_mutation_probability": 0.65,
-                    "early_stopping_niter": 10,  # Stop if no improvement after N generations
-                    "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
-                    "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
-                    "batch_size": None,
-                    "relaxer": None,
-                    "fitness_strategy": None,  # None = inherit from top-level
-                    "diversity_reference_db": None,  # For diversity strategy
-                    "diversity_max_references": 100,  # Performance limit
-                    "diversity_update_interval": 5,  # Update references every N generations
-                    "system_type": "gas_cluster",
-                },
-            },
-        }
-    return copy.deepcopy(_DEFAULT_PARAMS_TEMPLATE)
+    return copy.deepcopy(_get_default_params_template())
 
 
 def get_minimal_ga_params(
     seed: int | None = None,
     model_name: str | None = None,
-) -> dict[str, Any]:
+) -> GLOptimizerParams:
     """Return compact GA-focused parameters derived from defaults.
 
     Uses sequential population init and offspring work (``n_jobs_*`` set to 1) so
@@ -270,7 +286,7 @@ def get_minimal_ga_params(
     return params
 
 
-def get_testing_params() -> dict[str, Any]:
+def get_testing_params() -> GLOptimizerParams:
     """Return fast, low-cost parameters for tests (EMT, fewer iterations).
 
     Complete preset based on :func:`get_default_params`; pass as-is to ``run_*``
@@ -304,7 +320,7 @@ def get_testing_params() -> dict[str, Any]:
     return params
 
 
-def _get_base_ga_benchmark_params(seed: int) -> dict[str, Any]:
+def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
     """Return GA benchmark parameters derived from defaults."""
     params = get_default_params()
     params["seed"] = seed
@@ -354,7 +370,7 @@ def get_uma_ga_benchmark_params(
     *,
     model_name: str = "uma-s-1p2",
     uma_task: str = "oc25",
-) -> dict[str, Any]:
+) -> GLOptimizerParams:
     """GA benchmark parameters matching :func:`_get_base_ga_benchmark_params` but with UMA.
 
     Tuned for regression and profiling alongside the MACE TorchSim benchmark preset
@@ -381,7 +397,7 @@ def get_uma_ga_benchmark_params(
     return params
 
 
-def get_default_uma_params() -> dict[str, Any]:
+def get_default_uma_params() -> GLOptimizerParams:
     """Default SCGO parameters using the UMA calculator (fairchem-core).
 
     Pass as-is to ``run_*`` or override keys. For typical campaigns with default
@@ -416,7 +432,7 @@ def get_torchsim_ga_params(
     surface_config: SurfaceSystemConfig | None = None,
     seed: int | None = None,
     model_name: str | None = None,
-) -> dict[str, Any]:
+) -> GLOptimizerParams:
     """Return GO params using TorchSim relaxer (requires ``scgo[mace]``).
 
     Mirrors :func:`get_ts_search_params` call style by requiring ``system_type``
@@ -432,7 +448,7 @@ def get_torchsim_ga_params(
 
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
-        raise ValueError(
+        raise SCGOValidationError(
             f"system_type={system_type!r} requires surface_config to be provided "
             "as a SurfaceSystemConfig when building go_params."
         )
@@ -476,7 +492,7 @@ def get_diversity_params(
     reference_db_glob: str = "**/*.db",
     max_references: int = 100,
     update_interval: int = 5,
-) -> dict[str, Any]:
+) -> GLOptimizerParams:
     """Return params for diversity-based optimization (reference DB, intervals).
 
     Pass as-is to ``run_*`` or override keys. ``reference_db_glob`` must match at
@@ -495,7 +511,7 @@ def get_diversity_params(
     return params
 
 
-def get_high_energy_params() -> dict[str, Any]:
+def get_high_energy_params() -> GLOptimizerParams:
     """Return params that bias exploration toward high-energy structures.
 
     Pass as-is to ``run_*`` or override keys. Sets top-level ``fitness_strategy``
@@ -547,7 +563,7 @@ def get_ts_search_params(
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
-        raise ValueError(
+        raise SCGOValidationError(
             f"system_type={system_type!r} requires surface_config to be provided "
             "as a SurfaceSystemConfig when building ts_params."
         )

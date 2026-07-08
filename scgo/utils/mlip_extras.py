@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import os
 
+from scgo.exceptions import SCGORuntimeError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,4 +40,4 @@ def ensure_mace_uma_not_both_installed() -> None:
             "in separate environments to avoid dependency conflicts."
         )
         logger.warning(msg)
-        raise RuntimeError(msg)
+        raise SCGORuntimeError(msg)

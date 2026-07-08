@@ -4,6 +4,7 @@ import pytest
 from ase import Atoms
 from ase.cluster import Icosahedron
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
@@ -109,7 +110,7 @@ class TestRemoveAtomsFromVertices:
         """Removing >= len(cluster) raises ValueError."""
         base = Icosahedron("Pt", 2)
         base.center()
-        with pytest.raises(ValueError, match="Cannot remove"):
+        with pytest.raises(SCGOValidationError, match="Cannot remove"):
             remove_atoms_from_vertices(
                 base,
                 13,

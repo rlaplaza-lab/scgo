@@ -11,6 +11,10 @@ from typing import Any
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 
 def validate_atoms(atoms: Atoms) -> None:
     """Validate that atoms is a valid ASE Atoms object.
@@ -22,7 +26,7 @@ def validate_atoms(atoms: Atoms) -> None:
         TypeError: If atoms is not an Atoms instance.
     """
     if not isinstance(atoms, Atoms):
-        raise TypeError("Input 'atoms' must be an ASE Atoms object.")
+        raise SCGOValidationError("Input 'atoms' must be an ASE Atoms object.")
 
 
 def validate_calculator_attached(
@@ -44,7 +48,7 @@ def validate_calculator_attached(
     """
     calculator = atoms.calc
     if calculator is None:
-        raise ValueError(
+        raise SCGOValidationError(
             f"The input 'atoms' object for {algorithm_name} must have a calculator attached.",
         )
     return calculator
@@ -62,9 +66,9 @@ def validate_positive(name: str, value: float, strict: bool = False) -> None:
         ValueError: If value is not positive.
     """
     if strict and value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
+        raise SCGOValidationError(f"{name} must be positive, got {value}")
     elif not strict and value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
+        raise SCGOValidationError(f"{name} must be non-negative, got {value}")
 
 
 def validate_in_range(
@@ -85,7 +89,7 @@ def validate_in_range(
         ValueError: If value is outside the range.
     """
     if not (min_val <= value <= max_val):
-        raise ValueError(
+        raise SCGOValidationError(
             f"{name} must be between {min_val} and {max_val}, got {value}",
         )
 
@@ -105,11 +109,11 @@ def validate_integer(name: str, value: Any, strict: bool = True) -> None:
     if isinstance(value, int):
         return
     if strict:
-        raise TypeError(
+        raise SCGOValidationError(
             f"Input '{name}' must be an integer, got {type(value).__name__}"
         )
     if not (isinstance(value, float) and value.is_integer()):
-        raise TypeError(
+        raise SCGOValidationError(
             f"Input '{name}' must be an integer, got {type(value).__name__}"
         )
 
@@ -131,7 +135,7 @@ def validate_in_choices(
     """
     if value not in choices:
         choices_str = ", ".join(f"'{c}'" for c in choices)
-        raise ValueError(
+        raise SCGOValidationError(
             f"{name} must be one of {choices_str}, got '{value}'",
         )
 
@@ -156,20 +160,22 @@ def validate_composition(
             non-string elements.
     """
     if composition is None:
-        raise TypeError("composition cannot be None")
+        raise SCGOValidationError("composition cannot be None")
 
     valid_types = (list, tuple) if allow_tuple else (list,)
     if not isinstance(composition, valid_types):
         type_names = "list or tuple" if allow_tuple else "list"
-        raise TypeError(
+        raise SCGOValidationError(
             f"composition must be a {type_names} of atomic symbols, got {type(composition).__name__}",
         )
 
     if not allow_empty and not composition:
-        raise ValueError(
+        raise SCGOValidationError(
             "Composition cannot be empty. "
             "Provide a list of atomic symbols, e.g., ['Pt', 'Pt', 'Pt'] for Pt₃.",
         )
 
     if not all(isinstance(s, str) for s in composition):
-        raise TypeError("composition must contain only string element symbols")
+        raise SCGOValidationError(
+            "composition must contain only string element symbols"
+        )

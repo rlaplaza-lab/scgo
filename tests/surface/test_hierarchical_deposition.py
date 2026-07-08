@@ -9,6 +9,7 @@ from ase_ga.utilities import closest_distances_generator
 
 from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
+from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig, describe_surface_config
 from scgo.surface.deposition import create_deposited_cluster
 from scgo.surface.fragment_templates import build_default_fragment_template
@@ -55,7 +56,7 @@ def test_validate_partition_core_adsorbate():
 
 
 def test_validate_rejects_bad_partition():
-    with pytest.raises(ValueError, match="composition|partition|adsorbate"):
+    with pytest.raises(SCGOValidationError, match="composition|partition|adsorbate"):
         validate_adsorbate_definition(
             system_type="surface_cluster_adsorbate",
             composition=["Pt", "Pt", "Pt", "O"],

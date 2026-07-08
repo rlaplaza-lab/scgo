@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 from ase import Atoms
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.pbc import normalize_slab_pbc
 from scgo.utils.logging import get_logger
@@ -68,7 +71,7 @@ class SurfaceSystemConfig:
         object.__setattr__(self, "slab", self.slab.copy())
         slab = self.slab
         if self.surface_normal_axis not in (0, 1, 2):
-            raise ValueError("surface_normal_axis must be 0, 1, or 2")
+            raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
         validate_positive(
             "adsorption_height_min", self.adsorption_height_min, strict=True
         )
@@ -81,15 +84,15 @@ class SurfaceSystemConfig:
             strict=True,
         )
         if self.adsorption_height_min > self.adsorption_height_max:
-            raise ValueError(
+            raise SCGOValidationError(
                 "adsorption_height_min must be <= adsorption_height_max, "
                 f"got {self.adsorption_height_min} and {self.adsorption_height_max}"
             )
         if len(slab) == 0:
-            raise ValueError("slab must contain at least one atom")
+            raise SCGOValidationError("slab must contain at least one atom")
 
         if not any(slab.pbc):
-            raise ValueError("Slab must have at least one periodic dimension.")
+            raise SCGOValidationError("Slab must have at least one periodic dimension.")
 
         normalize_slab_pbc(slab, surface_normal_axis=self.surface_normal_axis)
 
@@ -104,21 +107,21 @@ class SurfaceSystemConfig:
             self.n_fix_bottom_slab_layers is not None
             and self.n_fix_bottom_slab_layers < 1
         ):
-            raise ValueError("n_fix_bottom_slab_layers must be >= 1 when set")
+            raise SCGOValidationError("n_fix_bottom_slab_layers must be >= 1 when set")
         if (
             self.n_relax_top_slab_layers is not None
             and self.n_relax_top_slab_layers < 1
         ):
-            raise ValueError("n_relax_top_slab_layers must be >= 1 when set")
+            raise SCGOValidationError("n_relax_top_slab_layers must be >= 1 when set")
         if self.fix_all_slab_atoms and self.n_relax_top_slab_layers is not None:
-            raise ValueError(
+            raise SCGOValidationError(
                 "n_relax_top_slab_layers is incompatible with fix_all_slab_atoms=True"
             )
         if (
             self.n_fix_bottom_slab_layers is not None
             and self.n_relax_top_slab_layers is not None
         ):
-            raise ValueError(
+            raise SCGOValidationError(
                 "set at most one of n_fix_bottom_slab_layers and "
                 "n_relax_top_slab_layers"
             )

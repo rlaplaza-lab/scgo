@@ -5,6 +5,10 @@ from __future__ import annotations
 import numpy as np
 from numpy.random import SeedSequence
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 
 def ensure_rng(seed: int | None = None) -> np.random.Generator:
     """Convert optional seed to Generator at API boundary.
@@ -58,7 +62,9 @@ def ensure_rng_or_create(rng: np.random.Generator | None) -> np.random.Generator
         return np.random.default_rng()
     if isinstance(rng, np.random.Generator):
         return rng
-    raise TypeError("rng must be an instance of numpy.random.Generator or None")
+    raise SCGOValidationError(
+        "rng must be an instance of numpy.random.Generator or None"
+    )
 
 
 def get_child_rng_or_none(

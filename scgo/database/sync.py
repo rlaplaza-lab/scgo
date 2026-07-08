@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from scgo.exceptions import SCGORuntimeError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -150,7 +151,7 @@ def retry_on_lock(
                                 f"{operation_name}: database locked after {effective_config.max_retries} attempts"
                             )
                         raise
-            raise RuntimeError(f"{operation_name} failed unexpectedly")
+            raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
 
         return wrapper  # type: ignore[return-value]
 

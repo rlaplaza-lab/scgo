@@ -22,6 +22,11 @@ SCGO supports four explicit system types (``SystemType`` is a ``Literal`` alias)
 See :class:`~scgo.system_types.SystemPolicy` and
 :class:`~scgo.system_types.AdsorbateDefinition` in the module reference above.
 
+Preset dicts returned by :func:`~scgo.param_presets.get_default_params` and
+:func:`~scgo.param_presets.get_ts_search_params` are typed as
+:class:`~scgo.system_types.GLOptimizerParams` and
+:class:`~scgo.system_types.TSParams` respectively (still plain dicts at runtime).
+
 NEB policy flags (via :class:`~scgo.system_types.SystemPolicy`)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

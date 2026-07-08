@@ -6,6 +6,7 @@ import logging
 
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import (
     get_default_params,
     get_diversity_params,
@@ -100,7 +101,7 @@ def test_initialize_params_deep_merge_user_overrides():
 def test_validate_algorithm_params_raises_on_unexpected_keys():
     """validate_algorithm_params should fail on unexpected keys."""
     algo_params = {"niter": 10, "unknown_key": 123}
-    with pytest.raises(ValueError, match="Unexpected BH algorithm parameters"):
+    with pytest.raises(SCGOValidationError, match="Unexpected BH algorithm parameters"):
         validate_algorithm_params(algo_params, chosen_go="bh", verbosity=1)
 
 
@@ -478,7 +479,9 @@ class TestResolveDiversityParams:
         algo_params = {}
         params = {}
 
-        with pytest.raises(ValueError, match="diversity_reference_db is required"):
+        with pytest.raises(
+            SCGOValidationError, match="diversity_reference_db is required"
+        ):
             resolve_diversity_params(algo_params, params, "ga")
 
     def test_resolve_diversity_params_error_message_includes_algorithm(self):
@@ -486,7 +489,7 @@ class TestResolveDiversityParams:
         algo_params = {}
         params = {}
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SCGOValidationError) as exc_info:
             resolve_diversity_params(algo_params, params, "bh")
 
         error_msg = str(exc_info.value)
@@ -584,7 +587,7 @@ class TestGetCalculatorClass:
 
     def test_get_calculator_class_unknown_raises(self):
         """Test get_calculator_class raises error for unknown calculator."""
-        with pytest.raises(ValueError, match="Unknown calculator"):
+        with pytest.raises(SCGOValidationError, match="Unknown calculator"):
             get_calculator_class("UNKNOWN_CALC")
 
     def test_get_calculator_class_unavailable_raises(self, monkeypatch):
@@ -593,5 +596,5 @@ class TestGetCalculatorClass:
             "scgo.utils.run_helpers._CALCULATORS_CACHE",
             {"EMT": _get_calculators()["EMT"], "TEST": None},
         )
-        with pytest.raises(ValueError, match="not available"):
+        with pytest.raises(SCGOValidationError, match="not available"):
             get_calculator_class("TEST")

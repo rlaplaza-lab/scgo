@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ase.data import atomic_numbers, chemical_symbols, covalent_radii, vdw_radii
 
+from scgo.exceptions import (
+    SCGOValidationError,
+)
+
 if TYPE_CHECKING:
     from ase import Atoms
 
@@ -96,7 +100,7 @@ def _resolve_ase_radius(
     try:
         z = atomic_numbers[symbol]
     except KeyError as exc:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unknown element symbol: {symbol}. Could not find {kind} radius."
         ) from exc
 
@@ -123,7 +127,7 @@ def _resolve_ase_radius(
         )
         return fallback
 
-    raise ValueError(
+    raise SCGOValidationError(
         f"Could not resolve {kind} radius for {symbol}: ASE value is invalid "
         "and interpolation/extrapolation failed."
     )
@@ -141,7 +145,7 @@ def get_vdw_radius(symbol: str) -> float:
     try:
         z = atomic_numbers[symbol]
     except KeyError as exc:
-        raise ValueError(
+        raise SCGOValidationError(
             f"Unknown element symbol: {symbol}. Could not find vdw radius."
         ) from exc
 

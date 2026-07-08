@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from scgo import parse_composition_arg
+from scgo.exceptions import SCGOValidationError
 
 
 @pytest.mark.parametrize(
@@ -50,7 +51,7 @@ def test_parse_composition_arg_valid(formula: str, expected: list[str]) -> None:
     ],
 )
 def test_parse_composition_arg_rejects_invalid(formula: str) -> None:
-    with pytest.raises(ValueError, match="Unable to parse composition string"):
+    with pytest.raises(SCGOValidationError, match="Unable to parse composition string"):
         parse_composition_arg(formula)
 
 
@@ -70,5 +71,5 @@ def test_parse_composition_arg_rejects_invalid(formula: str) -> None:
 def test_parse_composition_arg_error_detail(
     formula: str, message_fragment: str
 ) -> None:
-    with pytest.raises(ValueError, match=message_fragment):
+    with pytest.raises(SCGOValidationError, match=message_fragment):
         parse_composition_arg(formula)
