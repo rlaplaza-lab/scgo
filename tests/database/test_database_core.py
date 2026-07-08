@@ -596,6 +596,41 @@ class TestFilesystemSync:
 
         assert attempts["n"] == 3
 
+    def test_database_retry_skips_non_retryable_operational_error(self):
+        """database_retry must not mask schema or SQL logic failures."""
+        attempts = {"n": 0}
+
+        def bad_query():
+            attempts["n"] += 1
+            raise sqlite3.OperationalError("no such table: systems")
+
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            database_retry(
+                bad_query,
+                config=RetryConfig(max_retries=5, initial_delay=0.01),
+            )
+
+        assert attempts["n"] == 1
+
+    def test_database_retry_retries_transient_lock(self, monkeypatch):
+        """database_retry retries lock errors that clear on a later attempt."""
+        attempts = {"n": 0}
+
+        def flaky_read():
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise sqlite3.OperationalError("database is locked")
+            return "ok"
+
+        monkeypatch.setattr("scgo.database.sync.time.sleep", lambda _: None)
+
+        result = database_retry(
+            flaky_read,
+            config=RetryConfig(max_retries=5, initial_delay=0.01),
+        )
+        assert result == "ok"
+        assert attempts["n"] == 3
+
     def test_retry_with_backoff(self):
         attempts = []
 

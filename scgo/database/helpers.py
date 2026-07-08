@@ -21,6 +21,7 @@ from ase_ga.data import DataConnection
 
 from scgo.constants import PENALTY_ENERGY
 from scgo.database.connection import (
+    _create_data_connection_with_retry,
     _run_sqlite,
     apply_sqlite_pragmas,
     close_data_connection,
@@ -37,12 +38,7 @@ from scgo.database.schema import (
     stamp_scgo_database,
 )
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
-from scgo.database.sync import (
-    PRESET_AGGRESSIVE,
-    database_retry,
-    retry_on_lock,
-    retry_with_backoff,
-)
+from scgo.database.sync import database_retry, retry_with_backoff
 from scgo.utils.helpers import (
     ensure_directory_exists,
     ensure_final_id,
@@ -227,17 +223,7 @@ def setup_database(
             prep_db.vacuum()
 
     try:
-
-        def _open_connection_impl():
-            return DataConnection(db_file)
-
-        _open_connection = retry_on_lock(
-            config=PRESET_AGGRESSIVE,
-            operation_name="open DataConnection",
-            log_retries=True,
-        )(_open_connection_impl)
-
-        da = _open_connection()
+        da = _create_data_connection_with_retry(db_file)
 
         configure_data_connection_settings(
             da,

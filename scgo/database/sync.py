@@ -49,17 +49,54 @@ def database_retry(
     operation_name: str = "database operation",
     log_level: str = "debug",
 ) -> Any:
-    """Run ``operation`` with :func:`retry_with_backoff` and SQLite-friendly defaults."""
+    """Run ``operation`` with exponential backoff on transient SQLite / I/O errors.
+
+    Only :exc:`~sqlite3.OperationalError` messages classified by
+    :func:`is_retryable_error` are retried; other operational failures propagate
+    immediately so schema or logic bugs are not masked by backoff.
+    """
     effective_config = config or PRESET_DEFAULT
-    return retry_with_backoff(
-        operation=operation,
-        max_retries=effective_config.max_retries,
-        initial_delay=effective_config.initial_delay,
-        backoff_factor=effective_config.backoff_factor,
-        exception_types=HPC_DATABASE_EXCEPTIONS,
-        operation_name=operation_name,
-        log_level=log_level,
-    )
+    max_retries = effective_config.max_retries
+
+    log_methods = {
+        "debug": logger.debug,
+        "info": logger.info,
+        "warning": logger.warning,
+        "error": logger.error,
+    }
+    log_func = log_methods.get(log_level.lower(), logger.debug)
+
+    for attempt in range(max_retries):
+        try:
+            return operation()
+        except sqlite3.OperationalError as e:
+            if not is_retryable_error(e):
+                raise
+            if attempt < max_retries - 1:
+                delay = effective_config.get_delay(attempt)
+                log_func(
+                    f"{operation_name}: failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                    f"Retrying in {delay:.2f}s..."
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    f"{operation_name}: failed after {max_retries} attempts: {e}"
+                )
+                raise
+        except OSError as e:
+            if attempt < max_retries - 1:
+                delay = effective_config.get_delay(attempt)
+                log_func(
+                    f"{operation_name}: failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                    f"Retrying in {delay:.2f}s..."
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    f"{operation_name}: failed after {max_retries} attempts: {e}"
+                )
+                raise
 
 
 def is_retryable_error(error: Exception) -> bool:

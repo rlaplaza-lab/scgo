@@ -135,6 +135,17 @@ def apply_sqlite_pragmas(
         _apply_pragma(conn, f"PRAGMA cache_size=-{cache_size_mb * 1024};")
 
 
+def _create_data_connection(db_path: str) -> DataConnection:
+    """Construct an ASE :class:`~ase_ga.data.DataConnection` without opening it."""
+    return DataConnection(db_path)
+
+
+_create_data_connection_with_retry = retry_on_lock(
+    config=PRESET_AGGRESSIVE,
+    operation_name="open DataConnection",
+)(_create_data_connection)
+
+
 def _open_data_connection(
     db_path: str,
     *,
