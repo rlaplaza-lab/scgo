@@ -1629,8 +1629,7 @@ def _generate_template_with_atom_adjustment(
     base_cluster: Atoms | None = gen_func(base_composition, base_n_atoms, rng)
     if base_cluster is None:
         logger.debug(
-            "Template adjustment skipped: base generator returned None "
-            "(%s, n=%d)",
+            "Template adjustment skipped: base generator returned None (%s, n=%d)",
             base_template_type,
             base_n_atoms,
         )
@@ -1678,8 +1677,7 @@ def _generate_template_with_atom_adjustment(
                 if attempt < max_removal_attempts - 1:
                     continue
                 logger.debug(
-                    "Template shrink failed after %d removal attempts "
-                    "(%s: %d -> %d)",
+                    "Template shrink failed after %d removal attempts (%s: %d -> %d)",
                     max_removal_attempts,
                     base_template_type,
                     base_n_atoms,

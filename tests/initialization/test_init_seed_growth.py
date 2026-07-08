@@ -638,7 +638,9 @@ class TestSeedGrowthFallbackChain:
         from scgo.initialization import initializers as init_mod
 
         seed_a = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
-        seed_b = Atoms("Pt3", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.2, 0.0]])
+        seed_b = Atoms(
+            "Pt3", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.2, 0.0]]
+        )
         candidates_by_formula = {
             "Pt2": [(0.0, seed_a)],
             "Pt3": [(0.0, seed_b)],
@@ -646,7 +648,14 @@ class TestSeedGrowthFallbackChain:
         valid_combinations = [("Pt2", "Pt3")]
         call_sizes: list[int] = []
 
-        def fake_sample(candidates, strategy, tried_positions, existing_geometries, rng, max_attempts=10):
+        def fake_sample(
+            candidates,
+            strategy,
+            tried_positions,
+            existing_geometries,
+            rng,
+            max_attempts=10,
+        ):
             # First formula succeeds; second fails → previously caused a partial combine.
             if len(candidates) == 1 and len(candidates[0][1]) == 2:
                 return seed_a.copy(), None
@@ -664,7 +673,9 @@ class TestSeedGrowthFallbackChain:
 
         monkeypatch.setattr(init_mod, "_sample_suitable_seed", fake_sample)
         monkeypatch.setattr(init_mod, "combine_and_grow", fake_combine_and_grow)
-        monkeypatch.setattr(init_mod, "_grow_from_random_seed", fake_grow_from_random_seed)
+        monkeypatch.setattr(
+            init_mod, "_grow_from_random_seed", fake_grow_from_random_seed
+        )
 
         out = init_mod._try_seed_growth(
             composition=["Pt"] * 5,
@@ -682,7 +693,9 @@ class TestSeedGrowthFallbackChain:
         assert out is not None
         assert len(out) == 5
 
-    def test_db_combo_exhaustion_tries_random_seed_growth(self, monkeypatch, rng, caplog):
+    def test_db_combo_exhaustion_tries_random_seed_growth(
+        self, monkeypatch, rng, caplog
+    ):
         """When DB combos exist but all fail, still attempt random-seed growth."""
         import logging
 
@@ -705,7 +718,9 @@ class TestSeedGrowthFallbackChain:
             random_calls["n"] += 1
             return Atoms("Pt5", positions=[[i * 2.5, 0.0, 0.0] for i in range(5)])
 
-        monkeypatch.setattr(init_mod, "_grow_from_random_seed", fake_grow_from_random_seed)
+        monkeypatch.setattr(
+            init_mod, "_grow_from_random_seed", fake_grow_from_random_seed
+        )
 
         caplog.set_level(logging.INFO)
         out = init_mod._try_seed_growth(

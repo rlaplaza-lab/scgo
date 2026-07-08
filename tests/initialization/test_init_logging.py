@@ -142,7 +142,9 @@ def test_all_strategies_none_emits_warning_before_raise(caplog):
     def always_none():
         return None
 
-    with pytest.raises(RuntimeError, match="All initialization strategies returned None"):
+    with pytest.raises(
+        RuntimeError, match="All initialization strategies returned None"
+    ):
         _try_strategies_in_order(
             [("primary", always_none), ("fallback", always_none)],
             composition=["Pt", "Pt"],

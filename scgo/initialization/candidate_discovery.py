@@ -135,16 +135,27 @@ def _could_path_contain_relevant_candidates(
     path: str, target_counts: Counter[str]
 ) -> bool:
     """Check if a path might contain candidates that are subsets of target."""
-    path_comp = _parse_composition_from_path(path)
-    if path_comp is None:
+    is_relevant, is_parseable = _path_relevance_status(path, target_counts)
+    if not is_parseable:
         logger.debug(
             "Cannot parse composition from path %s; skipping candidate discovery scan",
             path,
         )
         return False
+    return is_relevant
+
+
+def _path_relevance_status(
+    path: str,
+    target_counts: Counter[str],
+) -> tuple[bool, bool]:
+    """Return (is_relevant, is_parseable) for candidate discovery path filtering."""
+    path_comp = _parse_composition_from_path(path)
+    if path_comp is None:
+        return False, False
 
     path_counts = get_composition_counts(path_comp)
-    return is_composition_subset(path_counts, target_counts)
+    return is_composition_subset(path_counts, target_counts), True
 
 
 def _compute_files_signature(files: list[str]) -> tuple[tuple[str, float], ...]:
@@ -220,16 +231,15 @@ def _find_smaller_candidates(
     skipped_unparseable = 0
     filtered_matches: list[str] = []
     for db_file in matches:
-        path_comp = _parse_composition_from_path(db_file)
-        if path_comp is None:
+        is_relevant, is_parseable = _path_relevance_status(db_file, target_counts)
+        if not is_parseable:
             skipped_unparseable += 1
             logger.debug(
                 "Cannot parse composition from path %s; skipping candidate discovery scan",
                 db_file,
             )
             continue
-        path_counts = get_composition_counts(path_comp)
-        if is_composition_subset(path_counts, target_counts):
+        if is_relevant:
             filtered_matches.append(db_file)
 
     if matches:
