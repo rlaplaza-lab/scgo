@@ -9,6 +9,7 @@ from ase.build import molecule
 from ase.calculators.emt import EMT
 from numpy.random import default_rng
 
+from scgo import parse_composition_arg
 from scgo.cluster_adsorbate import (
     ClusterAdsorbateConfig,
     attach_adsorbate_internal_geometry_constraints,
@@ -270,3 +271,26 @@ def test_resolve_mobile_composition(composition: list[str]) -> None:
         "adsorbate_fragment_lengths": [2],
     }
     assert resolve_mobile_composition(composition, ads_def) == core + ["O", "H"]
+
+
+def test_resolve_mobile_composition_rejects_count_mismatch() -> None:
+    ads_def = {
+        "core_symbols": ["Ru"] * 10 + ["W", "O"],
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    composition = ["Ru"] * 9 + ["W", "W", "O", "O", "H"]
+    with pytest.raises(ValueError, match="got counts|expected"):
+        resolve_mobile_composition(composition, ads_def, context="test")
+
+
+def test_ho2ru9w2_formula_resolves_with_matching_adsorbate_definition() -> None:
+    """Campaign formula HO2Ru9W2 must match Ru9W2O core + OH adsorbate, not Ru10W1O."""
+    core = ["Ru"] * 9 + ["W", "W", "O"]
+    ads_def = {
+        "core_symbols": core,
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    parsed = parse_composition_arg("HO2Ru9W2")
+    assert resolve_mobile_composition(parsed, ads_def) == core + ["O", "H"]

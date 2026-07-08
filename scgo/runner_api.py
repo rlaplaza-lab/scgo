@@ -848,6 +848,9 @@ def parse_composition_arg(comp_str: str) -> list[str]:
     ambiguous two-letter forms (``ho2`` as H+O2 vs holmium) are rejected.
     """
     comp_str = comp_str.strip()
+    if not comp_str:
+        raise _compact_formula_error(comp_str, "Empty composition string.")
+
     if "," in comp_str:
         parts = [p.strip() for p in comp_str.split(",") if p.strip()]
         normalized = [p[0].upper() + p[1:].lower() if len(p) > 0 else p for p in parts]
@@ -860,6 +863,13 @@ def parse_composition_arg(comp_str: str) -> list[str]:
         single = _parse_lowercase_single_element(comp_str)
         if single is not None:
             return single
+        m = re.fullmatch(r"([a-z]{1,2})(\d+)?", comp_str)
+        if m:
+            sym = m.group(1)[0].upper() + m.group(1)[1:]
+            if sym not in atomic_numbers:
+                raise _compact_formula_error(
+                    comp_str, f"Unknown element symbol {sym!r}."
+                )
         raise _compact_formula_error(
             comp_str,
             "Lowercase compact formulas with multiple elements are not supported.",
