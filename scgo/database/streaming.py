@@ -19,6 +19,7 @@ from scgo.database.connection import get_connection
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.metadata import add_metadata
 from scgo.database.schema import is_scgo_database
+from scgo.database.sync import database_retry
 from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import TRACE, get_logger
 
@@ -255,11 +256,17 @@ def count_database_structures(db_path: str | Path) -> int:
 
     where_sql = relaxed_rows_where_clause()
 
-    try:
+    def _count() -> int:
         with get_connection(str(db_path)) as da, da.c.managed_connection() as conn:
             cur = conn.execute(f"SELECT COUNT(*) FROM systems WHERE {where_sql}")
             res = cur.fetchone()
             return int((res or [0])[0] or 0)
+
+    try:
+        return database_retry(
+            _count,
+            operation_name=f"count structures in {db_path}",
+        )
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         logger.error("Error counting structures in %s: %s", db_path, e)
         raise

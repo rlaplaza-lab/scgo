@@ -37,7 +37,12 @@ from scgo.database.schema import (
     stamp_scgo_database,
 )
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
-from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock, retry_with_backoff
+from scgo.database.sync import (
+    PRESET_AGGRESSIVE,
+    database_retry,
+    retry_on_lock,
+    retry_with_backoff,
+)
 from scgo.utils.helpers import (
     ensure_directory_exists,
     ensure_final_id,
@@ -370,8 +375,8 @@ def _extract_structures_from_db(
         logger.debug("Skipping extract: not an SCGO database %s", db_path)
         return []
 
-    with get_connection(db_path) as da:
-        try:
+    def _extract() -> list[tuple[float, Atoms]]:
+        with get_connection(db_path) as da:
             out: list[tuple[float, Atoms]] = []
             for energy, atoms in iter_relaxed_structures(
                 da,
@@ -423,9 +428,15 @@ def _extract_structures_from_db(
                     )
 
             return out
-        except (sqlite3.DatabaseError, OSError, ValueError, AttributeError) as e:
-            logger.warning("Failed to extract structures from %s: %s", db_path, e)
-            return []
+
+    try:
+        return database_retry(
+            _extract,
+            operation_name=f"extract structures from {db_path}",
+        )
+    except (sqlite3.DatabaseError, OSError, ValueError, AttributeError) as e:
+        logger.warning("Failed to extract structures from %s: %s", db_path, e)
+        return []
 
 
 def extract_minima_from_database_file(

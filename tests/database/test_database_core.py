@@ -572,6 +572,30 @@ class TestMetadataManagement:
 class TestFilesystemSync:
     """Filesystem synchronization utilities."""
 
+    def test_get_connection_retries_on_transient_lock(self, monkeypatch, tmp_path):
+        """get_connection retries sqlite lock errors when opening."""
+        import scgo.database.connection as conn_mod
+
+        db_path = tmp_path / "test.db"
+        db_path.touch()
+
+        attempts = {"n": 0}
+        original_dc = conn_mod.DataConnection
+
+        def flaky_data_connection(path):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise sqlite3.OperationalError("database is locked")
+            return original_dc(path)
+
+        monkeypatch.setattr(conn_mod, "DataConnection", flaky_data_connection)
+        monkeypatch.setattr("scgo.database.sync.time.sleep", lambda _: None)
+
+        with get_connection(db_path) as db:
+            assert db is not None
+
+        assert attempts["n"] == 3
+
     def test_retry_with_backoff(self):
         attempts = []
 

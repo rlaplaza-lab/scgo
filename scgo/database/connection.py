@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ase_ga.data import DataConnection
 
+from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -134,6 +135,30 @@ def apply_sqlite_pragmas(
         _apply_pragma(conn, f"PRAGMA cache_size=-{cache_size_mb * 1024};")
 
 
+def _open_data_connection(
+    db_path: str,
+    *,
+    busy_timeout: int,
+    wal_mode: bool,
+    cache_size_mb: int,
+) -> DataConnection:
+    """Open a :class:`~ase_ga.data.DataConnection` and apply SCGO SQLite settings."""
+    da = DataConnection(db_path)
+    activate_data_connection(
+        da,
+        busy_timeout=busy_timeout,
+        wal_mode=wal_mode,
+        cache_size_mb=cache_size_mb,
+    )
+    return da
+
+
+_open_data_connection_with_retry = retry_on_lock(
+    config=PRESET_AGGRESSIVE,
+    operation_name="open DataConnection",
+)(_open_data_connection)
+
+
 @contextmanager
 def get_connection(
     db_path: str | Path,
@@ -148,6 +173,9 @@ def get_connection(
     WAL mode is off by default (``DELETE`` journal) for shared/HPC filesystems;
     pass ``wal_mode=True`` on local disks when you need more write concurrency.
 
+    Transient sqlite lock errors during open are retried with the same backoff
+    policy used by :func:`~scgo.database.helpers.setup_database`.
+
     Args:
         db_path: Path to the ``.db`` file.
         busy_timeout: SQLite busy timeout in milliseconds (default 30s).
@@ -155,10 +183,8 @@ def get_connection(
         cache_size_mb: SQLite page cache size hint in MiB.
     """
     db_path = str(db_path)
-    da = DataConnection(db_path)
-
-    activate_data_connection(
-        da,
+    da = _open_data_connection_with_retry(
+        db_path,
         busy_timeout=busy_timeout,
         wal_mode=wal_mode,
         cache_size_mb=cache_size_mb,
