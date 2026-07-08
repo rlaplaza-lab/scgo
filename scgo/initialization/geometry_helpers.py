@@ -7,7 +7,8 @@ particularly using convex hull analysis to guide growth strategies.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 from ase import Atoms
@@ -37,6 +38,15 @@ from .initialization_config import (
 # Core utilities
 
 template_debug_logger = get_logger("scgo.initialization.templates")
+
+
+def format_composition_counts_short(
+    counts: Mapping[str, int] | Counter[str],
+) -> str:
+    """Format composition counts as a compact string (e.g. ``Pt×11, Au×2``)."""
+    if not counts:
+        return "none"
+    return ", ".join(f"{symbol}×{count}" for symbol, count in sorted(counts.items()))
 
 
 def format_placement_error_message(
@@ -69,16 +79,22 @@ def format_placement_error_message(
     Returns:
         Formatted error message string
     """
-    parts = [f"Could not {context}"]
-
+    headline_parts = [f"Could not {context}"]
     if composition:
-        parts.append(f"for composition {composition}")
+        headline_parts.append(
+            f"for {format_composition_counts_short(get_composition_counts(composition))}"
+        )
     if n_atoms:
-        parts.append(f"({n_atoms} atoms)")
+        headline_parts.append(f"({n_atoms} atoms)")
 
-    parts.append(".\n")
+    lines = [" ".join(headline_parts)]
 
-    # Parameter values
+    if additional_info:
+        for line in additional_info.strip().splitlines():
+            stripped = line.strip()
+            if stripped:
+                lines.append(f"  {stripped}")
+
     param_parts = [
         f"placement_radius_scaling={placement_radius_scaling:.2f}",
         f"min_distance_factor={min_distance_factor:.2f}",
@@ -86,30 +102,24 @@ def format_placement_error_message(
     ]
     if cell_side is not None:
         param_parts.append(f"cell_side={cell_side:.2f} Å")
+    lines.append(f"  parameters: {', '.join(param_parts)}")
 
-    parts.append(f"Parameters: {', '.join(param_parts)}")
-
-    # Diagnostics if provided
     if diagnostics:
-        parts.append(f"\nDiagnostics: {diagnostics.summary}")
+        summary = diagnostics.summary
+        if summary.startswith("Structure is "):
+            summary = summary[len("Structure is ") :]
+        lines.append(f"  partial cluster: {summary}")
 
-    # Additional info
-    if additional_info:
-        parts.append(f"\n{additional_info}")
-
-    # Suggestions
-    parts.append("\nSuggestions:")
-    parts.append(
-        f"  - Increase placement_radius_scaling to {placement_radius_scaling * 1.5:.2f}"
-    )
-    parts.append(
-        f"  - Decrease min_distance_factor to {max(min_distance_factor * 0.8, 0.3):.2f}"
-    )
-    parts.append(f"  - Increase connectivity_factor to {connectivity_factor * 1.2:.2f}")
+    suggestion_parts = [
+        f"placement_radius_scaling→{placement_radius_scaling * 1.5:.2f}",
+        f"min_distance_factor→{max(min_distance_factor * 0.8, 0.3):.2f}",
+        f"connectivity_factor→{connectivity_factor * 1.2:.2f}",
+    ]
     if cell_side is not None:
-        parts.append(f"  - Increase cell_side to {cell_side * 1.5:.2f} Å")
+        suggestion_parts.append(f"cell_side→{cell_side * 1.5:.2f} Å")
+    lines.append(f"  suggestions: {', '.join(suggestion_parts)}")
 
-    return "\n".join(parts)
+    return "\n".join(lines)
 
 
 # Convex hull and caching

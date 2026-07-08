@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import itertools
 import logging
-from collections import Counter
+import threading
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
@@ -64,6 +65,57 @@ from .templates import generate_template_matches
 TEMPLATE_ROTATIONS_CACHE_NS = "template_rotations"
 
 logger = get_logger(__name__)
+
+
+class _SeedSamplingLogCollector:
+    """Thread-safe accumulator for seed-sampling failures across batch workers."""
+
+    _lock = threading.Lock()
+    _records: list[tuple[str, str]] = []
+
+    @classmethod
+    def reset(cls) -> None:
+        with cls._lock:
+            cls._records.clear()
+
+    @classmethod
+    def record(cls, formula: str, reason: str) -> None:
+        with cls._lock:
+            cls._records.append((formula, reason))
+
+    @classmethod
+    def emit_summary_if_any(cls) -> None:
+        with cls._lock:
+            if not cls._records:
+                return
+            records = list(cls._records)
+            cls._records.clear()
+
+        formula_reasons: dict[str, Counter[str]] = defaultdict(Counter)
+        for formula, reason in records:
+            formula_reasons[formula][reason] += 1
+
+        parts: list[str] = []
+        for formula in sorted(
+            formula_reasons,
+            key=lambda f: (-sum(formula_reasons[f].values()), f),
+        ):
+            counter = formula_reasons[formula]
+            total = sum(counter.values())
+            if len(counter) == 1:
+                (reason,) = counter
+                parts.append(f"{formula}×{total} [{reason}]")
+            else:
+                reason_detail = ", ".join(
+                    f"{reason}×{count}" for reason, count in counter.most_common()
+                )
+                parts.append(f"{formula}×{total} [{reason_detail}]")
+
+        logger.info(
+            "seed+growth: no suitable seed (%d failures): %s",
+            len(records),
+            ", ".join(parts),
+        )
 
 
 class InitStrategy(Enum):
@@ -728,7 +780,7 @@ def _sample_suitable_seed(
     existing_geometries: list[str],
     rng: np.random.Generator,
     max_attempts: int = 10,
-) -> Atoms | None:
+) -> tuple[Atoms | None, str | None]:
     """Sample a suitable seed from candidates with geometry diversity preference.
 
     Args:
@@ -740,7 +792,7 @@ def _sample_suitable_seed(
         max_attempts: Maximum attempts to find suitable seed
 
     Returns:
-        Suitable seed Atoms object, or None if not found
+        Tuple of (suitable seed Atoms object or None, failure reason if None)
     """
     # Pre-filter candidates to remove already-tried positions
     available_candidates = [
@@ -750,7 +802,9 @@ def _sample_suitable_seed(
     ]
 
     if not available_candidates:
-        return None
+        return None, "all candidates already tried"
+
+    rejection_counts: Counter[str] = Counter()
 
     for attempt in range(max_attempts):
         sampled = _sample_seed_with_strategy(
@@ -760,7 +814,7 @@ def _sample_suitable_seed(
         )
 
         if sampled is None:
-            return None
+            return None, "candidate sampling failed"
 
         _, sampled_seed = sampled
         geometry = _classify_seed_geometry(sampled_seed)
@@ -776,23 +830,28 @@ def _sample_suitable_seed(
             if hash(a.get_positions().tobytes()) != pos_hash
         ]
 
-        # If no more candidates available, stop trying
-        if not available_candidates:
-            break
-
         # Accept if suitable geometry
         if geometry not in ["planar", "3d"]:
+            rejection_counts[f"unsuitable {geometry} geometry"] += 1
+            if not available_candidates:
+                break
             continue
 
         # Prefer geometry diversity: if all existing are same, prefer different
         if existing_geometries:
             all_same = all(g == existing_geometries[0] for g in existing_geometries)
             if all_same and geometry == existing_geometries[0]:
+                rejection_counts["need mixed seed geometries"] += 1
+                if not available_candidates:
+                    break
                 continue  # Prefer different geometry
 
-        return sampled_seed.copy()
+        return sampled_seed.copy(), None
 
-    return None
+    if rejection_counts:
+        reason, _ = rejection_counts.most_common(1)[0]
+        return None, reason
+    return None, "candidates exhausted after sampling"
 
 
 def _try_seed_growth(
@@ -854,7 +913,7 @@ def _try_seed_growth(
         # Sample seeds for each formula in the combination
         for formula in combo:
             candidates = candidates_by_formula[formula]
-            seed = _sample_suitable_seed(
+            seed, failure_reason = _sample_suitable_seed(
                 candidates,
                 strategy_idx,
                 tried_positions,
@@ -863,7 +922,13 @@ def _try_seed_growth(
             )
 
             if seed is None:
-                logger.debug(f"No suitable seed found for {formula} after attempts")
+                reason = failure_reason or "unknown"
+                _SeedSamplingLogCollector.record(formula, reason)
+                logger.trace(
+                    "seed+growth: no suitable seed for %s (%s)",
+                    formula,
+                    reason,
+                )
                 break
 
             seeds_to_combine.append(seed)
@@ -1351,6 +1416,8 @@ def create_initial_cluster_batch(
         structure_seed = (batch_base_seed + i * 7919) % (2**31)
         structure_assignments.append((i, strategy, template_index, structure_seed))
 
+    _SeedSamplingLogCollector.reset()
+
     def _worker_wrapper(assignment):
         return _generate_structure_batch_item(
             assignment=assignment,
@@ -1399,5 +1466,7 @@ def create_initial_cluster_batch(
             template_to_random,
             seed_to_random,
         )
+
+    _SeedSamplingLogCollector.emit_summary_if_any()
 
     return results  # type: ignore[return-value]

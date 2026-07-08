@@ -24,6 +24,7 @@ from .geometry_helpers import (
     _verify_exact_composition,
     analyze_disconnection,
     compute_bond_distance_params,
+    format_composition_counts_short,
     format_placement_error_message,
     get_covalent_radius,
     get_structure_diagnostics,
@@ -549,11 +550,8 @@ def random_spherical(
                     connectivity_factor=connectivity_factor,
                     cell_side=cell_side,
                     additional_info=(
-                        f"This may indicate:\n"
-                        f"  - Cell too small: cell_side={cell_side:.2f} Å may be insufficient for {n_atoms} atoms\n"
-                        f"  - Placement volume too small\n"
-                        f"  - Distance constraints too strict\n"
-                        f"  - Connectivity factor too strict"
+                        f"cell may be too small (cell_side={cell_side:.2f} Å for {n_atoms} atoms); "
+                        "placement volume or distance/connectivity constraints may be too strict"
                     ),
                 )
                 raise ValueError(error_msg)
@@ -1000,8 +998,6 @@ def _add_atoms_single_mode(
             reason = "early termination" if early_term else f"{attempts_made} attempts"
 
             # Get current composition state
-            current_composition = new_atoms.get_chemical_symbols()
-            current_counts = get_composition_counts(current_composition)
             remaining_atoms = atoms_to_add[atom_idx:]
             remaining_counts = get_composition_counts(remaining_atoms)
 
@@ -1010,13 +1006,13 @@ def _add_atoms_single_mode(
             )
 
             additional_info = (
-                f"Failed to place atom {atom_symbol} ({current_count + 1}/{total_target}) after {reason}.\n"
-                f"Current state: {current_count} atoms placed, composition counts: {current_counts}\n"
-                f"Remaining atoms to place: {len(remaining_atoms)} atoms, composition counts: {remaining_counts}"
+                f"atom: {atom_symbol} ({current_count + 1}/{total_target}); "
+                f"remaining: {format_composition_counts_short(remaining_counts)}; "
+                f"after {reason}"
             )
 
             error_msg = format_placement_error_message(
-                context="place atom",
+                context=f"place atom {atom_symbol} ({current_count}/{total_target} placed)",
                 composition=None,
                 n_atoms=None,
                 placement_radius_scaling=placement_radius_scaling,
@@ -1036,8 +1032,6 @@ def _add_atoms_single_mode(
             disconnection_distance, suggested_factor, analysis_msg = (
                 analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
             )
-            current_composition = new_atoms.get_chemical_symbols()
-            current_counts = get_composition_counts(current_composition)
             remaining_atoms = atoms_to_add[atom_idx + 1 :]
             remaining_counts = (
                 get_composition_counts(remaining_atoms) if remaining_atoms else {}
@@ -1047,16 +1041,17 @@ def _add_atoms_single_mode(
             )
 
             additional_info = (
-                f"Cluster became disconnected after placing atom {atom_symbol} "
-                f"({len(new_atoms)}/{len(base_atoms) + len(atoms_to_add)} atoms placed).\n"
-                f"Current state: {len(new_atoms)} atoms, composition counts: {current_counts}\n"
-                f"Remaining atoms: {len(remaining_atoms)} atoms, composition counts: {remaining_counts}\n"
-                f"Analysis: {analysis_msg}\n"
-                f"Suggested connectivity_factor: {suggested_factor:.2f}"
+                f"disconnected after placing {atom_symbol} "
+                f"({len(new_atoms)}/{len(base_atoms) + len(atoms_to_add)} placed); "
+                f"remaining: {format_composition_counts_short(remaining_counts)}; "
+                f"{analysis_msg}; suggested connectivity_factor→{suggested_factor:.2f}"
             )
 
             error_msg = format_placement_error_message(
-                context="maintain connectivity",
+                context=(
+                    f"maintain connectivity after placing {atom_symbol} "
+                    f"({len(new_atoms)}/{len(base_atoms) + len(atoms_to_add)} placed)"
+                ),
                 composition=None,
                 n_atoms=None,
                 placement_radius_scaling=placement_radius_scaling,
@@ -1094,8 +1089,6 @@ def _add_atoms_batch_mode(
         batch_attempt += 1
         if batch_attempt > max_batch_attempts:
             current_count = len(new_atoms)
-            current_composition = new_atoms.get_chemical_symbols()
-            current_counts = get_composition_counts(current_composition)
             remaining_counts = get_composition_counts(atoms_to_add)
 
             diagnostics = get_structure_diagnostics(
@@ -1103,14 +1096,15 @@ def _add_atoms_batch_mode(
             )
 
             additional_info = (
-                f"Failed to place remaining {len(atoms_to_add)} atoms "
-                f"({current_count}/{total_target} placed) after {max_batch_attempts} batch attempts.\n"
-                f"Current state: {current_count} atoms placed, composition counts: {current_counts}\n"
-                f"Remaining atoms: {len(atoms_to_add)} atoms, composition counts: {remaining_counts}"
+                f"remaining: {format_composition_counts_short(remaining_counts)}"
             )
 
             error_msg = format_placement_error_message(
-                context="place remaining atoms in batch mode",
+                context=(
+                    f"complete batch placement "
+                    f"({current_count}/{total_target} placed, "
+                    f"{len(atoms_to_add)} remaining, {max_batch_attempts} attempts)"
+                ),
                 composition=None,
                 n_atoms=None,
                 placement_radius_scaling=placement_radius_scaling,
@@ -1260,24 +1254,21 @@ def _add_atoms_batch_mode(
             disconnection_distance, suggested_factor, analysis_msg = (
                 analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
             )
-            current_composition = new_atoms.get_chemical_symbols()
-            current_counts = get_composition_counts(current_composition)
             remaining_counts = get_composition_counts(atoms_to_add)
             diagnostics = get_structure_diagnostics(
                 new_atoms, min_distance_factor, connectivity_factor, use_mic=False
             )
 
             additional_info = (
-                f"Cluster became disconnected after batch placement "
-                f"({len(new_atoms)}/{total_target} atoms placed).\n"
-                f"Current state: {len(new_atoms)} atoms, composition counts: {current_counts}\n"
-                f"Remaining atoms: {len(atoms_to_add)} atoms, composition counts: {remaining_counts}\n"
-                f"Analysis: {analysis_msg}\n"
-                f"Suggested connectivity_factor: {suggested_factor:.2f}"
+                f"remaining: {format_composition_counts_short(remaining_counts)}; "
+                f"{analysis_msg}; suggested connectivity_factor→{suggested_factor:.2f}"
             )
 
             error_msg = format_placement_error_message(
-                context="maintain connectivity after batch placement",
+                context=(
+                    f"maintain connectivity after batch placement "
+                    f"({len(new_atoms)}/{total_target} placed)"
+                ),
                 composition=None,
                 n_atoms=None,
                 placement_radius_scaling=placement_radius_scaling,
