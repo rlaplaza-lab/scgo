@@ -699,10 +699,10 @@ def _run_go_trials(
         )
     elif chosen_go == "bh":
         logger.info(
-            f"Selected Basin Hopping for {n_atoms}-atom cluster (small cluster)"
+            "Selected Basin Hopping for %d-atom cluster (small cluster)", n_atoms
         )
     else:
-        logger.info(f"Selected Genetic Algorithm for {n_atoms}-atom cluster")
+        logger.info("Selected Genetic Algorithm for %d-atom cluster", n_atoms)
 
     # Extract algorithm-specific parameters without mutation
     algo_params = params["optimizer_params"].get(chosen_go, {})
@@ -969,7 +969,7 @@ def _run_go_campaign_compositions(
     if not compositions_list:
         raise ValueError("compositions iterable must not be empty")
     num_compositions = len(compositions_list)
-    logger.info(f"Starting campaign for {num_compositions} compositions.")
+    logger.info("Starting campaign for %d compositions.", num_compositions)
 
     # Create calculator once and reuse it for all compositions to avoid file handle leaks
     calculator_kwargs = params.get("calculator_kwargs", {})
@@ -980,11 +980,14 @@ def _run_go_campaign_compositions(
     for i, composition in enumerate(compositions_list):
         formula_str = get_cluster_formula(composition)
         if verbosity >= 1:
-            logger.info(f"\n{'=' * 60}")
+            logger.info("\n%s", "=" * 60)
             logger.info(
-                f"Running minima search for {formula_str} ({i + 1}/{num_compositions})"
+                "Running minima search for %s (%d/%d)",
+                formula_str,
+                i + 1,
+                num_compositions,
             )
-            logger.info(f"{'=' * 60}")
+            logger.info("%s", "=" * 60)
 
         comp_seed = int(rng.integers(0, 2**63 - 1))
         trial_output_dir = resolve_go_campaign_searches_dir(output_dir, formula_str)
@@ -1010,10 +1013,12 @@ def _run_go_campaign_compositions(
             # downstream consumers and tests.
             all_results[formula_str] = results
             if not results and verbosity >= 1:
-                logger.warning(f"No minima found for {formula_str} (results empty)")
+                logger.warning("No minima found for %s (results empty)", formula_str)
             if verbosity >= 1:
-                logger.info(f"Finished processing {formula_str}.")
-                logger.info(f"  Returned {len(results)} final minima for {formula_str}")
+                logger.info("Finished processing %s.", formula_str)
+                logger.info(
+                    "  Returned %d final minima for %s", len(results), formula_str
+                )
         except (RuntimeError, ValueError, OSError, sqlite3.DatabaseError) as e:
             # Enhanced error logging for HPC debugging
             error_details = [

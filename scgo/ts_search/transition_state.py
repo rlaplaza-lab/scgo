@@ -1194,11 +1194,11 @@ def find_transition_state(
             )
 
     if verbosity >= 1:
-        logger.info(f"Finding transition state for pair {pair_id}")
+        logger.info("Finding transition state for pair %s", pair_id)
         if reactant_energy is not None:
-            logger.info(f"  Reactant energy: {reactant_energy:.6f} eV")
+            logger.info("  Reactant energy: %.6f eV", reactant_energy)
         if product_energy is not None:
-            logger.info(f"  Product energy: {product_energy:.6f} eV")
+            logger.info("  Product energy: %.6f eV", product_energy)
 
     result = make_ts_result(
         pair_id=pair_id,
@@ -1273,7 +1273,7 @@ def find_transition_state(
                 result["product_energy"] = float(ep_results[1][0])
 
             if verbosity >= 2:
-                logger.info(f"Using TorchSim batched NEB (climb={climb})")
+                logger.info("Using TorchSim batched NEB (climb=%s)", climb)
 
             neb = TorchSimNEB(
                 images,
@@ -1302,7 +1302,7 @@ def find_transition_state(
         dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
 
         if verbosity >= 2:
-            logger.info(f"Starting NEB optimization with {optimizer.__name__}")
+            logger.info("Starting NEB optimization with %s", optimizer.__name__)
 
         t_neb0 = perf_counter()
         dyn.run(fmax=fmax, steps=neb_steps)
@@ -1347,10 +1347,12 @@ def find_transition_state(
 
         if verbosity >= 1 and result["status"] == "success":
             logger.info(
-                f"TS found at image {result['ts_image_index']}/{len(neb.images) - 1}"
+                "TS found at image %d/%d",
+                result["ts_image_index"],
+                len(neb.images) - 1,
             )
-            logger.info(f"  TS energy: {result['ts_energy']:.6f} eV")
-            logger.info(f"  Barrier height: {result['barrier_height']:.6f} eV")
+            logger.info("  TS energy: %.6f eV", result["ts_energy"])
+            logger.info("  Barrier height: %.6f eV", result["barrier_height"])
             if use_torchsim:
                 logger.info(
                     "  GPU-batched force calls: %s",
@@ -1434,7 +1436,7 @@ def save_neb_result(
         _detach_calc(result["transition_state"])
         ts_path = os.path.join(output_dir, f"ts_{pair_id}.xyz")
         write(ts_path, result["transition_state"])
-        logger.info(f"Saved TS structure to {ts_path}")
+        logger.info("Saved TS structure to %s", ts_path)
 
     for label, key in (
         ("reactant", "reactant_structure"),
@@ -1446,7 +1448,7 @@ def save_neb_result(
             _detach_calc(ep)
             ep_path = os.path.join(output_dir, f"{label}_{pair_id}.xyz")
             write(ep_path, ep)
-            logger.info(f"Saved {label} endpoint structure to {ep_path}")
+            logger.info("Saved %s endpoint structure to %s", label, ep_path)
 
     extra = {key: result[key] for key in _PROVENANCE_KEYS if key in result}
     extra["neb_backend"] = (
@@ -1478,4 +1480,4 @@ def save_neb_result(
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    logger.info(f"Saved NEB metadata to {metadata_path}")
+    logger.info("Saved NEB metadata to %s", metadata_path)

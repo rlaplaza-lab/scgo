@@ -585,7 +585,7 @@ def run_transition_state_search(
         raise ValueError(f"Cannot initialize calculator: {e}") from e
 
     if verbosity >= 1:
-        logger.info(f"Loading minima for composition {formula}")
+        logger.info("Loading minima for composition %s", formula)
 
     minima_by_formula = load_minima_by_composition(
         str(minima_dir), composition, prefer_final_unique=True
@@ -625,7 +625,7 @@ def run_transition_state_search(
         )
 
     if not minima_by_formula:
-        logger.error(f"No minima found in {minima_dir}")
+        logger.error("No minima found in %s", minima_dir)
         cleanup_torch_cuda(logger=logger)
         return []
 
@@ -650,12 +650,12 @@ def run_transition_state_search(
             )
 
     if len(minima) < 2:
-        logger.error(f"Only {len(minima)} minima found, need at least 2 to find TS")
+        logger.error("Only %d minima found, need at least 2 to find TS", len(minima))
         cleanup_torch_cuda(logger=logger)
         return []
 
     if verbosity >= 1:
-        logger.info(f"Found {len(minima)} minima for {formula}")
+        logger.info("Found %d minima for %s", len(minima), formula)
     if verbosity >= 2 and neb_align_endpoints:
         logger.info(
             "NEB endpoint alignment enabled (align=%s, mic=%s, cell_remap=%s, "
@@ -683,7 +683,7 @@ def run_transition_state_search(
         return []
 
     if verbosity >= 1:
-        logger.info(f"Selected {len(pairs)} structure pairs for TS search")
+        logger.info("Selected %d structure pairs for TS search", len(pairs))
 
     ts_results_root.mkdir(parents=True, exist_ok=True)
     run_id = ensure_run_id(None, verbosity=verbosity, logger=logger)
@@ -856,9 +856,12 @@ def run_transition_state_search(
     if verbosity >= 1:
         num_success = sum(1 for r in ts_results if r.get("status") == "success")
         logger.info(
-            f"TS search complete for {formula}: {len(ts_results)} result(s) ({num_success} successful)."
+            "TS search complete for %s: %d result(s) (%d successful).",
+            formula,
+            len(ts_results),
+            num_success,
         )
-        logger.info(f"Results written to: {ts_results_root}")
+        logger.info("Results written to: %s", ts_results_root)
 
     cleanup_torch_cuda(logger=logger)
 
@@ -882,7 +885,7 @@ def integrate_ts_to_database(
     logger = get_logger(__name__)
 
     if not os.path.exists(minima_database_file):
-        logger.warning(f"Minima database not found: {minima_database_file}")
+        logger.warning("Minima database not found: %s", minima_database_file)
         return 0
 
     added = 0

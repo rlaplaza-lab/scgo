@@ -36,6 +36,22 @@ def test_create_initial_cluster_batch_logs_and_returns_population(caplog):
     # Ensure expected initialization log messages were emitted
     assert "Initialization for 4-atom clusters" in caplog.text
     assert "Strategy allocation" in caplog.text
+    assert caplog.text.count("Population initialization:") == 1
+    assert "Fallbacks: template->random=" not in caplog.text
+
+
+def test_batch_init_fallback_summary_emitted_once(caplog):
+    """Multi-structure batch should emit one init summary, not per-structure fallbacks."""
+    caplog.set_level(logging.DEBUG)
+    create_initial_cluster_batch(
+        composition=["Pt"] * 4,
+        n_structures=10,
+        rng=np.random.default_rng(99),
+        mode="smart",
+        n_jobs=1,
+    )
+    assert caplog.text.count("Population initialization:") == 1
+    assert caplog.text.count("Fallbacks: template->random=") == 0
 
 
 def test_format_placement_error_message_is_compact_and_consistent():

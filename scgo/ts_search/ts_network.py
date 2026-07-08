@@ -109,7 +109,7 @@ def add_ts_to_database(
         True if successfully added, False otherwise.
     """
     if not os.path.exists(db_file):
-        logger.error(f"Database file not found: {db_file}")
+        logger.error("Database file not found: %s", db_file)
         return False
     if ts_structure is None:
         logger.error("Cannot add TS %s: transition-state structure is missing", pair_id)
@@ -445,7 +445,7 @@ def build_connectivity_graph(
         Dictionary with adjacency list and metadata for network analysis.
     """
     if not os.path.exists(network_metadata_file):
-        logger.warning(f"Network metadata file not found: {network_metadata_file}")
+        logger.warning("Network metadata file not found: %s", network_metadata_file)
         return {}
 
     with open(network_metadata_file) as f:

@@ -72,6 +72,12 @@ from scgo.system_types import (
     validate_structure_for_system_type,
 )
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
+from scgo.utils.logging import get_logger
+from scgo.utils.phase_logging import (
+    InitDiagnosticsCollector,
+    format_count_summary,
+    log_phase_header,
+)
 from scgo.utils.rng_helpers import (
     create_child_rng,
     ensure_rng_or_create,
@@ -83,7 +89,7 @@ from scgo.utils.validation import (
     validate_positive,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def slab_ga_metadata_extras(
@@ -336,6 +342,7 @@ class ClusterStartGenerator(StartGenerator):
         adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
         cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
         max_hierarchical_attempts: int = 200,
+        verbosity: int = 1,
     ) -> None:
         """Initialize ClusterStartGenerator.
 
@@ -424,11 +431,17 @@ class ClusterStartGenerator(StartGenerator):
         self._candidate_batch: list[Atoms] | None = None
 
         if population_size is not None and self.rng is not None:
+            log_phase_header(
+                logger,
+                "Population initialization",
+                verbosity=verbosity,
+            )
             if self._hierarchical and adsorbate_definition is not None:
                 from scgo.cluster_adsorbate.hierarchical import (
                     build_hierarchical_core_fragment_cluster,
                 )
 
+                InitDiagnosticsCollector.reset()
                 self._candidate_batch = []
                 for _i in range(population_size):
                     placement_metadata: dict[str, str] = {}
@@ -455,6 +468,13 @@ class ClusterStartGenerator(StartGenerator):
                     if site_type in self._batch_site_type_counts:
                         self._batch_site_type_counts[site_type] += 1
                     self._candidate_batch.append(a)
+                site_summary = format_count_summary(self._batch_site_type_counts)
+                InitDiagnosticsCollector.emit_summary(
+                    logger,
+                    verbosity=verbosity,
+                    n_structures=population_size,
+                    extra=f"site types {site_summary}" if site_summary else "",
+                )
             else:
                 from scgo.initialization import create_initial_cluster_batch
 
@@ -544,6 +564,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         adsorbate_definition: AdsorbateDefinition | None = None,
         adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
         cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
+        verbosity: int = 1,
     ) -> None:
         self.rng: Generator | None = (
             ensure_rng_or_create(rng) if rng is not None else None
@@ -574,6 +595,11 @@ class SurfaceClusterStartGenerator(StartGenerator):
         self._candidate_batch: list[Atoms] | None = None
 
         if population_size is not None and self.rng is not None:
+            log_phase_header(
+                logger,
+                "Population initialization",
+                verbosity=verbosity,
+            )
             self._candidate_batch = create_deposited_cluster_batch(
                 composition=composition,
                 slab=self.slab,
@@ -1378,7 +1404,7 @@ def setup_diversity_scorer(
     from scgo.database import SCGODatabaseManager
 
     if logger.isEnabledFor(logging.INFO):
-        logger.info(f"Loading reference structures from: {diversity_reference_db}")
+        logger.info("Loading reference structures from: %s", diversity_reference_db)
     with SCGODatabaseManager(base_dir=base_dir, enable_caching=True) as db_manager:
         reference_structures: list[Atoms] = db_manager.load_reference_structures(
             db_glob_pattern=diversity_reference_db,
@@ -1386,7 +1412,7 @@ def setup_diversity_scorer(
             max_structures=diversity_max_references,
         )
     if logger.isEnabledFor(logging.INFO):
-        logger.info(f"Loaded {len(reference_structures)} reference structures")
+        logger.info("Loaded %d reference structures", len(reference_structures))
 
     if not reference_structures:
         logger.warning(
@@ -1472,8 +1498,8 @@ def log_early_stopping_info(
         fitness_strategy = FitnessStrategy(fitness_strategy)
 
     if logger.isEnabledFor(logging.INFO):
-        logger.info(f"Starting GA evolution with {niter} generations...")
-        logger.info(f"Using fitness_strategy='{fitness_strategy}'")
+        logger.info("Starting GA evolution with %d generations...", niter)
+        logger.info("Using fitness_strategy='%s'", fitness_strategy)
     if early_stopping_niter > 0:
         stopping_metric: str = (
             "fitness" if fitness_strategy != FitnessStrategy.LOW_ENERGY else "energy"

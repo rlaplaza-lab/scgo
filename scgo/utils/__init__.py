@@ -24,7 +24,18 @@ from .helpers import (
     is_true_minimum,
     perform_local_relaxation,
 )
-from .logging import configure_logging, get_logger
+from .logging import (
+    TRACE,
+    VERBOSITY_LEVELS,
+    configure_logging,
+    get_logger,
+    log_debug_v,
+    log_error_v,
+    log_exception_v,
+    log_info_v,
+    log_warning_v,
+    should_show_progress,
+)
 from .mutation_weights import get_adaptive_mutation_config
 from .rng_helpers import create_child_rng, ensure_rng, get_child_rng_or_none
 
@@ -42,8 +53,16 @@ __all__ = [
     "is_true_minimum",
     "perform_local_relaxation",
     # logging
+    "TRACE",
+    "VERBOSITY_LEVELS",
     "configure_logging",
     "get_logger",
+    "log_debug_v",
+    "log_error_v",
+    "log_exception_v",
+    "log_info_v",
+    "log_warning_v",
+    "should_show_progress",
     # mutation_weights
     "get_adaptive_mutation_config",
     # rng_helpers

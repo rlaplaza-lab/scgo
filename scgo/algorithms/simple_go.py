@@ -91,7 +91,7 @@ def simple_go(
     )
     atoms.calc = calc
 
-    logger.info(f"Performing simple optimization for {n_atoms}-atom cluster")
+    logger.info("Performing simple optimization for %d-atom cluster", n_atoms)
 
     try:
         a_optimized = retry_with_backoff(

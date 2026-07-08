@@ -9,6 +9,11 @@ from scgo.utils.logging import (
     VERBOSITY_LEVELS,
     configure_logging,
     get_logger,
+    log_debug_v,
+    log_error_v,
+    log_exception_v,
+    log_info_v,
+    log_warning_v,
     should_show_progress,
 )
 
@@ -204,6 +209,127 @@ class TestLoggingOutput:
         assert output == "Test message"
         assert "test" not in output  # module name should not appear
         assert ":" not in output  # no timestamps or other formatting
+
+
+class TestVerbosityGatedHelpers:
+    """Test verbosity-gated logging helper functions."""
+
+    def test_log_info_v_default(self, capfd):
+        """Test log_info_v with default verbosity (1) and min_verbosity (1)."""
+        configure_logging(1)
+        logger = get_logger("test")
+        log_info_v(logger, "Test info message", verbosity=1, min_verbosity=1)
+        captured = capfd.readouterr()
+        assert "Test info message" in captured.out
+
+    def test_log_info_v_suppressed(self, capfd):
+        """Test log_info_v suppressed when verbosity < min_verbosity."""
+        configure_logging(0)
+        logger = get_logger("test")
+        log_info_v(logger, "Should not appear", verbosity=0, min_verbosity=1)
+        captured = capfd.readouterr()
+        assert "Should not appear" not in captured.out
+
+    def test_log_debug_v_default(self, capfd):
+        """Test log_debug_v with verbosity=2, min_verbosity=2."""
+        configure_logging(2)
+        logger = get_logger("test")
+        log_debug_v(logger, "Test debug message", verbosity=2, min_verbosity=2)
+        captured = capfd.readouterr()
+        assert "Test debug message" in captured.out
+
+    def test_log_debug_v_suppressed_at_verbosity_1(self, capfd):
+        """Test log_debug_v suppressed when verbosity=1 < min_verbosity=2."""
+        configure_logging(1)
+        logger = get_logger("test")
+        log_debug_v(logger, "Should not appear", verbosity=1, min_verbosity=2)
+        captured = capfd.readouterr()
+        assert "Should not appear" not in captured.out
+
+    def test_log_warning_v_always_shown_at_0(self, capfd):
+        """Test log_warning_v shown even at verbosity=0 with min_verbosity=0."""
+        configure_logging(0)
+        logger = get_logger("test")
+        log_warning_v(logger, "Warning message", verbosity=0, min_verbosity=0)
+        captured = capfd.readouterr()
+        assert "Warning message" in captured.out
+
+    def test_log_error_v_always_shown(self, capfd):
+        """Test log_error_v shown even at verbosity=0 with default min_verbosity=0."""
+        configure_logging(0)
+        logger = get_logger("test")
+        log_error_v(logger, "Error message", verbosity=0)
+        captured = capfd.readouterr()
+        assert "Error message" in captured.out
+
+    def test_log_exception_v_with_traceback(self, capfd):
+        """Test log_exception_v includes traceback at high verbosity."""
+        configure_logging(2)
+        logger = get_logger("test")
+        try:
+            raise ValueError("Test error")
+        except ValueError:
+            log_exception_v(
+                logger,
+                "Caught exception",
+                verbosity=2,
+                min_verbosity=1,
+                min_verbosity_for_traceback=2,
+            )
+        captured = capfd.readouterr()
+        assert "Caught exception" in captured.out
+        assert "ValueError" in captured.out
+        assert "Test error" in captured.out
+
+    def test_log_exception_v_without_traceback(self, capfd):
+        """Test log_exception_v does not include traceback at low verbosity."""
+        configure_logging(1)
+        logger = get_logger("test")
+        try:
+            raise ValueError("Test error")
+        except ValueError:
+            log_exception_v(
+                logger,
+                "Caught exception",
+                verbosity=1,
+                min_verbosity=1,
+                min_verbosity_for_traceback=2,
+            )
+        captured = capfd.readouterr()
+        assert "Caught exception" in captured.out
+        # At verbosity=1, should use error not exception, so no traceback
+        assert "Traceback" not in captured.out
+
+    def test_lazy_evaluation_with_logger_level(self, capfd):
+        """Test that logger respects level filtering (lazy evaluation)."""
+        configure_logging(0)  # WARNING level only
+        logger = get_logger("test")
+
+        # At WARNING level, INFO and DEBUG are filtered by the logger
+        # The logging system itself does lazy evaluation
+        logger.info("This should not appear")
+        logger.debug("This should not appear either")
+        logger.warning("This should appear")
+
+        captured = capfd.readouterr()
+        assert "This should not appear" not in captured.out
+        assert "This should not appear either" not in captured.out
+        assert "This should appear" in captured.out
+
+    def test_format_string_with_args(self, capfd):
+        """Test that format strings with args work correctly."""
+        configure_logging(1)
+        logger = get_logger("test")
+        log_info_v(
+            logger,
+            "Processing %d of %d items",
+            5,
+            10,
+            verbosity=1,
+            min_verbosity=1,
+        )
+        captured = capfd.readouterr()
+        assert "Processing 5 of 10 items" in captured.out
 
 
 class TestIntegration:

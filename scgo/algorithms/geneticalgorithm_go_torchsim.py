@@ -57,13 +57,11 @@ from scgo.cluster_adsorbate.constraints import (
 from scgo.cluster_adsorbate.rigid import enforce_frozen_adsorbate_geometry
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.database import (
-    HPC_DATABASE_EXCEPTIONS,
     RetryConfig,
     close_data_connection,
     database_retry,
     setup_database,
 )
-from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.metadata import (
     add_metadata,
     filter_by_metadata,
@@ -94,6 +92,10 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger, should_show_progress
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.phase_logging import (
+    log_generation_offspring_summaries,
+    log_phase_subheader,
+)
 from scgo.utils.rng_helpers import (
     create_child_rng,
     ensure_rng_or_create,
@@ -138,17 +140,6 @@ def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
     atoms.info["confid"] = gaid
     atoms.info.setdefault("data", {})
     return atoms
-
-
-def _count_relaxed_candidates(da: DataConnection) -> int:
-    """Count relaxed candidates without materializing all candidate atoms."""
-    kvp = SYSTEMS_JSON_COLUMN
-    with da.c.managed_connection() as conn:
-        row = conn.execute(
-            f"SELECT COUNT(*) FROM systems "
-            f"WHERE CAST(json_extract({kvp}, '$.relaxed') AS INTEGER)=1"
-        ).fetchone()
-    return int(row[0]) if row else 0
 
 
 def _fails_fast_geometric_prefilter(atoms: Atoms, blmin: dict) -> bool:
@@ -279,7 +270,6 @@ def _build_offspring_worker(
     ctx: OffspringBuildContext,
 ) -> dict[str, Any]:
     """Build one GA offspring (crossover + optional mutation) in an isolated worker."""
-    worker_logger = get_logger(__name__)
     pairing_rng, operator_rng, decision_rng = offspring_rng_triple(job["task_seed"])
     setup_t0 = perf_counter()
     if _offspring_worker_has_cached_state(ctx):
@@ -310,12 +300,14 @@ def _build_offspring_worker(
     child, desc = local_pairing.get_new_individual([job["a1"], job["a2"]])
     crossover_s = perf_counter() - crossover_t0
     mutation_s = 0.0
+    mutation_applied = False
     if child is None:
         return {
             "index": job["index"],
             "child": None,
             "desc": None,
             "failure_reason": "pairing_failed",
+            "mutation_applied": False,
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
@@ -326,6 +318,7 @@ def _build_offspring_worker(
             "child": None,
             "desc": desc,
             "failure_reason": "too_close_prefilter",
+            "mutation_applied": False,
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
@@ -336,6 +329,7 @@ def _build_offspring_worker(
         mutation_s = perf_counter() - mutation_t0
         if mutated is not None:
             child = mutated
+            mutation_applied = True
     if ctx.freeze_adsorbate_internal_geometry:
         enforce_frozen_adsorbate_geometry(
             child,
@@ -365,12 +359,13 @@ def _build_offspring_worker(
             enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
         )
     except ValueError as exc:
-        worker_logger.debug("Offspring rejected by system_type validation: %s", exc)
         return {
             "index": job["index"],
             "child": None,
             "desc": desc,
             "failure_reason": "validation_failed",
+            "validation_error": str(exc),
+            "mutation_applied": mutation_applied,
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
@@ -380,6 +375,7 @@ def _build_offspring_worker(
         "child": child,
         "desc": desc,
         "failure_reason": None,
+        "mutation_applied": mutation_applied,
         "operator_setup_s": operator_setup_s,
         "crossover_s": crossover_s,
         "mutation_s": mutation_s,
@@ -470,8 +466,12 @@ def _relax_unrelaxed_candidates(
     enforce_adsorbate_subgraph_integrity: bool = True,
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
-) -> int:
-    """Relax unrelaxed candidates in batches and commit them to the database."""
+) -> tuple[int, int]:
+    """Relax unrelaxed candidates in batches and commit them to the database.
+
+    Returns:
+        Tuple of (GA-eligible count, ineligible count) for this relax call.
+    """
     available = database_retry(
         da.get_number_of_unrelaxed_candidates,
         config=RetryConfig(max_retries=5),
@@ -479,9 +479,9 @@ def _relax_unrelaxed_candidates(
     )
 
     if available == 0:
-        return 0
+        return (0, 0)
     if not force and max_batch is not None and available < max_batch:
-        return 0
+        return (0, 0)
 
     to_take = available if force or max_batch is None else min(available, max_batch)
 
@@ -502,7 +502,7 @@ def _relax_unrelaxed_candidates(
         profiling["db_read_s"] = profiling.get("db_read_s", 0.0) + (perf_counter() - t0)
 
     if not batch:
-        return 0
+        return (0, 0)
 
     t0 = perf_counter()
     surface_mode = uses_surface(system_type)
@@ -566,8 +566,14 @@ def _relax_unrelaxed_candidates(
                 )
                 if validation_error is not None:
                     ineligible_count += 1
-                    logger.warning(
-                        "Offspring %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
+                    label = (
+                        "Offspring"
+                        if generation is not None
+                        else "Initial candidate"
+                    )
+                    logger.debug(
+                        "%s %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
+                        label,
                         idx + 1,
                         len(batch),
                         validation_error,
@@ -629,13 +635,6 @@ def _relax_unrelaxed_candidates(
         config=RetryConfig(max_retries=5),
         operation_name="write_relaxed_batch",
     )
-    if ineligible_count > 0:
-        logger.info(
-            "Relaxation batch: %d/%d individuals are GA-eligible, %d persisted as ineligible",
-            len(batch) - ineligible_count,
-            len(batch),
-            ineligible_count,
-        )
     if profiling is not None:
         profiling["db_write_s"] = profiling.get("db_write_s", 0.0) + (
             perf_counter() - t0
@@ -649,7 +648,7 @@ def _relax_unrelaxed_candidates(
                 "population_update_s", 0.0
             ) + (perf_counter() - t0)
 
-    return successful_count
+    return (successful_count, ineligible_count)
 
 
 def ga_go(
@@ -970,6 +969,7 @@ def ga_go(
             adsorbate_definition=adsorbate_definition,
             adsorbate_fragment_template=adsorbate_fragment_template,
             cluster_adsorbate_config=cluster_adsorbate_config,
+            verbosity=verbosity,
         )
     else:
         start_generator = ClusterStartGenerator(
@@ -985,6 +985,7 @@ def ga_go(
             adsorbate_definition=adsorbate_definition,
             adsorbate_fragment_template=adsorbate_fragment_template,
             cluster_adsorbate_config=cluster_adsorbate_config,
+            verbosity=verbosity,
         )
     profile_timings["initial_population_batch_build_s"] = (
         perf_counter() - t0_batch_build
@@ -1084,7 +1085,7 @@ def ga_go(
                 )
                 if validation_error is not None:
                     initial_discarded_count += 1
-                    logger.warning(
+                    logger.debug(
                         "Discarding disconnected initial candidate before DB insert: %s",
                         validation_error,
                     )
@@ -1135,7 +1136,7 @@ def ga_go(
                     )
                     if validation_error is not None:
                         initial_ineligible_relaxed_count += 1
-                        logger.warning(
+                        logger.debug(
                             "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
                             validation_error,
                         )
@@ -1228,16 +1229,6 @@ def ga_go(
                 "Tagged %s GA population members with generation=0",
                 initial_pop_count,
             )
-        if initial_discarded_count > 0:
-            logger.info(
-                "Discarded %d disconnected initial candidates before DB insert",
-                initial_discarded_count,
-            )
-        if initial_ineligible_relaxed_count > 0:
-            logger.info(
-                "Stored %d initial relaxed candidates as GA-ineligible",
-                initial_ineligible_relaxed_count,
-            )
 
         log_file = os.path.join(output_dir, "population.log")
 
@@ -1263,11 +1254,20 @@ def ga_go(
             **population_kwargs,
         )
         population._write_log()
-        logger.debug(
-            "Initial Population created: size=%d, confids=%s",
-            len(population.pop),
-            [a.info.get("confid") for a in population.pop],
-        )
+        if verbosity >= 1:
+            eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
+            logger.info(
+                "Initial population: size=%d, %d GA-eligible, %d discarded pre-relax, %d ineligible post-relax",
+                len(population.pop),
+                eligible_initial,
+                initial_discarded_count,
+                initial_ineligible_relaxed_count,
+            )
+        if verbosity >= 2:
+            logger.debug(
+                "Initial Population confids=%s",
+                [a.info.get("confid") for a in population.pop],
+            )
 
         log_early_stopping_info(
             verbosity=verbosity,
@@ -1338,6 +1338,14 @@ def ga_go(
             worker_failures_gen = 0
             worker_failure_types_gen: dict[str, int] = {}
             retry_failure_reasons_gen: dict[str, int] = {}
+            generation_all_job_results: list[dict[str, Any]] = []
+            total_crossover_jobs_gen = 0
+
+            log_phase_subheader(
+                logger,
+                f"Generation {generation}",
+                verbosity=verbosity,
+            )
 
             offspring_ctx = OffspringBuildContext(
                 atoms_template=_picklable_atoms_copy(atoms_template),
@@ -1465,6 +1473,8 @@ def ga_go(
                                 )
                                 continue
                             job_results[result["index"]] = result
+                    total_crossover_jobs_gen += len(job_results)
+                    generation_all_job_results.extend(job_results.values())
                     if len(jobs) > 0 and len(job_results) == 0 and worker_exceptions:
                         first = worker_exceptions[0]
                         if not all(
@@ -1560,13 +1570,14 @@ def ga_go(
             )
             profile_counters["offspring_created"] += created
 
-            # Emit a concise per-generation summary at DEBUG level (one line)
-            logger.debug(
-                "Generation %s offspring loop: n_offspring=%d, created=%d, attempts=%d",
-                generation,
-                n_offspring,
-                created,
-                attempts,
+            log_generation_offspring_summaries(
+                logger,
+                verbosity=verbosity,
+                job_results=generation_all_job_results,
+                total_jobs=total_crossover_jobs_gen,
+                created=created,
+                n_offspring=n_offspring,
+                attempts=attempts,
             )
 
             # Ask TorchSim relaxer to process available unrelaxed candidates now.
@@ -1579,7 +1590,7 @@ def ga_go(
             pre_db_write = float(profile_timings.get("db_write_s", 0.0))
             pre_pop_update = float(profile_timings.get("population_update_s", 0.0))
             t0_relax_call = perf_counter()
-            offspring_count = _relax_unrelaxed_candidates(
+            eligible_count, ineligible_count = _relax_unrelaxed_candidates(
                 da,
                 relaxer,
                 population=population,
@@ -1600,6 +1611,7 @@ def ga_go(
                 freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                 adsorbate_fragment_templates=adsorbate_fragment_template,
             )
+            offspring_count = eligible_count
             relax_call_wall_s = perf_counter() - t0_relax_call
             post_db_read = float(profile_timings.get("db_read_s", 0.0))
             post_relax = float(profile_timings.get("relax_batch_s", 0.0))
@@ -1610,33 +1622,15 @@ def ga_go(
             gen_db_write_s = max(0.0, post_db_write - pre_db_write)
             gen_pop_update_s_from_relax = max(0.0, post_pop_update - pre_pop_update)
             pop_update_s = gen_pop_update_s_from_relax
+            if verbosity >= 1 and (eligible_count + ineligible_count) > 0:
+                logger.info(
+                    "Relaxation: %d/%d GA-eligible, %d ineligible",
+                    eligible_count,
+                    eligible_count + ineligible_count,
+                    ineligible_count,
+                )
             if offspring_count > 0:
                 profile_counters["offspring_relaxed"] += int(offspring_count)
-                # Attempt to report a concise triple: created_this_gen / relaxed_this_call / total_relaxed
-                try:
-                    total_relaxed_cnt = database_retry(
-                        lambda: _count_relaxed_candidates(da),
-                        config=RetryConfig(max_retries=5),
-                        operation_name="count_relaxed_candidates",
-                    )
-                except HPC_DATABASE_EXCEPTIONS:
-                    total_relaxed_cnt = None
-
-                if total_relaxed_cnt is not None:
-                    logger.debug(
-                        "Generation %s: created=%d, relaxed_this_call=%d, total_relaxed=%d",
-                        generation,
-                        created,
-                        offspring_count,
-                        total_relaxed_cnt,
-                    )
-                else:
-                    logger.debug(
-                        "Generation %s: created=%d, relaxed_this_call=%d",
-                        generation,
-                        created,
-                        offspring_count,
-                    )
 
             if per_generation is not None:
                 per_generation.append(

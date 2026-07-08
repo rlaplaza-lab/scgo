@@ -119,3 +119,133 @@ def _suppress_third_party_loggers(level: int, hpc_mode: bool = False) -> None:
 def should_show_progress(verbosity: int) -> bool:
     """True when verbosity >= 1 (progress bars enabled for normal+)."""
     return verbosity >= 1
+
+
+# ---------------------------------------------------------------------------
+# Verbosity-gated logging helpers
+# ---------------------------------------------------------------------------
+# These helpers provide consistent verbosity-gated logging with lazy evaluation.
+# Use these instead of scattering `if verbosity >= X:` checks in code.
+#
+# Style guidelines for SCGO logging:
+# - Prefer %-style formatting: logger.info("Processing %s", item)
+# - Avoid f-strings: logger.info(f"Processing {item}") - eager evaluation wasteful
+# - Use these helpers for verbosity-gated messages
+# - Use logger.exception() for unexpected errors with automatic traceback
+# - Use exc_info=(verbosity >= 2) for handled errors with conditional traceback
+
+
+def log_debug_v(
+    logger: logging.Logger,
+    message: str,
+    *args: object,
+    verbosity: int = 1,
+    min_verbosity: int = 2,
+) -> None:
+    """Log debug message if verbosity >= min_verbosity (default 2).
+
+    Uses lazy %-style formatting. Message is only formatted if it will be logged.
+
+    Args:
+        logger: The logger instance.
+        message: Format string for the message.
+        *args: Arguments for the format string.
+        verbosity: Current verbosity level (0-3).
+        min_verbosity: Minimum verbosity to log (default 2 = DEBUG).
+    """
+    if verbosity >= min_verbosity:
+        logger.debug(message, *args)
+
+
+def log_info_v(
+    logger: logging.Logger,
+    message: str,
+    *args: object,
+    verbosity: int = 1,
+    min_verbosity: int = 1,
+) -> None:
+    """Log info message if verbosity >= min_verbosity (default 1).
+
+    Uses lazy %-style formatting. Message is only formatted if it will be logged.
+
+    Args:
+        logger: The logger instance.
+        message: Format string for the message.
+        *args: Arguments for the format string.
+        verbosity: Current verbosity level (0-3).
+        min_verbosity: Minimum verbosity to log (default 1 = INFO).
+    """
+    if verbosity >= min_verbosity:
+        logger.info(message, *args)
+
+
+def log_warning_v(
+    logger: logging.Logger,
+    message: str,
+    *args: object,
+    verbosity: int = 1,
+    min_verbosity: int = 1,
+) -> None:
+    """Log warning message if verbosity >= min_verbosity (default 1).
+
+    Warnings are typically always shown, but this allows conditional suppression.
+
+    Args:
+        logger: The logger instance.
+        message: Format string for the message.
+        *args: Arguments for the format string.
+        verbosity: Current verbosity level (0-3).
+        min_verbosity: Minimum verbosity to log (default 1).
+    """
+    if verbosity >= min_verbosity:
+        logger.warning(message, *args)
+
+
+def log_error_v(
+    logger: logging.Logger,
+    message: str,
+    *args: object,
+    verbosity: int = 0,
+    min_verbosity: int = 0,
+) -> None:
+    """Log error message if verbosity >= min_verbosity (default 0).
+
+    Errors are typically always shown, but this allows conditional suppression.
+
+    Args:
+        logger: The logger instance.
+        message: Format string for the message.
+        *args: Arguments for the format string.
+        verbosity: Current verbosity level (0-3).
+        min_verbosity: Minimum verbosity to log (default 0 = always).
+    """
+    if verbosity >= min_verbosity:
+        logger.error(message, *args)
+
+
+def log_exception_v(
+    logger: logging.Logger,
+    message: str,
+    *args: object,
+    verbosity: int = 1,
+    min_verbosity: int = 1,
+    min_verbosity_for_traceback: int = 2,
+) -> None:
+    """Log exception with traceback if verbosity >= min_verbosity_for_traceback.
+
+    For unexpected errors, use logger.exception() directly instead.
+    This helper is for handled exceptions where you want conditional traceback.
+
+    Args:
+        logger: The logger instance.
+        message: Format string for the message.
+        *args: Arguments for the format string.
+        verbosity: Current verbosity level (0-3).
+        min_verbosity: Minimum verbosity to log error (default 1).
+        min_verbosity_for_traceback: Minimum verbosity for traceback (default 2).
+    """
+    if verbosity >= min_verbosity:
+        if verbosity >= min_verbosity_for_traceback:
+            logger.exception(message, *args)
+        else:
+            logger.error(message, *args)

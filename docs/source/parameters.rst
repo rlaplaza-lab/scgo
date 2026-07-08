@@ -43,9 +43,9 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
    * - 0
      - Warnings and errors only; no progress bars
    * - 1
-     - Normal operation: parameter merge logs, timing summaries, campaign progress
+     - Normal operation: parameter merge logs, timing summaries, campaign progress, and GA phase summaries (initialization, per-generation crossover/mutation/relaxation)
    * - 2
-     - DEBUG-level library messages (third-party loggers still suppressed in HPC mode)
+     - Per-individual GA and initialization detail (offspring outcomes, placement failures, ineligible structures after relaxation); third-party loggers still suppressed in HPC mode
    * - 3
      - TRACE-level diagnostics (deepest SCGO logging)
 

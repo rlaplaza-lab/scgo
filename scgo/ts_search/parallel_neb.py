@@ -169,7 +169,7 @@ class ParallelNEBBatch:
                         self._optimizers[neb_idx].step()
                         still_active.append(neb_idx)
                 except (RuntimeError, ValueError) as e:
-                    logger.debug(f"NEB {neb_idx} step failed: {e}")
+                    logger.debug("NEB %d step failed: %s", neb_idx, e)
                     self.failed_nebs[neb_idx] = str(e)
                     results[neb_idx]["error"] = str(e)
 

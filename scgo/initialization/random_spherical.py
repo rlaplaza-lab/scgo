@@ -16,6 +16,7 @@ from scipy.spatial import KDTree
 
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
+from scgo.utils.phase_logging import InitDiagnosticsCollector
 
 from .atomic_radii import (
     cluster_passes_ga_blmin,
@@ -52,6 +53,12 @@ from .initialization_config import (
 )
 
 logger = get_logger(__name__)
+
+
+def _record_placement_failure(error_msg: str) -> None:
+    """Store placement failure for batch summary (detail emitted at verbosity 2)."""
+    compact = error_msg.splitlines()[0]
+    InitDiagnosticsCollector.record_placement_failure(compact, error_msg)
 
 
 # Growth order strategy implementations
@@ -1029,7 +1036,7 @@ def _add_atoms_single_mode(
                 diagnostics=diagnostics,
                 additional_info=additional_info,
             )
-            logger.debug(error_msg)
+            _record_placement_failure(error_msg)
             return None
 
         new_atoms.append(Atom(atom_symbol, new_pos))
@@ -1068,7 +1075,7 @@ def _add_atoms_single_mode(
                 diagnostics=diagnostics,
                 additional_info=additional_info,
             )
-            logger.debug(error_msg)
+            _record_placement_failure(error_msg)
             return None
 
     return new_atoms
@@ -1121,7 +1128,7 @@ def _add_atoms_batch_mode(
                 diagnostics=diagnostics,
                 additional_info=additional_info,
             )
-            logger.debug(error_msg)
+            _record_placement_failure(error_msg)
             return None
 
         # Progressive relaxation for batch attempts
@@ -1287,7 +1294,7 @@ def _add_atoms_batch_mode(
                 diagnostics=diagnostics,
                 additional_info=additional_info,
             )
-            logger.warning(error_msg)
+            _record_placement_failure(error_msg)
             return None
 
         # Reset batch attempt counter on successful placement

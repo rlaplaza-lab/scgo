@@ -355,7 +355,7 @@ def bh_go(
             )
 
         if logger.isEnabledFor(logging.INFO):
-            logger.info(f"Loading reference structures from: {diversity_reference_db}")
+            logger.info("Loading reference structures from: %s", diversity_reference_db)
         with SCGODatabaseManager(
             base_dir=output_dir, enable_caching=True
         ) as db_manager:
@@ -365,7 +365,7 @@ def bh_go(
                 max_structures=diversity_max_references,
             )
         if logger.isEnabledFor(logging.INFO):
-            logger.info(f"Loaded {len(reference_structures)} reference structures")
+            logger.info("Loaded %d reference structures", len(reference_structures))
 
         if not reference_structures:
             logger.warning(

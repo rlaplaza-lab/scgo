@@ -8,7 +8,6 @@ growth strategies based on available candidates.
 from __future__ import annotations
 
 import itertools
-import logging
 import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
@@ -25,6 +24,7 @@ from scgo.utils.helpers import (
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.phase_logging import InitDiagnosticsCollector, infer_verbosity
 from scgo.utils.validation import validate_composition
 
 from .atomic_radii import get_vdw_radius
@@ -1433,6 +1433,8 @@ def create_initial_cluster_batch(
         structure_assignments.append((i, strategy, template_index, structure_seed))
 
     _SeedSamplingLogCollector.reset()
+    if n_structures > 1:
+        InitDiagnosticsCollector.reset()
 
     def _worker_wrapper(assignment):
         return _generate_structure_batch_item(
@@ -1466,23 +1468,17 @@ def create_initial_cluster_batch(
                 results[idx] = atoms
                 fallback_info[idx] = (used_strat, fallback)
 
-    if logger.isEnabledFor(logging.DEBUG):
-        template_to_random = sum(
-            1
-            for u, f in fallback_info.values()
-            if u == "random_spherical" and f == "template"
-        )
-        seed_to_random = sum(
-            1
-            for u, f in fallback_info.values()
-            if u == "random_spherical" and f == "seed+growth"
-        )
-        logger.debug(
-            "Fallbacks: template->random=%d, seed->random=%d",
-            template_to_random,
-            seed_to_random,
-        )
+    for used_strat, fallback in fallback_info.values():
+        if fallback is not None:
+            InitDiagnosticsCollector.record_fallback(used_strat, fallback)
 
     _SeedSamplingLogCollector.emit_summary_if_any()
+
+    if n_structures > 1:
+        InitDiagnosticsCollector.emit_summary(
+            logger,
+            verbosity=infer_verbosity(logger),
+            n_structures=n_structures,
+        )
 
     return results  # type: ignore[return-value]

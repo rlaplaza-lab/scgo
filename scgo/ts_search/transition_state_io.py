@@ -177,7 +177,7 @@ def select_structure_pairs(
     logger = get_logger(__name__)
 
     if len(minima) < 2:
-        logger.info(f"Only {len(minima)} minima, need at least 2 to pair")
+        logger.info("Only %d minima, need at least 2 to pair", len(minima))
         return []
 
     scored_pairs: list[tuple[float, int, int]] = []
@@ -469,7 +469,7 @@ def write_final_unique_ts(
             empty_data["minima_base_dir"] = minima_base_dir
         with open(summary_path, "w") as f:
             json.dump(empty_data, f, indent=2)
-        logger.info(f"No successful TSs to deduplicate for {formula}")
+        logger.info("No successful TSs to deduplicate for %s", formula)
         return []
 
     clusters = _cluster_ts_candidates_globally(
