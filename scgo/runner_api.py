@@ -1354,9 +1354,9 @@ def _prepare_run_go_campaign_context(
                 context="run_go_campaign",
             )
         elif preset_ads_def is not None:
-            ads_def = preset_ads_def
+            ads_def = copy.deepcopy(preset_ads_def)
             full_comp = resolve_mobile_composition(
-                comp, preset_ads_def, context="run_go_campaign"
+                comp, ads_def, context="run_go_campaign"
             )
         else:
             ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(

@@ -10,7 +10,9 @@
   ``Formula`` instead of mis-reading ``Ho`` as holmium).
 - Gas/surface adsorbate runs with a preset ``adsorbate_definition``: reconcile
   campaign composition to ``core_symbols + adsorbate_symbols`` when counts match
-  but symbol order differs, or when only the core formula is supplied.
+  but symbol order differs, when only the core formula is supplied, or when the
+  full mobile formula requires re-deriving ``core_symbols`` by stripping known
+  ``adsorbate_symbols`` (oxide campaigns such as ``HO2Ru9W2``).
 
 ### Changed
 

@@ -14,6 +14,7 @@ from scgo.param_presets import (
     get_ts_search_params,
 )
 from scgo.runner_api import (
+    _prepare_run_go_campaign_context,
     _run_go_campaign_compositions,
     _run_go_trials,
     _run_go_ts_pipeline,
@@ -31,6 +32,7 @@ from scgo.runner_api import (
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import get_system_policy
+from scgo.utils.helpers import get_composition_counts
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 from tests.test_utils import isolated_workflow_cwd
 
@@ -481,6 +483,40 @@ def test_run_go_campaign_normalizes_items(monkeypatch):
         system_type="gas_cluster",
     )
     assert captured == [["Au", "Au"], ["Pt"], ["Cu", "Cu"]]
+
+
+def test_run_go_campaign_reconciles_wrong_preset_core() -> None:
+    """Full oxide formula with stale preset core_symbols is reconciled at campaign prep."""
+    wrong_core = ["Ru"] * 10 + ["W", "O"]
+    params = {
+        "adsorbate_definition": {
+            "core_symbols": wrong_core,
+            "adsorbate_symbols": ["O", "H"],
+            "adsorbate_fragment_lengths": [2],
+        },
+        "adsorbate_fragment_template": _adsorbates_oh(n=1)[0],
+    }
+    context = _prepare_run_go_campaign_context(
+        ["HO2Ru9W2"],
+        params=params,
+        seed=42,
+        verbosity=0,
+        run_id=None,
+        clean=False,
+        output_dir=None,
+        surface_config=None,
+        system_type="gas_cluster_adsorbate",
+        adsorbates=None,
+    )
+    expected_core = ["Ru"] * 9 + ["W", "W", "O"]
+    parsed = parse_composition_arg("HO2Ru9W2")
+    assert get_composition_counts(context.compositions[0]) == get_composition_counts(
+        parsed
+    )
+    assert get_composition_counts(
+        context.params["adsorbate_definition"]["core_symbols"]
+    ) == get_composition_counts(expected_core)
+    assert context.compositions[0][-2:] == ["O", "H"]
 
 
 def test_run_go_campaign_empty_raises():

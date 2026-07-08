@@ -20,6 +20,7 @@ from scgo.system_types import (
     resolve_mobile_composition,
     validate_structure_for_system_type,
 )
+from scgo.utils.helpers import get_composition_counts
 
 
 def _pt_triangle() -> Atoms:
@@ -279,9 +280,38 @@ def test_resolve_mobile_composition_rejects_count_mismatch() -> None:
         "adsorbate_symbols": ["O", "H"],
         "adsorbate_fragment_lengths": [2],
     }
-    composition = ["Ru"] * 9 + ["W", "W", "O", "O", "H"]
+    composition = ["Ru"] * 9 + ["W", "W", "O", "O"]
     with pytest.raises(ValueError, match="got counts|expected"):
         resolve_mobile_composition(composition, ads_def, context="test")
+
+
+def test_resolve_mobile_composition_reconciles_wrong_preset_core() -> None:
+    """Full formula with stale Ru10WO preset core is reconciled to Ru9W2O + OH."""
+    wrong_core = ["Ru"] * 10 + ["W", "O"]
+    ads_def = {
+        "core_symbols": wrong_core,
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    parsed = parse_composition_arg("HO2Ru9W2")
+    expected_core = ["Ru"] * 9 + ["W", "W", "O"]
+    result = resolve_mobile_composition(parsed, ads_def)
+    assert get_composition_counts(result) == get_composition_counts(parsed)
+    assert get_composition_counts(ads_def["core_symbols"]) == get_composition_counts(
+        expected_core
+    )
+    assert result[-2:] == ["O", "H"]
+
+
+def test_resolve_mobile_composition_preserves_core_only_path() -> None:
+    core = ["Ru"] * 9 + ["W", "W", "O"]
+    ads_def = {
+        "core_symbols": core,
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    assert resolve_mobile_composition(core, ads_def) == core + ["O", "H"]
+    assert ads_def["core_symbols"] == core
 
 
 def test_ho2ru9w2_formula_resolves_with_matching_adsorbate_definition() -> None:

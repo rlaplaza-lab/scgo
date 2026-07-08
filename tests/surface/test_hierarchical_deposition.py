@@ -55,13 +55,13 @@ def test_validate_partition_core_adsorbate():
 
 
 def test_validate_rejects_bad_partition():
-    with pytest.raises(ValueError, match="composition|partition"):
+    with pytest.raises(ValueError, match="composition|partition|adsorbate"):
         validate_adsorbate_definition(
             system_type="surface_cluster_adsorbate",
-            composition=["Pt", "Pt", "Pt", "O", "H"],
+            composition=["Pt", "Pt", "Pt", "O"],
             adsorbate_definition={
                 "adsorbate_symbols": ["O", "H"],
-                "core_symbols": ["Pt"],
+                "core_symbols": ["Pt", "Pt", "Pt"],
                 "adsorbate_fragment_lengths": [2],
             },
             context="test",
