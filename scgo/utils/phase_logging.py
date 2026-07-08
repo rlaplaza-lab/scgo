@@ -99,7 +99,9 @@ class InitDiagnosticsCollector:
             placement_failures = list(cls._placement_failures)
 
         template_to_random = sum(
-            1 for used, fb in fallbacks if used == "random_spherical" and fb == "template"
+            1
+            for used, fb in fallbacks
+            if used == "random_spherical" and fb == "template"
         )
         seed_to_random = sum(
             1

@@ -567,9 +567,7 @@ def _relax_unrelaxed_candidates(
                 if validation_error is not None:
                     ineligible_count += 1
                     label = (
-                        "Offspring"
-                        if generation is not None
-                        else "Initial candidate"
+                        "Offspring" if generation is not None else "Initial candidate"
                     )
                     logger.debug(
                         "%s %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
