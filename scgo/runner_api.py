@@ -838,14 +838,20 @@ def _parse_lowercase_single_element(comp_str: str) -> list[str] | None:
 
 
 def parse_composition_arg(comp_str: str) -> list[str]:
-    """Supports two formats:
-    - Comma-separated symbols: "Pt,Pt,Au" (case-insensitive per symbol)
-    - Compact formula with chemical capitalization: "Pt3Au", "HO2Ru9W2"
-      (parsed via :class:`ase.formula.Formula`; ``HO2`` is H + O2, not holmium)
+    """Parse composition strings.
 
-    All-lowercase compact formulas are accepted only for unambiguous single-element
-    inputs such as ``pt3``. Multi-element lowercase strings (``pt3au``) and
-    ambiguous two-letter forms (``ho2`` as H+O2 vs holmium) are rejected.
+    Supported formats:
+
+    - Comma-separated symbols such as ``"Pt,Pt,Au"`` (case-insensitive per
+      symbol).
+    - Compact formula with chemical capitalization such as ``"Pt3Au"`` or
+      ``"HO2Ru9W2"``. Uses :class:`ase.formula.Formula`; ``HO2`` is H + O2,
+      not holmium.
+
+    All-lowercase compact formulas are accepted only for unambiguous
+    single-element inputs such as ``pt3``. Multi-element lowercase strings
+    (``pt3au``) and ambiguous two-letter forms (``ho2`` as H+O2 vs holmium)
+    are rejected.
     """
     comp_str = comp_str.strip()
     if not comp_str:
