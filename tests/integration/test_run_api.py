@@ -513,6 +513,33 @@ def test_run_go_campaign_reconciles_wrong_preset_core() -> None:
     )
 
 
+def test_run_go_campaign_reconciles_wrong_preset_core_surface() -> None:
+    params = {
+        "adsorbate_definition": {
+            "core_symbols": ["Pt"] * 4 + ["O"],
+            "adsorbate_symbols": ["O", "H"],
+            "adsorbate_fragment_lengths": [2],
+        },
+        "adsorbate_fragment_template": _adsorbates_oh(n=1)[0],
+    }
+    context = _prepare_run_go_campaign_context(
+        [parse_composition_arg("Pt5O2H")],
+        params=params,
+        seed=42,
+        verbosity=0,
+        run_id=None,
+        clean=False,
+        output_dir=None,
+        surface_config=_surface_cfg(),
+        system_type="surface_cluster_adsorbate",
+        adsorbates=None,
+    )
+    parsed = parse_composition_arg("Pt5O2H")
+    assert get_composition_counts(context.compositions[0]) == get_composition_counts(
+        parsed
+    )
+
+
 def test_run_go_campaign_empty_raises():
     with pytest.raises(ValueError, match="empty"):
         run_go_campaign([], params=None, verbosity=0, system_type="gas_cluster")

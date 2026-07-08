@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -453,6 +454,61 @@ def extract_adsorbate_definition_from_params(
             if isinstance(ex, dict):
                 return ex
     return None
+
+
+def resolve_adsorbate_run_composition(
+    *,
+    system_type: SystemType,
+    composition: list[str],
+    adsorbates: AdsorbatesInput | None,
+    preset_adsorbate_definition: AdsorbateDefinition | None,
+    context: str,
+) -> tuple[AdsorbateDefinition | None, list[Atoms] | None, list[str]]:
+    """Build or reconcile mobile composition for adsorbate runs (gas or surface).
+
+    Uses explicit ``adsorbates`` when provided; otherwise reconciles ``composition``
+    against a preset ``adsorbate_definition`` from params.
+    """
+    policy = get_system_policy(system_type)
+    comp = [str(s) for s in composition]
+
+    if not policy.has_adsorbate:
+        if adsorbates is not None:
+            raise ValueError(
+                f"{context} does not accept adsorbates for system_type={system_type!r}."
+            )
+        if preset_adsorbate_definition is not None:
+            raise ValueError(
+                f"{context} does not accept adsorbate_definition for "
+                f"system_type={system_type!r}."
+            )
+        return None, None, comp
+
+    if adsorbates is not None:
+        return build_adsorbate_definition_from_inputs(
+            system_type=system_type,
+            composition=comp,
+            adsorbates=adsorbates,
+            context=context,
+        )
+
+    if preset_adsorbate_definition is not None:
+        ads_def = copy.deepcopy(preset_adsorbate_definition)
+        full_comp = resolve_mobile_composition(comp, ads_def, context=context)
+        validate_adsorbate_definition(
+            system_type=system_type,
+            composition=full_comp,
+            adsorbate_definition=ads_def,
+            context=context,
+        )
+        return ads_def, None, full_comp
+
+    return build_adsorbate_definition_from_inputs(
+        system_type=system_type,
+        composition=comp,
+        adsorbates=None,
+        context=context,
+    )
 
 
 def validate_composition_against_adsorbate(

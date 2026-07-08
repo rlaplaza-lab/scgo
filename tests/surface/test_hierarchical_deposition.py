@@ -81,6 +81,27 @@ def test_validate_accepts_wrong_list_order_with_matching_multiset():
     )
 
 
+def test_validate_reconciles_wrong_preset_core_surface():
+    """Surface adsorbate runs reconcile core_symbols from full mobile formulas."""
+    from scgo.utils.helpers import get_composition_counts
+
+    ads_def = {
+        "core_symbols": ["Pt"] * 4 + ["O"],
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    composition = ["Pt"] * 5 + ["O", "O", "H"]
+    validate_adsorbate_definition(
+        system_type="surface_cluster_adsorbate",
+        composition=composition,
+        adsorbate_definition=ads_def,
+        context="test",
+    )
+    assert get_composition_counts(ads_def["core_symbols"]) == get_composition_counts(
+        ["Pt"] * 5 + ["O"]
+    )
+
+
 def test_hierarchical_deposition_ordering_and_slab_prefix():
     cfg = _small_slab()
     slab = cfg.slab

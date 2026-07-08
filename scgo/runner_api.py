@@ -44,12 +44,10 @@ from scgo.system_types import (
     AdsorbatesInput,
     AdsorbateDefinition,
     SystemType,
-    build_adsorbate_definition_from_inputs,
     extract_adsorbate_definition_from_params,
     get_system_policy,
+    resolve_adsorbate_run_composition,
     resolve_connectivity_factor,
-    resolve_mobile_composition,
-    validate_adsorbate_definition,
     validate_system_type_settings,
 )
 from scgo.ts_search.transition_state_run import (
@@ -222,13 +220,16 @@ def _prepare_run_context(
     if params is not None:
         _reject_system_keys(params, context=context, kind="go")
     comp = _as_composition(composition)
-    ads_def, ads_template, full_comp = build_adsorbate_definition_from_inputs(
-        system_type=st, composition=comp, adsorbates=adsorbates, context=context
+    preset_ads = (
+        extract_adsorbate_definition_from_params(params)
+        if adsorbates is None and params is not None
+        else None
     )
-    validate_adsorbate_definition(
+    ads_def, ads_template, full_comp = resolve_adsorbate_run_composition(
         system_type=st,
-        composition=full_comp,
-        adsorbate_definition=ads_def,
+        composition=comp,
+        adsorbates=adsorbates,
+        preset_adsorbate_definition=preset_ads,
         context=context,
     )
     params_prep = params or {}
@@ -1351,29 +1352,11 @@ def _prepare_run_go_campaign_context(
     ads_temp: list[Atoms] | Atoms | None = None
     for composition_item in _as_composition_list(compositions):
         comp = _as_composition(composition_item)
-        if adsorbates is not None:
-            ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
-                system_type=st,
-                composition=comp,
-                adsorbates=adsorbates,
-                context="run_go_campaign",
-            )
-        elif preset_ads_def is not None:
-            ads_def = copy.deepcopy(preset_ads_def)
-            full_comp = resolve_mobile_composition(
-                comp, ads_def, context="run_go_campaign"
-            )
-        else:
-            ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
-                system_type=st,
-                composition=comp,
-                adsorbates=None,
-                context="run_go_campaign",
-            )
-        validate_adsorbate_definition(
+        ads_def, ads_temp, full_comp = resolve_adsorbate_run_composition(
             system_type=st,
-            composition=full_comp,
-            adsorbate_definition=ads_def,
+            composition=comp,
+            adsorbates=adsorbates,
+            preset_adsorbate_definition=preset_ads_def,
             context="run_go_campaign",
         )
         full_compositions.append(full_comp)
@@ -1456,16 +1439,14 @@ def _prepare_run_go_ts_context(
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
     go_prep = _with_surface_in_optimizers(go_mat, surface_config=surface_config)
     core_comp = _as_composition(composition)
-    ads_def, ads_temp, comp = build_adsorbate_definition_from_inputs(
+    preset_ads = (
+        extract_adsorbate_definition_from_params(go_mat) if adsorbates is None else None
+    )
+    ads_def, ads_temp, comp = resolve_adsorbate_run_composition(
         system_type=st,
         composition=core_comp,
         adsorbates=adsorbates,
-        context=context_name,
-    )
-    validate_adsorbate_definition(
-        system_type=st,
-        composition=comp,
-        adsorbate_definition=ads_def,
+        preset_adsorbate_definition=preset_ads,
         context=context_name,
     )
     _validate_go_ts_param_coherence(
@@ -1720,17 +1701,15 @@ def run_go_ts_campaign(
 
     full_compositions: list[list[str]] = []
     ads_def, ads_temp = None, None
+    preset_ads = (
+        extract_adsorbate_definition_from_params(go_mat) if adsorbates is None else None
+    )
     for core_comp in _as_composition_list(compositions):
-        ads_def, ads_temp, full_comp = build_adsorbate_definition_from_inputs(
+        ads_def, ads_temp, full_comp = resolve_adsorbate_run_composition(
             system_type=st,
             composition=core_comp,
             adsorbates=adsorbates,
-            context="run_go_ts_campaign",
-        )
-        validate_adsorbate_definition(
-            system_type=st,
-            composition=full_comp,
-            adsorbate_definition=ads_def,
+            preset_adsorbate_definition=preset_ads,
             context="run_go_ts_campaign",
         )
         full_compositions.append(full_comp)
@@ -1882,17 +1861,15 @@ def run_ts_campaign(
 
     full_compositions: list[list[str]] = []
     ads_def: AdsorbateDefinition | None = None
+    preset_ads = (
+        extract_adsorbate_definition_from_params(ts_mat) if adsorbates is None else None
+    )
     for core in _as_composition_list(compositions):
-        ads_def, _, full = build_adsorbate_definition_from_inputs(
+        ads_def, _, full = resolve_adsorbate_run_composition(
             system_type=st,
             composition=core,
             adsorbates=adsorbates,
-            context="run_ts_campaign",
-        )
-        validate_adsorbate_definition(
-            system_type=st,
-            composition=full,
-            adsorbate_definition=ads_def,
+            preset_adsorbate_definition=preset_ads,
             context="run_ts_campaign",
         )
         full_compositions.append(full)

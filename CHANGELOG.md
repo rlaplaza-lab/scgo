@@ -12,7 +12,8 @@
   campaign composition to ``core_symbols + adsorbate_symbols`` when counts match
   but symbol order differs, when only the core formula is supplied, or when the
   full mobile formula requires re-deriving ``core_symbols`` by stripping known
-  ``adsorbate_symbols`` (oxide campaigns such as ``HO2Ru9W2``).
+  ``adsorbate_symbols`` (oxide campaigns such as ``HO2Ru9W2``). Applies to gas and
+  surface adsorbate system types across all runner entry points.
 
 ### Changed
 
