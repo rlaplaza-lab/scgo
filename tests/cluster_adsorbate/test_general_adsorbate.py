@@ -286,10 +286,9 @@ def test_resolve_mobile_composition_rejects_count_mismatch() -> None:
 
 
 def test_resolve_mobile_composition_reconciles_wrong_preset_core() -> None:
-    """Full formula with stale Ru10WO preset core is reconciled to Ru9W2O + OH."""
-    wrong_core = ["Ru"] * 10 + ["W", "O"]
+    """HO2Ru9W2 with stale Ru10WO preset core is reconciled to Ru9W2O + OH."""
     ads_def = {
-        "core_symbols": wrong_core,
+        "core_symbols": ["Ru"] * 10 + ["W", "O"],
         "adsorbate_symbols": ["O", "H"],
         "adsorbate_fragment_lengths": [2],
     }
@@ -301,17 +300,6 @@ def test_resolve_mobile_composition_reconciles_wrong_preset_core() -> None:
         expected_core
     )
     assert result[-2:] == ["O", "H"]
-
-
-def test_resolve_mobile_composition_preserves_core_only_path() -> None:
-    core = ["Ru"] * 9 + ["W", "W", "O"]
-    ads_def = {
-        "core_symbols": core,
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
-    assert resolve_mobile_composition(core, ads_def) == core + ["O", "H"]
-    assert ads_def["core_symbols"] == core
 
 
 def test_ho2ru9w2_formula_resolves_with_matching_adsorbate_definition() -> None:

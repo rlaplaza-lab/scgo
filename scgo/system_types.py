@@ -391,17 +391,13 @@ def _strip_adsorbate_symbols(
     composition: list[str],
     adsorbate_symbols: list[str],
 ) -> list[str] | None:
-    """Remove one occurrence of each adsorbate symbol (in order) from ``composition``.
-
-    Returns ``None`` if any symbol is missing.
-    """
+    """Return ``composition`` minus one of each adsorbate symbol, or ``None``."""
     remaining = list(composition)
     for symbol in adsorbate_symbols:
         try:
-            idx = remaining.index(symbol)
+            remaining.remove(symbol)
         except ValueError:
             return None
-        remaining.pop(idx)
     return remaining
 
 
@@ -413,10 +409,8 @@ def resolve_mobile_composition(
 ) -> list[str]:
     """Return ``core_symbols + adsorbate_symbols`` for a matching composition.
 
-    When ``composition`` is a full mobile formula and ``adsorbate_symbols`` are
-    known, derives ``core_symbols`` by stripping those adsorbate symbols from
-    ``composition`` and updates ``adsorbate_definition['core_symbols']`` in
-    place when the preset core partition disagrees.
+    Updates ``adsorbate_definition['core_symbols']`` in place when a full mobile
+    formula is reconciled by stripping known ``adsorbate_symbols``.
     """
     prefix = f"{context}: " if context else ""
     core_list, ads_list = _core_and_ads_lists(adsorbate_definition, context=context)
@@ -436,10 +430,8 @@ def resolve_mobile_composition(
     if ads_list:
         derived_core = _strip_adsorbate_symbols(comp, ads_list)
         if derived_core is not None:
-            reconciled = derived_core + ads_list
-            if get_composition_counts(reconciled) == comp_counts:
-                adsorbate_definition["core_symbols"] = derived_core
-                return reconciled
+            adsorbate_definition["core_symbols"] = derived_core
+            return derived_core + ads_list
 
     raise ValueError(
         f"{prefix}composition must match core_symbols + adsorbate_symbols: "
@@ -472,7 +464,8 @@ def validate_composition_against_adsorbate(
     """Check composition against the core/adsorbate partition; return both lists.
 
     ``composition`` may match ``core_symbols + adsorbate_symbols`` exactly, share
-    the same element counts in a different order, or list only ``core_symbols``.
+    the same element counts in a different order, list only ``core_symbols``, or
+    be a full mobile formula from which ``adsorbate_symbols`` are stripped.
     """
     prefix = f"{context}: " if context else ""
     core_list, ads_list = _core_and_ads_lists(adsorbate_definition, context=context)
