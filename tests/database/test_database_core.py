@@ -12,7 +12,6 @@ import multiprocessing as mp
 import os
 import sqlite3
 import threading
-import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -25,7 +24,6 @@ from ase.calculators.emt import EMT
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import (
-    PRESET_CONTENTED,
     RetryConfig,
     SCGODatabaseManager,
     add_metadata,
@@ -53,6 +51,7 @@ from scgo.database.streaming import (
     iter_database_minima,
     iter_databases_minima,
 )
+from scgo.database.sync import PRESET_AGGRESSIVE
 from scgo.exceptions import SCGOValidationError
 from tests.test_utils import assert_run_id_persisted, create_test_atoms
 
@@ -104,18 +103,19 @@ def _count_open_files() -> int:
     return -1
 
 
-_CONCURRENT_WRITE_RETRY = PRESET_CONTENTED
+# Mirrors TorchSim GA batch writes: PRESET_AGGRESSIVE retries, default busy_timeout.
+_PRODUCTION_WRITE_RETRY = PRESET_AGGRESSIVE
+# Two parallel jobs × one GA batch each (see torchsim_batch_size / surface batch_size=2).
+_CONCURRENT_STRESS_WORKERS = 2
+_CONCURRENT_STRESS_BATCH_SIZE = 5
 
 
 def _write_to_database(args):
     """Helper function for multiprocess database writing."""
-    db_path, n_structures, worker_id = args
-
-    # Stagger workers slightly to reduce simultaneous lock acquisition.
-    time.sleep(0.05 * worker_id)
+    db_path, batch_size, worker_id = args
 
     atoms_list = []
-    for i in range(n_structures):
+    for i in range(batch_size):
         atoms = create_test_atoms(
             ["Pt", "Pt"],
             positions=[[0, 0, 0], [2.5 + i * 0.1, 0, 0]],
@@ -124,7 +124,7 @@ def _write_to_database(args):
         atoms.info["data"] = {"worker_tag": f"w{worker_id}"}
         atoms_list.append(atoms)
 
-    with get_connection(db_path, wal_mode=True, busy_timeout=120000) as da:
+    with get_connection(db_path) as da:
         for atoms in atoms_list:
             database_retry(
                 lambda _a=atoms: (
@@ -133,9 +133,8 @@ def _write_to_database(args):
                     ),
                     da.add_relaxed_step(_a),
                 ),
-                config=_CONCURRENT_WRITE_RETRY,
+                config=_PRODUCTION_WRITE_RETRY,
                 operation_name=f"concurrent_stress_write:w{worker_id}",
-                log_level="warning",
             )
     return True, worker_id
 
@@ -824,6 +823,7 @@ class TestRobustness:
     @pytest.mark.slow
     @pytest.mark.xdist_group(name="no_nested_pool")
     def test_concurrent_write_stress(self, tmp_path, pt2_atoms):
+        """Two processes append GA-sized batches using production retry settings."""
         with _setup_test_db(
             tmp_path,
             "concurrent.db",
@@ -833,12 +833,12 @@ class TestRobustness:
         ) as (_da, db_file):
             pass
 
-        n_workers = 2
-        n_structures = 6
+        n_workers = _CONCURRENT_STRESS_WORKERS
+        batch_size = _CONCURRENT_STRESS_BATCH_SIZE
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
-                executor.submit(_write_to_database, (str(db_file), n_structures, wid))
+                executor.submit(_write_to_database, (str(db_file), batch_size, wid))
                 for wid in range(n_workers)
             ]
 
@@ -847,7 +847,7 @@ class TestRobustness:
         assert all(r[0] for r in results), f"Worker failures: {results}"
 
         n_relaxed = count_database_structures(db_file)
-        assert n_relaxed == n_workers * n_structures
+        assert n_relaxed == n_workers * batch_size
 
     def test_setup_database_wal_mode(self, tmp_path, pt2_atoms):
         with _setup_test_db(

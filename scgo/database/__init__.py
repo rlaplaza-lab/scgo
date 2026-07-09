@@ -43,7 +43,6 @@ from scgo.database.registry import (
 from scgo.database.schema import stamp_scgo_database
 from scgo.database.sync import (
     HPC_DATABASE_EXCEPTIONS,
-    PRESET_CONTENTED,
     RetryConfig,
     database_retry,
     retry_transaction,
@@ -74,7 +73,6 @@ __all__ = [
     "update_metadata",
     "filter_by_metadata",
     "HPC_DATABASE_EXCEPTIONS",
-    "PRESET_CONTENTED",
     "RetryConfig",
     "database_retry",
     "retry_transaction",

@@ -42,13 +42,6 @@ class RetryConfig:
 PRESET_AGGRESSIVE = RetryConfig(max_retries=5, initial_delay=0.1, backoff_factor=2.0)
 PRESET_CONSERVATIVE = RetryConfig(max_retries=3, initial_delay=0.5, backoff_factor=1.5)
 PRESET_DEFAULT = RetryConfig(max_retries=3, initial_delay=0.2, backoff_factor=2.0)
-# Shared filesystems / multi-process writers: longer backoff than PRESET_AGGRESSIVE.
-PRESET_CONTENTED = RetryConfig(
-    max_retries=15,
-    initial_delay=0.1,
-    backoff_factor=2.0,
-    max_delay=10.0,
-)
 
 
 def database_retry(
