@@ -10,6 +10,7 @@ from scgo.algorithms.ga_common import (
     validate_structure_for_ga_storage,
 )
 from scgo.database import close_data_connection, setup_database
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster_batch
@@ -90,7 +91,7 @@ def test_validate_structure_for_ga_storage_uses_canonical_frame() -> None:
                 surface_config=surface_config,
                 n_slab=n_slab,
             )
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             raw_ok = False
         storage_err = validate_structure_for_ga_storage(
             atoms.copy(),

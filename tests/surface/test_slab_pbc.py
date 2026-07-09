@@ -23,13 +23,15 @@ def test_fcc111_slab_unchanged_by_normalize():
 
 
 def test_surface_system_config_rejects_all_open_pbc():
+    from scgo.exceptions import SCGOValidationError
+
     slab = Atoms("Pt", positions=[[0, 0, 0]], cell=[10, 10, 10], pbc=False)
     try:
         SurfaceSystemConfig(slab=slab)
-    except ValueError as exc:
+    except SCGOValidationError as exc:
         assert "periodic" in str(exc).lower()
     else:
-        raise AssertionError("expected ValueError")
+        raise AssertionError("expected SCGOValidationError")
 
 
 def test_surface_system_config_normalizes_3d_pbc():

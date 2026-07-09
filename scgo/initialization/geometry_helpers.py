@@ -524,7 +524,7 @@ def _generate_batch_positions_on_convex_hull(
     positions = atoms.get_positions()
     try:
         hull = _get_cached_hull(positions)
-    except ValueError:
+    except (ValueError, SCGOValidationError):
         # Convex hull computation failed (degenerate geometry)
         return []
 
@@ -871,7 +871,7 @@ def _classify_seed_geometry(atoms: Atoms) -> str:
         else:
             return "planar"
 
-    except (QhullError, ValueError, RuntimeError):
+    except (QhullError, ValueError, RuntimeError, SCGOValidationError):
         # Convex hull computation failed (degenerate geometry, collinear points, etc.)
         return "planar"
 

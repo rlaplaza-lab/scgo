@@ -457,7 +457,7 @@ class TestTransactions:
                     "VALUES ('test', '[78,78]', '[[0,0,0],[2.5,0,0]]', "
                     "'[[10,0,0],[0,10,0],[0,0,10]]')"
                 )
-                raise ValueError("Test error")
+                raise SCGOValidationError("Test error")
         else:
             with (
                 get_connection(tmp_path / "test.db") as db,

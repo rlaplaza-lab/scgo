@@ -117,7 +117,7 @@ class TestBoundaryValues:
                 ["Pt", "Pt"], cell_side=10.0, min_distance_factor=10.0, rng=rng
             )
             assert len(atoms) == 2
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             # Placement failure is acceptable with very large factor
             pass
 
@@ -134,7 +134,7 @@ class TestBoundaryValues:
             )
             # If it succeeds, should have 2 atoms
             assert len(atoms) == 2
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             # Failure is acceptable with extreme parameters
             pass
 
@@ -266,7 +266,7 @@ class TestRandomSphericalStressAndPerformance:
             # If it succeeds, should be valid
             if atoms is not None:
                 assert is_cluster_connected(atoms, connectivity_factor=STRICT_FACTOR)
-        except ValueError as e:
+        except (ValueError, SCGOValidationError) as e:
             # Error should mention connectivity, clashes, or validation failure
             # (strict parameters can cause either type of failure)
             error_msg = str(e).lower()

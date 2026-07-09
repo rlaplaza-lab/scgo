@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster, is_cluster_connected
 from tests.constants import INITIALIZATION_MODES
 from tests.test_utils import (
@@ -34,7 +35,7 @@ from tests.test_utils import (
 def _skip_template_valueerror(mode: str, reason: str):
     try:
         yield
-    except ValueError:
+    except (ValueError, SCGOValidationError):
         if mode == "template":
             pytest.skip(reason)
         raise
@@ -228,7 +229,7 @@ class TestInitializationModesEdgeCases:
             comp_list = MIXED_COMPOSITIONS[composition](5)  # Generate 5-atom cluster
             atoms = create_initial_cluster(comp_list, mode=mode, rng=rng)
             assert_cluster_valid(atoms, comp_list)
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             if mode == "template":
                 pytest.skip("Template mode may fail for some compositions")
             raise
@@ -242,7 +243,7 @@ class TestInitializationModesEdgeCases:
             atoms = create_initial_cluster(comp, mode=mode, rng=rng)
             assert len(atoms) == size
             assert_cluster_valid(atoms, comp)
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             if mode == "template":
                 pytest.skip("Template mode may fail for non-magic numbers")
             raise
@@ -257,7 +258,7 @@ class TestInitializationModesEdgeCases:
             atoms = create_initial_cluster(comp, mode=mode, rng=rng)
             assert len(atoms) == size
             assert_cluster_valid(atoms, comp)
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             if mode == "template":
                 pytest.skip("Template mode may fail for non-magic numbers")
             raise
@@ -272,7 +273,7 @@ class TestInitializationModesEdgeCases:
             atoms = create_initial_cluster(comp, mode=mode, rng=rng)
             assert len(atoms) == size
             assert_cluster_valid(atoms, comp)
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             if mode == "template":
                 pytest.skip("Template mode may fail for non-magic numbers")
             raise
@@ -291,7 +292,7 @@ class TestInitializationModesReliability:
             test_rng, _ = create_paired_rngs(seed)
             atoms = create_initial_cluster(comp, mode=mode, rng=test_rng)
             assert_cluster_valid(atoms, comp, check_connectivity=len(atoms) > 2)
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             if mode == "template":
                 pytest.skip("Template mode may fail for non-magic numbers")
             raise
@@ -306,7 +307,7 @@ class TestInitializationModesReliability:
             test_rng, _ = create_paired_rngs(seed)
             atoms = create_initial_cluster(comp, mode=mode, rng=test_rng)
             assert_cluster_valid(atoms, comp, check_connectivity=len(atoms) > 2)
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             if mode == "template":
                 pytest.skip("Template mode may fail for non-magic numbers")
             raise

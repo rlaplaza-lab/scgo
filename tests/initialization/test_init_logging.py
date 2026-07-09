@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from scgo.exceptions import SCGORuntimeError
 from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.initialization.geometry_helpers import (
     format_composition_counts_short,
@@ -159,7 +160,7 @@ def test_all_strategies_none_emits_warning_before_raise(caplog):
         return None
 
     with pytest.raises(
-        RuntimeError, match="All initialization strategies returned None"
+        SCGORuntimeError, match="All initialization strategies returned None"
     ):
         _try_strategies_in_order(
             [("primary", always_none), ("fallback", always_none)],

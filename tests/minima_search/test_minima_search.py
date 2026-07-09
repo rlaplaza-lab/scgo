@@ -22,9 +22,9 @@ class TestRequireCalculator:
     """Tests for _require_calculator function."""
 
     def test_require_calculator_with_none(self):
-        """Test that None calculator raises ValueError."""
+        """Test that None calculator raises SCGOValidationError."""
         with pytest.raises(
-            ValueError, match="calculator_for_global_optimization is required"
+            SCGOValidationError, match="calculator_for_global_optimization is required"
         ):
             main_mod._require_calculator(None)
 

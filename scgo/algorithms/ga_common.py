@@ -196,7 +196,7 @@ def validate_structure_for_ga_storage(
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
-    except ValueError as exc:
+    except (ValueError, SCGOValidationError) as exc:
         return str(exc)
     return None
 
@@ -215,7 +215,7 @@ def core_adsorbate_partition_counts(
             adsorbate_definition,
             context="core_adsorbate_partition_counts",
         )
-    except ValueError as exc:
+    except (ValueError, SCGOValidationError) as exc:
         logger.debug("core_adsorbate_partition_counts validation failed: %s", exc)
         return None
     if len(core_list) == 0 or len(ads_list) == 0:
@@ -237,7 +237,7 @@ def core_adsorbate_partition_details(
             adsorbate_definition,
             context="core_adsorbate_partition_details",
         )
-    except ValueError as exc:
+    except (ValueError, SCGOValidationError) as exc:
         logger.debug("core_adsorbate_partition_details validation failed: %s", exc)
         return None
     if len(core_list) == 0 or len(ads_list) == 0:

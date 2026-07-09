@@ -99,7 +99,7 @@ class TestBasicInitialization:
         """Test that unknown initialization mode raises appropriate error."""
         comp = ["Pt"]
         with pytest.raises(
-            ValueError,
+            SCGOValidationError,
             match='Unsupported mode: "invalid_mode"',
         ):
             create_initial_cluster(comp, mode="invalid_mode", rng=rng)
@@ -152,7 +152,7 @@ class TestEmptyAndSingleAtomInitialization:
             ) == get_composition_counts(comp)
             # Single atom doesn't need connectivity check, but should have valid cell
             assert atoms.get_cell() is not None
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             # Template mode may fail for single atom (not a magic number), which is acceptable
             if mode == "template":
                 pytest.skip(

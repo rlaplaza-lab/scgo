@@ -231,7 +231,7 @@ def test_update_mutation_weights_requires_explicit_rng():
         "rattle_strength": 0.5,
         "rattle_prop": 0.5,
     }
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(TypeError):
         update_mutation_weights(ops, name_map, adaptive)  # type: ignore[call-arg]
 
 

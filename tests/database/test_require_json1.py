@@ -10,7 +10,7 @@ def test_get_connection_raises_runtime_error_when_json1_missing(monkeypatch, tmp
     db_path.touch()
 
     def fake_ensure_sqlite_json1(conn):
-        raise RuntimeError("SQLite JSON1 extension is required")
+        raise SCGORuntimeError("SQLite JSON1 extension is required")
 
     monkeypatch.setattr(conn_mod, "_ensure_sqlite_json1", fake_ensure_sqlite_json1)
 

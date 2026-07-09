@@ -799,8 +799,8 @@ def _run_go_trials(
     return final_unique_minima
 
 
-def _compact_formula_error(comp_str: str, detail: str) -> ValueError:
-    return ValueError(
+def _compact_formula_error(comp_str: str, detail: str) -> SCGOValidationError:
+    return SCGOValidationError(
         f"Unable to parse composition string: {comp_str}. {detail} "
         "Use chemical capitalization for compact formulas (e.g. Pt3Au, HO2Ru9W2) "
         "or comma-separated symbols (e.g. Pt,Pt,Pt,Au)."
