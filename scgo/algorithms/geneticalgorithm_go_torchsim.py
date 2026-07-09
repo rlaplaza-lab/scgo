@@ -359,7 +359,7 @@ def _build_offspring_worker(
             allow_adsorbate_surface_detachment=ctx.allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
         )
-    except ValueError as exc:
+    except (ValueError, SCGOValidationError) as exc:
         return {
             "index": job["index"],
             "child": None,

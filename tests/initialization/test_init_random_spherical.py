@@ -81,7 +81,7 @@ class TestBoundaryValues:
             )
             # If it succeeds, should have 2 atoms
             assert len(atoms) == 2
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             # Failure is acceptable with extreme parameters
             pass
 
@@ -93,7 +93,7 @@ class TestBoundaryValues:
                 ["Pt", "Pt"], cell_side=20.0, placement_radius_scaling=100.0, rng=rng
             )
             assert len(atoms) == 2
-        except ValueError:
+        except (ValueError, SCGOValidationError):
             # Failure is acceptable with extreme parameters
             pass
 

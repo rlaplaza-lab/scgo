@@ -838,7 +838,7 @@ def _generate_custom_template(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError):
+    except (ValueError, RuntimeError, AttributeError, SCGOValidationError):
         # Expected during template discovery; logging here creates excessive noise.
         return None
 
@@ -998,7 +998,7 @@ def _generate_ase_template_with_common_pattern(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError):
+    except (ValueError, RuntimeError, AttributeError, SCGOValidationError):
         # Expected during template discovery; logging here creates excessive noise.
         return None
 
@@ -1084,7 +1084,7 @@ def _adjust_template_to_target(
                 return None
             _set_template_info(grown, template_name)
             return grown
-        except ValueError as e:
+        except (ValueError, SCGOValidationError) as e:
             logger.debug(
                 f"Failed to grow {template_name} template from {base_count} "
                 f"to {target_n_atoms} atoms: {e}"
@@ -1826,7 +1826,14 @@ def generate_template_matches(
                             min_distance_factor=min_distance_factor,
                             connectivity_factor=connectivity_factor,
                         )
-            except (ValueError, RuntimeError, AttributeError, TypeError, KeyError) as e:
+            except (
+                ValueError,
+                RuntimeError,
+                AttributeError,
+                TypeError,
+                KeyError,
+                SCGOValidationError,
+            ) as e:
                 logger.debug(
                     "Template generation failed for %s (n_atoms=%s): %s: %s",
                     template_type,
@@ -1859,7 +1866,14 @@ def generate_template_matches(
                         min_distance_factor=min_distance_factor,
                         connectivity_factor=connectivity_factor,
                     )
-            except (ValueError, RuntimeError, AttributeError, TypeError, KeyError) as e:
+            except (
+                ValueError,
+                RuntimeError,
+                AttributeError,
+                TypeError,
+                KeyError,
+                SCGOValidationError,
+            ) as e:
                 logger.debug(
                     "Template adjustment failed for %s (base=%s, target=%s): %s: %s",
                     template_type,

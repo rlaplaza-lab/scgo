@@ -1364,7 +1364,7 @@ def find_transition_state(
 
     except KeyboardInterrupt:
         raise
-    except (ValueError, RuntimeError, OSError) as e:
+    except (ValueError, RuntimeError, OSError, SCGOValidationError) as e:
         result["error"] = str(e)
         if is_cuda_oom_error(e):
             cleanup_torch_cuda(logger=logger)

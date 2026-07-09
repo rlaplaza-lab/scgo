@@ -1816,6 +1816,15 @@ def _check_composition_feasibility(
         base_counts, target_counts
     )
 
+    if operation == "grow" and atoms_to_remove:
+        removal_details = ", ".join(
+            f"{elem} (excess {count})" for elem, count in atoms_to_remove.items()
+        )
+        return False, (
+            f"Cannot grow from {base_composition} to {target_composition}: "
+            f"base has excess atoms that must be removed first ({removal_details})"
+        )
+
     # Check if we can achieve target composition
     if excess_elements:
         # Some elements need to be removed but aren't present in sufficient quantity

@@ -200,7 +200,7 @@ def test_interpolate_path_different_lengths_fails():
     atoms1.center(vacuum=5.0)
     atoms2.center(vacuum=5.0)
 
-    with pytest.raises(ValueError):  # ASE will raise a ValueError for mismatched atoms
+    with pytest.raises((ValueError, SCGOValidationError)):
         interpolate_path(atoms1, atoms2, n_images=3)
 
 

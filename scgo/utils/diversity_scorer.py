@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.comparators import (
     PureInteratomicDistanceComparator,
     get_sorted_dist_list,
@@ -148,7 +149,7 @@ class DiversityScorer:
             try:
                 cum_diff, max_diff = self.comparator.get_differences(atoms, ref)
                 dissimilarities.append(cum_diff + 0.5 * max_diff)
-            except (ValueError, RuntimeError) as exc:
+            except (ValueError, RuntimeError, SCGOValidationError) as exc:
                 get_logger(__name__).debug(
                     "Skipping comparator pair in diversity fallback: %s", exc
                 )

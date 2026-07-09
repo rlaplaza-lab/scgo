@@ -13,6 +13,7 @@ to improve overall test suite coverage.
 import numpy as np
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster, is_cluster_connected
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from tests.test_utils import (
@@ -44,7 +45,7 @@ class TestParameterSensitivity:
             # Should always produce connected clusters with proper connectivity factor
             assert len(atoms) == 8
             assert_cluster_valid(atoms, comp, connectivity_factor=connectivity_factor)
-        except ValueError as e:
+        except (ValueError, SCGOValidationError) as e:
             msg = str(e)
             # At the GA steric floor, bond length equals the clash limit; random
             # placement may fail to find a valid configuration for larger clusters.
@@ -73,7 +74,7 @@ class TestParameterSensitivity:
             )
             assert len(atoms) == 6
             assert_cluster_valid(atoms, comp)
-        except ValueError as e:
+        except (ValueError, SCGOValidationError) as e:
             # Validation failures are an acceptable outcome for tight placement
             if "Validation failed" in str(e):
                 return
@@ -163,7 +164,7 @@ class TestCrossModeComparison:
             try:
                 atoms = create_initial_cluster(comp, mode=mode, rng=rng)
                 assert_cluster_valid(atoms, comp)
-            except ValueError:
+            except (ValueError, SCGOValidationError):
                 if mode == "template":
                     pytest.skip("Template mode may fail for non-magic numbers")
                 raise
@@ -178,7 +179,7 @@ class TestCrossModeComparison:
             try:
                 atoms = create_initial_cluster(comp, mode=mode, rng=rng)
                 assert is_cluster_connected(atoms)
-            except ValueError:
+            except (ValueError, SCGOValidationError):
                 if mode == "template":
                     pytest.skip("Template mode may fail for non-magic numbers")
                 raise
@@ -219,7 +220,7 @@ class TestCrossModeComparison:
                     atoms = create_initial_cluster(comp, mode=mode, rng=rng)
                     assert len(atoms) == size
                     assert is_cluster_connected(atoms) or size <= 2
-                except ValueError:
+                except (ValueError, SCGOValidationError):
                     if mode == "template":
                         pytest.skip("Template mode may fail for non-magic numbers")
                     raise
@@ -329,7 +330,7 @@ class TestCompositionVariety:
             )
             assert_cluster_valid(atoms, composition)
             assert is_cluster_connected(atoms)
-        except ValueError as e:
+        except (ValueError, SCGOValidationError) as e:
             # Treat validation failures as acceptable for extreme parameter combinations
             if "Validation failed" in str(e):
                 return

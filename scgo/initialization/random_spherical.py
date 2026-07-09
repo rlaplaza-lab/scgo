@@ -28,6 +28,7 @@ from .atomic_radii import (
 )
 from .geometry_helpers import (
     _check_composition_feasibility,
+    _compute_composition_delta,
     _generate_batch_positions_on_convex_hull,
     _verify_exact_composition,
     analyze_disconnection,
@@ -690,7 +691,7 @@ def grow_from_seed(
     base_counts = get_composition_counts(base_composition)
     target_counts = get_composition_counts(target_composition)
 
-    atoms_to_add = list((target_counts - base_counts).elements())
+    atoms_to_add, _, _ = _compute_composition_delta(base_counts, target_counts)
 
     if not atoms_to_add:
         base_atoms.set_cell([cell_side, cell_side, cell_side])

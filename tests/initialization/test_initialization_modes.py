@@ -173,7 +173,7 @@ class TestInitializationModesParameterSensitivity:
                     )
                     assert len(atoms) == 6
                     assert_cluster_valid(atoms, comp)
-                except ValueError as e:
+                except (ValueError, SCGOValidationError) as e:
                     # Some rare initialization failures are expected (e.g. very strict connectivity).
                     # Treat validation failures as an acceptable outcome for extreme parameters
                     # so the test passes whether the initializer succeeds or correctly rejects params.

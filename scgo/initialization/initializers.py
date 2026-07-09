@@ -709,12 +709,22 @@ def _grow_from_random_seed(
     # Determine seed size: about 1/4 of target, minimum 3 atoms, maximum 15
     seed_size = max(3, min(15, n_atoms // 4))
 
-    # Create seed composition by sampling from target composition
-    # Sample to preserve composition ratios (vs. taking first N elements).
+    # Create seed composition by sampling from target composition without
+    # exceeding per-element counts (so growth can reach the target).
     if not composition:
         # Empty composition - return None early
         return None
-    seed_composition = list(rng.choice(composition, size=seed_size, replace=True))
+    remaining = get_composition_counts(composition)
+    seed_composition: list[str] = []
+    for _ in range(seed_size):
+        available = [elem for elem, count in remaining.items() if count > 0]
+        if not available:
+            break
+        elem = str(rng.choice(available))
+        seed_composition.append(elem)
+        remaining[elem] -= 1
+    if not seed_composition:
+        return None
 
     # Generate small random seed cluster
     seed_cell_side = compute_cell_side(seed_composition)
@@ -727,7 +737,7 @@ def _grow_from_random_seed(
             min_distance_factor=min_distance_factor,
             connectivity_factor=connectivity_factor,
         )
-    except ValueError:
+    except (ValueError, SCGOValidationError):
         logger.debug(
             "Seed cluster generation failed for composition %s",
             seed_composition,
@@ -745,7 +755,7 @@ def _grow_from_random_seed(
             connectivity_factor=connectivity_factor,
         )
         return result
-    except ValueError:
+    except (ValueError, SCGOValidationError):
         logger.debug(
             "grow_from_seed failed for composition %s",
             composition,
@@ -1116,7 +1126,7 @@ def _try_strategies_in_order(
                         strategy_name,
                         next_strategy,
                     )
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError, SCGOValidationError) as e:
             if is_last_strategy:
                 raise
             next_strategy = strategies[idx + 1][0]
