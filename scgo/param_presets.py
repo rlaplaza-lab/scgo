@@ -460,6 +460,11 @@ def get_torchsim_ga_params(
     if model_name is not None:
         params["calculator_kwargs"]["model_name"] = model_name
 
+    # Keep TorchSim as the explicit relaxer backend, but let campaign scale
+    # iteration budget and population size with composition complexity.
+    params["optimizer_params"]["ga"]["niter"] = "auto"
+    params["optimizer_params"]["ga"]["population_size"] = "auto"
+
     mace_model = params["calculator_kwargs"].get("model_name", "mace_matpes_0")
     fmax_val = params["optimizer_params"]["ga"]["fmax"]
     niter_local = params["optimizer_params"]["ga"]["niter_local_relaxation"]
