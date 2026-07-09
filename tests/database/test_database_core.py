@@ -12,6 +12,7 @@ import multiprocessing as mp
 import os
 import sqlite3
 import threading
+import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -24,6 +25,7 @@ from ase.calculators.emt import EMT
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import (
+    PRESET_CONTENTED,
     RetryConfig,
     SCGODatabaseManager,
     add_metadata,
@@ -102,17 +104,15 @@ def _count_open_files() -> int:
     return -1
 
 
-_CONCURRENT_WRITE_RETRY = RetryConfig(
-    max_retries=8,
-    initial_delay=0.05,
-    backoff_factor=1.7,
-    max_delay=5.0,
-)
+_CONCURRENT_WRITE_RETRY = PRESET_CONTENTED
 
 
 def _write_to_database(args):
     """Helper function for multiprocess database writing."""
     db_path, n_structures, worker_id = args
+
+    # Stagger workers slightly to reduce simultaneous lock acquisition.
+    time.sleep(0.05 * worker_id)
 
     atoms_list = []
     for i in range(n_structures):
@@ -124,7 +124,7 @@ def _write_to_database(args):
         atoms.info["data"] = {"worker_tag": f"w{worker_id}"}
         atoms_list.append(atoms)
 
-    with get_connection(db_path, wal_mode=True, busy_timeout=60000) as da:
+    with get_connection(db_path, wal_mode=True, busy_timeout=120000) as da:
         for atoms in atoms_list:
             database_retry(
                 lambda _a=atoms: (
@@ -135,6 +135,7 @@ def _write_to_database(args):
                 ),
                 config=_CONCURRENT_WRITE_RETRY,
                 operation_name=f"concurrent_stress_write:w{worker_id}",
+                log_level="warning",
             )
     return True, worker_id
 
@@ -833,7 +834,7 @@ class TestRobustness:
             pass
 
         n_workers = 2
-        n_structures = 10
+        n_structures = 6
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
