@@ -23,6 +23,8 @@ Install with exactly one MLIP extra per environment (`[mace]`, `[uma]`, or `[upe
 
 ```bash
 pip install "scgo[mace]"   # or: pip install "scgo[uma]" or pip install "scgo[upet]"
+# UPET also needs vesin 0.6.0 at runtime (skin= for metatomic-torchsim):
+# pip install 'vesin==0.6.0' --force-reinstall --no-deps
 ```
 
 Requires Python 3.12+ and SQLite with the JSON1 extension. See the [installation guide](https://scgo.readthedocs.io/en/latest/installation.html) for conda, editable installs, development extras, and HPC notes.

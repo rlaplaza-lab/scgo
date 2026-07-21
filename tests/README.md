@@ -8,8 +8,8 @@
 | `integration` | Full workflow (GO campaigns, output trees) | Excluded from fast job (`not integration`) |
 | `benchmark` | Long MLIP regression (Cu₄ MACE E2E) | Excluded from CI |
 | `requires_cuda` | Needs GPU | Skipped on CPU runners |
-| `requires_mace` | Needs MACE extra | Excluded from UMA CI jobs; Kaggle MACE suite |
-| `requires_upet` | Needs UPET extra | Kaggle UPET suite (`scgo[upet]`) |
+| `requires_mace` | Needs MACE extra | Excluded from UMA/UPET CI jobs; Kaggle MACE suite |
+| `requires_upet` | Needs UPET extra | Excluded from MACE/UMA CI jobs; Kaggle UPET suite |
 | `requires_multicore` | Needs ≥2 CPUs | Skipped on single-core |
 
 Fast CI (every PR): `pytest tests/ -m "not slow and not integration"`
@@ -44,11 +44,12 @@ windows.
 
 ### Optional MLIP extras on CI
 
-`requires_mace` marks tests that import the MACE stack at runtime. UMA CI
-jobs install only `uma` extras and exclude these tests by marker — not because
-the physics is optional, but because the calculators are mutually exclusive
-install targets on disk-limited runners. `requires_upet` is the analogous
-marker for the UPET / metatomic-torchsim stack.
+`requires_mace` marks tests that import the MACE stack at runtime. UMA and UPET
+CI jobs install only their own extras and exclude these tests by marker — not
+because the physics is optional, but because the calculators are mutually
+exclusive install targets on disk-limited runners. `requires_upet` is the
+analogous marker for the UPET / metatomic-torchsim stack (excluded from MACE/UMA
+jobs).
 
 ## Local runs
 

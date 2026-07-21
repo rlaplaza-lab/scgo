@@ -301,6 +301,18 @@ def _install_scgo_mlip(py: list[str], pip: list[str], *, mlip_extra: str) -> Non
 
     run([*pip, "install", "--no-cache-dir", "-e", f".[{mlip_extra},dev]", "--no-deps"])
     run([*pip, "install", "--no-cache-dir", *install_deps])
+    if mlip_extra == "upet":
+        # metatomic-torchsim declares vesin<0.6 but needs skin= from 0.6.0
+        run(
+            [
+                *pip,
+                "install",
+                "--no-cache-dir",
+                "vesin==0.6.0",
+                "--force-reinstall",
+                "--no-deps",
+            ]
+        )
 
 
 def _install_scgo_mace(py: list[str], pip: list[str]) -> None:

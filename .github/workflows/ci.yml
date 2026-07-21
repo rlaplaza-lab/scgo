@@ -77,6 +77,12 @@ jobs:
           - python-version: "3.13"
             pip-extras: "uma,dev"
             suite: uma
+          - python-version: "3.12"
+            pip-extras: "upet,dev"
+            suite: upet
+          - python-version: "3.13"
+            pip-extras: "upet,dev"
+            suite: upet
       fail-fast: false
 
     steps:
@@ -108,6 +114,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[${{ matrix.pip-extras }}]"
+          # metatomic-torchsim declares vesin<0.6 but needs NeighborList(skin=...) from 0.6.0
+          if [ "${{ matrix.suite }}" = "upet" ]; then
+            pip install 'vesin==0.6.0' --force-reinstall --no-deps
+          fi
 
       - name: Check SQLite JSON1 extension
         run: |
@@ -144,6 +154,11 @@ jobs:
         run: |
           pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_upet" -v
 
+      - name: Run fast tests (UPET)
+        if: matrix.suite == 'upet'
+        run: |
+          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace" -v
+
       - name: Run slow tests
         if: matrix.suite == 'mace'
         env:
@@ -157,6 +172,13 @@ jobs:
           SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
           pytest tests/ -m "slow and not benchmark and not requires_mace and not requires_upet" -n 2 -v
+
+      - name: Run slow tests (UPET)
+        if: matrix.suite == 'upet'
+        env:
+          SCGO_BATCH_TEST_SAMPLES: "15"
+        run: |
+          pytest tests/ -m "slow and not benchmark and not requires_mace" -n 2 -v
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
