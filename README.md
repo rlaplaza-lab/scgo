@@ -11,7 +11,7 @@ A compact toolkit for global optimization of atomic clusters using ASE. SCGO pro
 ## Features
 
 - **Basin Hopping and Genetic Algorithm** global optimization with automatic algorithm selection by cluster size
-- **MLIP support** — MACE and UMA (fairchem) for GPU-accelerated optimization via TorchSim
+- **MLIP support** — MACE, UMA (fairchem), and UPET (metatomic) for GPU-accelerated optimization via TorchSim
 - **Surface workflows** — slab-supported clusters and adsorbates with hull-site placement and tag-aware GA operators
 - **Transition state search** — NEB-based TS search with automated pair selection and PBC-aware endpoint alignment
 - **Flexible API** — high-level runners (`run_go`, `run_go_ts`, …) and low-level control for custom workflows
@@ -19,10 +19,10 @@ A compact toolkit for global optimization of atomic clusters using ASE. SCGO pro
 
 ## Install
 
-Install with exactly one MLIP extra per environment (`[mace]` or `[uma]`):
+Install with exactly one MLIP extra per environment (`[mace]`, `[uma]`, or `[upet]`):
 
 ```bash
-pip install "scgo[mace]"   # or: pip install "scgo[uma]"
+pip install "scgo[mace]"   # or: pip install "scgo[uma]" or pip install "scgo[upet]"
 ```
 
 Requires Python 3.12+ and SQLite with the JSON1 extension. See the [installation guide](https://scgo.readthedocs.io/en/latest/installation.html) for conda, editable installs, development extras, and HPC notes.

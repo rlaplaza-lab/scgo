@@ -109,7 +109,11 @@ from scgo.utils.timing_report import (
     log_timing_summary,
     write_timing_file,
 )
-from scgo.utils.torchsim_policy import is_ml_calculator, is_uma_like_calculator
+from scgo.utils.torchsim_policy import (
+    is_ml_calculator,
+    is_uma_like_calculator,
+    is_upet_like_calculator,
+)
 from scgo.utils.validation import validate_composition
 
 
@@ -835,6 +839,27 @@ def ga_go(
                     model_kind="fairchem",
                     fairchem_model_name=str(model_name),
                     fairchem_task_name=getattr(calculator, "task_name", None),
+                    force_tol=fmax,
+                    max_steps=niter_local_relaxation,
+                    expected_max_atoms=expected_max_atoms,
+                    max_atoms_to_try=expected_max_atoms,
+                )
+            elif is_upet_like_calculator(calculator):
+                model_name = getattr(calculator, "model_name", None)
+                if model_name is None and calculator.name.startswith("UPET-"):
+                    model_name = calculator.name.removeprefix("UPET-").split("-v")[0]
+                if not model_name and not getattr(calculator, "checkpoint_path", None):
+                    raise SCGOValidationError(
+                        "Cannot infer UPET model_name from calculator for TorchSim relaxer."
+                    )
+                relaxer = TorchSimBatchRelaxer(
+                    model_kind="upet",
+                    upet_model_name=str(model_name) if model_name else None,
+                    upet_version=getattr(calculator, "version", None),
+                    upet_checkpoint_path=getattr(calculator, "checkpoint_path", None),
+                    upet_non_conservative=getattr(
+                        calculator, "non_conservative", False
+                    ),
                     force_tol=fmax,
                     max_steps=niter_local_relaxation,
                     expected_max_atoms=expected_max_atoms,

@@ -40,9 +40,19 @@ AVAILABLE_UMA_MODELS = [
     "uma-m-1p1",
 ]
 
+# Common UPET model identifiers (see upet.list_upet)
+AVAILABLE_UPET_MODELS = [
+    "pet-mad-s",
+    "pet-mad-xs",
+    "pet-oam-xl",
+    "pet-omat-s",
+    "pet-spice-s",
+]
+
 __all__ = [
     "AVAILABLE_MACE_MODELS",
     "AVAILABLE_UMA_MODELS",
+    "AVAILABLE_UPET_MODELS",
     "TS_DEFAULTS_BY_SYSTEM_TYPE",
     "get_default_params",
     "get_minimal_ga_params",
@@ -53,7 +63,9 @@ __all__ = [
     "get_ts_defaults",
     "get_ts_search_params",
     "get_default_uma_params",
+    "get_default_upet_params",
     "get_uma_ga_benchmark_params",
+    "get_upet_ga_benchmark_params",
 ]
 
 
@@ -365,6 +377,33 @@ def _attach_fairchem_torchsim_relaxer(
     )
 
 
+def _attach_upet_torchsim_relaxer(
+    ga: dict[str, Any],
+    calculator_kwargs: dict[str, Any],
+    *,
+    max_steps: int,
+    autobatcher: bool | None = None,
+    expected_max_atoms: int | None = None,
+) -> None:
+    """Set ``ga['relaxer']`` to a UPET-backed :class:`TorchSimBatchRelaxer`."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    fmax_val = float(ga.get("fmax", 0.05))
+    ga["relaxer"] = TorchSimBatchRelaxer(
+        model_kind="upet",
+        upet_model_name=calculator_kwargs.get("model_name"),
+        upet_version=calculator_kwargs.get("version"),
+        upet_checkpoint_path=calculator_kwargs.get("checkpoint_path"),
+        upet_non_conservative=bool(calculator_kwargs.get("non_conservative", False)),
+        force_tol=fmax_val,
+        optimizer_name="fire",
+        max_steps=max_steps,
+        dtype=None,
+        autobatcher=autobatcher,
+        expected_max_atoms=expected_max_atoms,
+    )
+
+
 def get_uma_ga_benchmark_params(
     seed: int,
     *,
@@ -417,6 +456,64 @@ def get_default_uma_params() -> GLOptimizerParams:
     niter_local = ga.get("niter_local_relaxation", "auto")
     max_steps = 250 if niter_local == "auto" else int(niter_local)
     _attach_fairchem_torchsim_relaxer(
+        ga,
+        params["calculator_kwargs"],
+        max_steps=max_steps,
+        autobatcher=None,
+        expected_max_atoms=None,
+    )
+    return params
+
+
+def get_upet_ga_benchmark_params(
+    seed: int,
+    *,
+    model_name: str = "pet-mad-s",
+    version: str = "1.5.0",
+) -> GLOptimizerParams:
+    """GA benchmark parameters using UPET with TorchSim (mirrors UMA benchmark preset).
+
+    Tuned for regression alongside MACE/UMA benchmark presets: fixed local relaxation
+    budget (200 steps), autobatching, and ``expected_max_atoms=600``. Pass as-is to
+    ``run_*`` or override keys. For general UPET runs with default GA ``"auto"``
+    local steps, use :func:`get_default_upet_params` instead.
+    """
+    params = _get_base_ga_benchmark_params(seed)
+    params["calculator"] = "UPET"
+    params["calculator_kwargs"] = {
+        "model_name": model_name,
+        "version": version,
+    }
+
+    ga = params["optimizer_params"]["ga"]
+    niter_local = ga.get("niter_local_relaxation", 200)
+    max_steps = 200 if niter_local == "auto" else int(niter_local)
+    _attach_upet_torchsim_relaxer(
+        ga,
+        params["calculator_kwargs"],
+        max_steps=max_steps,
+        autobatcher=True,
+        expected_max_atoms=600,
+    )
+    return params
+
+
+def get_default_upet_params() -> GLOptimizerParams:
+    """Default SCGO parameters using the UPET calculator (metatomic-torchsim).
+
+    Pass as-is to ``run_*`` or override keys. Default model is ``pet-mad-s`` v1.5.0.
+    For benchmark-style fixed local steps, use :func:`get_upet_ga_benchmark_params`.
+    """
+    params = get_default_params()
+    params["calculator"] = "UPET"
+    params["calculator_kwargs"] = {
+        "model_name": "pet-mad-s",
+        "version": "1.5.0",
+    }
+    ga = params.get("optimizer_params", {}).get("ga", {})
+    niter_local = ga.get("niter_local_relaxation", "auto")
+    max_steps = 250 if niter_local == "auto" else int(niter_local)
+    _attach_upet_torchsim_relaxer(
         ga,
         params["calculator_kwargs"],
         max_steps=max_steps,
@@ -573,9 +670,16 @@ def get_ts_search_params(
             "as a SurfaceSystemConfig when building ts_params."
         )
 
-    if calculator_kwargs is None:
+    if not calculator_kwargs:
         calc_u = str(calculator).strip().upper()
-        calculator_kwargs = {"model_name": "mace_matpes_0"} if calc_u == "MACE" else {}
+        if calc_u == "MACE":
+            calculator_kwargs = {"model_name": "mace_matpes_0"}
+        elif calc_u == "UMA":
+            calculator_kwargs = {"model_name": "uma-s-1p2", "task_name": "oc25"}
+        elif calc_u == "UPET":
+            calculator_kwargs = {"model_name": "pet-mad-s", "version": "1.5.0"}
+        else:
+            calculator_kwargs = {}
 
     params: dict[str, Any] = {
         "calculator": calculator,

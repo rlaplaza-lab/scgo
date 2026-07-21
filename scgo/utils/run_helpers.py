@@ -41,7 +41,7 @@ _CALCULATORS_CACHE: dict[str, Any] | None = None
 
 
 def _get_calculators() -> dict[str, Any]:
-    """ASE calculator registry; MACE/UMA entries are None if extras are not installed."""
+    """ASE calculator registry; MLIP entries are None if extras are not installed."""
     global _CALCULATORS_CACHE
     if _CALCULATORS_CACHE is not None:
         return _CALCULATORS_CACHE
@@ -58,6 +58,12 @@ def _get_calculators() -> dict[str, Any]:
         calcs["UMA"] = UMA
     except ImportError:
         calcs["UMA"] = None
+    try:
+        from scgo.calculators.upet_helpers import UPET
+
+        calcs["UPET"] = UPET
+    except ImportError:
+        calcs["UPET"] = None
     _CALCULATORS_CACHE = calcs
     return calcs
 

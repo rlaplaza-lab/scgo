@@ -1,9 +1,9 @@
 """When SCGO may use TorchSim batched NEB/GA paths.
 
-TorchSim can drive multiple model families (e.g., MACE, FairChem/UMA) via model
-wrappers in ``torch_sim.models``. Policy helpers here validate whether TorchSim
-may be used for a given calculator name and whether the required stack is
-installed.
+TorchSim can drive multiple model families (e.g., MACE, FairChem/UMA, UPET) via
+model wrappers in ``torch_sim.models`` and ``metatomic_torchsim``. Policy helpers
+here validate whether TorchSim may be used for a given calculator name and whether
+the required stack is installed.
 
 Design note:
 - If a caller explicitly requests TorchSim (``use_torchsim=True``), we **fail
@@ -30,14 +30,15 @@ def mace_torchsim_stack_available() -> bool:
 def calculator_name_supports_torchsim_batched_neb(calculator_name: str) -> bool:
     """True if calculator family can run TorchSim NEB when its stack is installed."""
     name = calculator_name.strip().upper()
-    return name in ("MACE", "UMA")
+    return name in ("MACE", "UMA", "UPET")
 
 
 def _require_torchsim() -> None:
     if importlib.util.find_spec("torch_sim") is None:
         raise ImportError(
             "TorchSim was requested but torch_sim is not installed. "
-            "Install the appropriate extra (e.g., pip install 'scgo[uma]' or 'scgo[mace]')."
+            "Install the appropriate extra (e.g., pip install 'scgo[uma]', "
+            "'scgo[mace]', or 'scgo[upet]')."
         )
 
 
@@ -51,8 +52,22 @@ def _require_torchsim_fairchem() -> None:
         )
 
 
+def _require_torchsim_upet() -> None:
+    _require_torchsim()
+    if importlib.util.find_spec("upet") is None:
+        raise ImportError(
+            "TorchSim UPET support was requested but upet is not installed. "
+            "Install with: pip install 'scgo[upet]'."
+        )
+    if importlib.util.find_spec("metatomic_torchsim") is None:
+        raise ImportError(
+            "TorchSim UPET support was requested but metatomic-torchsim is not installed. "
+            "Install with: pip install 'scgo[upet]'."
+        )
+
+
 _MLIP_CALCULATOR_CLASS_NAMES = frozenset(
-    {"MACECalculator", "MACE", "UMA", "FAIRChemCalculator"}
+    {"MACECalculator", "MACE", "UMA", "FAIRChemCalculator", "UPET", "UPETCalculator"}
 )
 
 
@@ -67,6 +82,14 @@ def is_uma_like_calculator(calculator: Calculator | None) -> bool:
         return False
     cls_name = calculator.__class__.__name__
     return cls_name in ("UMA", "FAIRChemCalculator")
+
+
+def is_upet_like_calculator(calculator: Calculator | None) -> bool:
+    """True for UPET ASE calculator instances (by class name)."""
+    if calculator is None:
+        return False
+    cls_name = calculator.__class__.__name__
+    return cls_name in ("UPET", "UPETCalculator")
 
 
 def resolve_ts_torchsim_flags(
@@ -89,6 +112,8 @@ def resolve_ts_torchsim_flags(
         )
     if name == "UMA":
         _require_torchsim_fairchem()
+    elif name == "UPET":
+        _require_torchsim_upet()
     else:
         _require_torchsim()
 

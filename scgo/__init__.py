@@ -50,8 +50,10 @@ from scgo.initialization import (
 from scgo.param_presets import (
     AVAILABLE_MACE_MODELS,
     AVAILABLE_UMA_MODELS,
+    AVAILABLE_UPET_MODELS,
     get_default_params,
     get_default_uma_params,
+    get_default_upet_params,
     get_diversity_params,
     get_high_energy_params,
     get_minimal_ga_params,
@@ -59,6 +61,7 @@ from scgo.param_presets import (
     get_torchsim_ga_params,
     get_ts_search_params,
     get_uma_ga_benchmark_params,
+    get_upet_ga_benchmark_params,
 )
 from scgo.runner_api import (
     CompositionInput,
@@ -105,6 +108,7 @@ __all__ = [
     "__version__",
     "AVAILABLE_MACE_MODELS",
     "AVAILABLE_UMA_MODELS",
+    "AVAILABLE_UPET_MODELS",
     # Exceptions
     "SCGOError",
     "SCGOConfigurationError",
@@ -148,8 +152,10 @@ __all__ = [
     "get_testing_params",
     "get_ts_search_params",
     "get_default_uma_params",
+    "get_default_upet_params",
     "get_torchsim_ga_params",
     "get_uma_ga_benchmark_params",
+    "get_upet_ga_benchmark_params",
     # Main run API (see scgo.runner_api)
     "CompositionInput",
     "resolve_workflow_seed",

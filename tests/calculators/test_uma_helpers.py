@@ -63,5 +63,5 @@ def test_both_mlip_stacks_raises_when_both_importable():
 
     from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
-    with pytest.raises(SCGORuntimeError, match="MACE stack"):
+    with pytest.raises(SCGORuntimeError, match="Multiple MLIP stacks"):
         ensure_mace_uma_not_both_installed()

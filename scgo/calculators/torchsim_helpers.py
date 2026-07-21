@@ -6,8 +6,8 @@ multiple candidate structures in a single batched call.
 Important:
 - Imports for optional stacks (TorchSim, MACE, FairChem) are **lazy** so SCGO can
   be imported in minimal environments without pulling MLIP dependencies.
-- TorchSim can run with multiple model families. SCGO supports MACE and
-  FairChem/UMA via TorchSim model wrappers.
+- TorchSim can run with multiple model families. SCGO supports MACE, FairChem/UMA,
+  and UPET/metatomic via TorchSim model wrappers.
 """
 
 from __future__ import annotations
@@ -322,6 +322,71 @@ def _load_default_fairchem_model(
     )
 
 
+def _parse_upet_model_and_size(model_name: str) -> tuple[str, str]:
+    """Split a UPET model id (e.g. ``pet-mad-s``) into base model and size."""
+    if "-" not in model_name:
+        raise SCGOValidationError(
+            f"Invalid UPET model_name {model_name!r}; expected form 'pet-mad-s'."
+        )
+    model, size = model_name.rsplit("-", 1)
+    return model, size
+
+
+def _prepare_atoms_for_metatomic_torchsim(atoms: Atoms) -> Atoms:
+    """Return a copy safe for metatomic/vesin when PBC is disabled.
+
+    Metatomic neighbor lists require zero cell vectors along non-periodic
+    directions (gas-phase clusters still use a finite ASE box for spacing).
+    """
+    prepared = atoms.copy()
+    if not any(prepared.pbc):
+        prepared.cell[:] = 0.0
+    return prepared
+
+
+def _restore_ase_cell_from_reference(relaxed: Atoms, reference: Atoms) -> None:
+    """Restore SCGO storage cell/PBC after a metatomic TorchSim relaxation."""
+    relaxed.cell = reference.cell.copy()
+    relaxed.pbc = reference.pbc
+
+
+def _load_default_upet_model(
+    *,
+    device,
+    dtype,
+    upet_model_name: str,
+    upet_version: str | None,
+    upet_checkpoint_path: str | None = None,
+    upet_non_conservative: bool = False,
+    compute_stress: bool = False,
+):
+    """Create a TorchSim MetatomicModel for UPET checkpoints."""
+    import metatomic_torchsim._neighbors as _mt_neighbors  # type: ignore
+    from metatomic_torchsim import MetatomicModel  # type: ignore
+    from upet import get_upet
+
+    # nvalchemiops CUDA NL can fail for non-cubic gas-phase cells (float max_neighbors
+    # in metatomic-torchsim); vesin handles these systems reliably.
+    _mt_neighbors.HAS_NVALCHEMIOPS = False
+
+    if upet_checkpoint_path:
+        atomistic = get_upet(checkpoint_path=upet_checkpoint_path)
+    else:
+        model, size = _parse_upet_model_and_size(upet_model_name)
+        atomistic = get_upet(
+            model=model,
+            size=size,
+            version=upet_version or "latest",
+        )
+
+    return MetatomicModel(
+        atomistic,
+        device=device,
+        non_conservative=upet_non_conservative,
+        compute_stress=compute_stress,
+    )
+
+
 def _steps_taken_from_optimize_state(state: Any) -> int | None:
     """Best-effort extraction of optimizer steps from a TorchSim state object."""
     for attr in ("n_steps", "step", "steps"):
@@ -406,10 +471,14 @@ class TorchSimBatchRelaxer:
     device: object | None = None
     dtype: object | None = None
     model: object | None = None
-    model_kind: str = "mace"  # "mace" or "fairchem"
+    model_kind: str = "mace"  # "mace", "fairchem", or "upet"
     mace_model_name: str = "mace_matpes_0"
     fairchem_model_name: str | None = None
     fairchem_task_name: str | None = None
+    upet_model_name: str | None = None
+    upet_version: str | None = None
+    upet_checkpoint_path: str | None = None
+    upet_non_conservative: bool = False
     optimizer_name: str = "fire"
     force_tol: float | None = 0.05
     max_steps: int | None = 100
@@ -477,9 +546,24 @@ class TorchSimBatchRelaxer:
                     fairchem_model_name=str(self.fairchem_model_name),
                     fairchem_task_name=self.fairchem_task_name,
                 )
+            elif mk in ("upet", "metatomic"):
+                if not self.upet_model_name and not self.upet_checkpoint_path:
+                    raise SCGOValidationError(
+                        "TorchSimBatchRelaxer(model_kind='upet') requires "
+                        "upet_model_name or upet_checkpoint_path"
+                    )
+                self.model = _load_default_upet_model(
+                    device=self.device,
+                    dtype=self.dtype,
+                    upet_model_name=str(self.upet_model_name or ""),
+                    upet_version=self.upet_version,
+                    upet_checkpoint_path=self.upet_checkpoint_path,
+                    upet_non_conservative=self.upet_non_conservative,
+                )
             else:
                 raise SCGOValidationError(
-                    f"Unknown model_kind {self.model_kind!r}; expected 'mace' or 'fairchem'"
+                    f"Unknown model_kind {self.model_kind!r}; "
+                    "expected 'mace', 'fairchem', or 'upet'"
                 )
         else:
             self.model = _ensure_torchsim_mace_wrapper(
@@ -720,6 +804,11 @@ class TorchSimBatchRelaxer:
             runner_kwargs["max_steps"] = steps
 
         atoms_seq = list(atoms_list)
+        reference_atoms = list(atoms_list)
+        if self._uses_metatomic_model():
+            atoms_seq = [
+                _prepare_atoms_for_metatomic_torchsim(atoms) for atoms in atoms_seq
+            ]
 
         # torch_sim.initialize_state ignores ASE constraints; map FixAtoms -> TorchSim.
         ts_fix = build_torchsim_fixatoms_from_ase_batch(atoms_seq, self.device)
@@ -813,6 +902,8 @@ class TorchSimBatchRelaxer:
         for idx, (energy, relaxed) in enumerate(
             zip(energies, relaxed_atoms, strict=True)
         ):
+            if self._uses_metatomic_model():
+                _restore_ase_cell_from_reference(relaxed, reference_atoms[idx])
             if forces_list is not None:
                 relaxed.arrays["forces"] = np.asarray(
                     forces_list[idx], dtype=np.float64
@@ -832,12 +923,21 @@ class TorchSimBatchRelaxer:
             results.append((energy, relaxed))
         return results
 
+    def _uses_metatomic_model(self) -> bool:
+        mk = str(self.model_kind or "mace").strip().lower()
+        return mk in ("upet", "metatomic")
+
     def _cache_model_name(self) -> str:
         mk = str(self.model_kind or "mace").strip().lower()
         if mk == "mace":
             return str(self.mace_model_name)
         if mk in ("fairchem", "uma"):
             return str(self.fairchem_model_name or "fairchem")
+        if mk in ("upet", "metatomic"):
+            if self.upet_checkpoint_path:
+                return str(self.upet_checkpoint_path)
+            ver = self.upet_version or "latest"
+            return f"{self.upet_model_name}-v{ver}"
         return str(mk)
 
     def __deepcopy__(self, memo):  # pragma: no cover - deepcopy helper

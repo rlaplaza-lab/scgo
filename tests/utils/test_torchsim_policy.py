@@ -11,6 +11,7 @@ from scgo.param_presets import get_ts_search_params
 from scgo.utils.torchsim_policy import (
     calculator_name_supports_torchsim_batched_neb,
     is_uma_like_calculator,
+    is_upet_like_calculator,
     mace_torchsim_stack_available,
     resolve_ts_torchsim_flags,
 )
@@ -27,10 +28,18 @@ def test_is_uma_like_calculator():
     assert is_uma_like_calculator(object.__new__(UMA)) is True
 
 
+def test_is_upet_like_calculator():
+    from scgo.calculators.upet_helpers import UPET
+
+    assert is_upet_like_calculator(None) is False
+    assert is_upet_like_calculator(object.__new__(UPET)) is True
+
+
 def test_calculator_name_supports_torchsim_only_mace():
     assert calculator_name_supports_torchsim_batched_neb("MACE") is True
     assert calculator_name_supports_torchsim_batched_neb("mace") is True
     assert calculator_name_supports_torchsim_batched_neb("UMA") is True
+    assert calculator_name_supports_torchsim_batched_neb("UPET") is True
     assert calculator_name_supports_torchsim_batched_neb("EMT") is False
 
 
@@ -94,6 +103,41 @@ def test_get_ts_search_params_uma_has_torchsim_when_available(monkeypatch):
     )
     assert ts["use_torchsim"] is True
     assert ts["use_parallel_neb"] is False
+
+
+def test_resolve_ts_torchsim_flags_upet_requires_stacks(monkeypatch):
+    real_find_spec = importlib.util.find_spec
+
+    def fake_spec(name: str):
+        if name in ("torch_sim", "upet", "metatomic_torchsim"):
+            return object()
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_spec)
+
+    us, up = resolve_ts_torchsim_flags("UPET", True, True)
+    assert us is True and up is True
+
+
+def test_coerce_ts_params_upet_sets_model_fields(monkeypatch):
+    real_find_spec = importlib.util.find_spec
+
+    def fake_spec(name: str):
+        if name in ("torch_sim", "upet", "metatomic_torchsim"):
+            return object()
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_spec)
+
+    ts = get_ts_search_params(
+        calculator="UPET", calculator_kwargs={}, system_type="gas_cluster"
+    )
+    kw = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
+    assert kw["use_torchsim"] is True
+    tsp = kw["torchsim_params"]
+    assert tsp["model_kind"] == "upet"
+    assert tsp["upet_model_name"] == "pet-mad-s"
+    assert tsp["upet_version"] == "1.5.0"
 
 
 def test_coerce_ts_params_uma_sets_fairchem_model_fields(monkeypatch):

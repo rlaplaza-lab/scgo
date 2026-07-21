@@ -19,7 +19,11 @@ from ase import Atoms
 from ase.io import read
 from ase.units import Hartree
 
-from scgo.param_presets import get_torchsim_ga_params, get_uma_ga_benchmark_params
+from scgo.param_presets import (
+    get_torchsim_ga_params,
+    get_uma_ga_benchmark_params,
+    get_upet_ga_benchmark_params,
+)
 from scgo.runner_api import run_go_campaign
 from scgo.utils.atoms_helpers import parse_energy_from_xyz_comment
 from scgo.utils.comparators import (
@@ -73,6 +77,9 @@ def default_pt_cluster_benchmark_output_dir(
     if calculator == "UMA":
         task_name = str(calculator_kwargs.get("task_name", "default"))
         dirname = f"{prefix}_uma_{_slug(model_name)}-{_slug(task_name)}"
+    elif calculator == "UPET":
+        version = str(calculator_kwargs.get("version", "default"))
+        dirname = f"{prefix}_upet_{_slug(model_name)}-{_slug(version)}"
     else:
         dirname = f"{prefix}_mace_{_slug(model_name)}"
     return (BENCHMARK_RESULTS_ROOT / dirname).resolve()
@@ -104,23 +111,32 @@ def add_common_benchmark_cli(parser: argparse.ArgumentParser) -> None:
     """Register CLI flags shared by all Pt benchmark scripts."""
     parser.add_argument(
         "--backend",
-        choices=("mace", "uma"),
+        choices=("mace", "uma", "upet"),
         default=os.environ.get("SCGO_BENCHMARK_BACKEND", "mace"),
         help=(
             "mace: TorchSim GA + MACE (GPU-friendly default for ML potentials); "
-            "uma: ASE GA + UMA (install scgo[uma] in a separate env)."
+            "uma: TorchSim GA + UMA (install scgo[uma] in a separate env); "
+            "upet: TorchSim GA + UPET (install scgo[upet] in a separate env)."
         ),
     )
     parser.add_argument(
         "--model-name",
         default=None,
-        help="Override calculator model_name (default UMA: uma-s-1p2; MACE: preset default).",
+        help=(
+            "Override calculator model_name (default UMA: uma-s-1p2; "
+            "UPET: pet-mad-s; MACE: preset default)."
+        ),
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--uma-task",
         default="oc25",
         help="UMA task (only used when --backend uma).",
+    )
+    parser.add_argument(
+        "--upet-version",
+        default="1.5.0",
+        help="UPET model version (only used when --backend upet).",
     )
     parser.add_argument(
         "--clusters",
@@ -393,11 +409,15 @@ def get_benchmark_params(
     *,
     backend: str = "mace",
     uma_task: str = "oc25",
+    upet_version: str = "1.5.0",
 ) -> dict:
-    """Build benchmark params: TorchSim GA + MACE (``backend=mace``) or ASE GA + UMA."""
+    """Build benchmark params for TorchSim GA + MACE, UMA, or UPET."""
     if backend == "uma":
         mn = model_name or "uma-s-1p2"
         return get_uma_ga_benchmark_params(seed, model_name=mn, uma_task=uma_task)
+    if backend == "upet":
+        mn = model_name or "pet-mad-s"
+        return get_upet_ga_benchmark_params(seed, model_name=mn, version=upet_version)
     params = get_torchsim_ga_params(
         system_type="gas_cluster", seed=seed, model_name=model_name
     )
@@ -639,6 +659,7 @@ def run_benchmark_suite(
     *,
     backend: str = "mace",
     uma_task: str = "oc25",
+    upet_version: str = "1.5.0",
     profile_detail: bool = True,
     profile_top_n: int = 8,
 ) -> list[BenchmarkResult]:
@@ -650,6 +671,7 @@ def run_benchmark_suite(
             model_name=model_name,
             backend=backend,
             uma_task=uma_task,
+            upet_version=upet_version,
         )
 
     if not clusters:

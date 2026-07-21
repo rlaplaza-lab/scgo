@@ -42,7 +42,9 @@ from scgo.utils.timing_report import (
 from scgo.utils.torchsim_policy import (
     _require_torchsim,
     _require_torchsim_fairchem,
+    _require_torchsim_upet,
     is_uma_like_calculator,
+    is_upet_like_calculator,
 )
 from scgo.utils.ts_provenance import is_cuda_oom_error, ts_output_provenance
 from scgo.utils.validation import validate_atoms, validate_calculator_attached
@@ -1166,6 +1168,8 @@ def find_transition_state(
     if use_torchsim:
         if is_uma_like_calculator(calculator):
             _require_torchsim_fairchem()
+        elif is_upet_like_calculator(calculator):
+            _require_torchsim_upet()
         else:
             _require_torchsim()
     else:

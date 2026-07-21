@@ -72,6 +72,7 @@ def main() -> None:
         model_name=args.model_name,
         backend=args.backend,
         uma_task=args.uma_task,
+        upet_version=args.upet_version,
     )
     params = apply_ga_benchmark_overrides(
         base_params,

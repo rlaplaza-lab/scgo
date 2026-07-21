@@ -108,6 +108,23 @@ def coerce_ts_params_to_runner_kwargs(
                 "fairchem_task_name": str(task_name),
             }
         )
+    elif str(ts_params.get("calculator", "")).strip().upper() == "UPET":
+        ck = ts_params.get("calculator_kwargs", {}) or {}
+        model_name = ck.get("model_name")
+        if not model_name and not ck.get("checkpoint_path"):
+            raise SCGOValidationError(
+                "UPET transition-state search requires calculator_kwargs with "
+                "'model_name' or 'checkpoint_path' (set via get_ts_search_params())."
+            )
+        kwargs["torchsim_params"].update(
+            {
+                "model_kind": "upet",
+                "upet_model_name": str(model_name) if model_name else None,
+                "upet_version": ck.get("version"),
+                "upet_checkpoint_path": ck.get("checkpoint_path"),
+                "upet_non_conservative": bool(ck.get("non_conservative", False)),
+            }
+        )
 
     # Keys without per-system defaults: pass through as-is (None when missing
     # is fine for the runner).

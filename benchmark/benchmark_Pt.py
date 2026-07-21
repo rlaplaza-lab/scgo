@@ -72,7 +72,7 @@ def test_benchmark_minima_recovery(cluster_formula: str, seed: int):
 def main() -> None:
     """CLI entry point for running the Pt benchmark suite."""
     parser = argparse.ArgumentParser(
-        description="Pt cluster geometric recovery benchmark (MACE/TorchSim or UMA/ASE GA).",
+        description="Pt cluster geometric recovery benchmark (MACE/UMA/UPET TorchSim GA).",
     )
     add_common_benchmark_cli(parser)
     args = parser.parse_args()
@@ -82,6 +82,7 @@ def main() -> None:
         model_name=args.model_name,
         backend=args.backend,
         uma_task=args.uma_task,
+        upet_version=args.upet_version,
     )
     params["optimizer_params"]["ga"]["niter"] = args.niter
     params["optimizer_params"]["ga"]["population_size"] = args.population_size
@@ -94,6 +95,7 @@ def main() -> None:
         verbose=True,
         backend=args.backend,
         uma_task=args.uma_task,
+        upet_version=args.upet_version,
     )
     elapsed = time.perf_counter() - t0
     logger.info("Benchmark wall time: %.1f s (%s)", elapsed, args.backend)

@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scgo"
 dynamic = ["version"]
-description = "Global optimization of atomic clusters using ASE with Basin Hopping and Genetic Algorithms, MLIP calculators (MACE, UMA), surface/adsorbate workflows, and NEB transition-state search."
+description = "Global optimization of atomic clusters using ASE with Basin Hopping and Genetic Algorithms, MLIP calculators (MACE, UMA, UPET), surface/adsorbate workflows, and NEB transition-state search."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [
   { name = "R. Laplaza", email = "ruben.laplaza@iiq.csic.es" },
 ]
-keywords = ["computational-chemistry", "structure-optimization", "atomic-clusters", "basin-hopping", "genetic-algorithm", "ase", "mace", "uma", "fairchem"]
+keywords = ["computational-chemistry", "structure-optimization", "atomic-clusters", "basin-hopping", "genetic-algorithm", "ase", "mace", "uma", "upet", "fairchem", "metatomic"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -40,7 +40,7 @@ Repository = "https://github.com/rlaplaza-lab/scgo"
 Issues = "https://github.com/rlaplaza-lab/scgo/issues"
 
 [project.optional-dependencies]
-# Install exactly one of [mace] or [uma] for MLIPs; they use incompatible dependency stacks.
+# Install exactly one of [mace], [uma], or [upet] for MLIPs; they use incompatible stacks.
 mace = [
     "e3nn==0.4.4",
     "mace-torch==0.3.16",
@@ -52,6 +52,12 @@ mace = [
 uma = [
     "fairchem-core>=2.19.0",
     "torch-sim-atomistic[fairchem]==0.6.0",
+]
+upet = [
+    "upet>=0.2.6",
+    "metatomic-torchsim>=0.1.3",
+    "vesin==0.6.0",
+    "torch-sim-atomistic==0.6.0",
 ]
 dev = [
     "pytest>=7.0.0",
