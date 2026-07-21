@@ -144,6 +144,11 @@ def wait_for_kernel(slug: str, *, fetch_seconds: int) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--slug", default="scgogpuci")
+    parser.add_argument(
+        "--slug-suffix",
+        default="",
+        help="Appended to --slug and --title (e.g. 'mace' → scgogpuci-mace)",
+    )
     parser.add_argument("--title", default="ScgoGpuCI")
     parser.add_argument("--code-file", default=".github/scripts/kaggle_gpu_runner.py")
     parser.add_argument("--dataset", action="append", default=["rlaplaza/scgocisrc"])
@@ -157,6 +162,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    suffix = str(args.slug_suffix or "").strip().strip("-")
+    slug = f"{args.slug}-{suffix}" if suffix else args.slug
+    title = f"{args.title}-{suffix}" if suffix else args.title
+
     code_file = Path(args.code_file)
     if not code_file.is_file():
         raise SystemExit(f"Kernel code file not found: {code_file}")
@@ -168,16 +177,16 @@ def main() -> int:
 
     write_kernel_metadata(
         staging_dir=staging,
-        slug=args.slug,
-        title=args.title,
+        slug=slug,
+        title=title,
         code_file=staged_code,
         dataset_sources=args.dataset,
         timeout_seconds=args.timeout_seconds,
         machine_shape=args.machine_shape,
     )
 
-    final_status = wait_for_kernel(args.slug, fetch_seconds=args.fetch_seconds)
-    log_path = download_kernel_log(args.slug, Path(args.log_dir))
+    final_status = wait_for_kernel(slug, fetch_seconds=args.fetch_seconds)
+    log_path = download_kernel_log(slug, Path(args.log_dir))
     if log_path is not None:
         print(f"::group::Kaggle kernel log ({log_path.name})")
         print(

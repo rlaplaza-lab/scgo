@@ -16,6 +16,7 @@ from pathlib import Path
 REPO_URL = "https://github.com/rlaplaza-lab/scgo.git"
 GIT_REF = "__GIT_REF__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
+MLIP_EXTRA = "__MLIP_EXTRA__"
 CONDA_ENV = "scgo-gpu"
 # Use /tmp so pytest/pip artifacts are not saved as Kaggle kernel output.
 WORKDIR = Path("/tmp/scgo")
@@ -279,11 +280,16 @@ def _install_torch_stack(py: list[str], pip: list[str]) -> None:
     raise subprocess.CalledProcessError(1, attempts[-1])
 
 
-def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
-    """Install SCGO + MACE like CI's pip install -e '.[mace,dev]' (torch pre-installed)."""
+def _install_scgo_mlip(py: list[str], pip: list[str], *, mlip_extra: str) -> None:
+    """Install SCGO + one MLIP extra (``mace`` or ``upet``); torch is pre-installed."""
+    if mlip_extra not in ("mace", "upet"):
+        raise SystemExit(
+            f"Unsupported MLIP_EXTRA={mlip_extra!r}; expected 'mace' or 'upet' "
+            "(UMA is not run on Kaggle — HuggingFace auth for fairchem weights)."
+        )
     data = tomllib.loads((WORKDIR / "pyproject.toml").read_text(encoding="utf-8"))
     deps = list(data["project"]["dependencies"])
-    deps.extend(data["project"]["optional-dependencies"]["mace"])
+    deps.extend(data["project"]["optional-dependencies"][mlip_extra])
     deps.extend(data["project"]["optional-dependencies"]["dev"])
     # Torch comes from Kaggle's CUDA index; lint tooling is not needed on the kernel.
     skip_prefixes = ("ruff", "pre-commit")
@@ -293,8 +299,13 @@ def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
         if not dep.startswith(skip_prefixes) and not dep.startswith("torch>=")
     ]
 
-    run([*pip, "install", "--no-cache-dir", "-e", ".[mace,dev]", "--no-deps"])
+    run([*pip, "install", "--no-cache-dir", "-e", f".[{mlip_extra},dev]", "--no-deps"])
     run([*pip, "install", "--no-cache-dir", *install_deps])
+
+
+def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
+    """Backward-compatible alias for :func:`_install_scgo_mlip` with MACE."""
+    _install_scgo_mlip(py, pip, mlip_extra="mace")
 
 
 def _assert_numpy_version(py: list[str]) -> None:
@@ -360,7 +371,8 @@ def main() -> int:
         run([*pip, "install", "--upgrade", "pip"])
         _install_numpy(py, pip)
         _install_torch_stack(py, pip)
-        _install_scgo_mace(py, pip)
+        log(f"Installing scgo[{MLIP_EXTRA},dev] for GPU suite")
+        _install_scgo_mlip(py, pip, mlip_extra=MLIP_EXTRA)
         _assert_numpy_version(py)
         _assert_cuda_usable(py)
 

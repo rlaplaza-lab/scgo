@@ -8,7 +8,8 @@
 | `integration` | Full workflow (GO campaigns, output trees) | Excluded from fast job (`not integration`) |
 | `benchmark` | Long MLIP regression (Cu₄ MACE E2E) | Excluded from CI |
 | `requires_cuda` | Needs GPU | Skipped on CPU runners |
-| `requires_mace` | Needs MACE extra | Excluded from UMA CI jobs |
+| `requires_mace` | Needs MACE extra | Excluded from UMA CI jobs; Kaggle MACE suite |
+| `requires_upet` | Needs UPET extra | Kaggle UPET suite (`scgo[upet]`) |
 | `requires_multicore` | Needs ≥2 CPUs | Skipped on single-core |
 
 Fast CI (every PR): `pytest tests/ -m "not slow and not integration"`
@@ -46,7 +47,8 @@ windows.
 `requires_mace` marks tests that import the MACE stack at runtime. UMA CI
 jobs install only `uma` extras and exclude these tests by marker — not because
 the physics is optional, but because the calculators are mutually exclusive
-install targets on disk-limited runners.
+install targets on disk-limited runners. `requires_upet` is the analogous
+marker for the UPET / metatomic-torchsim stack.
 
 ## Local runs
 
@@ -61,26 +63,37 @@ SCGO_BATCH_TEST_SAMPLES=15 pytest tests/ -m "slow and not benchmark"
 pytest tests/physics/test_reference_emt.py -v
 ```
 
-Install dev extras: `pip install -e ".[mace,dev]"` or `pip install -e ".[uma,dev]"`.
+Install dev extras: `pip install -e ".[mace,dev]"`, `pip install -e ".[uma,dev]"`,
+or `pip install -e ".[upet,dev]"` (exactly one MLIP extra per environment).
 
 ## Kaggle GPU CI (manual)
 
 GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 
 1. GitHub → Actions → **Kaggle GPU tests** → **Run workflow**
-2. Leave defaults (`ref=main`, `marker=requires_cuda and requires_mace and not benchmark`) unless testing a branch
-3. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
+2. Leave defaults (`ref=main`, empty `marker`) unless testing a branch — the workflow
+   runs **two kernels** in parallel:
+   - **MACE**: `requires_cuda and requires_mace and not benchmark`
+   - **UPET**: `requires_cuda and requires_upet and not benchmark`
+3. **UMA is not run on Kaggle** (HuggingFace auth for fairchem / UMA weights is
+   typically unavailable there).
+4. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
 
-The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. Kaggle may mount that dataset as either `scgo-src.tar.gz` or an extracted tree under `/kaggle/input/scgocisrc/`. **Pip installs (MACE/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI. The kernel requests a **Tesla T4** GPU (`machine_shape: NvidiaTeslaT4`). Kaggle may assign a P100 otherwise; its sm_60 architecture is incompatible with the cu124 PyTorch wheels used here.
+The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. Kaggle may mount that dataset as either `scgo-src.tar.gz` or an extracted tree under `/kaggle/input/scgocisrc/`. **Pip installs (MACE/UPET/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI. The kernel requests a **Tesla T4** GPU (`machine_shape: NvidiaTeslaT4`). Kaggle may assign a P100 otherwise; its sm_60 architecture is incompatible with the cu124 PyTorch wheels used here.
 
-Example-mimic GPU integration coverage: `tests/integration/test_gpu_examples_integration.py` (all four `system_type` values from `examples/`).
+Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all four `system_type` values from `examples/`).
+
+UPET GPU smoke coverage: `tests/integration/test_gpu_upet_smoke.py`.
 
 ### Local equivalents
 
 ```bash
-# All GPU tests (skipped without CUDA)
+# MACE GPU suite (skipped without CUDA / scgo[mace])
 pytest tests/ -m "requires_cuda and requires_mace and not benchmark" -v
 
-# Example-mimic GPU integration only
+# UPET GPU suite (skipped without CUDA / scgo[upet])
+pytest tests/ -m "requires_cuda and requires_upet and not benchmark" -v
+
+# Example-mimic GPU integration only (MACE)
 pytest tests/integration/test_gpu_examples_integration.py -v
 ```

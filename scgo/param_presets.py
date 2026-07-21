@@ -385,10 +385,18 @@ def _attach_upet_torchsim_relaxer(
     autobatcher: bool | None = None,
     expected_max_atoms: int | None = None,
 ) -> None:
-    """Set ``ga['relaxer']`` to a UPET-backed :class:`TorchSimBatchRelaxer`."""
+    """Set ``ga['relaxer']`` to a UPET-backed :class:`TorchSimBatchRelaxer`.
+
+    Device defaults to CUDA when available. ``autobatcher=None`` enables
+    TorchSim ``InFlightAutoBatcher`` on GPU (batched population relaxations).
+    Model dtype is synced from metatomic capabilities after load.
+    """
+    import torch
+
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
     fmax_val = float(ga.get("fmax", 0.05))
+    on_cuda = torch.cuda.is_available()
     ga["relaxer"] = TorchSimBatchRelaxer(
         model_kind="upet",
         upet_model_name=calculator_kwargs.get("model_name"),
@@ -398,9 +406,11 @@ def _attach_upet_torchsim_relaxer(
         force_tol=fmax_val,
         optimizer_name="fire",
         max_steps=max_steps,
-        dtype=None,
-        autobatcher=autobatcher,
+        device=torch.device("cuda") if on_cuda else torch.device("cpu"),
+        dtype=None,  # synced from MetatomicModel capabilities in __post_init__
+        autobatcher=on_cuda if autobatcher is None else autobatcher,
         expected_max_atoms=expected_max_atoms,
+        max_atoms_to_try=expected_max_atoms,
     )
 
 

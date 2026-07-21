@@ -862,6 +862,7 @@ def ga_go(
                     ),
                     force_tol=fmax,
                     max_steps=niter_local_relaxation,
+                    # device/autobatcher: CUDA + InFlightAutoBatcher by default
                     expected_max_atoms=expected_max_atoms,
                     max_atoms_to_try=expected_max_atoms,
                 )

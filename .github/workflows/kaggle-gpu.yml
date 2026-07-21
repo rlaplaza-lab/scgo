@@ -1,6 +1,8 @@
 name: Kaggle GPU tests
 
 # Manual GPU CI via Kaggle (see tests/README.md). CPU CI in ci.yml excludes requires_cuda.
+# Runs MACE and UPET suites in separate kernels (mutually exclusive extras).
+# UMA is intentionally omitted: HuggingFace auth for fairchem weights is not available on Kaggle.
 
 on:
   workflow_dispatch:
@@ -11,15 +13,28 @@ on:
         default: main
         type: string
       marker:
-        description: pytest marker expression
+        description: >
+          Optional pytest marker override for both suites. Leave empty to use
+          suite defaults (MACE: requires_cuda and requires_mace; UPET: requires_cuda
+          and requires_upet). Always excludes benchmark.
         required: false
-        default: requires_cuda and requires_mace and not benchmark
+        default: ""
         type: string
 
 jobs:
   kaggle-gpu:
-    name: Kaggle GPU (${{ inputs.ref }})
+    name: Kaggle GPU (${{ matrix.suite }}, ${{ inputs.ref }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: mace
+            mlip_extra: mace
+            default_marker: requires_cuda and requires_mace and not benchmark
+          - suite: upet
+            mlip_extra: upet
+            default_marker: requires_cuda and requires_upet and not benchmark
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,7 +44,8 @@ jobs:
       - name: Render Kaggle runner script
         env:
           GIT_REF: ${{ inputs.ref }}
-          PYTEST_MARKER: ${{ inputs.marker }}
+          MLIP_EXTRA: ${{ matrix.mlip_extra }}
+          PYTEST_MARKER: ${{ inputs.marker || matrix.default_marker }}
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -38,10 +54,12 @@ jobs:
           rendered = (
               template.replace("__GIT_REF__", os.environ["GIT_REF"])
               .replace("__PYTEST_MARKER__", os.environ["PYTEST_MARKER"])
+              .replace("__MLIP_EXTRA__", os.environ["MLIP_EXTRA"])
           )
           out = Path(".github/scripts/kaggle_gpu_runner.py")
           out.write_text(rendered)
           print(f"Wrote {out} ({len(rendered)} bytes)")
+          print(f"suite={os.environ['MLIP_EXTRA']} marker={os.environ['PYTEST_MARKER']}")
           PY
 
       - name: Configure Kaggle credentials
@@ -96,6 +114,7 @@ jobs:
           python -m pip install --upgrade kaggle
           python .github/scripts/kaggle_run_kernel.py \
             --code-file .github/scripts/kaggle_gpu_runner.py \
+            --slug-suffix "${{ matrix.suite }}" \
             --machine-shape NvidiaTeslaT4 \
             --fetch-seconds 15 \
             --timeout-seconds 10800
@@ -106,4 +125,4 @@ jobs:
         run: |
           python -m pip install --upgrade kaggle
           python .github/scripts/setup_kaggle_auth.py --require-existing
-          python .github/scripts/dump_kaggle_kernel_log.py scgogpuci /tmp/kaggle-log
+          python .github/scripts/dump_kaggle_kernel_log.py "scgogpuci-${{ matrix.suite }}" /tmp/kaggle-log

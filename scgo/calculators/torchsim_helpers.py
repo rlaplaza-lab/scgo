@@ -569,6 +569,7 @@ class TorchSimBatchRelaxer:
             self.model = _ensure_torchsim_mace_wrapper(
                 self.model, self.device, self.dtype
             )
+        self._sync_device_dtype_from_model()
         self._patch_model_for_cuda()
 
         # Store device string for cache key (e.g., "cuda" or "cpu")
@@ -926,6 +927,28 @@ class TorchSimBatchRelaxer:
     def _uses_metatomic_model(self) -> bool:
         mk = str(self.model_kind or "mace").strip().lower()
         return mk in ("upet", "metatomic")
+
+    def _sync_device_dtype_from_model(self) -> None:
+        """Align SimState device/dtype with the loaded TorchSim model.
+
+        MetatomicModel (UPET) chooses dtype from model capabilities and moves
+        weights to ``device``. Mismatched SimState dtypes raise in
+        ``MetatomicModel.forward``; syncing here keeps batched GPU relaxations
+        on the model device with autobatching.
+        """
+        model_device = getattr(self.model, "device", None)
+        if model_device is not None:
+            self.device = model_device
+        model_dtype = getattr(self.model, "dtype", None)
+        if model_dtype is not None:
+            self.dtype = model_dtype
+        if self._uses_metatomic_model():
+            logger.info(
+                "UPET/TorchSim model ready: device=%s dtype=%s model_kind=%s",
+                self.device,
+                self.dtype,
+                self.model_kind,
+            )
 
     def _cache_model_name(self) -> str:
         mk = str(self.model_kind or "mace").strip().lower()
