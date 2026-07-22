@@ -44,9 +44,16 @@ def build_graphite_slab(
     all_positions = single_layer.get_positions().copy()
     all_symbols = single_layer.get_chemical_symbols()
 
+    cell = single_layer.get_cell()
+    # Bernal AB: shift odd layers by (a1 + a2) / 3 in the graphene plane.
+    ab_shift = (cell[0] + cell[1]) / 3.0
+
     for layer_idx in range(1, layers):
         layer_positions = single_layer.get_positions().copy()
         layer_positions[:, 2] += layer_idx * GRAPHITE_INTERLAYER_DISTANCE
+        if layer_idx % 2 == 1:
+            layer_positions[:, 0] += ab_shift[0]
+            layer_positions[:, 1] += ab_shift[1]
         all_positions = np.vstack([all_positions, layer_positions])
         all_symbols.extend(single_layer.get_chemical_symbols())
 
@@ -61,6 +68,7 @@ def build_graphite_slab(
     slab.set_positions(positions)
 
     normalize_slab_pbc(slab)
+    slab.wrap()
     return slab
 
 

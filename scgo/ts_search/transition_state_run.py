@@ -35,6 +35,7 @@ from scgo.system_types import (
     validate_structure_for_system_type,
     validate_system_type_settings,
 )
+from scgo.utils.comparators import get_shared_mobile_atom_indices
 from scgo.utils.helpers import (
     auto_niter_ts,
     filter_unique_minima,
@@ -243,7 +244,7 @@ def _run_serial_neb_search(
                 neb_surface_lattice_rotation=neb_surface_lattice_rotation,
                 neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             )
-        except (RuntimeError, ValueError) as e:
+        except (RuntimeError, ValueError, SCGOValidationError) as e:
             logger.error(
                 "Unexpected error while finding TS for pair %s: %s: %s",
                 pair_id,
@@ -310,8 +311,6 @@ def _warn_on_surface_mobile_indices(
     policy = get_system_policy(system_type)
     if not policy.uses_surface:
         return
-
-    from scgo.utils.comparators import get_shared_mobile_atom_indices
 
     slab_n = int(n_slab) if n_slab > 0 else None
     sample_count = min(3, len(minima))

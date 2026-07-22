@@ -23,11 +23,42 @@ class SurfaceSiteCandidate:
     normal: np.ndarray
 
 
+# Call-stack / placement-session cache: identical site-core geometries reuse Qhull.
+_SITE_CANDIDATE_CACHE: dict[int, dict[SiteType, list[SurfaceSiteCandidate]]] = {}
+_SITE_CACHE_MAX = 64
+
+
 def _safe_normalize(v: np.ndarray) -> np.ndarray:
     vn = float(np.linalg.norm(v))
     if vn < 1e-12:
         return np.array([0.0, 0.0, 1.0], dtype=float)
     return v / vn
+
+
+def _site_core_positions_key(core: Atoms) -> int:
+    pos = np.ascontiguousarray(core.get_positions(), dtype=np.float64)
+    return hash(pos.tobytes())
+
+
+def clear_surface_site_cache() -> None:
+    """Drop cached hull site candidates (e.g. between independent placement stacks)."""
+    _SITE_CANDIDATE_CACHE.clear()
+
+
+def get_or_compute_surface_site_candidates(
+    core: Atoms,
+) -> dict[SiteType, list[SurfaceSiteCandidate]]:
+    """Return surface sites for ``core``, caching by positions hash."""
+    key = _site_core_positions_key(core)
+    cached = _SITE_CANDIDATE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = compute_surface_site_candidates(core)
+    if len(_SITE_CANDIDATE_CACHE) >= _SITE_CACHE_MAX:
+        # Drop an arbitrary old entry (insertion order in CPython 3.7+).
+        _SITE_CANDIDATE_CACHE.pop(next(iter(_SITE_CANDIDATE_CACHE)))
+    _SITE_CANDIDATE_CACHE[key] = result
+    return result
 
 
 def compute_surface_site_candidates(

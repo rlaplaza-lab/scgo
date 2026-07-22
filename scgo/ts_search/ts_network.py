@@ -15,7 +15,7 @@ from ase import Atoms
 
 from scgo.database import get_connection
 from scgo.database.metadata import add_metadata, get_metadata, persist_provenance
-from scgo.database.sync import retry_with_backoff
+from scgo.database.sync import database_retry
 from scgo.ts_search.transition_state import minima_provenance_dict
 from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.helpers import get_cluster_formula
@@ -154,7 +154,7 @@ def add_ts_to_database(
                 da.add_relaxed_candidate(ts_db_atoms)
                 return True
 
-            retry_with_backoff(
+            database_retry(
                 _add,
                 max_retries=5,
                 initial_delay=0.05,

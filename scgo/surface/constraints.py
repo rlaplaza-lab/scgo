@@ -73,6 +73,14 @@ def _layer_indices_by_clustering(
         return {i for i in range(len(positions)) if rounded[i] <= cutoff + 1e-9}
 
 
+def _replace_slab_fixatoms(atoms: Atoms, fix_indices: list[int] | None) -> None:
+    """Replace ``FixAtoms`` while preserving other constraints (e.g. FixBondLength)."""
+    kept = [c for c in (atoms.constraints or []) if not isinstance(c, FixAtoms)]
+    if fix_indices:
+        kept.append(FixAtoms(indices=fix_indices))
+    atoms.set_constraint(kept)
+
+
 def attach_slab_constraints(
     atoms: Atoms,
     n_slab: int,
@@ -82,7 +90,10 @@ def attach_slab_constraints(
     n_relax_top_slab_layers: int | None = None,
     surface_normal_axis: int,
 ) -> None:
-    """Attach ``FixAtoms`` for slab atoms; clears existing constraints.
+    """Attach ``FixAtoms`` for slab atoms; preserve non-``FixAtoms`` constraints.
+
+    Existing ``FixAtoms`` are removed and replaced. Other constraints (e.g.
+    adsorbate ``FixBondLength``) are kept.
 
     To relax only the top N slab layers (typical surface region), either set
     ``n_relax_top_slab_layers=N`` or fix the bottom ``L - N`` layers via
@@ -104,8 +115,8 @@ def attach_slab_constraints(
             f"attach_slab_constraints: n_slab={n_slab} exceeds len(atoms)={len(atoms)}"
         )
 
-    atoms.constraints = []
     if n_slab <= 0:
+        _replace_slab_fixatoms(atoms, None)
         return
 
     if n_relax_top_slab_layers is not None and n_fix_bottom_slab_layers is not None:
@@ -117,8 +128,7 @@ def attach_slab_constraints(
     slab_positions = atoms.get_positions()[:n_slab]
 
     if fix_all_slab_atoms:
-        fix_idx = list(range(n_slab))
-        atoms.set_constraint(FixAtoms(indices=fix_idx))
+        _replace_slab_fixatoms(atoms, list(range(n_slab)))
         return
 
     if n_relax_top_slab_layers is not None:
@@ -129,11 +139,11 @@ def attach_slab_constraints(
             from_top=True,
         )
         fix_idx = sorted(set(range(n_slab)) - mobile)
-        if fix_idx:
-            atoms.set_constraint(FixAtoms(indices=fix_idx))
+        _replace_slab_fixatoms(atoms, fix_idx or None)
         return
 
     if n_fix_bottom_slab_layers is None:
+        _replace_slab_fixatoms(atoms, None)
         return
 
     layer_idx = _layer_indices_by_clustering(
@@ -142,7 +152,7 @@ def attach_slab_constraints(
         n_layers=n_fix_bottom_slab_layers,
         from_top=False,
     )
-    atoms.set_constraint(FixAtoms(indices=sorted(layer_idx)))
+    _replace_slab_fixatoms(atoms, sorted(layer_idx))
 
 
 def attach_slab_constraints_from_surface_config(

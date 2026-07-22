@@ -12,17 +12,6 @@ import math
 import typing
 
 import numpy as np
-from numpy.random import Generator
-
-from scgo.exceptions import (
-    SCGORuntimeError,
-    SCGOValidationError,
-)
-
-if typing.TYPE_CHECKING:
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-    from scgo.utils.diversity_scorer import DiversityScorer
-    from scgo.utils.fitness_strategies import FitnessStrategy
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase_ga.offspring_creator import OperationSelector
@@ -33,12 +22,13 @@ from ase_ga.standard_comparators import (
 )
 from ase_ga.startgenerator import StartGenerator
 from ase_ga.utilities import get_all_atom_types
+from numpy.random import Generator
 
 from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
 )
-from scgo.ase_ga_patches.population import Population
+from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
 from scgo.ase_ga_patches.standardmutations import (
     AnisotropicRattleMutation,
     BreathingMutation,
@@ -59,7 +49,12 @@ from scgo.constants import (
 )
 
 # Prefer metadata reader for raw_score and other fields
+from scgo.database import SCGODatabaseManager
 from scgo.database.metadata import get_metadata
+from scgo.exceptions import (
+    SCGORuntimeError,
+    SCGOValidationError,
+)
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.config import SurfaceSystemConfig
@@ -76,6 +71,9 @@ from scgo.system_types import (
     validate_composition_against_adsorbate,
     validate_structure_for_system_type,
 )
+from scgo.utils.comparators import PureInteratomicDistanceComparator
+from scgo.utils.diversity_scorer import DiversityScorer
+from scgo.utils.fitness_strategies import FitnessStrategy, get_fitness_from_atoms
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import (
@@ -93,6 +91,10 @@ from scgo.utils.validation import (
     validate_integer,
     validate_positive,
 )
+
+if typing.TYPE_CHECKING:
+    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+
 
 logger = get_logger(__name__)
 
@@ -1336,8 +1338,6 @@ def update_early_stopping_state_unified(
                   should_stop).
         should_stop is True if early stopping should be triggered.
     """
-    from scgo.utils.fitness_strategies import FitnessStrategy, get_fitness_from_atoms
-
     if isinstance(fitness_strategy, str):
         fitness_strategy = FitnessStrategy(fitness_strategy)
 
@@ -1378,6 +1378,7 @@ def setup_diversity_scorer(
     logger,
     *,
     base_dir: str,
+    mic: bool = False,
 ) -> DiversityScorer | None:
     """Setup DiversityScorer for diversity fitness strategy.
 
@@ -1389,6 +1390,7 @@ def setup_diversity_scorer(
         diversity_max_references: Maximum number of reference structures to load.
         logger: Logger instance for logging messages.
         base_dir: Base directory for resolving reference DB glob patterns.
+        mic: Whether the diversity comparator uses the minimum-image convention.
 
     Returns:
         DiversityScorer instance if fitness_strategy is "diversity", None otherwise.
@@ -1396,9 +1398,6 @@ def setup_diversity_scorer(
     Raises:
         ValueError: If diversity_reference_db is None when fitness_strategy is "diversity".
     """
-    from scgo.utils.diversity_scorer import DiversityScorer
-    from scgo.utils.fitness_strategies import FitnessStrategy
-
     if isinstance(fitness_strategy, str):
         fitness_strategy = FitnessStrategy(fitness_strategy)
 
@@ -1409,8 +1408,6 @@ def setup_diversity_scorer(
         raise SCGOValidationError(
             "diversity_reference_db is required when fitness_strategy='diversity'"
         )
-
-    from scgo.database import SCGODatabaseManager
 
     if logger.isEnabledFor(logging.INFO):
         logger.info("Loading reference structures from: %s", diversity_reference_db)
@@ -1430,13 +1427,11 @@ def setup_diversity_scorer(
         )
         return None
 
-    from scgo.utils.comparators import PureInteratomicDistanceComparator
-
     comparator_for_diversity = PureInteratomicDistanceComparator(
         n_top=n_to_optimize,
         tol=DEFAULT_COMPARATOR_TOL,
         pair_cor_max=DEFAULT_PAIR_COR_MAX,
-        mic=False,
+        mic=mic,
     )
     return DiversityScorer(reference_structures, comparator_for_diversity)
 
@@ -1458,14 +1453,10 @@ def select_population_class(
     Returns:
         Tuple of (PopulationClass, population_kwargs).
     """
-    from scgo.utils.fitness_strategies import FitnessStrategy
-
     if isinstance(fitness_strategy, str):
         fitness_strategy = FitnessStrategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
-        from scgo.ase_ga_patches.population import FitnessStrategyPopulation
-
         PopulationClass = FitnessStrategyPopulation
         population_kwargs = {
             "fitness_strategy": fitness_strategy,
@@ -1501,8 +1492,6 @@ def log_early_stopping_info(
     if verbosity < 1:
         return
 
-    from scgo.utils.fitness_strategies import FitnessStrategy
-
     if isinstance(fitness_strategy, str):
         fitness_strategy = FitnessStrategy(fitness_strategy)
 
@@ -1534,8 +1523,6 @@ def sort_minima_by_fitness(
         fitness_strategy: Fitness strategy name.
         logger: Logger instance.
     """
-    from scgo.utils.fitness_strategies import FitnessStrategy, get_fitness_from_atoms
-
     if isinstance(fitness_strategy, str):
         fitness_strategy = FitnessStrategy(fitness_strategy)
 

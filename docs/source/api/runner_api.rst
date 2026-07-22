@@ -41,9 +41,13 @@ All functions accept:
 - ``ts_params``: TS parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_ts_search_params` at run time)
 - ``seed``: random seed for reproducibility (must agree across ``seed=``, ``go_params['seed']``, and ``ts_params['seed']`` when more than one is set)
 - ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, or ``"surface_cluster_adsorbate"`` (run argument only — not inside preset dicts)
-- ``surface_config``: required for surface system types; must agree across run argument and preset dicts when both are set
+- ``surface_config``: required for surface system types; may also appear as a top-level key in ``go_params`` / ``ts_params`` (fanned into optimizer slots) and must agree with the run argument when both are set
 - ``adsorbates``: ASE Atoms or list of Atoms, required for adsorbate system types
 - ``verbosity``: 0=quiet (warnings only), 1=normal (parameter merge and timing summaries), 2=debug (library detail), 3=trace (custom TRACE level for deep diagnostics). Progress bars are shown when ``verbosity >= 1`` (see :func:`~scgo.utils.logging.should_show_progress` in :doc:`/api/utils`).
+
+The ``scgo.runner_api`` module is a thin facade: implementations live in
+``runner_composition``, ``runner_params``, ``runner_go``, and ``runner_ts``.
+Public imports and test monkeypatches on ``scgo.runner_api.*`` remain unchanged.
 
 See :doc:`/parameters` (*Parameter resolution*) for merge rules and logging behaviour.
 

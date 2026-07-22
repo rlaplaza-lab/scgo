@@ -7,7 +7,6 @@ local minimizations, with Metropolis acceptance criteria.
 
 from __future__ import annotations
 
-import logging
 import os
 from time import perf_counter
 from typing import Any
@@ -21,6 +20,7 @@ from tqdm import tqdm
 from scgo.algorithms.ga_common import (
     ga_run_metadata_extras,
     maybe_apply_mobile_core_ads_tags,
+    setup_diversity_scorer,
 )
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import (
@@ -33,9 +33,9 @@ from scgo.constants import (
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_PAIR_COR_MAX,
 )
-from scgo.database import HPC_DATABASE_EXCEPTIONS, SCGODatabaseManager, setup_database
+from scgo.database import HPC_DATABASE_EXCEPTIONS, setup_database
 from scgo.database.metadata import add_metadata, persist_provenance
-from scgo.database.sync import retry_with_backoff
+from scgo.database.sync import database_retry
 from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
@@ -48,7 +48,6 @@ from scgo.system_types import (
     validate_system_type_settings,
 )
 from scgo.utils.comparators import PureInteratomicDistanceComparator
-from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
@@ -347,34 +346,16 @@ def bh_go(
             raise SCGOValidationError("Surface system has no movable atoms above slab.")
 
     # Load reference structures and create DiversityScorer for diversity strategy
-    diversity_scorer = None
-    if fitness_strategy == FitnessStrategy.DIVERSITY:
-        if diversity_reference_db is None:
-            raise SCGOValidationError(
-                "diversity_reference_db is required when fitness_strategy='diversity'. "
-                "Provide a glob pattern (e.g., '**/*.db') to find reference databases."
-            )
-
-        if logger.isEnabledFor(logging.INFO):
-            logger.info("Loading reference structures from: %s", diversity_reference_db)
-        with SCGODatabaseManager(
-            base_dir=output_dir, enable_caching=True
-        ) as db_manager:
-            reference_structures = db_manager.load_reference_structures(
-                db_glob_pattern=diversity_reference_db,
-                composition=atoms.get_chemical_symbols(),
-                max_structures=diversity_max_references,
-            )
-        if logger.isEnabledFor(logging.INFO):
-            logger.info("Loaded %d reference structures", len(reference_structures))
-
-        if not reference_structures:
-            logger.warning(
-                "No reference structures found for diversity strategy. "
-                "This may result in poor diversity optimization."
-            )
-        else:
-            diversity_scorer = DiversityScorer(reference_structures, comparator)
+    diversity_scorer = setup_diversity_scorer(
+        fitness_strategy=fitness_strategy,
+        diversity_reference_db=diversity_reference_db,
+        composition=list(atoms.get_chemical_symbols()),
+        n_to_optimize=comparator_n_top,
+        diversity_max_references=diversity_max_references,
+        logger=logger,
+        base_dir=output_dir,
+        mic=surface_mode,
+    )
 
     # Detach calculator temporarily for DB setup to avoid pickling issues
     calc = atoms.calc
@@ -428,7 +409,7 @@ def bh_go(
                 else:
                     write_timing_file(output_dir, out)
 
-        a_current = retry_with_backoff(
+        a_current = database_retry(
             da.get_an_unrelaxed_candidate,
             max_retries=5,
             initial_delay=0.2,
@@ -478,7 +459,7 @@ def bh_go(
             persist_provenance(a_current, run_id=run_id)
 
         t_db0 = perf_counter()
-        retry_with_backoff(
+        database_retry(
             lambda: da.add_relaxed_step(a_current),
             max_retries=5,
             initial_delay=0.2,
@@ -538,7 +519,7 @@ def bh_go(
                 persist_provenance(a_trial, run_id=run_id)
 
             t_ins0 = perf_counter()
-            retry_with_backoff(
+            database_retry(
                 lambda _t=a_trial, _d=desc: da.add_unrelaxed_candidate(
                     _t, description=_d
                 ),
@@ -583,7 +564,7 @@ def bh_go(
                 persist_provenance(a_trial, run_id=run_id)
 
             t_w0 = perf_counter()
-            retry_with_backoff(
+            database_retry(
                 lambda _t=a_trial: da.add_relaxed_step(_t),
                 max_retries=5,
                 initial_delay=0.2,
@@ -657,7 +638,7 @@ def bh_go(
                     }
                 )
 
-        all_candidates = retry_with_backoff(
+        all_candidates = database_retry(
             da.get_all_relaxed_candidates,
             max_retries=5,
             initial_delay=0.2,

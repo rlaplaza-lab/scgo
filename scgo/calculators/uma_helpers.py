@@ -7,6 +7,7 @@ from typing import Any
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
+from scgo.calculators.torch_device import resolve_torch_device
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
@@ -34,16 +35,11 @@ class UMA(Calculator):
     ) -> None:
         ensure_mace_uma_not_both_installed()
         try:
-            import torch
             from fairchem.core import FAIRChemCalculator
         except ImportError as e:
             raise ImportError(_MISSING_FAIRCHEM_MSG) from e
 
-        if device is None:
-            dev: str = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            d = str(device).lower()
-            dev = "cuda" if "cuda" in d else "cpu"
+        dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
 
         name = f"UMA-{model_name}"
         super().__init__(name=name, **kwargs)
@@ -77,3 +73,51 @@ class UMA(Calculator):
             system_changes=system_changes,
         )
         self.results = self._inner.results
+
+
+def try_extract_torchsim_model_from_uma_calculator(
+    calculator: Calculator,
+) -> object | None:
+    """Reuse the FairChem predictor already loaded on an ASE UMA calculator.
+
+    ``torch_sim.models.fairchem.FairChemModel`` only accepts a checkpoint name
+    or path in its public constructor, so this builds a TorchSim-ready shell
+    around the live ``predictor`` instead of reloading weights.
+    """
+    try:
+        import torch
+        from torch_sim.models.fairchem import FairChemModel  # type: ignore
+    except ImportError:
+        return None
+
+    inner = getattr(calculator, "_inner", None)
+    if inner is None:
+        # Bare FAIRChemCalculator (no SCGO UMA wrapper).
+        if getattr(calculator, "predictor", None) is None:
+            return None
+        inner = calculator
+
+    predictor = getattr(inner, "predictor", None)
+    if predictor is None:
+        return None
+
+    task_name = getattr(calculator, "task_name", None)
+    if task_name is None:
+        task_name = getattr(inner, "task_name", None)
+
+    device = getattr(predictor, "device", None)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    elif not isinstance(device, torch.device):
+        device = torch.device(str(device))
+
+    model = FairChemModel.__new__(FairChemModel)
+    model._dtype = torch.float32
+    model._compute_stress = False
+    model._compute_forces = True
+    model._memory_scales_with = "n_atoms"
+    model._device = device
+    model.predictor = predictor
+    model.task_name = task_name
+    model.implemented_properties = ["energy", "forces"]
+    return model

@@ -68,3 +68,31 @@ def test_multi_fragment_placement_with_relaxation() -> None:
         clash_atoms=combined,
     )
     assert second is not None
+
+
+def test_surface_site_cache_reuses_hull_for_identical_core() -> None:
+    from unittest.mock import patch
+
+    from scgo.cluster_adsorbate import sites as sites_mod
+
+    sites_mod.clear_surface_site_cache()
+    core = Atoms(
+        "Pt4",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.5, 0.0, 0.0],
+            [1.25, 2.165, 0.0],
+            [1.25, 0.722, 2.0],
+        ],
+        pbc=False,
+    )
+    with patch.object(
+        sites_mod,
+        "compute_surface_site_candidates",
+        wraps=sites_mod.compute_surface_site_candidates,
+    ) as mocked:
+        first = sites_mod.get_or_compute_surface_site_candidates(core)
+        second = sites_mod.get_or_compute_surface_site_candidates(core)
+        assert first is second
+        assert mocked.call_count == 1
+    sites_mod.clear_surface_site_cache()

@@ -27,9 +27,21 @@ Or with UMA support:
 
    pip install "scgo[uma]"
 
+Or with UPET support:
+
+.. code-block:: bash
+
+   pip install "scgo[upet]"
+   pip install 'vesin==0.6.0' --force-reinstall --no-deps
+
 For pip-only installs, ensure ``nvalchemi-toolkit-ops`` is available for the
 MACE stack and uninstall ``vesin``/``vesin-torch`` if you encounter
-TorchSim-related errors.
+TorchSim-related errors (except for UPET, which needs the pinned ``vesin``
+above).
+
+Calculator ``device`` options (``cuda``, ``cpu``, and ``mps`` where supported)
+are validated: an unsupported explicit device raises
+``SCGOValidationError`` instead of silently using CPU.
 
 Conda (development from source)
 ---------------------------------
@@ -45,8 +57,9 @@ For contributors or editable installs with the full MACE + dev toolchain:
 
 The conda environment installs SCGO in editable mode with ``[mace,dev]``
 (MACE/TorchSim plus test and lint tooling). Note that ``vesin`` and
-``vesin-torch`` conflict with the TorchSim stack used by SCGO and should not
-be installed.
+``vesin-torch`` conflict with the TorchSim stack used by the MACE/UMA extras
+and should not be installed in those environments. The UPET extra requires a
+pinned ``vesin==0.6.0`` in a separate environment.
 
 Editable install from source
 ----------------------------
@@ -55,7 +68,7 @@ Editable install from source
 
    git clone https://github.com/rlaplaza-lab/scgo.git
    cd scgo
-   pip install -e ".[mace]"   # or: pip install -e ".[uma]"
+   pip install -e ".[mace]"   # or: pip install -e ".[uma]" / ".[upet]"
 
 Development Installation
 ------------------------
@@ -64,14 +77,14 @@ For development with tests and linting:
 
 .. code-block:: bash
 
-   pip install -e ".[mace,dev]"  # or: pip install -e ".[uma,dev]"
+   pip install -e ".[mace,dev]"  # or: "[uma,dev]" / "[upet,dev]"
    pre-commit install
 
 Dependency Notes
 ----------------
 
-- SCGO requires exactly one of the ``[mace]`` or ``[uma]`` extras for MLIP support
-- The MACE and UMA extras use incompatible dependency stacks
+- SCGO requires exactly one of the ``[mace]``, ``[uma]``, or ``[upet]`` extras for MLIP support
+- The MACE, UMA, and UPET extras use incompatible dependency stacks
 - SQLite JSON1 extension is required for database operations
   (``pysqlite3-binary`` recommended for pip installs)
 - Sella is optional for advanced optimization features and requires a C toolchain

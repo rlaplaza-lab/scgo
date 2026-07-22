@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 
 class SCGOError(Exception):
     """Base exception for all SCGO errors."""
@@ -14,18 +12,15 @@ class SCGOError(Exception):
 
 
 class SCGOValidationError(SCGOError):
-    """Input validation errors (logged at ERROR when logging is configured)."""
+    """Input validation errors.
+
+    Callers that want user-facing ERROR logs should log at the raise site
+    (or API/runner boundary); construction alone does not log.
+    """
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
-        # Log validation errors at ERROR level when logging is configured
-        # Only log if we have handlers (configure_logging has been called)
-        # This avoids logging during module import before configure_logging is called
-        root_logger = logging.getLogger()
-        if root_logger.handlers:
-            logger = logging.getLogger("scgo.validation")
-            logger.error("Validation error: %s", message)
 
 
 class SCGOConfigurationError(SCGOError):

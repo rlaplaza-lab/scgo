@@ -41,6 +41,7 @@ from .geometry_helpers import (
     _classify_seed_geometry,
     _generate_rotation_matrix,
     _should_check_connectivity,
+    reorder_cluster_to_composition,
     validate_cluster,
     validate_cluster_structure,
 )
@@ -363,6 +364,7 @@ def _apply_template_rotation_and_validate(
     rng: np.random.Generator,
     min_distance_factor: float,
     connectivity_factor: float,
+    composition: list[str] | None = None,
 ) -> Atoms | None:
     """Apply rotation diversity, set cell, center, and validate a template structure.
 
@@ -375,6 +377,8 @@ def _apply_template_rotation_and_validate(
         rng: Random number generator for rotation.
         min_distance_factor: Factor for minimum distance checks.
         connectivity_factor: Factor for connectivity threshold.
+        composition: Optional target composition for atom reordering before the
+            validation-complete flag is set.
 
     Returns:
         Validated Atoms with rotation applied, or None if validation fails.
@@ -431,6 +435,8 @@ def _apply_template_rotation_and_validate(
             f"Template structure validation failed: {error_message}. Falling back to random_spherical."
         )
         return None
+    if composition is not None:
+        selected = reorder_cluster_to_composition(selected, composition)
     selected.info["scgo_validation_complete"] = True
     return selected
 
@@ -483,6 +489,7 @@ def _try_template_generation(
             rng,
             min_distance_factor,
             connectivity_factor,
+            composition=list(composition),
         )
         if result is not None:
             return result
@@ -598,6 +605,7 @@ def _try_template_generation(
         rng,
         min_distance_factor,
         connectivity_factor,
+        composition=list(composition),
     )
     if result is None:
         return None

@@ -23,6 +23,7 @@ from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
 from ase_ga.data import DataConnection
 from ase_ga.utilities import get_all_atom_types
+from scipy.spatial.distance import cdist
 from tqdm import tqdm
 
 from scgo.algorithms.ga_common import (
@@ -147,20 +148,69 @@ def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
     return atoms
 
 
-def _fails_fast_geometric_prefilter(atoms: Atoms, blmin: dict) -> bool:
-    """Return True when a severe clash is detected quickly."""
-    if len(atoms) < 2:
+_PREFILTER_BLMIN_FACTOR = 0.55
+
+
+def _blmin_threshold_matrix(
+    atomic_numbers: np.ndarray, blmin: dict
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map atomic numbers to a dense Z-pair clash-threshold matrix."""
+    unique_z = np.unique(atomic_numbers.astype(int, copy=False))
+    z_to_i = {int(z): i for i, z in enumerate(unique_z)}
+    n_u = len(unique_z)
+    thresh = np.zeros((n_u, n_u), dtype=float)
+    for zi in unique_z:
+        zi_i = int(zi)
+        for zj in unique_z:
+            zj_i = int(zj)
+            min_allowed = float(blmin.get((zi_i, zj_i), blmin.get((zj_i, zi_i), 0.0)))
+            if min_allowed > 0.0:
+                thresh[z_to_i[zi_i], z_to_i[zj_i]] = (
+                    _PREFILTER_BLMIN_FACTOR * min_allowed
+                )
+    index = np.array([z_to_i[int(z)] for z in atomic_numbers], dtype=int)
+    return thresh, index
+
+
+def _fails_fast_geometric_prefilter(
+    atoms: Atoms, blmin: dict, *, n_slab: int = 0
+) -> bool:
+    """Return True when a severe clash is detected quickly.
+
+    Only mobile atoms (indices ``n_slab:``) participate: mobile–mobile and
+    mobile–slab pairs are checked; slab–slab pairs are skipped.
+    """
+    n_atoms = len(atoms)
+    if n_atoms < 2:
         return False
+    n_slab_i = max(0, min(int(n_slab), n_atoms))
+    n_mobile = n_atoms - n_slab_i
+    if n_mobile < 1:
+        return False
+
     numbers = atoms.get_atomic_numbers()
     positions = atoms.get_positions()
-    for i in range(len(atoms)):
-        zi = int(numbers[i])
-        for j in range(i + 1, len(atoms)):
-            zj = int(numbers[j])
-            distance = float(np.linalg.norm(positions[i] - positions[j]))
-            min_allowed = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
-            if min_allowed > 0.0 and distance < 0.55 * min_allowed:
-                return True
+    thresh, z_index = _blmin_threshold_matrix(numbers, blmin)
+    mobile_pos = positions[n_slab_i:]
+    mobile_idx = z_index[n_slab_i:]
+
+    # Mobile–mobile pairs (upper triangle).
+    if n_mobile >= 2:
+        mm = cdist(mobile_pos, mobile_pos)
+        pair_thresh = thresh[np.ix_(mobile_idx, mobile_idx)]
+        upper = np.triu(np.ones((n_mobile, n_mobile), dtype=bool), k=1)
+        if np.any(upper & (pair_thresh > 0.0) & (mm < pair_thresh)):
+            return True
+
+    # Mobile–slab pairs.
+    if n_slab_i > 0:
+        slab_pos = positions[:n_slab_i]
+        slab_idx = z_index[:n_slab_i]
+        ms = cdist(mobile_pos, slab_pos)
+        pair_thresh = thresh[np.ix_(mobile_idx, slab_idx)]
+        if np.any((pair_thresh > 0.0) & (ms < pair_thresh)):
+            return True
+
     return False
 
 
@@ -317,7 +367,7 @@ def _build_offspring_worker(
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
         }
-    if _fails_fast_geometric_prefilter(child, ctx.blmin):
+    if _fails_fast_geometric_prefilter(child, ctx.blmin, n_slab=ctx.n_slab):
         return {
             "index": job["index"],
             "child": None,
@@ -828,12 +878,24 @@ def ga_go(
     if relaxer is None:
         if is_ml_calculator(calculator):
             if is_uma_like_calculator(calculator):
+                from scgo.calculators.uma_helpers import (
+                    try_extract_torchsim_model_from_uma_calculator,
+                )
+
                 model_name = getattr(calculator, "model_name", None)
                 if model_name is None and calculator.name.startswith("UMA-"):
                     model_name = calculator.name.removeprefix("UMA-")
                 if not model_name:
                     raise SCGOValidationError(
                         "Cannot infer UMA model_name from calculator for TorchSim relaxer."
+                    )
+                shared_model = try_extract_torchsim_model_from_uma_calculator(
+                    calculator
+                )
+                if shared_model is None:
+                    logger.warning(
+                        "Could not extract live FairChem predictor from UMA "
+                        "calculator; TorchSim will reload the checkpoint."
                     )
                 relaxer = TorchSimBatchRelaxer(
                     model_kind="fairchem",
@@ -843,14 +905,29 @@ def ga_go(
                     max_steps=niter_local_relaxation,
                     expected_max_atoms=expected_max_atoms,
                     max_atoms_to_try=expected_max_atoms,
+                    model=shared_model,
                 )
+                if shared_model is not None and hasattr(calculator, "_inner"):
+                    calculator._inner = None
             elif is_upet_like_calculator(calculator):
+                from scgo.calculators.upet_helpers import (
+                    try_extract_torchsim_model_from_upet_calculator,
+                )
+
                 model_name = getattr(calculator, "model_name", None)
                 if model_name is None and calculator.name.startswith("UPET-"):
                     model_name = calculator.name.removeprefix("UPET-").split("-v")[0]
                 if not model_name and not getattr(calculator, "checkpoint_path", None):
                     raise SCGOValidationError(
                         "Cannot infer UPET model_name from calculator for TorchSim relaxer."
+                    )
+                shared_model = try_extract_torchsim_model_from_upet_calculator(
+                    calculator
+                )
+                if shared_model is None:
+                    logger.warning(
+                        "Could not extract live AtomisticModel from UPET "
+                        "calculator; TorchSim will reload the checkpoint."
                     )
                 relaxer = TorchSimBatchRelaxer(
                     model_kind="upet",
@@ -865,7 +942,10 @@ def ga_go(
                     # device/autobatcher: CUDA + InFlightAutoBatcher by default
                     expected_max_atoms=expected_max_atoms,
                     max_atoms_to_try=expected_max_atoms,
+                    model=shared_model,
                 )
+                if shared_model is not None and hasattr(calculator, "_inner"):
+                    calculator._inner = None
             else:
                 from scgo.calculators.mace_helpers import (
                     infer_mace_model_name_from_calculator,
@@ -905,27 +985,8 @@ def ga_go(
     else:
         atoms_template.calc = calculator
 
-    # Load reference structures and create DiversityScorer for diversity strategy
-    diversity_scorer = setup_diversity_scorer(
-        fitness_strategy=fitness_strategy,
-        diversity_reference_db=diversity_reference_db,
-        composition=composition,
-        n_to_optimize=n_to_optimize,
-        diversity_max_references=diversity_max_references,
-        logger=logger,
-        base_dir=output_dir,
-    )
-
+    # Diversity scorer needs surface-aware mic; set up after operators / comp_mic.
     slab_for_pairing = slab_ref if surface_mode else None
-    _ = create_ga_pairing(
-        atoms_template,
-        n_to_optimize,
-        rng,
-        slab_atoms=slab_for_pairing,
-        system_type=system_type,
-        composition=composition,
-        adsorbate_definition=adsorbate_definition,
-    )
 
     adaptive_config = get_adaptive_mutation_config(
         composition=composition,
@@ -976,6 +1037,16 @@ def ga_go(
     )
 
     comp_mic = bool(surface_config.comparator_use_mic) if surface_mode else False
+    diversity_scorer = setup_diversity_scorer(
+        fitness_strategy=fitness_strategy,
+        diversity_reference_db=diversity_reference_db,
+        composition=composition,
+        n_to_optimize=n_to_optimize,
+        diversity_max_references=diversity_max_references,
+        logger=logger,
+        base_dir=output_dir,
+        mic=comp_mic,
+    )
     comp = create_structure_comparator(n_to_optimize, energy_tolerance, mic=comp_mic)
 
     t0_batch_build = perf_counter()
@@ -1224,6 +1295,7 @@ def ga_go(
                         surface_mode=surface_mode,
                         freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                         adsorbate_definition=adsorbate_definition,
+                        adsorbate_fragment_templates=adsorbate_fragment_template,
                     )
                     for c in batch
                 ]

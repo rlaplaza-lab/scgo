@@ -49,3 +49,38 @@ def test_make_surface_config_normalizes_before_config():
 def test_graphite_preset_is_slab_periodic():
     slab = build_graphite_slab(layers=2, vacuum=8.0, repeat_xy=2)
     assert list(slab.pbc) == [True, True, False]
+
+
+def test_graphite_preset_uses_ab_bernal_stacking():
+    """Odd layers must be laterally shifted by (a1+a2)/3 (not AA-only)."""
+    import numpy as np
+    from ase.geometry import find_mic
+
+    slab = build_graphite_slab(layers=2, vacuum=8.0, repeat_xy=1)
+    n_per_layer = len(slab) // 2
+    pos = slab.get_positions()
+    layer0 = pos[:n_per_layer]
+    layer1 = pos[n_per_layer:]
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    expected_shift = (cell[0] + cell[1]) / 3.0
+    pbc_xy = [True, True, False]
+
+    # AA stacking would place layers on top of each other in xy.
+    for p0 in layer0:
+        dists = [
+            float(np.linalg.norm(find_mic(p1 - p0, cell, pbc=pbc_xy)[0][:2]))
+            for p1 in layer1
+        ]
+        assert min(dists) > 0.5
+
+    # Undoing the Bernal shift restores an AA overlay.
+    for p0 in layer0:
+        dists = [
+            float(
+                np.linalg.norm(
+                    find_mic((p1 - expected_shift) - p0, cell, pbc=pbc_xy)[0][:2]
+                )
+            )
+            for p1 in layer1
+        ]
+        assert min(dists) < 1e-6

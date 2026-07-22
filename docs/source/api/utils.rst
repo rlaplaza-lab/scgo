@@ -13,6 +13,22 @@ Parameter resolution
    :undoc-members:
    :show-inheritance:
 
+Config aliases
+--------------
+
+.. automodule:: scgo.utils.config_aliases
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Combine atoms
+-------------
+
+.. automodule:: scgo.utils.combine_atoms
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Logging
 -------
 

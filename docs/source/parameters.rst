@@ -97,10 +97,12 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
    * - ``calculator``
      - ``"MACE"``
-     - Calculator: ``"MACE"``, ``"UMA"``, or ``"EMT"``
+     - Calculator: ``"MACE"``, ``"UMA"``, ``"UPET"``, or ``"EMT"``
    * - ``calculator_kwargs``
      - ``{}``
-     - Calculator options (e.g., ``{"model_name": "mace_mp_small"}``)
+     - Calculator options (e.g., ``{"model_name": "mace_mp_small"}``).
+       Explicit ``device`` values that the backend does not support raise
+       ``SCGOValidationError`` (no silent CPU fallback).
    * - ``seed``
      - ``None``
      - Random seed (function argument overrides)
@@ -128,10 +130,16 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Keep adsorbate fragments rigid
    * - ``surface_config``
      - ``None``
-     - Required for surface runs
+     - Required for surface runs. May also be set as a top-level key in
+       ``go_params`` (fanned into optimizer slots); preferred as the run-function
+       ``surface_config=`` argument.
    * - ``cluster_adsorbate_config``
      - ``None``
-     - Tune adsorbate placement
+     - Tune adsorbate placement (belongs in ``go_params``, not as a separate
+       ``run_*`` keyword)
+   * - ``validation_n_jobs``
+     - (optional)
+     - Parallel workers for post-GO Hessian/force validation
    * - ``validate_with_hessian``
      - ``False``
      - Run vibrational analysis
@@ -385,11 +393,11 @@ Surface Config
      - Required
      - ASE Atoms object
    * - ``adsorption_height_min``
-     - ``2.0``
-     - Minimum height above slab (\ :math:`\AA`)
+     - ``1.2`` (class) / ``2.0`` (``make_surface_config``)
+     - Minimum height above slab (\ :math:`\AA`). Alias: ``height_min``.
    * - ``adsorption_height_max``
-     - ``3.5``
-     - Maximum height above slab (\ :math:`\AA`)
+     - ``3.0`` (class) / ``3.5`` (``make_surface_config``)
+     - Maximum height above slab (\ :math:`\AA`). Alias: ``height_max``.
    * - ``surface_normal_axis``
      - ``2``
      - Normal axis (0=x, 1=y, 2=z)
@@ -421,6 +429,8 @@ Surface Config
 
 .. note::
    Use only one of the layer options, not both. See :doc:`/api/surface` for the full ``SurfaceSystemConfig`` field list.
+   Height may be set via ``adsorption_height_*`` or the shorter ``height_*`` alias;
+   conflicting values raise ``SCGOValidationError``.
 
 ----------------
 Adsorbate Config
@@ -432,16 +442,20 @@ Adsorbate Config
 
    * - ``height_min``
      - ``0.9``
-     - Minimum placement height (\ :math:`\AA`)
+     - Minimum placement height (\ :math:`\AA`). Alias: ``adsorption_height_min``.
    * - ``height_max``
      - ``2.2``
-     - Maximum placement height (\ :math:`\AA`)
+     - Maximum placement height (\ :math:`\AA`). Alias: ``adsorption_height_max``.
    * - ``max_placement_attempts``
      - ``80``
      - Maximum placement tries
    * - ``blmin_ratio``
      - ``0.7``
      - Clash threshold
+
+.. note::
+   Canonical adsorbate fields are ``height_*``; ``adsorption_height_*`` is accepted
+   as an alias for convenience when sharing knobs with surface configs.
 
 ----------
 See Also

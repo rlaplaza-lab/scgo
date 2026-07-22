@@ -785,10 +785,8 @@ def _add_atoms_to_cluster_iteratively(
     if not atoms_to_add:
         return base_atoms.copy()
 
-    atoms = base_atoms.copy()
     atoms_to_add = list(atoms_to_add)
-
-    new_atoms = atoms.copy()
+    new_atoms = base_atoms.copy()
 
     radii_to_add = {s: get_covalent_radius(s) for s in set(atoms_to_add)}
 
@@ -863,11 +861,19 @@ def _add_atoms_single_mode(
         new_pos = None
         consecutive_failures = 0
 
-        # Create KDTree once per atom if cluster is large enough
+        # Cache geometry across failed attempts; rebuild only after a successful append.
+        current_positions = new_atoms.get_positions()
+        current_radii = (
+            np.array([get_covalent_radius_by_z(n) for n in new_atoms.numbers])
+            if len(new_atoms) > 0
+            else np.empty(0, dtype=float)
+        )
+        center = new_atoms.get_center_of_mass() if len(new_atoms) > 0 else None
+
         use_kdtree = len(new_atoms) >= KDTREE_THRESHOLD
         tree = None
         if use_kdtree and len(new_atoms) > 0:
-            tree = KDTree(new_atoms.get_positions())
+            tree = KDTree(current_positions)
 
         for attempt in range(max_attempts_per_atom):
             attempt_ratio = (attempt + 1) / max_attempts_per_atom
@@ -879,11 +885,10 @@ def _add_atoms_single_mode(
                     steric_floor=steric_floor,
                 )
             )
-            current_positions = new_atoms.get_positions()
             n_current = len(new_atoms)
 
             if n_current > 0:
-                center = new_atoms.get_center_of_mass()
+                assert center is not None
 
                 # Special handling for 2-atom clusters: bond length must respect
                 # both the steric floor and connectivity_factor (not raw r_i+r_j).
@@ -922,9 +927,6 @@ def _add_atoms_single_mode(
                     if available_shell < atom_radius * effective_min_distance:
                         continue
 
-                    current_radii = np.array(
-                        [get_covalent_radius_by_z(n) for n in new_atoms.numbers]
-                    )
                     max_existing_radius = (
                         np.max(current_radii) if len(current_radii) > 0 else atom_radius
                     )
@@ -974,36 +976,50 @@ def _add_atoms_single_mode(
                         candidate_pos = candidates[0]
 
             if len(current_positions) > 0:
-                current_radii = np.array(
-                    [get_covalent_radius_by_z(n) for n in new_atoms.numbers]
-                )
-
-                # Use KDTree for large clusters to optimize distance checks
-                if use_kdtree and tree is not None:
-                    dists, _ = tree.query(candidate_pos, k=len(current_positions))
-                    dists = np.asarray(dists).flatten()
-                else:
-                    dists = np.linalg.norm(current_positions - candidate_pos, axis=1)
-
                 min_allowed_dists = (
                     current_radii + atom_radius
                 ) * effective_min_distance
-
-                if np.any(dists < min_allowed_dists):
-                    consecutive_failures += 1
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                        break  # Early termination
-                    continue
-
                 max_connectivity_dists = (
                     current_radii + atom_radius
                 ) * connectivity_factor
 
-                if not np.any(dists <= max_connectivity_dists):
-                    consecutive_failures += 1
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                        break  # Early termination
-                    continue
+                if use_kdtree and tree is not None:
+                    query_r = float(
+                        max(np.max(min_allowed_dists), np.max(max_connectivity_dists))
+                    )
+                    neighbor_idx = np.asarray(
+                        tree.query_ball_point(candidate_pos, query_r), dtype=int
+                    )
+                    if neighbor_idx.size == 0:
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            break
+                        continue
+                    dists = np.linalg.norm(
+                        current_positions[neighbor_idx] - candidate_pos, axis=1
+                    )
+                    if np.any(dists < min_allowed_dists[neighbor_idx]):
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            break
+                        continue
+                    if not np.any(dists <= max_connectivity_dists[neighbor_idx]):
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            break
+                        continue
+                else:
+                    dists = np.linalg.norm(current_positions - candidate_pos, axis=1)
+                    if np.any(dists < min_allowed_dists):
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            break
+                        continue
+                    if not np.any(dists <= max_connectivity_dists):
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            break
+                        continue
 
             new_pos = candidate_pos
             consecutive_failures = 0  # Reset on success
@@ -1210,29 +1226,38 @@ def _add_atoms_batch_mode(
 
             # Check distance to existing atoms
             if len(current_positions) > 0:
+                min_allowed_dists = (
+                    current_radii + atom_radius
+                ) * effective_min_distance
+                max_connectivity_dists = (
+                    current_radii + atom_radius
+                ) * connectivity_factor
                 if use_kdtree:
-                    dists_to_existing, _ = tree.query(
-                        candidate_pos, k=len(current_positions)
+                    query_r = float(
+                        max(np.max(min_allowed_dists), np.max(max_connectivity_dists))
                     )
-                    dists_to_existing = np.asarray(dists_to_existing).flatten()
+                    neighbor_idx = np.asarray(
+                        tree.query_ball_point(candidate_pos, query_r), dtype=int
+                    )
+                    if neighbor_idx.size == 0:
+                        continue
+                    dists_to_existing = np.linalg.norm(
+                        current_positions[neighbor_idx] - candidate_pos, axis=1
+                    )
+                    if np.any(dists_to_existing < min_allowed_dists[neighbor_idx]):
+                        continue
+                    if not np.any(
+                        dists_to_existing <= max_connectivity_dists[neighbor_idx]
+                    ):
+                        continue
                 else:
                     dists_to_existing = np.linalg.norm(
                         current_positions - candidate_pos, axis=1
                     )
-                min_allowed_dists = (
-                    current_radii + atom_radius
-                ) * effective_min_distance
-
-                if np.any(dists_to_existing < min_allowed_dists):
-                    continue  # Clash with existing atoms
-
-                # Check connectivity
-                max_connectivity_dists = (
-                    current_radii + atom_radius
-                ) * connectivity_factor
-
-                if not np.any(dists_to_existing <= max_connectivity_dists):
-                    continue  # Too far for connectivity
+                    if np.any(dists_to_existing < min_allowed_dists):
+                        continue  # Clash with existing atoms
+                    if not np.any(dists_to_existing <= max_connectivity_dists):
+                        continue  # Too far for connectivity
 
             # Check distance to other candidates in batch
             valid = True

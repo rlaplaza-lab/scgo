@@ -31,6 +31,10 @@ from scgo.constants import (
 from scgo.database.metadata import get_metadata
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.system_types import SystemType, get_system_policy
+from scgo.utils.comparators import (
+    PureInteratomicDistanceComparator,
+    get_shared_mobile_atom_indices,
+)
 from scgo.utils.helpers import extract_energy_from_atoms
 from scgo.utils.logging import get_logger
 from scgo.utils.run_helpers import cleanup_torch_cuda
@@ -59,6 +63,14 @@ def _detach_calc(atoms: Atoms | None) -> None:
         return
     with contextlib.suppress(AttributeError, TypeError):
         atoms.calc = None
+
+
+def neb_max_atom_force(neb_forces: np.ndarray | list[float]) -> float:
+    """ASE-compatible fmax: maximum per-atom Euclidean force norm."""
+    forces = np.asarray(neb_forces, dtype=float).reshape(-1, 3)
+    if forces.size == 0:
+        return 0.0
+    return float(np.linalg.norm(forces, axis=1).max())
 
 
 def attach_singlepoint_from_relax_output(
@@ -106,11 +118,6 @@ def calculate_structure_similarity(
     n_slab: int | None = None,
 ) -> tuple[float, float, bool]:
     """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ."""
-    from scgo.utils.comparators import (
-        PureInteratomicDistanceComparator,
-        get_shared_mobile_atom_indices,
-    )
-
     if len(atoms1) != len(atoms2):
         raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
@@ -1317,7 +1324,7 @@ def find_transition_state(
 
         try:
             neb_forces = neb.get_forces()
-            final_fmax: float | None = float(np.max(np.abs(neb_forces)))
+            final_fmax: float | None = neb_max_atom_force(neb_forces)
         except (AttributeError, RuntimeError, ValueError):
             final_fmax = None
 

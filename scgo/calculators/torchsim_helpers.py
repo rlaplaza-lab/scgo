@@ -29,6 +29,7 @@ from ase import Atoms
 from ase.build import bulk
 from ase.constraints import FixAtoms as ASEFixAtoms
 
+from scgo.calculators.torch_device import resolve_torch_device
 from scgo.database.metadata import update_metadata
 from scgo.exceptions import (
     SCGORuntimeError,
@@ -38,6 +39,8 @@ from scgo.utils.helpers import ensure_float64_forces
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_DEFAULT_UPET_VERSION = "1.5.0"
 
 __all__ = [
     "MemoryScalerCache",
@@ -353,7 +356,6 @@ def _restore_ase_cell_from_reference(relaxed: Atoms, reference: Atoms) -> None:
 def _load_default_upet_model(
     *,
     device,
-    dtype,
     upet_model_name: str,
     upet_version: str | None,
     upet_checkpoint_path: str | None = None,
@@ -376,7 +378,7 @@ def _load_default_upet_model(
         atomistic = get_upet(
             model=model,
             size=size,
-            version=upet_version or "latest",
+            version=upet_version or _DEFAULT_UPET_VERSION,
         )
 
     return MetatomicModel(
@@ -476,7 +478,7 @@ class TorchSimBatchRelaxer:
     fairchem_model_name: str | None = None
     fairchem_task_name: str | None = None
     upet_model_name: str | None = None
-    upet_version: str | None = None
+    upet_version: str | None = _DEFAULT_UPET_VERSION
     upet_checkpoint_path: str | None = None
     upet_non_conservative: bool = False
     optimizer_name: str = "fire"
@@ -506,7 +508,15 @@ class TorchSimBatchRelaxer:
         _register_torchsim_warning_filters()
         self._ts = ts
         if self.device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device(
+                resolve_torch_device(None, allow_mps=True, backend_name="TorchSim")
+            )
+        else:
+            self.device = torch.device(
+                resolve_torch_device(
+                    self.device, allow_mps=True, backend_name="TorchSim"
+                )
+            )
         if self.dtype is None:
             # Match ASE MACE wrapper default of float64 for parity
             self.dtype = torch.float64
@@ -554,7 +564,6 @@ class TorchSimBatchRelaxer:
                     )
                 self.model = _load_default_upet_model(
                     device=self.device,
-                    dtype=self.dtype,
                     upet_model_name=str(self.upet_model_name or ""),
                     upet_version=self.upet_version,
                     upet_checkpoint_path=self.upet_checkpoint_path,
@@ -959,7 +968,7 @@ class TorchSimBatchRelaxer:
         if mk in ("upet", "metatomic"):
             if self.upet_checkpoint_path:
                 return str(self.upet_checkpoint_path)
-            ver = self.upet_version or "latest"
+            ver = self.upet_version or _DEFAULT_UPET_VERSION
             return f"{self.upet_model_name}-v{ver}"
         return str(mk)
 

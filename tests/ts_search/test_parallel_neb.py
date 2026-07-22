@@ -6,10 +6,44 @@ import numpy as np
 import pytest
 
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
-from scgo.ts_search.parallel_neb import ParallelNEBBatch
+from scgo.ts_search.parallel_neb import ParallelNEBBatch, _neb_image_dedup_key
 from scgo.ts_search.transition_state import TorchSimNEB, interpolate_path
 
 pytestmark = pytest.mark.requires_cuda
+
+
+def _unique_neb_image_count(*image_lists: list) -> int:
+    keys = {_neb_image_dedup_key(atoms) for images in image_lists for atoms in images}
+    return len(keys)
+
+
+class _CountingFakeRelaxer:
+    """Relaxer stub that records batch sizes and returns zero forces."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.batch_sizes: list[int] = []
+
+    def relax_batch(self, atoms_list, steps=0):
+        self.calls += 1
+        self.batch_sizes.append(len(atoms_list))
+        results = []
+        for a in atoms_list:
+            ra = a.copy()
+            ra.arrays["forces"] = np.zeros((len(a), 3))
+            results.append((0.0, ra))
+        return results
+
+
+def _assert_one_global_relax_batch(
+    neb1, neb2, relaxer, *, expected_unique: int
+) -> None:
+    batch = ParallelNEBBatch([neb1, neb2], relaxer, max_total_steps=5)
+    batch.run_optimization(fmax=1.0, max_steps=1)
+    assert relaxer.calls == 1
+    assert relaxer.batch_sizes == [expected_unique]
+    assert neb1.get_force_calls() >= 1
+    assert neb2.get_force_calls() >= 1
 
 
 class TestParallelNEBBatch:
@@ -154,50 +188,53 @@ class TestParallelNEBBatch:
         )
 
 
-def test_parallel_neb_relax_batch_one_global_then_per_neb_after_step(
-    cu3_triangle, cu3_linear
-):
-    """One global ``relax_batch``; cached PES forces avoid duplicate relaxer calls.
+def test_parallel_neb_relax_batch_dedups_identical_cu3_paths(cu3_triangle, cu3_linear):
+    """Cu3 triangle→linear: IDPP matches linear, so 10 slots collapse to 5.
 
-    ``ParallelNEBBatch`` evaluates all images in one ``relax_batch``, attaches
-    forces to each image, then ``TorchSimNEB.get_forces()`` uses the cache path
-    (no second ``relax_batch`` per band). With zero PES forces both bands can
-    report converged in a single outer step, so only one relaxer invocation
-    occurs.
+    ``ParallelNEBBatch`` still evaluates once globally and fans results out to
+    both bands (no per-band second ``relax_batch``).
     """
-
-    class FakeRelaxer:
-        def __init__(self):
-            self.calls = 0
-            self.batch_sizes: list[int] = []
-
-        def relax_batch(self, atoms_list, steps=0):
-            self.calls += 1
-            self.batch_sizes.append(len(atoms_list))
-            results = []
-            for a in atoms_list:
-                ra = a.copy()
-                ra.arrays["forces"] = np.zeros((len(a), 3))
-                results.append((0.0, ra))
-            return results
-
-    relaxer = FakeRelaxer()
-
+    relaxer = _CountingFakeRelaxer()
     images1 = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
     images2 = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="linear")
 
+    assert len(images1) == len(images2) == 5
+    assert np.allclose(images1[2].positions, images2[2].positions)
+    expected_unique = _unique_neb_image_count(images1, images2)
+    assert expected_unique == 5
+    assert expected_unique < len(images1) + len(images2)
+
     neb1 = TorchSimNEB(images1, relaxer, k=0.1, climb=False)
     neb2 = TorchSimNEB(images2, relaxer, k=0.1, climb=False)
+    _assert_one_global_relax_batch(neb1, neb2, relaxer, expected_unique=expected_unique)
 
-    batch = ParallelNEBBatch([neb1, neb2], relaxer, max_total_steps=5)
-    batch.run_optimization(fmax=1.0, max_steps=1)
 
-    # First ParallelNEB step must batch-evaluate all images in one relax_batch.
-    expected_batch = len(neb1.images) + len(neb2.images)
-    assert relaxer.batch_sizes and relaxer.batch_sizes[0] == expected_batch
-    assert relaxer.calls >= 1
-    assert neb1.get_force_calls() >= 1
-    assert neb2.get_force_calls() >= 1
+def test_parallel_neb_relax_batch_keeps_distinct_ir4_interiors(
+    ir4_tetrahedron, ir4_tetrahedron_atom_swapped
+):
+    """Ir4 tet→atom-swapped tet: IDPP interiors differ from linear.
+
+    Shared endpoints still dedupe (2), but distinct interiors keep 3+3, so the
+    first ``relax_batch`` sees 8 unique images rather than 5 or 10.
+    """
+    relaxer = _CountingFakeRelaxer()
+    images1 = interpolate_path(
+        ir4_tetrahedron, ir4_tetrahedron_atom_swapped, n_images=3, method="idpp"
+    )
+    images2 = interpolate_path(
+        ir4_tetrahedron, ir4_tetrahedron_atom_swapped, n_images=3, method="linear"
+    )
+
+    assert len(images1) == len(images2) == 5
+    assert not np.allclose(images1[2].positions, images2[2].positions)
+    expected_unique = _unique_neb_image_count(images1, images2)
+    assert expected_unique == 8
+    assert expected_unique > len(images1)
+    assert expected_unique < len(images1) + len(images2)
+
+    neb1 = TorchSimNEB(images1, relaxer, k=0.1, climb=False)
+    neb2 = TorchSimNEB(images2, relaxer, k=0.1, climb=False)
+    _assert_one_global_relax_batch(neb1, neb2, relaxer, expected_unique=expected_unique)
 
 
 def test_parallel_neb_uses_neb_forces_for_stepping(cu3_triangle, cu3_linear):
@@ -290,3 +327,84 @@ def test_torchsimneb_get_forces_skips_relax_if_forces_present(cu3_triangle, cu3_
     # Should skip calling relax_batch because forces are already present
     neb.get_forces()
     assert relaxer.calls == 0
+
+
+def test_parallel_neb_skips_endpoints_after_first_step(cu3_triangle, cu3_linear):
+    """After step 0, only interior images are batch-evaluated."""
+    relaxer = _CountingFakeRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    assert len(images) == 5
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=5)
+    # Force at least two steps by keeping fmax tiny and get_forces returning large force.
+    original_get_forces = neb.get_forces
+
+    def always_high_forces():
+        forces = original_get_forces()
+        return np.ones_like(forces) * 10.0
+
+    neb.get_forces = always_high_forces  # type: ignore[method-assign]
+    batch.run_optimization(fmax=1e-6, max_steps=2)
+    assert relaxer.calls == 2
+    assert relaxer.batch_sizes[0] == 5  # all images on step 0
+    assert relaxer.batch_sizes[1] == 3  # interiors only
+
+
+def test_parallel_neb_require_forces_raises_when_missing(cu3_triangle, cu3_linear):
+    """Missing forces from relax_batch must raise (require_forces=True)."""
+    from scgo.exceptions import SCGORuntimeError
+
+    class EnergyOnlyRelaxer:
+        def relax_batch(self, atoms_list, steps=0):
+            return [(0.0, a.copy()) for a in atoms_list]
+
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    relaxer = EnergyOnlyRelaxer()
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=1)
+    with pytest.raises(SCGORuntimeError, match="did not return forces"):
+        batch.run_optimization(fmax=1.0, max_steps=1)
+
+
+def test_run_parallel_neb_search_skips_invalid_pair(tmp_path, cu3_triangle, cu3_linear):
+    """Validation failure on one pair skips it without aborting the batch."""
+    from unittest.mock import patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb._neb_endpoint_copies",
+            side_effect=ValueError("bad structure"),
+        ),
+        patch(
+            "scgo.ts_search.parallel_neb._tsh.TorchSimBatchRelaxer",
+            return_value=_CountingFakeRelaxer(),
+        ),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            run_dir=tmp_path,
+            surface_config=None,
+            rng=None,
+            neb_n_images=3,
+            neb_spring_constant=0.1,
+            neb_fmax=0.05,
+            neb_steps=2,
+            neb_climb=False,
+            neb_interpolation_method="linear",
+            neb_align_endpoints=False,
+            neb_perturb_sigma=0.0,
+            neb_interpolation_mic=False,
+            neb_tangent_method="aseneb",
+            torchsim_params={},
+            system_type="gas_cluster",
+        )
+
+    assert len(results) == 1
+    assert results[0]["status"] == "skipped"
+    assert "bad structure" in str(results[0].get("error", ""))

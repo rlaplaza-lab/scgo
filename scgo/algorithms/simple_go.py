@@ -17,7 +17,7 @@ from ase.optimize.optimize import Optimizer
 
 from scgo.database import HPC_DATABASE_EXCEPTIONS, close_data_connection, setup_database
 from scgo.database.metadata import persist_provenance
-from scgo.database.sync import retry_with_backoff
+from scgo.database.sync import database_retry
 from scgo.exceptions import SCGOValidationError
 from scgo.utils.helpers import (
     extract_minima_from_database,
@@ -97,7 +97,7 @@ def simple_go(
     logger.info("Performing simple optimization for %d-atom cluster", n_atoms)
 
     try:
-        a_optimized = retry_with_backoff(
+        a_optimized = database_retry(
             da.get_an_unrelaxed_candidate,
             max_retries=5,
             initial_delay=0.2,
@@ -115,7 +115,7 @@ def simple_go(
         if run_id is not None and a_optimized is not None:
             persist_provenance(a_optimized, run_id=run_id)
 
-        retry_with_backoff(
+        database_retry(
             lambda: da.add_relaxed_step(a_optimized),
             max_retries=5,
             initial_delay=0.2,
@@ -123,7 +123,7 @@ def simple_go(
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
 
-        all_candidates = retry_with_backoff(
+        all_candidates = database_retry(
             da.get_all_relaxed_candidates,
             max_retries=5,
             initial_delay=0.2,

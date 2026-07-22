@@ -172,3 +172,4 @@ def stamp_scgo_database(
         _upsert_scgo_metadata_keys(conn, schema_version=ver)
 
     _run_sqlite(path, _stamp)
+    clear_scgo_database_cache()

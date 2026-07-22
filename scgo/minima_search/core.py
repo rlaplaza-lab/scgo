@@ -821,7 +821,12 @@ def run_trials(
                 for i, future in enumerate(as_completed(futures), 1):
                     try:
                         validated = future.result()
-                    except (OSError, RuntimeError, ValueError) as e:
+                    except (
+                        OSError,
+                        RuntimeError,
+                        ValueError,
+                        SCGOValidationError,
+                    ) as e:
                         logger.warning("Validation failed for candidate %d: %s", i, e)
                         continue
                     if validated is not None:
@@ -843,7 +848,7 @@ def run_trials(
                         validated_minima.append((energy, atoms))
                     else:
                         logger.info(f"Candidate {i + 1} rejected")
-                except (OSError, RuntimeError, ValueError) as e:
+                except (OSError, RuntimeError, ValueError, SCGOValidationError) as e:
                     logger.warning(
                         f"Validation failed for candidate {i + 1} (E={energy:.4f} eV): {e}"
                     )

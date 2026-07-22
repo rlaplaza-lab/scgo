@@ -88,7 +88,7 @@ end"""
     lines.append(blocks2)
     lines.append("")
     # The second job should read the optimized coordinates from the first job's output xyz file.
-    lines.append("* xyzfile 0 1 orca.xyz")
+    lines.append(f"* xyzfile {charge} {multiplicity} orca.xyz")
     lines.append("")
 
     content = "\n".join(lines)

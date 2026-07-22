@@ -17,6 +17,7 @@ from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
+from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     SYSTEM_TYPE_POLICIES,
@@ -170,7 +171,7 @@ def _get_default_params_template() -> GLOptimizerParams:
         "check_hessian": True,
         "imag_freq_threshold": 50.0,
         "tag_final_minima": True,
-        "connectivity_factor": 1.4,  # Default connectivity factor for cluster validation
+        "connectivity_factor": CONNECTIVITY_FACTOR,  # Default for cluster validation
         "allow_cluster_fragmentation": False,
         "allow_adsorbate_surface_detachment": False,
         "enforce_adsorbate_subgraph_integrity": True,
@@ -189,7 +190,7 @@ def _get_default_params_template() -> GLOptimizerParams:
             },
             "bh": {
                 "optimizer": "FIRE",
-                "temperature": 500 * 8.617e-5,  # 500K in eV
+                "temperature": 500 * BOLTZMANN_K_EV_PER_K,  # 500K in eV
                 "fmax": 0.05,
                 "niter": "auto",
                 "dr": 0.2,
@@ -694,7 +695,7 @@ def get_ts_search_params(
     params: dict[str, Any] = {
         "calculator": calculator,
         "calculator_kwargs": dict(calculator_kwargs),
-        "connectivity_factor": 1.4,
+        "connectivity_factor": CONNECTIVITY_FACTOR,
         "allow_cluster_fragmentation": False,
         "allow_adsorbate_surface_detachment": False,
         "enforce_adsorbate_subgraph_integrity": True,

@@ -40,6 +40,88 @@ def test_try_extract_torchsim_model_from_mace_calculator():
     assert try_extract_torchsim_model_from_mace_calculator(calc) is model
 
 
+def test_try_extract_torchsim_model_from_uma_calculator():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from scgo.calculators import uma_helpers as uh
+
+    predictor = object()
+    calc = MagicMock()
+    calc._inner = MagicMock(predictor=predictor, task_name="oc25")
+    calc.task_name = "oc25"
+
+    class FakeFairChemModel:
+        pass
+
+    fairchem_mod = SimpleNamespace(FairChemModel=FakeFairChemModel)
+    with patch.dict("sys.modules", {"torch_sim.models.fairchem": fairchem_mod}):
+        result = uh.try_extract_torchsim_model_from_uma_calculator(calc)
+
+    assert isinstance(result, FakeFairChemModel)
+    assert result.predictor is predictor
+    assert result.task_name == "oc25"
+    assert result._compute_forces is True
+
+    calc_missing = MagicMock(spec=["_inner"])
+    calc_missing._inner = MagicMock(spec=[])
+    with patch.dict("sys.modules", {"torch_sim.models.fairchem": fairchem_mod}):
+        assert uh.try_extract_torchsim_model_from_uma_calculator(calc_missing) is None
+
+
+def test_try_extract_torchsim_model_from_upet_calculator():
+    from types import ModuleType
+    from unittest.mock import MagicMock, patch
+
+    from scgo.calculators import upet_helpers as uh
+
+    atomistic = object()
+    meta_calc = MagicMock()
+    meta_calc.model = atomistic
+    meta_calc.device = "cpu"
+
+    upet_inner = MagicMock()
+    upet_inner.calculator = meta_calc
+    upet_inner.non_conservative = False
+
+    calc = MagicMock()
+    calc._inner = upet_inner
+    calc.non_conservative = False
+    calc.device = None
+
+    fake_metatomic = MagicMock(return_value="wrapped")
+    neighbors_mod = ModuleType("metatomic_torchsim._neighbors")
+    neighbors_mod.HAS_NVALCHEMIOPS = True
+    root_mod = ModuleType("metatomic_torchsim")
+    root_mod.MetatomicModel = fake_metatomic
+    root_mod._neighbors = neighbors_mod
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "metatomic_torchsim": root_mod,
+            "metatomic_torchsim._neighbors": neighbors_mod,
+        },
+    ):
+        result = uh.try_extract_torchsim_model_from_upet_calculator(calc)
+
+    assert result == "wrapped"
+    fake_metatomic.assert_called_once()
+    assert fake_metatomic.call_args[0][0] is atomistic
+    assert neighbors_mod.HAS_NVALCHEMIOPS is False
+
+    calc_missing = MagicMock(spec=["_inner"])
+    calc_missing._inner = MagicMock(spec=[])
+    with patch.dict(
+        "sys.modules",
+        {
+            "metatomic_torchsim": root_mod,
+            "metatomic_torchsim._neighbors": neighbors_mod,
+        },
+    ):
+        assert uh.try_extract_torchsim_model_from_upet_calculator(calc_missing) is None
+
+
 def test_torchsim_import_success():
     """TorchSim and PyTorch are available as core dependencies."""
     import torch

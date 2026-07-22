@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- UPET MLIP backend (``[upet]`` extra) via metatomic-TorchSim, with CI matrix
+  coverage alongside MACE and UMA, plus Kaggle GPU suites for MACE/UPET.
+- Height aliases on surface and cluster-adsorbate configs: surface accepts
+  ``height_*`` as aliases for ``adsorption_height_*``; adsorbate configs accept
+  ``adsorption_height_*`` as aliases for ``height_*``. Conflicting values raise
+  ``SCGOValidationError``.
+- Shared helpers: :mod:`scgo.calculators.torch_device`,
+  :mod:`scgo.utils.config_aliases`, :mod:`scgo.utils.combine_atoms`.
+- GO top-level parameter allowlist (including ``validation_n_jobs``); unexpected
+  keys raise ``SCGOValidationError`` with the expected set.
+
+### Changed
+
+- Split the large ``runner_api`` module into focused modules
+  (``runner_composition``, ``runner_params``, ``runner_go``, ``runner_ts``) while
+  keeping the public ``scgo.runner_api`` / ``scgo`` import surface stable via
+  re-exports (including names used by test monkeypatches).
+- Split ASE GA ``standardmutations`` into
+  :mod:`scgo.ase_ga_patches.mutations` (one module per family); the old import
+  path remains a thin re-export.
+- Unsupported Torch devices warn once and raise ``SCGOValidationError`` instead
+  of silently falling back to CPU (MACE / UMA / UPET / TorchSim paths).
+- ``SCGOValidationError`` no longer logs at ERROR on construction. Runner API
+  entry points log validation failures at the prepare boundary; campaign and
+  pair handlers catch ``SCGOValidationError`` and continue where appropriate.
+- Top-level ``surface_config`` in ``go_params`` / ``ts_params`` is allowed and
+  fanned into optimizer slots; only ``system_type`` remains rejected in params
+  (use the run-function argument). Adsorbate placement knobs stay in
+  ``go_params``.
+- Surface slab constraint attachment preserves non-``FixAtoms`` constraints
+  (e.g. ``FixBondLength``). Multi-fragment hierarchical placement keeps sites
+  on the original metal core.
+- Parallel NEB skips re-evaluating endpoints after step 0 and uses a clearer
+  max-atom force metric; force attachment requires forces.
+
+### Fixed
+
+- Restore auto GA scaling in the TorchSim preset.
+- Align concurrent DB stress tests with production retry policy.
+- Handle ``SCGOValidationError`` in growth, GA, and initialization fallbacks
+  (and in GO campaign / TS pair error paths).
+
 ## 0.5.2
 
 ### Added
@@ -53,7 +99,9 @@
   (``SCGOValidationError``, ``SCGORuntimeError``, etc.) instead of bare
   ``ValueError`` / ``RuntimeError``. Downstream code should catch
   ``SCGOValidationError`` (or ``SCGOError``) rather than ``ValueError``.
-- ``SCGOValidationError`` is logged at ERROR when logging is configured.
+- ``SCGOValidationError`` is logged at ERROR when logging is configured
+  (construct-time logging in 0.5.2; superseded in 0.6.0 by runner-boundary
+  logging).
 - Preset dicts are documented as ``GLOptimizerParams`` and ``TSParams`` TypedDicts;
   default GO params template is cached via ``@cache``.
 

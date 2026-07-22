@@ -6,7 +6,6 @@ import functools
 import sqlite3
 import time
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,15 +48,37 @@ def database_retry(
     config: RetryConfig | None = None,
     operation_name: str = "database operation",
     log_level: str = "debug",
+    *,
+    exception_types: tuple[type[BaseException], ...] | None = None,
+    max_retries: int | None = None,
+    initial_delay: float | None = None,
+    backoff_factor: float | None = None,
 ) -> Any:
-    """Run ``operation`` with exponential backoff on transient SQLite / I/O errors.
+    """Run ``operation`` with exponential backoff on transient errors.
 
-    Only :exc:`~sqlite3.OperationalError` messages classified by
-    :func:`is_retryable_error` are retried; other operational failures propagate
-    immediately so schema or logic bugs are not masked by backoff.
+    When ``exception_types`` is ``None`` (default), only
+    :exc:`~sqlite3.OperationalError` messages classified by
+    :func:`is_retryable_error` and any :exc:`OSError` are retried.
+
+    When ``exception_types`` is set (e.g. :data:`HPC_DATABASE_EXCEPTIONS`), those
+    exception types are retried without the SQLite message filter — matching the
+    historical :func:`retry_with_backoff` behavior used by BH/simple.
+
+    Optional ``max_retries`` / ``initial_delay`` / ``backoff_factor`` override
+    fields on ``config`` (or :data:`PRESET_DEFAULT`) for call-site compatibility.
     """
-    effective_config = config or PRESET_DEFAULT
-    max_retries = effective_config.max_retries
+    base = config or PRESET_DEFAULT
+    effective_config = RetryConfig(
+        max_retries=max_retries if max_retries is not None else base.max_retries,
+        initial_delay=(
+            initial_delay if initial_delay is not None else base.initial_delay
+        ),
+        max_delay=base.max_delay,
+        backoff_factor=(
+            backoff_factor if backoff_factor is not None else base.backoff_factor
+        ),
+    )
+    n_retries = effective_config.max_retries
 
     log_methods = {
         "debug": logger.debug,
@@ -67,35 +88,29 @@ def database_retry(
     }
     log_func = log_methods.get(log_level.lower(), logger.debug)
 
-    for attempt in range(max_retries):
+    for attempt in range(n_retries):
         try:
             return operation()
-        except sqlite3.OperationalError as e:
-            if not is_retryable_error(e):
+        except Exception as e:
+            if exception_types is None:
+                if isinstance(e, sqlite3.OperationalError):
+                    if not is_retryable_error(e):
+                        raise
+                elif not isinstance(e, OSError):
+                    raise
+            elif not isinstance(e, exception_types):
                 raise
-            if attempt < max_retries - 1:
+
+            if attempt < n_retries - 1:
                 delay = effective_config.get_delay(attempt)
                 log_func(
-                    f"{operation_name}: failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                    f"{operation_name}: failed (attempt {attempt + 1}/{n_retries}): {e}. "
                     f"Retrying in {delay:.2f}s..."
                 )
                 time.sleep(delay)
             else:
                 logger.error(
-                    f"{operation_name}: failed after {max_retries} attempts: {e}"
-                )
-                raise
-        except OSError as e:
-            if attempt < max_retries - 1:
-                delay = effective_config.get_delay(attempt)
-                log_func(
-                    f"{operation_name}: failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                    f"Retrying in {delay:.2f}s..."
-                )
-                time.sleep(delay)
-            else:
-                logger.error(
-                    f"{operation_name}: failed after {max_retries} attempts: {e}"
+                    f"{operation_name}: failed after {n_retries} attempts: {e}"
                 )
                 raise
 
@@ -158,30 +173,41 @@ def retry_on_lock(
     return decorator
 
 
-@contextmanager
 def retry_transaction(
     db_connection,
+    operation: Callable[[Any], Any],
     config: RetryConfig | None = None,
     operation_name: str = "transaction",
     isolation_level: str = "DEFERRED",
-):
-    """Retry ``database_transaction`` on transient lock errors.
+) -> Any:
+    """Retry a full database transaction on transient lock errors.
 
-    Re-enters the transaction from scratch when a retryable
-    :exc:`~sqlite3.OperationalError` occurs during begin, body, or commit.
+    Runs ``operation(conn)`` inside a fresh
+    :func:`~scgo.database.transactions.database_transaction` on each attempt.
+    Unlike a yielded context manager, this correctly retries when the body or
+    commit raises a retryable :exc:`~sqlite3.OperationalError`.
+
+    Args:
+        db_connection: ASE ``DataConnection`` (or compatible) for the DB.
+        operation: Callable that receives the SQLite connection and returns a
+            result (may be ``None``).
+        config: Retry/backoff settings (defaults to ``PRESET_AGGRESSIVE``).
+        operation_name: Label used in retry log messages.
+        isolation_level: SQLite isolation level for each attempt.
+
+    Returns:
+        The return value of ``operation`` on success.
     """
+    from scgo.database.transactions import database_transaction
+
     effective_config = config or PRESET_AGGRESSIVE
     for attempt in range(effective_config.max_retries):
         try:
-            # Lazy import avoids circular imports.
-            from scgo.database.transactions import database_transaction
-
             with database_transaction(
                 db_connection,
                 isolation_level=isolation_level,
             ) as conn:
-                yield conn
-                return
+                return operation(conn)
         except sqlite3.OperationalError as e:
             if not is_retryable_error(e):
                 raise
@@ -194,9 +220,11 @@ def retry_transaction(
                 time.sleep(delay)
             else:
                 logger.error(
-                    f"{operation_name}: database locked after {effective_config.max_retries} attempts"
+                    f"{operation_name}: database locked after "
+                    f"{effective_config.max_retries} attempts"
                 )
                 raise
+    raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
 
 
 def retry_with_backoff(
@@ -208,47 +236,13 @@ def retry_with_backoff(
     operation_name: str = "operation",
     log_level: str = "debug",
 ) -> Any:
-    """Retry an operation with exponential backoff.
-
-    Useful for filesystem operations that might fail transiently
-    on slow network filesystems.
-
-    Args:
-        operation: Callable to execute
-        max_retries: Maximum retry attempts (coerced to at least 1)
-        initial_delay: Initial delay in seconds
-        backoff_factor: Delay multiplier for each retry
-        exception_types: Exceptions to catch and retry on
-        operation_name: Name for logging purposes
-        log_level: Logging level for retry messages ('debug', 'info', 'warning')
-
-    Returns:
-        Result of the successful operation.
-    """
-    max_retries = max(1, max_retries)
-    delay = initial_delay
-
-    log_methods = {
-        "debug": logger.debug,
-        "info": logger.info,
-        "warning": logger.warning,
-        "error": logger.error,
-    }
-    log_func = log_methods.get(log_level.lower(), logger.debug)
-
-    for attempt in range(max_retries):
-        try:
-            return operation()
-        except exception_types as e:
-            if attempt < max_retries - 1:
-                log_func(
-                    f"{operation_name}: failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                    f"Retrying in {delay:.2f}s..."
-                )
-                time.sleep(delay)
-                delay *= backoff_factor
-            else:
-                logger.error(
-                    f"{operation_name}: failed after {max_retries} attempts: {e}"
-                )
-                raise
+    """Thin wrapper around :func:`database_retry` for backward compatibility."""
+    return database_retry(
+        operation,
+        operation_name=operation_name,
+        log_level=log_level,
+        exception_types=exception_types,
+        max_retries=max_retries,
+        initial_delay=initial_delay,
+        backoff_factor=backoff_factor,
+    )

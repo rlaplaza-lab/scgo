@@ -21,7 +21,7 @@ from scgo.cluster_adsorbate.geometry import (
 from scgo.cluster_adsorbate.sites import (
     SiteType,
     SurfaceSiteCandidate,
-    compute_surface_site_candidates,
+    get_or_compute_surface_site_candidates,
 )
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGOValidationError
@@ -217,6 +217,7 @@ def place_fragment_on_cluster(
     placement_metadata: dict[str, str] | None = None,
     site_core: Atoms | None = None,
     clash_atoms: Atoms | None = None,
+    site_candidates: dict[SiteType, list[SurfaceSiteCandidate]] | None = None,
 ) -> Atoms | None:
     """Rigidly place a gas-phase fragment with random orientation near the cluster."""
     if config is None:
@@ -248,7 +249,8 @@ def place_fragment_on_cluster(
     com = np.mean(site_pos, axis=0)
     relative_site_pos = site_pos - com
     symbols = fragment_template.get_chemical_symbols()
-    site_candidates = compute_surface_site_candidates(site_atoms)
+    if site_candidates is None:
+        site_candidates = get_or_compute_surface_site_candidates(site_atoms)
     flat_candidates = [
         candidate for entries in site_candidates.values() for candidate in entries
     ]

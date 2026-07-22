@@ -203,6 +203,7 @@ def mark_final_minima_in_db(
     Returns:
         dict: summary containing counts, e.g. {"dbs_touched": int, "rows_updated": int, "details": {db_path: rows}}
     """
+    # Inline to avoid circular import: connection → sync → utils → helpers → metadata
     from scgo.database.connection import get_connection
     from scgo.database.discovery import DatabaseDiscovery
     from scgo.database.sync import retry_transaction
@@ -256,63 +257,68 @@ def mark_final_minima_in_db(
     for db_key, db_updates in updates_by_db.items():
         db_path = Path(db_key)
         try:
-            with (
-                get_connection(db_path) as db,
-                retry_transaction(
+            with get_connection(db_path) as db:
+
+                def _mark_rows(
+                    conn: sqlite3.Connection,
+                    updates: list[dict[str, Any]] = db_updates,
+                ) -> int:
+                    kvp = SYSTEMS_JSON_COLUMN
+                    select_cols = f"id, energy, {kvp}"
+                    rows_updated_this_db = 0
+                    for update in updates:
+                        row = _match_row_by_stored_final_id(
+                            conn,
+                            kvp=kvp,
+                            select_cols=select_cols,
+                            final_id=update["final_id"],
+                        )
+                        if row is None:
+                            continue
+
+                        row_id, _, kv_col = row
+
+                        try:
+                            existing = json.loads(kv_col) if kv_col else {}
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            existing = {}
+
+                        run_id = update["run_id"]
+                        rank = update["rank"]
+                        final_written = update["final_written"]
+                        fid = update["final_id"]
+
+                        if run_id is not None:
+                            existing["run_id"] = run_id
+
+                        fw_val = (
+                            os.path.basename(str(final_written))
+                            if final_written is not None
+                            else None
+                        )
+                        final_keys = {
+                            "final_unique_minimum": True,
+                            "final_rank": int(rank) if rank is not None else None,
+                            "final_written": fw_val,
+                            "final_id": fid,
+                        }
+                        existing.update(
+                            {k: v for k, v in final_keys.items() if v is not None}
+                        )
+
+                        conn.execute(
+                            f"UPDATE systems SET {kvp} = ? WHERE id = ?",
+                            (json.dumps(existing), row_id),
+                        )
+                        rows_updated_this_db += 1
+                    return rows_updated_this_db
+
+                rows_updated_this_db = retry_transaction(
                     db,
+                    _mark_rows,
                     operation_name="mark_final_minima",
                     isolation_level="IMMEDIATE",
-                ) as conn,
-            ):
-                kvp = SYSTEMS_JSON_COLUMN
-                select_cols = f"id, energy, {kvp}"
-                rows_updated_this_db = 0
-                for update in db_updates:
-                    row = _match_row_by_stored_final_id(
-                        conn,
-                        kvp=kvp,
-                        select_cols=select_cols,
-                        final_id=update["final_id"],
-                    )
-                    if row is None:
-                        continue
-
-                    row_id, _, kv_col = row
-
-                    try:
-                        existing = json.loads(kv_col) if kv_col else {}
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        existing = {}
-
-                    run_id = update["run_id"]
-                    rank = update["rank"]
-                    final_written = update["final_written"]
-                    fid = update["final_id"]
-
-                    if run_id is not None:
-                        existing["run_id"] = run_id
-
-                    fw_val = (
-                        os.path.basename(str(final_written))
-                        if final_written is not None
-                        else None
-                    )
-                    final_keys = {
-                        "final_unique_minimum": True,
-                        "final_rank": int(rank) if rank is not None else None,
-                        "final_written": fw_val,
-                        "final_id": fid,
-                    }
-                    existing.update(
-                        {k: v for k, v in final_keys.items() if v is not None}
-                    )
-
-                    conn.execute(
-                        f"UPDATE systems SET {kvp} = ? WHERE id = ?",
-                        (json.dumps(existing), row_id),
-                    )
-                    rows_updated_this_db += 1
-
+                )
                 if rows_updated_this_db > 0:
                     total_rows_updated += rows_updated_this_db
                     dbs_touched.add(db_key)

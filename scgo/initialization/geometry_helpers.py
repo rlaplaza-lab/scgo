@@ -17,6 +17,7 @@ from scipy.spatial import (
     KDTree,
     QhullError,
 )
+from scipy.spatial.distance import cdist
 
 from scgo.database.cache import get_global_cache
 from scgo.exceptions import (
@@ -1152,6 +1153,69 @@ def analyze_disconnection(
     return min_inter_component_distance, suggested_factor, analysis_msg
 
 
+def _build_connectivity_adjacency(
+    cluster: Atoms, connectivity_factor: float, use_mic: bool = False
+) -> list[list[int]]:
+    """Build an undirected adjacency list using covalent-radius connectivity."""
+    n = len(cluster)
+    adj: list[list[int]] = [[] for _ in range(n)]
+    if n <= 1:
+        return adj
+
+    positions = cluster.get_positions()
+    symbols = cluster.get_chemical_symbols()
+    radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
+
+    if use_mic:
+        for i in range(n):
+            for j in range(i + 1, n):
+                distance = float(cluster.get_distance(i, j, mic=True))
+                if distance <= (radii[i] + radii[j]) * connectivity_factor:
+                    adj[i].append(j)
+                    adj[j].append(i)
+        return adj
+
+    if n < 50:
+        dist = cdist(positions, positions)
+        thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
+        for i in range(n):
+            for j in range(i + 1, n):
+                if dist[i, j] <= thresh[i, j]:
+                    adj[i].append(j)
+                    adj[j].append(i)
+    else:
+        tree = KDTree(positions)
+        max_radius = float(np.max(radii))
+        query_radius = 2.0 * max_radius * connectivity_factor
+        for i in range(n):
+            for j in tree.query_ball_point(positions[i], query_radius):
+                if j <= i:
+                    continue
+                distance = float(np.linalg.norm(positions[i] - positions[j]))
+                if distance <= (radii[i] + radii[j]) * connectivity_factor:
+                    adj[i].append(j)
+                    adj[j].append(i)
+    return adj
+
+
+def _connected_without_node(adj: list[list[int]], n: int, remove_idx: int) -> bool:
+    """Return True if the graph stays connected after removing ``remove_idx``."""
+    if n <= 2:
+        return True
+    start = next((i for i in range(n) if i != remove_idx), None)
+    if start is None:
+        return True
+    visited = {remove_idx}
+    stack = [start]
+    while stack:
+        u = stack.pop()
+        if u in visited:
+            continue
+        visited.add(u)
+        stack.extend(adj[u])
+    return len(visited) == n
+
+
 def _identify_safe_removal_candidates(
     cluster: Atoms,
     candidate_indices: list[int],
@@ -1161,8 +1225,8 @@ def _identify_safe_removal_candidates(
 ) -> list[int]:
     """Identify which candidates can be safely removed without disconnecting.
 
-    Pre-checks connectivity impact before actual removal by testing each
-    candidate atom's removal and verifying the cluster remains connected.
+    Builds the connectivity graph once and tests each candidate via a
+    mask/articulation-style reachability check (no per-candidate ``Atoms.copy``).
 
     Args:
         cluster: The cluster to analyze
@@ -1183,22 +1247,17 @@ def _identify_safe_removal_candidates(
 
     # Limit checks for performance
     candidates_to_check = candidate_indices[:max_to_check]
-    safe_candidates = []
+    n = len(cluster)
+    adj = _build_connectivity_adjacency(cluster, connectivity_factor, use_mic=use_mic)
+    safe_candidates: list[int] = []
 
     for idx in candidates_to_check:
-        if idx >= len(cluster) or idx < 0:
+        if idx >= n or idx < 0:
             continue
-
-        # Create test cluster without this atom
-        test_cluster = cluster.copy()
-        del test_cluster[idx]
-
-        # Check if cluster remains connected after removal
-        if len(test_cluster) > 1:
-            if is_cluster_connected(test_cluster, connectivity_factor, use_mic):
-                safe_candidates.append(idx)
-        else:
-            # Single atom left - always connected
+        if n - 1 <= 1:
+            safe_candidates.append(idx)
+            continue
+        if _connected_without_node(adj, n, idx):
             safe_candidates.append(idx)
 
     return safe_candidates

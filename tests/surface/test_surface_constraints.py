@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
+from ase.constraints import FixAtoms, FixBondLengths
 
 from scgo.algorithms.geneticalgorithm_go_torchsim import _torchsim_prepare_relaxed_copy
 from scgo.exceptions import SCGOValidationError
@@ -27,9 +28,9 @@ def _three_layer_slab_positions() -> np.ndarray:
 
 
 def _fix_indices(combined: Atoms) -> list[int]:
-    assert len(combined.constraints) == 1
-    c = combined.constraints[0]
-    return sorted(int(i) for i in c.index)
+    fix = [c for c in combined.constraints if isinstance(c, FixAtoms)]
+    assert len(fix) == 1
+    return sorted(int(i) for i in fix[0].index)
 
 
 def test_attach_slab_constraints_nothing_frozen() -> None:
@@ -181,6 +182,32 @@ def test_surface_slab_constraint_summary_json_safe() -> None:
     assert s["fix_all_slab_atoms"] is False
     assert s["n_fix_bottom_slab_layers"] is None
     assert s["n_relax_top_slab_layers"] == 2
+
+
+def test_attach_slab_constraints_preserves_fixbondlength() -> None:
+    pos = _three_layer_slab_positions()
+    slab = Atoms("Pt6", positions=pos, cell=[10, 10, 10], pbc=True)
+    ads = Atoms(
+        "CO", positions=[[0.0, 0.0, 5.0], [0.0, 0.0, 6.1]], cell=slab.cell, pbc=True
+    )
+    combined = slab + ads
+    n_slab = len(slab)
+    combined.set_constraint(FixBondLengths([(n_slab, n_slab + 1)]))
+    attach_slab_constraints(
+        combined,
+        n_slab,
+        fix_all_slab_atoms=True,
+        n_fix_bottom_slab_layers=None,
+        surface_normal_axis=2,
+    )
+    bond = [c for c in combined.constraints if isinstance(c, FixBondLengths)]
+    fix = [c for c in combined.constraints if isinstance(c, FixAtoms)]
+    assert len(bond) == 1
+    assert [tuple(int(x) for x in pair) for pair in bond[0].pairs] == [
+        (n_slab, n_slab + 1)
+    ]
+    assert len(fix) == 1
+    assert sorted(int(i) for i in fix[0].index) == list(range(n_slab))
 
 
 def test_torchsim_prepare_relaxed_copy_attaches_fixatoms() -> None:

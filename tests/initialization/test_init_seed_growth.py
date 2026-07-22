@@ -544,6 +544,7 @@ class TestSeedGrowthDiversity:
         handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
         logger.addHandler(handler)
         original_level = logger.level
+        original_propagate = logger.propagate
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture all messages
         logger.propagate = False  # Prevent propagation to root logger
 
@@ -593,6 +594,7 @@ class TestSeedGrowthDiversity:
             handler.close()
             logger.removeHandler(handler)
             logger.setLevel(original_level)
+            logger.propagate = original_propagate
 
     @pytest.mark.slow
     def test_seed_growth_diversity_bimetallic_with_seeds(self, rng):
@@ -723,7 +725,7 @@ class TestSeedGrowthFallbackChain:
             init_mod, "_grow_from_random_seed", fake_grow_from_random_seed
         )
 
-        caplog.set_level(logging.INFO)
+        caplog.set_level(logging.INFO, logger="scgo.initialization.initializers")
         out = init_mod._try_seed_growth(
             composition=["Pt"] * 5,
             cell_side=20.0,

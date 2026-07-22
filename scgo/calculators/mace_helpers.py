@@ -49,6 +49,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 from mace.calculators import mace_mp
 
+from scgo.calculators.torch_device import resolve_torch_device
 from scgo.utils.logging import get_logger
 
 
@@ -102,15 +103,9 @@ class MACE(Calculator):
                 Calculator class.
         """
         ensure_mace_uma_not_both_installed()
-        if device is None:
-            if torch.cuda.is_available():
-                selected_device = "cuda"
-            elif torch.backends.mps.is_available():
-                selected_device = "mps"
-            else:
-                selected_device = "cpu"
-        else:
-            selected_device = device
+        selected_device = resolve_torch_device(
+            device, allow_mps=True, backend_name="MACE"
+        )
 
         # Resolve model name to URL if it's a MaceUrls enum member
         if hasattr(MaceUrls, model_name):

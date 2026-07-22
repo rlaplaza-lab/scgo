@@ -47,6 +47,22 @@ def test_write_orca_inputs(tmp_path):
     assert "* xyzfile 0 1 orca.xyz" in content
 
 
+def test_write_orca_inputs_nonzero_charge_multiplicity(tmp_path):
+    atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    output_dir = str(tmp_path / "orca_calc")
+    orca_settings = {
+        "charge": -1,
+        "multiplicity": 2,
+    }
+
+    write_orca_inputs(atoms, output_dir, orca_settings)
+
+    input_file = tmp_path / "orca_calc" / "orca.inp"
+    content = input_file.read_text()
+    assert "* xyz -1 2" in content
+    assert "* xyzfile -1 2 orca.xyz" in content
+
+
 def test_write_orca_inputs_defaults(tmp_path):
     atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     output_dir = str(tmp_path / "orca_calc")

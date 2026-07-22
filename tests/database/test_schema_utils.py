@@ -25,6 +25,18 @@ def test_get_scgo_metadata_returns_empty_for_non_scgo_db(tmp_path: Path):
     assert not is_scgo_database(db_path)
 
 
+def test_stamp_scgo_database_invalidates_is_scgo_cache(tmp_path: Path):
+    from scgo.database.schema import stamp_scgo_database
+
+    run_dir = tmp_path / "run_000"
+    db_path = run_dir / "ga_go.db"
+    _create_dummy_db(db_path)
+
+    assert not is_scgo_database(db_path)  # caches False
+    stamp_scgo_database(db_path)
+    assert is_scgo_database(db_path)  # must not keep stale False
+
+
 def test_find_databases_skips_non_scgo_db(tmp_path: Path):
     run_dir = tmp_path / "run_000"
     db_path = run_dir / "ga_go.db"

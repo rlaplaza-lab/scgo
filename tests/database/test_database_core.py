@@ -488,17 +488,56 @@ class TestTransactions:
         from scgo.database.sync import RetryConfig, retry_transaction
 
         config = RetryConfig(max_retries=3, initial_delay=0.1)
-        with (
-            get_connection(tmp_path / "test.db") as db,
-            retry_transaction(
-                db, config=config, operation_name="transaction (test)"
-            ) as conn,
-        ):
+
+        def _insert(conn):
             conn.execute(
                 "INSERT INTO systems (username, numbers, positions, cell) "
                 "VALUES ('test', '[78,78]', '[[0,0,0],[2.5,0,0]]', "
                 "'[[10,0,0],[0,10,0],[0,0,10]]')"
             )
+
+        with get_connection(tmp_path / "test.db") as db:
+            retry_transaction(
+                db,
+                _insert,
+                config=config,
+                operation_name="transaction (test)",
+            )
+
+    def test_retry_transaction_retries_body_operational_error(
+        self, tmp_path, pt2_atoms
+    ):
+        """Body-raised retryable errors must retry (callable API, not yield CM)."""
+        with _setup_test_db(tmp_path, "test.db", pt2_atoms, initial_candidate=None) as (
+            _da,
+            _db_path,
+        ):
+            pass
+
+        from scgo.database.sync import RetryConfig, retry_transaction
+
+        attempts = {"n": 0}
+
+        def _flaky(conn):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            conn.execute(
+                "INSERT INTO systems (username, numbers, positions, cell) "
+                "VALUES ('retry', '[78,78]', '[[0,0,0],[2.5,0,0]]', "
+                "'[[10,0,0],[0,10,0],[0,0,10]]')"
+            )
+            return "ok"
+
+        with get_connection(tmp_path / "test.db") as db:
+            result = retry_transaction(
+                db,
+                _flaky,
+                config=RetryConfig(max_retries=3, initial_delay=0.01),
+                operation_name="flaky body",
+            )
+        assert result == "ok"
+        assert attempts["n"] == 2
 
 
 class TestSchemaVersioning:

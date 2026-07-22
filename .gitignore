@@ -34,6 +34,12 @@ cluster_oh_relax_result.json
 .scgo_db_registry.json
 .scgo_db_registry.lock
 **/timing.json
+idpp.log
+
+# Accidental ImageMagick / converter dumps in repo root
+/ase
+/*.ps
+/*.eps
 
 # Benchmark outputs (reference XYZs under benchmark/benchmark_files_Pt/ stay tracked)
 benchmark/results/

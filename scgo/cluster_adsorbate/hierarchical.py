@@ -16,6 +16,7 @@ from scgo.cluster_adsorbate.config import (
 )
 from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.cluster_adsorbate.sites import get_or_compute_surface_site_candidates
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
@@ -148,33 +149,30 @@ def build_hierarchical_core_fragment_cluster(
         core = reorder_cluster_to_composition(core, core_list)
         combined = core
         metal_core = core
+        precomputed_sites = get_or_compute_surface_site_candidates(metal_core)
         site_types: list[str] = []
         placement_failed = False
         for frag_tmpl in fragments:
             frag_metadata: dict[str, str] = {}
-            frag = None
-            for _frag_attempt in range(ca.max_placement_attempts):
-                frag = place_fragment_on_cluster(
-                    metal_core,
-                    frag_tmpl,
-                    rng,
-                    ca,
-                    anchor_index=anchor,
-                    bond_axis=bond_axis,
-                    within_structure_site_counts=within_structure_site_counts,
-                    batch_site_counts=batch_site_counts,
-                    placement_metadata=frag_metadata,
-                    site_core=metal_core,
-                    clash_atoms=combined,
-                )
-                if frag is not None:
-                    break
+            frag = place_fragment_on_cluster(
+                metal_core,
+                frag_tmpl,
+                rng,
+                ca,
+                anchor_index=anchor,
+                bond_axis=bond_axis,
+                within_structure_site_counts=within_structure_site_counts,
+                batch_site_counts=batch_site_counts,
+                placement_metadata=frag_metadata,
+                site_core=metal_core,
+                clash_atoms=combined,
+                site_candidates=precomputed_sites,
+            )
             if frag is None:
                 placement_failed = True
                 break
             site_types.append(frag_metadata.get("site_type", "directional_fallback"))
             combined = combine_core_adsorbate(combined, frag)
-            metal_core = combined
 
         if placement_failed:
             continue

@@ -65,6 +65,43 @@ def test_gas_hierarchical_places_two_oh_separately() -> None:
     assert ok, err
 
 
+def test_hierarchical_site_core_stays_metal_core(monkeypatch) -> None:
+    """Later fragments must place on the original core, not the growing combined system."""
+    from scgo.cluster_adsorbate import hierarchical as hier
+
+    site_core_lens: list[int] = []
+    real_place = hier.place_fragment_on_cluster
+
+    def _tracking_place(*args, **kwargs):
+        site_core = kwargs.get("site_core")
+        assert site_core is not None
+        site_core_lens.append(len(site_core))
+        return real_place(*args, **kwargs)
+
+    monkeypatch.setattr(hier, "place_fragment_on_cluster", _tracking_place)
+
+    mobile = ["Pt", "Pt", "Pt", "O", "H", "O", "H"]
+    ads_def = {
+        "core_symbols": ["Pt", "Pt", "Pt"],
+        "adsorbate_symbols": ["O", "H", "O", "H"],
+        "adsorbate_fragment_lengths": [2, 2],
+    }
+    out = build_hierarchical_core_fragment_cluster(
+        mobile,
+        ads_def,
+        default_rng(11),
+        "**/*.db",
+        [_oh_template(), _oh_template()],
+        None,
+        cluster_init_vacuum=8.0,
+        init_mode="random_spherical",
+        max_placement_attempts=500,
+    )
+    assert out is not None
+    assert site_core_lens
+    assert all(n == 3 for n in site_core_lens)
+
+
 def test_feasibility_rejects_too_many_fragments_on_tiny_core() -> None:
     with pytest.raises(SCGOValidationError, match="heuristic site capacity"):
         validate_adsorbate_placement_feasibility(

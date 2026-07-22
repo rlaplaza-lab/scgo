@@ -18,6 +18,7 @@ from scgo.ts_search.transition_state import (
     calculate_structure_similarity,
     find_transition_state,
     interpolate_path,
+    neb_max_atom_force,
     save_neb_result,
 )
 from scgo.ts_search.transition_state_io import (
@@ -31,6 +32,16 @@ def temp_output_dir():
     """Temporary directory for output files."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield tmpdir
+
+
+def test_neb_max_atom_force_uses_per_atom_norm():
+    """Component-wise abs max can falsely converge; ASE uses max atom ||f||."""
+    # |f|_inf = 0.04 < 0.05, but ||f|| ≈ 0.069 > 0.05
+    forces = np.array([[0.04, 0.04, 0.04], [0.01, 0.0, 0.0]])
+    fmax = neb_max_atom_force(forces)
+    assert fmax == pytest.approx(np.sqrt(3 * 0.04**2))
+    assert fmax >= 0.05
+    assert float(np.max(np.abs(forces))) < 0.05
 
 
 def test_interpolate_path_basic(h2_reactant, h2_product):
@@ -247,7 +258,12 @@ def test_calculate_similarity_ignores_fixed_slab_atoms():
 
 
 def test_calculate_similarity_uses_mic_for_periodic_surfaces():
-    """MIC-aware similarity should treat periodic translations as equivalent."""
+    """MIC-aware similarity should treat periodic translations as equivalent.
+
+    ``PureInteratomicDistanceComparator`` enables MIC whenever the structure has
+    any PBC, so ``use_mic=False`` still compares via the minimum image when
+    ``pbc`` is set; both paths must therefore agree for this pair.
+    """
     cell = [8.0, 8.0, 12.0]
     a1 = Atoms(
         "Pt2",
@@ -261,9 +277,9 @@ def test_calculate_similarity_uses_mic_for_periodic_surfaces():
         cell=cell,
         pbc=[True, True, False],
     )
-    _, _, no_mic_similar = calculate_structure_similarity(a1, a2, use_mic=False)
+    _, _, no_mic_flag_similar = calculate_structure_similarity(a1, a2, use_mic=False)
     _, _, mic_similar = calculate_structure_similarity(a1, a2, use_mic=True)
-    assert bool(no_mic_similar) is False
+    assert bool(no_mic_flag_similar) is True
     assert bool(mic_similar) is True
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
+from scipy.spatial.distance import pdist
 
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
@@ -20,12 +21,59 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 
+_SORTED_DIST_FP_INFO_KEY = "_scgo_sorted_dist_fp"
+
+
+def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
+    """Build a content key that invalidates when geometry/composition changes."""
+    positions = np.ascontiguousarray(atoms.get_positions(), dtype=np.float64)
+    numbers = np.ascontiguousarray(atoms.get_atomic_numbers(), dtype=np.int32)
+    key: tuple = (hash(positions.tobytes()), hash(numbers.tobytes()), bool(mic))
+    if mic or np.any(atoms.get_pbc()):
+        cell = np.ascontiguousarray(atoms.get_cell().array, dtype=np.float64)
+        pbc = tuple(bool(x) for x in atoms.get_pbc())
+        key = (*key, hash(cell.tobytes()), pbc)
+    return key
+
+
+def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
+    """Compute unsorted-element fingerprints without consulting the cache."""
+    numbers = atoms.numbers
+    unique_types = set(numbers)
+    pair_cor: dict[int, np.ndarray] = {}
+    use_mic_path = bool(mic) or bool(np.any(atoms.get_pbc()))
+
+    all_d: np.ndarray | None = None
+    if use_mic_path:
+        all_d = atoms.get_all_distances(mic=True)
+
+    for n in unique_types:
+        i_un = np.flatnonzero(numbers == n)
+        if i_un.size == 0:
+            continue
+
+        if not use_mic_path:
+            positions = atoms.get_positions()[i_un]
+            d = pdist(positions).tolist()
+        else:
+            assert all_d is not None
+            sub = all_d[np.ix_(i_un, i_un)]
+            # Upper triangle excluding diagonal (same order as nested get_distance).
+            d = sub[np.triu_indices(len(i_un), k=1)].tolist()
+
+        d.sort()
+        pair_cor[n] = np.array(d)
+    return pair_cor
+
 
 def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarray]:
     """Calculates a dictionary of sorted interatomic distances for an Atoms object.
 
     This utility method is used to generate a structural fingerprint of a cluster
     by calculating all interatomic distances for each element type and sorting them.
+
+    Results are cached on ``atoms.info`` under ``_scgo_sorted_dist_fp`` and
+    invalidated when positions, numbers, or (for MIC) cell/PBC change.
 
     Args:
         atoms: The Atoms object for which to calculate the distances.
@@ -36,34 +84,22 @@ def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarra
         A dictionary where keys are atomic numbers (integers) and values are
         sorted 1D numpy arrays of interatomic distances for that element type.
     """
-    numbers = atoms.numbers
-    unique_types = set(numbers)
-    pair_cor = {}
+    content_key = _sorted_dist_content_key(atoms, mic=mic)
+    cached = atoms.info.get(_SORTED_DIST_FP_INFO_KEY)
+    if (
+        isinstance(cached, dict)
+        and cached.get("content_key") == content_key
+        and cached.get("mic") == bool(mic)
+        and isinstance(cached.get("pair_cor"), dict)
+    ):
+        return cached["pair_cor"]
 
-    for n in unique_types:
-        # Use enumerate for better performance and readability
-        i_un = [i for i, atom in enumerate(atoms) if atom.number == n]
-
-        if not i_un:
-            continue
-
-        # For non-periodic systems, use vectorized NumPy operations for better performance
-        if not mic and not np.any(atoms.get_pbc()):
-            from scipy.spatial.distance import pdist
-
-            positions = atoms.get_positions()[i_un]
-            d = pdist(positions).tolist()
-        else:
-            # For periodic systems or when mic=True, use original method
-            # as get_distance handles PBC correctly
-            d = [
-                atoms.get_distance(n1, n2, mic)
-                for i, n1 in enumerate(i_un)
-                for n2 in i_un[i + 1 :]
-            ]
-
-        d.sort()
-        pair_cor[n] = np.array(d)
+    pair_cor = _compute_sorted_dist_list(atoms, mic=mic)
+    atoms.info[_SORTED_DIST_FP_INFO_KEY] = {
+        "content_key": content_key,
+        "mic": bool(mic),
+        "pair_cor": pair_cor,
+    }
     return pair_cor
 
 

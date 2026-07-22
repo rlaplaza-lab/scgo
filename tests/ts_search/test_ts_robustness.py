@@ -67,7 +67,7 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
     # Create a minimal mock database directory with a few relaxed minima
     with tempfile.TemporaryDirectory() as tmpdir:
         run_dir = Path(tmpdir) / "Cu2_searches" / "run_20260101_120000"
-        run_dir.mkdir()
+        run_dir.mkdir(parents=True)
         db_path = run_dir / "candidates.db"
 
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
@@ -160,7 +160,7 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         run_dir = Path(tmpdir) / "Cu2_searches" / "run_20260101_120000"
-        run_dir.mkdir()
+        run_dir.mkdir(parents=True)
         db_path = run_dir / "candidates.db"
 
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)

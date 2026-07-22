@@ -23,6 +23,7 @@ from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.cluster_adsorbate.sites import get_or_compute_surface_site_candidates
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -33,6 +34,14 @@ from scgo.initialization.geometry_helpers import (
     get_covalent_radius,
 )
 from scgo.surface.validation import validate_supported_cluster_deposit
+from scgo.utils.combine_atoms import (
+    concatenate_inherit_cell_pbc,
+    random_rotation_matrix,
+    top_layer_indices,
+)
+from scgo.utils.combine_atoms import (
+    slab_surface_extreme as _shared_slab_surface_extreme,
+)
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 
@@ -72,10 +81,8 @@ def _slab_surface_layer(slab: Atoms, axis: int, thickness: float = 2.5) -> Atoms
     pos = slab.get_positions()
     if len(pos) == 0:
         return slab.copy()
-    top = slab_surface_extreme(slab, axis, upper=True)
-    mask = pos[:, axis] >= top - thickness
-    layer = slab[mask] if np.any(mask) else slab
-    return layer.copy()
+    indices = top_layer_indices(pos, axis, thickness=thickness)
+    return slab[indices].copy()
 
 
 def _build_adsorbate_fragments_on_slab(
@@ -94,6 +101,7 @@ def _build_adsorbate_fragments_on_slab(
 
     ca = resolve_cluster_adsorbate_config(cluster_adsorbate_config)
     site_core = _slab_surface_layer(slab, axis)
+    precomputed_sites = get_or_compute_surface_site_candidates(site_core)
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
 
@@ -115,6 +123,7 @@ def _build_adsorbate_fragments_on_slab(
                 clash_atoms=clash_target,
                 within_structure_site_counts=within_structure_site_counts,
                 batch_site_counts=batch_site_counts,
+                site_candidates=precomputed_sites,
             )
             if placed is None:
                 all_ok = False
@@ -145,10 +154,7 @@ def _near_surface_rotation_matrix(rng: Generator, axis: int) -> np.ndarray:
 
 def slab_surface_extreme(slab: Atoms, axis: int, *, upper: bool = True) -> float:
     """Return max (or min) Cartesian coordinate of slab atoms along ``axis``."""
-    pos = slab.get_positions()
-    if len(pos) == 0:
-        return 0.0
-    return float(np.max(pos[:, axis]) if upper else np.min(pos[:, axis]))
+    return _shared_slab_surface_extreme(slab, axis, upper=upper)
 
 
 def _in_plane_translation_near_slab_atom(
@@ -223,18 +229,12 @@ def _in_plane_translation(
 
 def combine_slab_adsorbate(slab: Atoms, adsorbate: Atoms) -> Atoms:
     """Concatenate slab and adsorbate; adsorbate cell/pbc are replaced by slab's."""
-    ads = adsorbate.copy()
-    ads.set_cell(slab.get_cell())
-    ads.set_pbc(slab.get_pbc())
-    return slab.copy() + ads
+    return concatenate_inherit_cell_pbc(slab, adsorbate)
 
 
 def _random_rotation_matrix(rng: Generator) -> np.ndarray:
-    """Return a uniformly random 3D rotation matrix."""
-    rotation_axis = rng.standard_normal(3)
-    rotation_axis /= np.linalg.norm(rotation_axis)
-    rotation_angle = float(rng.uniform(0.0, 2.0 * np.pi))
-    return _generate_rotation_matrix(rotation_axis, rotation_angle)
+    """Return a uniformly random 3D rotation matrix (Haar on SO(3))."""
+    return random_rotation_matrix(rng)
 
 
 def _place_cluster_above_slab(
@@ -484,6 +484,16 @@ def create_deposited_cluster_batch(
         out: list[Atoms] = []
         attempts = 0
         shared_site_counts = batch_site_counts
+
+        def _record_batch_site_type_sequential(structure: Atoms) -> None:
+            if shared_site_counts is None:
+                return
+            site_type = structure.info.get("adsorbate_site_type")
+            if not isinstance(site_type, str):
+                return
+            if site_type in shared_site_counts:
+                shared_site_counts[site_type] += 1
+
         while len(out) < n_structures and attempts < max_attempts:
             attempts += 1
             child_rng = np.random.default_rng(
@@ -502,6 +512,7 @@ def create_deposited_cluster_batch(
                 batch_site_counts=shared_site_counts,
             )
             if struct is not None:
+                _record_batch_site_type_sequential(struct)
                 out.append(struct)
         if len(out) < n_structures:
             raise SCGORuntimeError(

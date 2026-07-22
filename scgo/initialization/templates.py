@@ -45,6 +45,7 @@ from ase.cluster.cluster import Cluster
 from ase.data import atomic_numbers, reference_states
 from ase.symbols import Symbols
 from numpy.random import Generator
+from scipy.spatial.distance import cdist
 
 from scgo.exceptions import (
     SCGOValidationError,
@@ -64,6 +65,7 @@ from .geometry_helpers import (
     compute_bond_distance_params,
     get_convex_hull_vertex_indices,
     get_covalent_radius,
+    reorder_cluster_to_composition,
     validate_cluster,
     validate_cluster_structure,
 )
@@ -357,15 +359,14 @@ def remove_atoms_from_vertices(
 
         coordination: np.ndarray = np.zeros(len(current), dtype=np.int_)
         if len(current) > 1:
-            for i in range(len(current)):
-                r_i: float = get_covalent_radius(symbols[i])
-                for j in range(len(current)):
-                    if i == j:
-                        continue
-                    r_j: float = get_covalent_radius(symbols[j])
-                    d: np.floating[Any] = np.linalg.norm(positions[i] - positions[j])
-                    if d <= (r_i + r_j) * connectivity_factor:
-                        coordination[i] += 1
+            radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
+            dist_matrix = cdist(positions, positions)
+            thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
+            # Exclude self-pairs on the diagonal.
+            coordination = np.sum(
+                (dist_matrix <= thresh) & ~np.eye(len(current), dtype=bool),
+                axis=1,
+            ).astype(np.int_, copy=False)
 
         vert_coord: np.ndarray = coordination[vertices]
         vert_dist = distances[vertices]
@@ -1714,6 +1715,7 @@ def _validate_and_add_template(
     min_distance_factor: float,
     connectivity_factor: float,
     logger_instance: Any = None,
+    composition: list[str] | None = None,
 ) -> bool:
     """Validate a template structure and add it to results if valid.
 
@@ -1729,6 +1731,8 @@ def _validate_and_add_template(
         min_distance_factor: Factor for minimum distance checks
         connectivity_factor: Factor for connectivity threshold
         logger_instance: Logger instance (defaults to module logger)
+        composition: Optional target composition for atom reordering before the
+            validation-complete flag is set.
 
     Returns:
         True if template was added to results, False otherwise
@@ -1749,6 +1753,10 @@ def _validate_and_add_template(
     )
 
     if is_valid:
+        if composition is not None:
+            validated_atoms = reorder_cluster_to_composition(
+                validated_atoms, composition
+            )
         _set_template_info(validated_atoms, template_type)
         validated_atoms.info["scgo_validation_complete"] = True
         results.append(validated_atoms)
@@ -1825,6 +1833,7 @@ def generate_template_matches(
                             template_description=f"for {n_atoms} atoms",
                             min_distance_factor=min_distance_factor,
                             connectivity_factor=connectivity_factor,
+                            composition=list(composition),
                         )
             except (
                 ValueError,
@@ -1865,6 +1874,7 @@ def generate_template_matches(
                         template_description=f"({nearest_magic} -> {n_atoms})",
                         min_distance_factor=min_distance_factor,
                         connectivity_factor=connectivity_factor,
+                        composition=list(composition),
                     )
             except (
                 ValueError,

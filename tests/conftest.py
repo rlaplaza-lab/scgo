@@ -206,6 +206,41 @@ def cu3_bent():
 
 
 @pytest.fixture
+def ir4_tetrahedron():
+    """Ir4 regular tetrahedron."""
+    d = 2.7
+    positions = [
+        [0.0, 0.0, 0.0],
+        [d, 0.0, 0.0],
+        [d / 2, d * np.sqrt(3) / 2, 0.0],
+        [d / 2, d / (2 * np.sqrt(3)), d * np.sqrt(2.0 / 3.0)],
+    ]
+    atoms = Atoms("Ir4", positions=positions)
+    atoms.center(vacuum=8.0)
+    return atoms
+
+
+@pytest.fixture
+def ir4_tetrahedron_atom_swapped():
+    """Ir4 tetrahedron with two atoms swapped.
+
+    After endpoint alignment, IDPP and linear interiors still differ for this
+    pair (unlike Cu3 triangle→linear), so parallel NEB dedup keeps 8 uniques
+    for ``n_images=3`` (2 shared endpoints + 3+3 distinct interiors).
+    """
+    d = 2.7
+    positions = [
+        [d, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [d / 2, d / (2 * np.sqrt(3)), d * np.sqrt(2.0 / 3.0)],
+        [d / 2, d * np.sqrt(3) / 2, 0.0],
+    ]
+    atoms = Atoms("Ir4", positions=positions)
+    atoms.center(vacuum=8.0)
+    return atoms
+
+
+@pytest.fixture
 def empty_atoms():
     """Create an empty Atoms object for testing."""
     atoms = Atoms()

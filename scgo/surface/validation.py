@@ -22,6 +22,7 @@ from scgo.initialization.initialization_config import (
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.utils.combine_atoms import top_layer_indices
 
 # Small slack below nominal slab top (numerical / structural roughness).
 _BINDING_PENETRATION_TOLERANCE_A = 0.1
@@ -302,11 +303,7 @@ def _slab_surface_layer_indices(
     pos = combined.get_positions()
     if n_slab <= 0 or len(pos) < n_slab:
         return list(range(n_slab))
-    slab_pos = pos[:n_slab]
-    top = float(np.max(slab_pos[:, surface_normal_axis]))
-    mask = slab_pos[:, surface_normal_axis] >= top - thickness
-    indices = [i for i in range(n_slab) if mask[i]]
-    return indices if indices else list(range(n_slab))
+    return top_layer_indices(pos[:n_slab], surface_normal_axis, thickness=thickness)
 
 
 def _check_mobile_touches_slab(

@@ -12,6 +12,7 @@ from ase.optimize import FIRE
 
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
     AdsorbateDefinition,
     SystemType,
@@ -28,6 +29,7 @@ from .transition_state import (
     attach_singlepoint_from_relax_output,
     interpolate_path,
     make_ts_result,
+    neb_max_atom_force,
     save_neb_result,
 )
 
@@ -102,10 +104,16 @@ class ParallelNEBBatch:
             unique_images: list[Atoms] = []
             unique_index: dict[tuple, int] = {}
             neb_image_map: list[tuple[int, int, int]] = []
+            # After step 0, endpoints keep cached SinglePoint energy/forces.
+            evaluate_endpoints = self.step_count == 0
 
             for neb_idx in self.active_nebs:
                 neb = self.neb_instances[neb_idx]
+                n_img = len(neb.images)
                 for img_idx, atoms in enumerate(neb.images):
+                    is_endpoint = img_idx == 0 or img_idx == n_img - 1
+                    if is_endpoint and not evaluate_endpoints:
+                        continue
                     key = _neb_image_dedup_key(atoms)
                     if key not in unique_index:
                         unique_index[key] = len(unique_images)
@@ -119,6 +127,7 @@ class ParallelNEBBatch:
             logger.debug(
                 f"Step {self.step_count}: Evaluating {len(unique_images)} unique images "
                 f"({len(neb_image_map)} total slots) from {len(self.active_nebs)} active NEBs"
+                f"{'' if evaluate_endpoints else ' (interiors only)'}"
             )
 
             try:
@@ -142,7 +151,7 @@ class ParallelNEBBatch:
                 energy, relaxed_atoms = unique_results[unique_slot]
                 atoms = self.neb_instances[neb_idx].images[img_idx]
                 attach_singlepoint_from_relax_output(
-                    atoms, energy, relaxed_atoms, require_forces=False
+                    atoms, energy, relaxed_atoms, require_forces=True
                 )
 
             still_active: list[int] = []
@@ -150,7 +159,7 @@ class ParallelNEBBatch:
                 neb = self.neb_instances[neb_idx]
                 try:
                     neb_forces = neb.get_forces()
-                    max_force = float(np.max(np.abs(neb_forces)))
+                    max_force = neb_max_atom_force(neb_forces)
 
                     results[neb_idx]["final_fmax"] = max_force
                     results[neb_idx]["steps_taken"] = self.step_count + 1
@@ -218,8 +227,6 @@ def _neb_endpoint_copies(
     enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> tuple[Atoms, Atoms]:
     """Copy minima endpoints, optionally re-attaching surface FixAtoms constraints."""
-    from scgo.surface.constraints import attach_slab_constraints_from_surface_config
-
     react = atoms_i.copy()
     prod = atoms_j.copy()
     if surface_config is not None:
@@ -285,35 +292,59 @@ def run_parallel_neb_search(
     t_parallel0 = perf_counter()
     relaxer = _tsh.TorchSimBatchRelaxer(**(torchsim_params or {}))
 
-    pair_endpoints: list[tuple[Atoms, Atoms, float, float]] = []
-    for i, j in pairs:
-        react_ep, prod_ep = _neb_endpoint_copies(
-            minima[i][1],
-            minima[j][1],
-            surface_config,
-            system_type,
-            n_slab=n_slab,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-        )
-        pair_endpoints.append(
-            (
-                react_ep,
-                prod_ep,
-                _neb_endpoint_energy(minima[i]),
-                _neb_endpoint_energy(minima[j]),
-            )
-        )
-
     neb_instances: list[TorchSimNEB] = []
-    pair_results: list[dict[str, Any]] = []
-    for (i, j), (react_ep, prod_ep, react_e, prod_e) in zip(
-        pairs, pair_endpoints, strict=True
-    ):
+    # Parallel to neb_instances: (pair_index_in_results, i, j)
+    neb_meta: list[tuple[int, int, int]] = []
+    pair_results: list[dict[str, Any] | None] = [None] * len(pairs)
+
+    for pair_ord, (i, j) in enumerate(pairs):
         pair_id = f"{i}_{j}"
+        react_e = _neb_endpoint_energy(minima[i])
+        prod_e = _neb_endpoint_energy(minima[j])
+        try:
+            react_ep, prod_ep = _neb_endpoint_copies(
+                minima[i][1],
+                minima[j][1],
+                surface_config,
+                system_type,
+                n_slab=n_slab,
+                adsorbate_definition=adsorbate_definition,
+                connectivity_factor=connectivity_factor,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            )
+        except ValueError as e:
+            logger.warning(
+                "Skipping pair %s due to structure validation error: %s", pair_id, e
+            )
+            skipped = make_ts_result(
+                pair_id=pair_id,
+                n_images=neb_n_images,
+                spring_constant=neb_spring_constant,
+                use_torchsim=True,
+                fmax=neb_fmax,
+                neb_steps=neb_steps,
+                interpolation_method=neb_interpolation_method,
+                climb=neb_climb,
+                align_endpoints=neb_align_endpoints,
+                perturb_sigma=neb_perturb_sigma,
+                neb_interpolation_mic=neb_interpolation_mic,
+                neb_tangent_method=neb_tangent_method,
+                use_parallel_neb=True,
+                reactant_energy=react_e,
+                product_energy=prod_e,
+                error=str(e),
+            )
+            skipped["status"] = "skipped"
+            skipped["system_type"] = system_type
+            attach_minima_traceability(skipped, minima, i, j)
+            pair_dir = run_dir / f"pair_{pair_id}"
+            pair_dir.mkdir(parents=True, exist_ok=True)
+            save_neb_result(skipped, str(pair_dir), pair_id)
+            pair_results[pair_ord] = skipped
+            continue
+
         images = interpolate_path(
             react_ep,
             prod_ep,
@@ -340,40 +371,47 @@ def run_parallel_neb_search(
                 method=neb_tangent_method,
             )
         )
-        pair_results.append(
-            make_ts_result(
-                pair_id=pair_id,
-                n_images=neb_n_images,
-                spring_constant=neb_spring_constant,
-                use_torchsim=True,
-                fmax=neb_fmax,
-                neb_steps=neb_steps,
-                interpolation_method=neb_interpolation_method,
-                climb=neb_climb,
-                align_endpoints=neb_align_endpoints,
-                perturb_sigma=neb_perturb_sigma,
-                neb_interpolation_mic=neb_interpolation_mic,
-                neb_tangent_method=neb_tangent_method,
-                use_parallel_neb=True,
-                reactant_energy=react_e,
-                product_energy=prod_e,
-            )
+        result = make_ts_result(
+            pair_id=pair_id,
+            n_images=neb_n_images,
+            spring_constant=neb_spring_constant,
+            use_torchsim=True,
+            fmax=neb_fmax,
+            neb_steps=neb_steps,
+            interpolation_method=neb_interpolation_method,
+            climb=neb_climb,
+            align_endpoints=neb_align_endpoints,
+            perturb_sigma=neb_perturb_sigma,
+            neb_interpolation_mic=neb_interpolation_mic,
+            neb_tangent_method=neb_tangent_method,
+            use_parallel_neb=True,
+            reactant_energy=react_e,
+            product_energy=prod_e,
         )
-        pair_results[-1]["system_type"] = system_type
+        result["system_type"] = system_type
+        pair_results[pair_ord] = result
+        neb_meta.append((pair_ord, i, j))
 
     neb_steps_i = int(neb_steps)
-    batch = ParallelNEBBatch(neb_instances, relaxer, max_total_steps=neb_steps_i)
-    t_batch0 = perf_counter()
-    batch_results = batch.run_optimization(fmax=neb_fmax, max_steps=neb_steps_i)
-    neb_batch_s = perf_counter() - t_batch0
-    wall_total = perf_counter() - t_parallel0
-    n_p = max(1, len(pair_results))
-    neb_each = neb_batch_s / n_p
-    wall_each = wall_total / n_p
+    if neb_instances:
+        batch = ParallelNEBBatch(neb_instances, relaxer, max_total_steps=neb_steps_i)
+        t_batch0 = perf_counter()
+        batch_results = batch.run_optimization(fmax=neb_fmax, max_steps=neb_steps_i)
+        neb_batch_s = perf_counter() - t_batch0
+    else:
+        batch_results = []
+        neb_batch_s = 0.0
 
-    for idx, neb in enumerate(neb_instances):
-        summary = batch_results[idx]
-        result = pair_results[idx]
+    wall_total = perf_counter() - t_parallel0
+    n_active = max(1, len(neb_instances))
+    neb_each = neb_batch_s / n_active
+    wall_each = wall_total / max(1, len(pairs))
+
+    for neb_idx, (pair_ord, i, j) in enumerate(neb_meta):
+        neb = neb_instances[neb_idx]
+        summary = batch_results[neb_idx]
+        result = pair_results[pair_ord]
+        assert result is not None
         result["neb_converged"] = bool(summary.get("converged", False))
         result["error"] = summary.get("error")
         result["final_fmax"] = summary.get("final_fmax")
@@ -393,7 +431,6 @@ def run_parallel_neb_search(
                 result.get("pair_id"),
             )
 
-        i, j = pairs[idx]
         attach_minima_traceability(result, minima, i, j)
         pair_id = str(result["pair_id"])
         pair_dir = run_dir / f"pair_{pair_id}"
@@ -409,4 +446,5 @@ def run_parallel_neb_search(
         "neb_batch_optimization_s": neb_batch_s,
         "parallel_wall_s": wall_total,
     }
-    return pair_results, meta
+    assert all(r is not None for r in pair_results)
+    return pair_results, meta  # type: ignore[return-value]
