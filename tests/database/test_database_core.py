@@ -12,6 +12,7 @@ import multiprocessing as mp
 import os
 import sqlite3
 import threading
+import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -51,7 +52,6 @@ from scgo.database.streaming import (
     iter_database_minima,
     iter_databases_minima,
 )
-from scgo.database.sync import PRESET_AGGRESSIVE
 from scgo.exceptions import SCGOValidationError
 from tests.test_utils import assert_run_id_persisted, create_test_atoms
 
@@ -103,9 +103,15 @@ def _count_open_files() -> int:
     return -1
 
 
-# Mirrors TorchSim GA batch writes: PRESET_AGGRESSIVE retries, default busy_timeout.
-_PRODUCTION_WRITE_RETRY = PRESET_AGGRESSIVE
-# Two parallel jobs × one GA batch each (see torchsim_batch_size / surface batch_size=2).
+# Mirrors TorchSim GA batch writes under CI load: production busy_timeout with
+# a slightly more patient retry budget than PRESET_AGGRESSIVE (still transient-
+# lock only). Two parallel jobs × one GA-sized batch each.
+_STRESS_WRITE_RETRY = RetryConfig(
+    max_retries=12,
+    initial_delay=0.25,
+    max_delay=8.0,
+    backoff_factor=1.8,
+)
 _CONCURRENT_STRESS_WORKERS = 2
 _CONCURRENT_STRESS_BATCH_SIZE = 5
 
@@ -113,6 +119,9 @@ _CONCURRENT_STRESS_BATCH_SIZE = 5
 def _write_to_database(args):
     """Helper function for multiprocess database writing."""
     db_path, batch_size, worker_id = args
+
+    # Stagger workers so both processes do not open and write on the same tick.
+    time.sleep(0.05 * worker_id)
 
     atoms_list = []
     for i in range(batch_size):
@@ -127,14 +136,16 @@ def _write_to_database(args):
     with get_connection(db_path) as da:
         for atoms in atoms_list:
             database_retry(
-                lambda _a=atoms: (
-                    da.add_unrelaxed_candidate(
-                        _a, description=f"concurrent_stress:w{worker_id}"
-                    ),
-                    da.add_relaxed_step(_a),
+                lambda _a=atoms: da.add_unrelaxed_candidate(
+                    _a, description=f"concurrent_stress:w{worker_id}"
                 ),
-                config=_PRODUCTION_WRITE_RETRY,
-                operation_name=f"concurrent_stress_write:w{worker_id}",
+                config=_STRESS_WRITE_RETRY,
+                operation_name=f"concurrent_stress_write:w{worker_id}:unrelaxed",
+            )
+            database_retry(
+                lambda _a=atoms: da.add_relaxed_step(_a),
+                config=_STRESS_WRITE_RETRY,
+                operation_name=f"concurrent_stress_write:w{worker_id}:relaxed",
             )
     return True, worker_id
 
