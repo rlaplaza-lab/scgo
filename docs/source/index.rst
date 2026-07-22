@@ -10,22 +10,8 @@ SCGO Documentation
 SCGO: Simple Cluster Global Optimization
 =========================================
 
-A compact toolkit for global optimization of atomic clusters using ASE, with
-Basin Hopping, Genetic Algorithms, NEB transition-state search, and MLIP support.
-
-Key Features
-------------
-
-- **Basin Hopping and Genetic Algorithm** global optimization with automatic
-  algorithm selection by cluster size
-- **MLIP Support**: MACE and UMA (fairchem) for GPU-accelerated optimization
-- **Surface Workflows**: slab-supported clusters and adsorbates; hull-site
-  fragment placement and tag-aware GA operators
-- **Transition State Search**: NEB-based TS search with automated pair selection
-  and PBC-aware endpoint alignment
-- **Flexible API**: high-level runners and low-level control for custom workflows
-- **Reproducible initialization**: composition-canonical atom ordering for
-  multi-element GA runs
+Global optimization of atomic clusters with ASE: Basin Hopping, Genetic
+Algorithms, NEB transition-state search, and MLIPs (MACE, UMA, UPET).
 
 See :doc:`/quickstart` to get started.
 

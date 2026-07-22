@@ -100,9 +100,8 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Calculator: ``"MACE"``, ``"UMA"``, ``"UPET"``, or ``"EMT"``
    * - ``calculator_kwargs``
      - ``{}``
-     - Calculator options (e.g., ``{"model_name": "mace_mp_small"}``).
-       Explicit ``device`` values that the backend does not support raise
-       ``SCGOValidationError`` (no silent CPU fallback).
+     - Calculator options (e.g. ``{"model_name": "mace_mp_small"}``). Unsupported
+       ``device`` values raise ``SCGOValidationError``.
    * - ``seed``
      - ``None``
      - Random seed (function argument overrides)
@@ -130,13 +129,11 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Keep adsorbate fragments rigid
    * - ``surface_config``
      - ``None``
-     - Required for surface runs. May also be set as a top-level key in
-       ``go_params`` (fanned into optimizer slots); preferred as the run-function
-       ``surface_config=`` argument.
+     - Required for surface runs (prefer the run-function ``surface_config=``;
+       a top-level key in ``go_params`` is also allowed)
    * - ``cluster_adsorbate_config``
      - ``None``
-     - Tune adsorbate placement (belongs in ``go_params``, not as a separate
-       ``run_*`` keyword)
+     - Adsorbate placement knobs (in ``go_params`` only)
    * - ``validation_n_jobs``
      - (optional)
      - Parallel workers for post-GO Hessian/force validation
@@ -428,9 +425,10 @@ Surface Config
      - Connectivity factor for slab validation
 
 .. note::
-   Use only one of the layer options, not both. See :doc:`/api/surface` for the full ``SurfaceSystemConfig`` field list.
-   Height may be set via ``adsorption_height_*`` or the shorter ``height_*`` alias;
-   conflicting values raise ``SCGOValidationError``.
+   Use only one of the layer options, not both. See :doc:`/api/surface`.
+   Surface heights: ``adsorption_height_*`` (canonical) or ``height_*`` alias.
+   Adsorbate heights: ``height_*`` (canonical) or ``adsorption_height_*`` alias.
+   Conflicting values raise ``SCGOValidationError``.
 
 ----------------
 Adsorbate Config
@@ -452,10 +450,6 @@ Adsorbate Config
    * - ``blmin_ratio``
      - ``0.7``
      - Clash threshold
-
-.. note::
-   Canonical adsorbate fields are ``height_*``; ``adsorption_height_*`` is accepted
-   as an alias for convenience when sharing knobs with surface configs.
 
 ----------
 See Also

@@ -9,7 +9,8 @@ Dependencies
 ------------
 
 - **MACE (default):** ``pip install -e ".[mace]"`` — TorchSim GA + MACE
-- **UMA (optional):** pass ``--backend uma``; use a separate environment from MACE
+- **UMA:** separate env; ``--backend uma``
+- **UPET:** separate env with ``scgo[upet]`` + pinned ``vesin==0.6.0``
 
 Output layout
 -------------

@@ -1,20 +1,12 @@
 Parameter Presets
 ==================
 
-This page explains the parameter presets available in SCGO and what each parameter controls.
-
-Overview
---------
-
-SCGO has two parameter dict types: **GO** (``params`` / ``go_params``) and **TS**
-(``ts_params``). Merge rules, logging, and override behaviour are in
-:doc:`/parameters` (*Parameter resolution*).
+GO (``params`` / ``go_params``) and TS (``ts_params``) dicts. Merge rules:
+:doc:`/parameters`.
 
 ----------------
 Preset Functions
 ----------------
-
-Use these preset functions to get started quickly.
 
 **Global Optimization:**
 
@@ -34,6 +26,10 @@ Use these preset functions to get started quickly.
      - Default UMA (fairchem) parameters
    * - ``get_uma_ga_benchmark_params(seed, *, model_name, uma_task)``
      - UMA parameters for benchmarking campaigns
+   * - ``get_default_upet_params()``
+     - Default UPET (metatomic) parameters. Requires ``scgo[upet]``.
+   * - ``get_upet_ga_benchmark_params(seed, *, model_name)``
+     - UPET + TorchSim benchmark GA parameters
    * - ``get_diversity_params(reference_db_glob, max_references, update_interval)``
      - Bias exploration toward diverse structures
    * - ``get_high_energy_params()``
