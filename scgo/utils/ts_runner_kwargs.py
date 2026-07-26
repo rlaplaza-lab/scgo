@@ -125,6 +125,9 @@ def coerce_ts_params_to_runner_kwargs(
                 "upet_non_conservative": bool(ck.get("non_conservative", False)),
             }
         )
+    user_torchsim = ts_params.get("torchsim_params")
+    if isinstance(user_torchsim, dict):
+        kwargs["torchsim_params"].update(user_torchsim)
 
     # Keys without per-system defaults: pass through as-is (None when missing
     # is fine for the runner).
@@ -160,6 +163,7 @@ def coerce_ts_params_to_runner_kwargs(
         "neb_surface_cell_remap",
         "neb_surface_lattice_rotation",
         "neb_surface_max_lattice_shift",
+        "max_endpoint_mismatch",
     ):
         kwargs[key] = ts_params.get(key, ts_defaults[key])
 

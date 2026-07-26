@@ -40,8 +40,9 @@ def _assert_one_global_relax_batch(
 ) -> None:
     batch = ParallelNEBBatch([neb1, neb2], relaxer, max_total_steps=5)
     batch.run_optimization(fmax=1.0, max_steps=1)
-    assert relaxer.calls == 1
-    assert relaxer.batch_sizes == [expected_unique]
+    # One optimization eval + one post-loop PES refresh
+    assert relaxer.calls == 2
+    assert relaxer.batch_sizes == [expected_unique, expected_unique]
     assert neb1.get_force_calls() >= 1
     assert neb2.get_force_calls() >= 1
 
@@ -345,9 +346,72 @@ def test_parallel_neb_skips_endpoints_after_first_step(cu3_triangle, cu3_linear)
 
     neb.get_forces = always_high_forces  # type: ignore[method-assign]
     batch.run_optimization(fmax=1e-6, max_steps=2)
-    assert relaxer.calls == 2
+    # step 0: all images; step 1: interiors; final PES refresh: all images again
+    assert relaxer.calls == 3
     assert relaxer.batch_sizes[0] == 5  # all images on step 0
     assert relaxer.batch_sizes[1] == 3  # interiors only
+    assert relaxer.batch_sizes[2] == 5  # post-loop refresh
+
+
+def test_parallel_neb_refresh_keeps_energies_after_steps(cu3_triangle, cu3_linear):
+    """Post-loop PES refresh must leave readable energies after FIRE steps."""
+    from scgo.ts_search.transition_state import (
+        _finalize_neb_result,
+        _image_potential_energy,
+        make_ts_result,
+    )
+
+    class _SteppingRelaxer:
+        """Return nonzero forces so FIRE actually moves interiors."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def relax_batch(self, atoms_list, steps=0):
+            self.calls += 1
+            out = []
+            for a in atoms_list:
+                ra = a.copy()
+                forces = np.zeros((len(a), 3))
+                forces[0, 0] = 0.5  # enough to move when not converged
+                ra.arrays["forces"] = forces
+                out.append((float(-self.calls), ra))
+            return out
+
+    relaxer = _SteppingRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=5)
+    results = batch.run_optimization(fmax=1e-8, max_steps=2)
+    assert results[0]["steps_taken"] == 2
+    assert relaxer.calls >= 3  # includes refresh
+    for img in neb.images:
+        energy = _image_potential_energy(img)
+        assert np.isfinite(energy)
+        assert img.calc is not None
+        assert np.isfinite(float(img.get_potential_energy()))
+
+    result = make_ts_result(
+        pair_id="0_1",
+        n_images=3,
+        spring_constant=0.1,
+        use_torchsim=True,
+        fmax=1e-8,
+        neb_steps=2,
+        interpolation_method="idpp",
+        climb=False,
+        align_endpoints=True,
+        perturb_sigma=0.0,
+        neb_interpolation_mic=False,
+        neb_tangent_method="improvedtangent",
+        use_parallel_neb=True,
+        reactant_energy=0.0,
+        product_energy=0.0,
+    )
+    result["neb_converged"] = False
+    _finalize_neb_result(result, neb.images)
+    assert result["barrier_height"] is not None
+    assert result.get("error") != 'The property "energy" is not available.'
 
 
 def test_parallel_neb_require_forces_raises_when_missing(cu3_triangle, cu3_linear):
@@ -408,3 +472,226 @@ def test_run_parallel_neb_search_skips_invalid_pair(tmp_path, cu3_triangle, cu3_
     assert len(results) == 1
     assert results[0]["status"] == "skipped"
     assert "bad structure" in str(results[0].get("error", ""))
+
+
+def test_run_parallel_neb_preserves_batch_oom_error(tmp_path, cu3_triangle, cu3_linear):
+    """Batch OOM (no steps) must keep the real error, not 'endpoint as TS'."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+    oom = "CUDA out of memory. Tried to allocate 6.43 GiB."
+
+    class _OomBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = neb_instances
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            return [
+                {
+                    "converged": False,
+                    "final_fmax": None,
+                    "steps_taken": 0,
+                    "error": oom,
+                }
+                for _ in self.neb_instances
+            ]
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb._tsh.TorchSimBatchRelaxer",
+            return_value=_CountingFakeRelaxer(),
+        ),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _OomBatch),
+        patch(
+            "scgo.ts_search.parallel_neb._finalize_neb_result",
+            MagicMock(side_effect=AssertionError("finalize must be skipped")),
+        ) as finalize_mock,
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            run_dir=tmp_path,
+            surface_config=None,
+            rng=None,
+            neb_n_images=3,
+            neb_spring_constant=0.1,
+            neb_fmax=0.05,
+            neb_steps=2,
+            neb_climb=False,
+            neb_interpolation_method="linear",
+            neb_align_endpoints=False,
+            neb_perturb_sigma=0.0,
+            neb_interpolation_mic=False,
+            neb_tangent_method="aseneb",
+            torchsim_params={},
+            system_type="gas_cluster",
+        )
+
+    assert len(results) == 1
+    assert results[0]["status"] == "failed"
+    assert results[0]["neb_converged"] is False
+    assert oom in str(results[0].get("error", ""))
+    assert "endpoint as TS" not in str(results[0].get("error", ""))
+    finalize_mock.assert_not_called()
+
+
+def test_parallel_endpoint_max_idpp_uses_single_stage_climb(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """Endpoint-max IDPP must climb from step 0 (no no-climb pre-relax)."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+    calls: list[dict] = []
+
+    class _RecordingBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = list(neb_instances)
+            self.climb_flags = [bool(n.climb) for n in self.neb_instances]
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            calls.append(
+                {
+                    "n": len(self.neb_instances),
+                    "climb": list(self.climb_flags),
+                    "max_steps": int(max_steps),
+                }
+            )
+            return [
+                {
+                    "converged": True,
+                    "final_fmax": 0.01,
+                    "steps_taken": 5,
+                    "error": None,
+                }
+                for _ in self.neb_instances
+            ]
+
+    # Flat / endpoint-max IDPP energies → single-stage climb.
+    # Endpoint SP energies must match minima tuple energies (drift gate).
+    flat_band = [0.0, 0.1, 0.2, 0.3, 1.0]
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb._tsh.TorchSimBatchRelaxer",
+            return_value=_CountingFakeRelaxer(),
+        ),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _RecordingBatch),
+        patch(
+            "scgo.ts_search.parallel_neb.evaluate_neb_image_energies",
+            return_value=flat_band,
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            run_dir=tmp_path,
+            surface_config=None,
+            rng=None,
+            neb_n_images=3,
+            neb_spring_constant=0.1,
+            neb_fmax=0.05,
+            neb_steps=20,
+            neb_climb=True,
+            neb_interpolation_method="linear",
+            neb_align_endpoints=False,
+            neb_perturb_sigma=0.0,
+            neb_interpolation_mic=False,
+            neb_tangent_method="aseneb",
+            max_endpoint_mismatch=1.25,
+            torchsim_params={},
+            system_type="gas_cluster_adsorbate",
+        )
+
+    assert len(results) == 1
+    assert len(calls) == 1, f"expected single-stage only, got {calls!r}"
+    assert calls[0]["climb"] == [True]
+    assert calls[0]["max_steps"] == 20
+
+
+def test_parallel_two_stage_climb_runs_after_stage1_converges(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """Interior-max IDPP still uses two-stage; stage-1 fmax hit must climb after."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+    calls: list[dict] = []
+
+    class _RecordingBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = list(neb_instances)
+            self.climb_flags = [bool(n.climb) for n in self.neb_instances]
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            calls.append(
+                {
+                    "n": len(self.neb_instances),
+                    "climb": list(self.climb_flags),
+                    "max_steps": int(max_steps),
+                }
+            )
+            return [
+                {
+                    "converged": True,
+                    "final_fmax": 0.01,
+                    "steps_taken": 5 if len(calls) == 1 else 3,
+                    "error": None,
+                }
+                for _ in self.neb_instances
+            ]
+
+    # Endpoint SP energies must match minima tuple energies (drift gate).
+    # Interior max must clear prominence (>=0.40) and two-stage barrier (>=1.0).
+    interior_max_band = [0.0, 0.5, 1.6, 0.4, 1.0]
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb._tsh.TorchSimBatchRelaxer",
+            return_value=_CountingFakeRelaxer(),
+        ),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _RecordingBatch),
+        patch(
+            "scgo.ts_search.parallel_neb.evaluate_neb_image_energies",
+            return_value=interior_max_band,
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            run_dir=tmp_path,
+            surface_config=None,
+            rng=None,
+            neb_n_images=3,
+            neb_spring_constant=0.1,
+            neb_fmax=0.05,
+            neb_steps=20,
+            neb_climb=True,
+            neb_interpolation_method="linear",
+            neb_align_endpoints=False,
+            neb_perturb_sigma=0.0,
+            neb_interpolation_mic=False,
+            neb_tangent_method="aseneb",
+            max_endpoint_mismatch=1.25,
+            torchsim_params={},
+            system_type="gas_cluster_adsorbate",
+        )
+
+    assert len(results) == 1
+    assert len(calls) == 2, f"expected stage1+climb, got {calls!r}"
+    assert calls[0]["climb"] == [False]
+    assert calls[1]["climb"] == [True]
+    assert calls[1]["max_steps"] == 15

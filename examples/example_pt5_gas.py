@@ -11,6 +11,9 @@ preset defaults at call time. Pass ``system_type`` on the ``run_go_ts`` call
 (not inside the param dicts). Keep ``seed`` consistent across ``seed=``,
 ``go_params['seed']``, and ``ts_params['seed']``.
 
+TS: bare gas presets keep no-climb NEB, ``neb_fmax=0.05``, spring ``0.1``,
+5 images, and serial TorchSim NEB. This example only sets ``max_pairs``.
+
 Output is written under ``results/pt5_gas_mace/``: sibling ``Pt5_searches/`` and
 ``Pt5_ts_results/`` trees with datetime ``run_*`` directories, plus optional
 ``go_ts_timing.json`` when timing export is enabled (as below). See the

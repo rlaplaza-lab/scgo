@@ -10,9 +10,14 @@ combined cluster on graphite with surface-biased orientation, then run tag-aware
 GA (core crossover, ``fragment_reposition`` for adsorbate diversity). See
 ``docs/source/api/system_types.rst`` for operator details.
 
-Output: ``results/pt5_2oh_graphite_mace/`` with ``Pt5_searches/``,
-``Pt5_ts_results/``, and optional ``go_ts_timing.json`` (see docs quickstart,
-*On-disk layout*).
+TS: surface-adsorbate presets supply climb, spring ``0.5``, ``neb_fmax=0.25``,
+7 images, ``neb_steps=4000``, serial NEB, ``max_endpoint_mismatch``,
+``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
+interior maxima). This example only tightens ``max_pairs``.
+
+Output: ``results/pt5_2oh_graphite_mace/`` with ``H2O2Pt5_searches/``,
+``H2O2Pt5_ts_results/``, and optional ``go_ts_timing.json`` (see docs
+quickstart, *On-disk layout*).
 """
 
 from __future__ import annotations
@@ -37,7 +42,8 @@ OUTPUT_STEM = "pt5_2oh_graphite"
 
 NITER = 6
 POPULATION_SIZE = 24
-MAX_PAIRS = 10
+# Fewer close pairs; adsorbate TS presets supply climb / spring / steps / fmax.
+MAX_PAIRS = 6
 SLAB_LAYERS = 3
 ADSORBATES = [
     Atoms(symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]),
@@ -69,9 +75,6 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
         seed=SEED,
     )
     ts_params["max_pairs"] = MAX_PAIRS
-    ts_params["energy_gap_threshold"] = 1.0
-    ts_params["neb_n_images"] = 7
-    ts_params["neb_steps"] = 800
     ts_params["connectivity_factor"] = 1.8
     ts_params["write_timing_json"] = True
     return ts_params

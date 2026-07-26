@@ -11,6 +11,7 @@ from ase import Atoms
 from ase.optimize import FIRE
 
 from scgo.calculators import torchsim_helpers as _tsh
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
@@ -18,7 +19,7 @@ from scgo.system_types import (
     SystemType,
     validate_structure_for_system_type,
 )
-from scgo.utils.helpers import extract_energy_from_atoms
+from scgo.utils.helpers import copy_atoms
 from scgo.utils.logging import get_logger
 
 from .transition_state import (
@@ -27,10 +28,14 @@ from .transition_state import (
     _finalize_neb_result,
     attach_minima_traceability,
     attach_singlepoint_from_relax_output,
+    evaluate_neb_image_energies,
     interpolate_path,
     make_ts_result,
     neb_max_atom_force,
+    neb_uses_two_stage_climb,
     save_neb_result,
+    validate_initial_neb_energy_profile,
+    validate_initial_neb_path,
 )
 
 if TYPE_CHECKING:
@@ -40,9 +45,9 @@ logger = get_logger(__name__)
 
 
 def _neb_endpoint_energy(minimum: tuple[float, Atoms]) -> float:
-    energy, atoms = minimum
-    extracted = extract_energy_from_atoms(atoms)
-    return float(extracted if extracted is not None else energy)
+    """Return the canonical minima-list energy (ignore mutable atoms metadata)."""
+    energy, _atoms = minimum
+    return float(energy)
 
 
 def _neb_image_dedup_key(atoms: Atoms) -> tuple:
@@ -197,12 +202,51 @@ class ParallelNEBBatch:
                     else "NEB not processed"
                 )
 
+        # Final FIRE.step() invalidates SinglePoint caches on moved images.
+        # Refresh PES at the final geometries so barrier finalize can read energies.
+        self._refresh_pes_after_optimization()
+
         logger.info(
             f"Parallel NEB batch complete: {self.step_count} steps, "
             f"{len(self.converged_nebs)} converged, {len(self.failed_nebs)} failed"
         )
 
         return results
+
+    def _refresh_pes_after_optimization(self) -> None:
+        """Re-evaluate all NEB images at their final positions (no optimizer step)."""
+        unique_images: list[Atoms] = []
+        unique_index: dict[tuple, int] = {}
+        neb_image_map: list[tuple[int, int, int]] = []
+
+        for neb_idx, neb in enumerate(self.neb_instances):
+            if neb_idx in self.failed_nebs:
+                continue
+            for img_idx, atoms in enumerate(neb.images):
+                key = _neb_image_dedup_key(atoms)
+                if key not in unique_index:
+                    unique_index[key] = len(unique_images)
+                    unique_images.append(atoms)
+                neb_image_map.append((neb_idx, img_idx, unique_index[key]))
+
+        if not unique_images:
+            return
+
+        try:
+            unique_results = self.relaxer.relax_batch(unique_images, steps=0)
+        except (RuntimeError, ValueError) as e:
+            logger.warning(
+                "Final NEB PES refresh failed (%s); finalize will use cached energies if present",
+                e,
+            )
+            return
+
+        for neb_idx, img_idx, unique_slot in neb_image_map:
+            energy, relaxed_atoms = unique_results[unique_slot]
+            atoms = self.neb_instances[neb_idx].images[img_idx]
+            attach_singlepoint_from_relax_output(
+                atoms, energy, relaxed_atoms, require_forces=True
+            )
 
     def get_summary(self) -> dict[str, int]:
         """Return counts of total, converged and failed NEBs."""
@@ -227,8 +271,8 @@ def _neb_endpoint_copies(
     enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> tuple[Atoms, Atoms]:
     """Copy minima endpoints, optionally re-attaching surface FixAtoms constraints."""
-    react = atoms_i.copy()
-    prod = atoms_j.copy()
+    react = copy_atoms(atoms_i)
+    prod = copy_atoms(atoms_j)
     if surface_config is not None:
         attach_slab_constraints_from_surface_config(react, surface_config)
         attach_slab_constraints_from_surface_config(prod, surface_config)
@@ -282,6 +326,8 @@ def run_parallel_neb_search(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    max_endpoint_mismatch: float | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: float | None = None,
     allow_cluster_fragmentation: bool = False,
@@ -291,10 +337,13 @@ def run_parallel_neb_search(
     """Run all pairs through ParallelNEBBatch. Returns (results, timing meta)."""
     t_parallel0 = perf_counter()
     relaxer = _tsh.TorchSimBatchRelaxer(**(torchsim_params or {}))
+    neb_steps_i = int(neb_steps)
 
     neb_instances: list[TorchSimNEB] = []
     # Parallel to neb_instances: (pair_index_in_results, i, j)
     neb_meta: list[tuple[int, int, int]] = []
+    # Per-band two-stage flag (endpoint-max IDPP → climb from step 0).
+    neb_two_stage: list[bool] = []
     pair_results: list[dict[str, Any] | None] = [None] * len(pairs)
 
     for pair_ord, (i, j) in enumerate(pairs):
@@ -358,19 +407,70 @@ def run_parallel_neb_search(
             n_slab=n_slab,
             n_core_mobile=n_core_mobile,
             n_adsorbate_mobile=n_adsorbate_mobile,
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
             neb_surface_cell_remap=neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+        )
+        band_energies: list[float] | None = None
+        try:
+            validate_initial_neb_path(
+                images,
+                n_slab=n_slab,
+                mic=neb_interpolation_mic,
+                max_endpoint_mismatch=max_endpoint_mismatch,
+            )
+            if max_endpoint_mismatch is not None:
+                band_energies = evaluate_neb_image_energies(images, relaxer)
+                validate_initial_neb_energy_profile(
+                    band_energies,
+                    reference_reactant_energy=react_e,
+                    reference_product_energy=prod_e,
+                )
+        except SCGOValidationError as e:
+            logger.warning("Skipping pair %s: %s", pair_id, e)
+            skipped = make_ts_result(
+                pair_id=pair_id,
+                n_images=neb_n_images,
+                spring_constant=neb_spring_constant,
+                use_torchsim=True,
+                fmax=neb_fmax,
+                neb_steps=neb_steps,
+                interpolation_method=neb_interpolation_method,
+                climb=neb_climb,
+                align_endpoints=neb_align_endpoints,
+                perturb_sigma=neb_perturb_sigma,
+                neb_interpolation_mic=neb_interpolation_mic,
+                neb_tangent_method=neb_tangent_method,
+                use_parallel_neb=True,
+                reactant_energy=react_e,
+                product_energy=prod_e,
+                error=str(e),
+            )
+            skipped["status"] = "failed"
+            skipped["system_type"] = system_type
+            attach_minima_traceability(skipped, minima, i, j)
+            pair_dir = run_dir / f"pair_{pair_id}"
+            pair_dir.mkdir(parents=True, exist_ok=True)
+            save_neb_result(skipped, str(pair_dir), pair_id)
+            pair_results[pair_ord] = skipped
+            continue
+        pair_two_stage = neb_uses_two_stage_climb(
+            neb_climb, neb_steps_i, initial_energies=band_energies
         )
         neb_instances.append(
             TorchSimNEB(
                 images,
                 relaxer,
                 k=neb_spring_constant,
-                climb=neb_climb,
+                climb=bool(neb_climb) and not pair_two_stage,
                 method=neb_tangent_method,
             )
         )
+        neb_two_stage.append(pair_two_stage)
+        if band_energies is not None:
+            react_e = float(band_energies[0])
+            prod_e = float(band_energies[-1])
         result = make_ts_result(
             pair_id=pair_id,
             n_images=neb_n_images,
@@ -392,11 +492,70 @@ def run_parallel_neb_search(
         pair_results[pair_ord] = result
         neb_meta.append((pair_ord, i, j))
 
-    neb_steps_i = int(neb_steps)
     if neb_instances:
-        batch = ParallelNEBBatch(neb_instances, relaxer, max_total_steps=neb_steps_i)
         t_batch0 = perf_counter()
-        batch_results = batch.run_optimization(fmax=neb_fmax, max_steps=neb_steps_i)
+        batch_results = [
+            {
+                "converged": False,
+                "final_fmax": None,
+                "steps_taken": 0,
+                "error": None,
+            }
+            for _ in neb_instances
+        ]
+        # Single-stage climb bands (typical endpoint-max IDPP adsorbate paths).
+        single_idx = [i for i, ts in enumerate(neb_two_stage) if not ts]
+        two_idx = [i for i, ts in enumerate(neb_two_stage) if ts]
+        if single_idx:
+            single_nebs = [neb_instances[i] for i in single_idx]
+            batch = ParallelNEBBatch(single_nebs, relaxer, max_total_steps=neb_steps_i)
+            single_results = batch.run_optimization(
+                fmax=neb_fmax, max_steps=neb_steps_i
+            )
+            for local_i, neb_i in enumerate(single_idx):
+                batch_results[neb_i] = single_results[local_i]
+        if two_idx:
+            # Interior-max IDPP: relax without climb, then climb (always).
+            two_nebs = [neb_instances[i] for i in two_idx]
+            stage1_cap = neb_steps_i // 2
+            batch = ParallelNEBBatch(two_nebs, relaxer, max_total_steps=stage1_cap)
+            stage1_results = batch.run_optimization(fmax=neb_fmax, max_steps=stage1_cap)
+            for neb in two_nebs:
+                neb.climb = True
+            climb_local = [
+                i
+                for i, summary in enumerate(stage1_results)
+                if not summary.get("error")
+            ]
+            if climb_local:
+                steps1_vals = [
+                    int(stage1_results[i].get("steps_taken") or 0) for i in climb_local
+                ]
+                stage2_steps = max(
+                    neb_steps_i // 2,
+                    neb_steps_i - max(steps1_vals),
+                    1,
+                )
+                stage2_nebs = [two_nebs[i] for i in climb_local]
+                batch2 = ParallelNEBBatch(
+                    stage2_nebs, relaxer, max_total_steps=stage2_steps
+                )
+                stage2_results = batch2.run_optimization(
+                    fmax=neb_fmax, max_steps=stage2_steps
+                )
+                for local_i, s1_i in enumerate(climb_local):
+                    s2 = stage2_results[local_i]
+                    s1 = stage1_results[s1_i]
+                    steps1 = int(s1.get("steps_taken") or 0)
+                    steps2 = int(s2.get("steps_taken") or 0)
+                    stage1_results[s1_i] = {
+                        "converged": bool(s2.get("converged", False)),
+                        "final_fmax": s2.get("final_fmax", s1.get("final_fmax")),
+                        "steps_taken": steps1 + steps2,
+                        "error": s2.get("error") or s1.get("error"),
+                    }
+            for local_i, neb_i in enumerate(two_idx):
+                batch_results[neb_i] = stage1_results[local_i]
         neb_batch_s = perf_counter() - t_batch0
     else:
         batch_results = []
@@ -418,12 +577,30 @@ def run_parallel_neb_search(
         result["force_calls"] = neb.get_force_calls()
         result["steps_taken"] = summary.get("steps_taken")
 
-        try:
-            _finalize_neb_result(result, neb.images, logger=logger)
-        except RuntimeError as e:
+        # Batch failures (e.g. CUDA OOM) leave only GO endpoint energies on the
+        # band; finalize would overwrite the real error with "endpoint as TS".
+        batch_never_ran = (
+            result.get("error")
+            and (result.get("force_calls") or 0) == 0
+            and not result.get("steps_taken")
+        )
+        if batch_never_ran:
             result["status"] = "failed"
-            result["error"] = str(e)
-            _detach_calc(result.get("transition_state"))
+            result["neb_converged"] = False
+            logger.warning(
+                "Parallel NEB batch failed before any steps for pair %s: %s",
+                result.get("pair_id"),
+                result.get("error"),
+            )
+        else:
+            try:
+                _finalize_neb_result(result, neb.images, logger=logger)
+            except (RuntimeError, SCGORuntimeError, SCGOValidationError) as e:
+                # SCGORuntimeError is not a RuntimeError subclass; catch both so a
+                # missing-energy finalize cannot abort the whole parallel batch.
+                result["status"] = "failed"
+                result["error"] = str(e)
+                _detach_calc(result.get("transition_state"))
 
         if result["neb_converged"] and result.get("status") != "success":
             logger.warning(

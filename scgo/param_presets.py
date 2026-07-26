@@ -91,6 +91,7 @@ _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
     "torchsim_fmax": 0.05,
     "torchsim_max_steps": "auto",
+    "max_endpoint_mismatch": None,
 }
 
 _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -109,13 +110,47 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
     "torchsim_fmax": 0.1,
     "torchsim_max_steps": 500,
+    "max_endpoint_mismatch": None,
+}
+
+# Adsorbate paths need climb, stiffer springs, a hard geometric pair gate,
+# and a larger step budget. Gas adsorbates also enable parallel multi-band NEB
+# via get_ts_search_params; surface adsorbates stay serial (see there).
+_GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
+    **_GAS_TS_NEB_DEFAULTS,
+    "neb_n_images": 7,
+    "neb_spring_constant": 0.5,
+    # Soft adsorbate MEPs often stall near 0.15–0.25 for MACE CI-NEB.
+    "neb_fmax": 0.20,
+    # Two-stage climb needs a larger budget than bare-cluster NEBs.
+    "neb_steps": 4000,
+    "neb_climb": True,
+    "torchsim_fmax": 0.20,
+    "torchsim_max_steps": 4000,
+    "max_endpoint_mismatch": 1.25,
+}
+
+_SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
+    **_SURFACE_TS_NEB_DEFAULTS,
+    "neb_n_images": 7,
+    "neb_spring_constant": 0.5,
+    # Large-slab MLIP NEBs often stall near 0.2–0.3 at the bare-surface 0.1.
+    "neb_fmax": 0.25,
+    "neb_steps": 4000,
+    "neb_climb": True,
+    "torchsim_fmax": 0.25,
+    "torchsim_max_steps": 4000,
+    "max_endpoint_mismatch": 1.5,
+    # Inherited surface defaults enable free in-plane Kabsch; that shifts
+    # adsorbates off registry. Remap/MIC stay on via the surface base dict.
+    "neb_surface_lattice_rotation": False,
 }
 
 TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "gas_cluster": dict(_GAS_TS_NEB_DEFAULTS),
-    "gas_cluster_adsorbate": dict(_GAS_TS_NEB_DEFAULTS),
+    "gas_cluster_adsorbate": dict(_GAS_ADSORBATE_TS_NEB_DEFAULTS),
     "surface_cluster": dict(_SURFACE_TS_NEB_DEFAULTS),
-    "surface_cluster_adsorbate": dict(_SURFACE_TS_NEB_DEFAULTS),
+    "surface_cluster_adsorbate": dict(_SURFACE_ADSORBATE_TS_NEB_DEFAULTS),
 }
 
 
@@ -671,8 +706,9 @@ def get_ts_search_params(
 
     NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
     system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,
-    ``neb_surface_lattice_rotation``, and ``neb_surface_max_lattice_shift`` (default
-    ``1``) so path interpolation starts from lattice-compatible aligned endpoints.
+    and ``neb_surface_max_lattice_shift`` (default ``1``). Free in-plane
+    ``neb_surface_lattice_rotation`` is on for bare ``surface_cluster`` and off
+    for ``surface_cluster_adsorbate`` (registry-safe).
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
@@ -700,12 +736,15 @@ def get_ts_search_params(
         "allow_adsorbate_surface_detachment": False,
         "enforce_adsorbate_subgraph_integrity": True,
         "max_pairs": None,
-        "energy_gap_threshold": 2.0,
+        # Adsorbate NEBs need closer pairs; bare clusters keep the wider window.
+        "energy_gap_threshold": 0.75 if policy.has_adsorbate else 2.0,
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,
         "similarity_pair_cor_max": 0.1,
         "use_torchsim": True,
         "torchsim_batch_size": 5,
-        "use_parallel_neb": False,
+        # Gas adsorbate NEBs fit multi-band GPU batches; surface/slab cells
+        # (e.g. graphite) OOMs when all pairs×images are batched together.
+        "use_parallel_neb": bool(policy.has_adsorbate and not policy.uses_surface),
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }

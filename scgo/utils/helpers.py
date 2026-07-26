@@ -302,6 +302,25 @@ def ensure_float64_forces(atoms: Atoms) -> np.ndarray:
     return forces_f64
 
 
+def copy_atoms(atoms: Atoms) -> Atoms:
+    """Copy ``Atoms`` with nested ``info`` dicts isolated from the source.
+
+    ASE's ``Atoms.copy()`` shallow-copies ``info``, so nested containers such as
+    ``key_value_pairs`` / ``metadata`` remain shared. TorchSim single-points then
+    write ``raw_score`` into those shared dicts and corrupt minima used by later
+    NEB pairs. Always use this helper when an Atoms object may receive calculator
+    metadata writes.
+    """
+    out = atoms.copy()
+    # Replace top-level info mapping, then detach known nested dicts.
+    out.info = dict(out.info)
+    for key in ("metadata", "provenance", "key_value_pairs"):
+        val = out.info.get(key)
+        if isinstance(val, dict):
+            out.info[key] = dict(val)
+    return out
+
+
 def extract_energy_from_atoms(atoms: Atoms) -> float | None:
     """Extract energy from atoms object, handling various formats.
 

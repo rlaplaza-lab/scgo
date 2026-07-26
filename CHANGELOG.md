@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- TorchSim NEB/TS single-point force evaluations now use ``torch_sim.static``
+  instead of ``optimize(max_steps=0)``. The old path still took one FIRE step
+  (wrong forces at displaced geometries) and spammed
+  ``All systems have reached the maximum number of steps: 0`` via torch_sim's
+  logger in production. Batched NEB spring/climb/tangent physics remain ASE's.
+  Single-point calls default to ``autobatcher=False`` so TorchSim does not
+  re-probe GPU memory on every NEB force evaluation.
+- Parallel/serial TorchSim NEB finalize no longer fails with
+  ``The property "energy" is not available`` after a final FIRE step: PES is
+  refreshed at the final geometries, and energies are also cached in atoms
+  metadata when attaching SinglePoint results.
+- ASE ``Atoms.copy()`` shallow-shares nested ``info`` dicts; TorchSim
+  single-points writing ``raw_score`` were corrupting minima reused by later
+  NEB pairs (multi-eV bogus product energies). Endpoint/path copies now isolate
+  nested metadata, and static result mapping uses ``copy_atoms``.
+- Surface-adsorbate NEBs no longer apply free in-plane Kabsch rotation (breaks
+  adsorbate–slab registry). Cell remap / MIC remain on. Pre-NEB band checks
+  reject aligned endpoint energy drift ``> 0.5`` eV vs canonical minima, and
+  one-sided interior maxima with prominence ``< 0.40`` eV (slides that CI-NEB
+  collapses to an endpoint).
+
+### Changed
+
+- Adsorbate TS presets (`gas_cluster_adsorbate` / `surface_cluster_adsorbate`)
+  now use climbing NEB, spring ``0.5``, ``neb_steps=4000``, 7 images, a tighter
+  ``energy_gap_threshold`` (``0.75`` eV), and a hard ``max_endpoint_mismatch``
+  pair gate. Gas adsorbates use ``neb_fmax=0.20`` with ``use_parallel_neb=True``;
+  surface adsorbates use ``neb_fmax=0.25`` with serial NEB (avoids GPU OOM on
+  large slab cells and matches attainable MLIP force convergence). Fragment-wise
+  adsorbate matching, core-anchored endpoint alignment, and pre-NEB
+  clash/discontinuity rejection improve path quality for multi-fragment
+  adsorbates. Surface-adsorbate presets set
+  ``neb_surface_lattice_rotation=False``; pair selection also skips tiny
+  adsorbate hops (``max_diff < 0.20`` Å) that are usually barrierless slides.
+- Parallel NEB no longer overwrites batch failures (e.g. CUDA OOM with
+  ``force_calls=0``) as ``endpoint as TS`` during finalize.
+- Adsorbate NEBs reject IDPP bands with absurdly high barriers
+  (``> 8`` eV; likely discontinuous) before optimization, and use two-stage
+  CI-NEB (relax without climb, then climb). Stage 2 always runs and keeps at
+  least half the step budget.
+- Parallel two-stage CI-NEB always runs the climb stage after no-climb
+  relaxation when used, even if stage 1 already met ``fmax``.
+- Two-stage climb is skipped for endpoint-max / barrierless IDPP bands
+  and for soft interior maxima (IDPP barrier ``< 1.0`` eV); climb starts
+  immediately. A no-climb pre-relax was collapsing those MEPs so finalize
+  reported ``endpoint as TS`` for adsorbate OH hops.
+- Finalize rejects NEB results with barrier ``> 8`` eV (same discontinuous
+  threshold as the pre-NEB IDPP energy gate).
+- Adsorbate pair selection now prefers activated hops (moderate endpoint
+  mismatch and core RMS) over near-isomer slides, oversamples candidates, and
+  re-ranks by IDPP profile so NEB budgets favor robust interior maxima (and
+  skip endpoint-max slides when any robust bands exist).
+- TS minima deduplication for adsorbate systems uses core+adsorbate mobile
+  count (matching GA ``n_to_optimize``), not core-only length.
+
 ## 0.6.0
 
 ### Added

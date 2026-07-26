@@ -244,7 +244,9 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         neb_force_mic=True,
         neb_disable_alignment=False,
         neb_surface_cell_remap=True,
-        neb_surface_lattice_rotation=True,
+        # Continuous in-plane Kabsch breaks adsorbate–slab registry (multi-eV
+        # endpoint energy jumps). Keep cell remap / MIC; skip free rotation.
+        neb_surface_lattice_rotation=False,
         constrain_adsorbate_moves=True,
         adsorbate_move_scale=0.6,
         allow_composition_permutations=False,
