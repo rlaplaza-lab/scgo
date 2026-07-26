@@ -549,6 +549,12 @@ def run_transition_state_search(
     and finds transition states connecting them using nudged elastic band (NEB) with
     geodesic interpolation for initial path generation.
 
+    Prefer :func:`scgo.param_presets.get_ts_search_params` (or ``run_ts_search`` /
+    ``run_go_ts``) for production defaults: bare gas uses 5 images / serial TorchSim;
+    adsorbates use 7 images, climb, and ``energy_gap_threshold=0.75``. The signature
+    defaults below are a minimal low-level fallback when calling this function
+    directly without presets.
+
     Args:
         composition: List of atomic symbols for the mobile region. For high-level
             ``run_go_ts`` / ``run_ts_search`` with ``*_adsorbate`` types, pass
@@ -569,9 +575,11 @@ def run_transition_state_search(
         verbosity: Logging verbosity (0=quiet, 1=normal, 2=debug, 3=trace). Default 1.
         max_pairs: Maximum number of structure pairs to evaluate. If None, evaluates all pairs.
         energy_gap_threshold: Only pair structures with energy gap below this threshold (eV).
+            Low-level default ``1.0``; presets use ``2.0`` (bare) / ``0.75`` (adsorbate).
         similarity_tolerance: Cumulative difference tolerance for structure comparison.
         similarity_pair_cor_max: Maximum single distance difference tolerance for similarity.
-        neb_n_images: Number of intermediate NEB images. Default 3 (recommended).
+        neb_n_images: Number of intermediate NEB images. Low-level default ``3``;
+            presets use ``5`` (bare) / ``7`` (adsorbate).
         neb_spring_constant: Spring constant for NEB band (eV/Ų). Default 0.1.
         neb_fmax: Maximum force convergence for NEB (eV/Å). Default 0.05.
         neb_steps: Maximum NEB optimization steps. Default 'auto' (resolved with auto_niter_ts).
@@ -580,7 +588,12 @@ def run_transition_state_search(
         neb_interpolation_mic: If True, use minimum-image convention for NEB path
             interpolation. Use for periodic cells (e.g. slabs). Default False.
         neb_tangent_method: ASE NEB tangent method.
+        max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``;
+            when set (adsorbate presets), also enables pre-NEB path/energy checks.
         use_torchsim: Use TorchSim for GPU-efficient batched force evaluation (MACE/UMA only).
+            Low-level default ``False``; presets set ``True``.
+        use_parallel_neb: Batch multiple NEB bands (requires TorchSim). Presets enable
+            this only for gas adsorbates.
         torchsim_params: Optional parameters for TorchSimBatchRelaxer when use_torchsim=True.
         surface_config: When set, the same :class:`scgo.surface.config.SurfaceSystemConfig`
             used for GA. Endpoint structures are copied per pair and slab

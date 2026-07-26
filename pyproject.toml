@@ -75,7 +75,7 @@ dev = [
 packages = { find = {} }
 
 [tool.setuptools.dynamic]
-version = { attr = "scgo.__version__" }
+version = { attr = "scgo._version.__version__" }
 
 [tool.ruff]
 line-length = 88

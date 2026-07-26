@@ -199,8 +199,9 @@ def select_structure_pairs(
         surface_aware: Use slightly looser scoring scales (slab / periodic systems).
         n_slab: When set (from ``SurfaceSystemConfig.slab``), structural comparison
             uses only atoms ``n_slab:`` so pair selection ignores frozen slab motion.
-        max_endpoint_mismatch: Hard reject when comparator ``max_diff`` exceeds this (Å).
-            ``None`` disables the gate (bare-cluster default).
+        max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``.
+            ``None`` disables the gate (bare-cluster default). When set (adsorbate
+            presets), also enables pre-NEB clash and IDPP energy-profile checks.
         adsorbate_aware: Prefer modest core RMS and weight mismatch more heavily.
         n_core_mobile: Core atom count for adsorbate-aware core-RMS scoring.
 

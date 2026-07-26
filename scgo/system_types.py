@@ -156,6 +156,19 @@ class TSParams(TypedDict, total=False):
     neb_tangent_method: str
     torchsim_fmax: float
     torchsim_max_steps: int | str
+    energy_gap_threshold: float
+    max_endpoint_mismatch: float | None
+    max_pairs: int | None
+    use_torchsim: bool
+    use_parallel_neb: bool
+    torchsim_batch_size: int
+    connectivity_factor: float
+    similarity_tolerance: float
+    similarity_pair_cor_max: float
+    dedupe_minima: bool
+    minima_energy_tolerance: float
+    write_timing_json: bool
+    seed: int
     calculator: NotRequired[str]
     calculator_kwargs: NotRequired[CalculatorKwargs]
     surface_config: NotRequired[SurfaceSystemConfig]

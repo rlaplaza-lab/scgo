@@ -57,6 +57,9 @@ from scgo.utils.validation import validate_atoms, validate_calculator_attached
 if TYPE_CHECKING:
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
+# Pre-NEB IDPP and finalize share this cap for discontinuous / unphysical barriers.
+MAX_SPURIOUS_NEB_BARRIER_EV: float = 8.0
+
 
 def _detach_calc(atoms: Atoms | None) -> None:
     """Remove calculator from structure when present."""
@@ -1330,7 +1333,7 @@ def validate_initial_neb_path(
 def validate_initial_neb_energy_profile(
     energies: list[float] | np.ndarray,
     *,
-    max_spurious_barrier: float = 8.0,
+    max_spurious_barrier: float = MAX_SPURIOUS_NEB_BARRIER_EV,
     reference_reactant_energy: float | None = None,
     reference_product_energy: float | None = None,
     max_endpoint_energy_drift: float = 0.5,
@@ -1580,17 +1583,18 @@ def _finalize_neb_result(
 
     endpoint_ts = max_energy_idx == 0 or max_energy_idx == len(images) - 1
     # Match pre-NEB IDPP gate: absurd barriers are discontinuous / unphysical.
-    max_final_barrier = 8.0
+    max_final_barrier = MAX_SPURIOUS_NEB_BARRIER_EV
     if endpoint_ts:
         result["status"] = "failed"
         result["neb_converged"] = False
         result["error"] = (
-            f"NEB returned endpoint as TS (image {max_energy_idx}); "
-            "no interior saddle located"
+            f"Highest-energy image is an endpoint (image {max_energy_idx}); "
+            "no interior saddle found"
         )
         if logger is not None:
             logger.warning(
-                "NEB reported endpoint as TS for pair %s (image %d) — marking as non-converged",
+                "NEB highest-energy image is an endpoint for pair %s (image %d) "
+                "— marking as non-converged",
                 pair_id,
                 max_energy_idx,
             )

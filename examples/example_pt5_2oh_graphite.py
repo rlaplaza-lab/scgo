@@ -11,7 +11,7 @@ GA (core crossover, ``fragment_reposition`` for adsorbate diversity). See
 ``docs/source/api/system_types.rst`` for operator details.
 
 TS: surface-adsorbate presets supply climb, spring ``0.5``, ``neb_fmax=0.25``,
-7 images, ``neb_steps=4000``, serial NEB, ``max_endpoint_mismatch``,
+7 images, ``neb_steps=4000``, serial NEB, ``max_endpoint_mismatch=1.5`` Å,
 ``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
 interior maxima). This example only tightens ``max_pairs``.
 
@@ -22,6 +22,7 @@ quickstart, *On-disk layout*).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ase import Atoms
@@ -39,6 +40,14 @@ SEED = 42
 SYSTEM_TYPE = "surface_cluster_adsorbate"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
 OUTPUT_STEM = "pt5_2oh_graphite"
+
+
+def _resolve_output_stem() -> str:
+    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
+    return (
+        os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
+    )
+
 
 NITER = 6
 POPULATION_SIZE = 24
@@ -89,7 +98,7 @@ def main() -> None:
         seed=SEED,
         verbosity=1,
         output_root=DEFAULT_OUTPUT_ROOT,
-        output_stem=OUTPUT_STEM,
+        output_stem=_resolve_output_stem(),
         surface_config=surface_config,
         system_type=SYSTEM_TYPE,
         adsorbates=ADSORBATES,

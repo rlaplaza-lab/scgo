@@ -10,6 +10,7 @@ import os
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # Algorithms
+from scgo._version import __version__
 from scgo.algorithms import bh_go, ga_go
 
 # Cluster + adsorbate (composable local relax)
@@ -95,8 +96,6 @@ from scgo.utils.logging import (
     get_logger,
 )
 from scgo.utils.rng_helpers import get_child_rng_or_none
-
-__version__ = "0.6.1"
 
 
 def __dir__() -> list[str]:

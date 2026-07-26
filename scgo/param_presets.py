@@ -113,9 +113,10 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "max_endpoint_mismatch": None,
 }
 
-# Adsorbate paths need climb, stiffer springs, a hard geometric pair gate,
-# and a larger step budget. Gas adsorbates also enable parallel multi-band NEB
-# via get_ts_search_params; surface adsorbates stay serial (see there).
+# Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),
+# and a larger step budget. Keep neb_fmax and torchsim_fmax equal so ASE and
+# TorchSim force tolerances stay synced. Gas adsorbates also enable parallel
+# multi-band NEB via get_ts_search_params; surface adsorbates stay serial.
 _GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_GAS_TS_NEB_DEFAULTS,
     "neb_n_images": 7,
@@ -127,7 +128,7 @@ _GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_climb": True,
     "torchsim_fmax": 0.20,
     "torchsim_max_steps": 4000,
-    "max_endpoint_mismatch": 1.25,
+    "max_endpoint_mismatch": 1.25,  # Å; also enables pre-NEB path gates
 }
 
 _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -140,7 +141,7 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_climb": True,
     "torchsim_fmax": 0.25,
     "torchsim_max_steps": 4000,
-    "max_endpoint_mismatch": 1.5,
+    "max_endpoint_mismatch": 1.5,  # Å; also enables pre-NEB path gates
     # Inherited surface defaults enable free in-plane Kabsch; that shifts
     # adsorbates off registry. Remap/MIC stay on via the surface base dict.
     "neb_surface_lattice_rotation": False,

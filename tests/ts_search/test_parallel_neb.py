@@ -475,7 +475,7 @@ def test_run_parallel_neb_search_skips_invalid_pair(tmp_path, cu3_triangle, cu3_
 
 
 def test_run_parallel_neb_preserves_batch_oom_error(tmp_path, cu3_triangle, cu3_linear):
-    """Batch OOM (no steps) must keep the real error, not 'endpoint as TS'."""
+    """Batch OOM (no steps) must keep the real error, not endpoint-as-TS."""
     from unittest.mock import MagicMock, patch
 
     from scgo.ts_search.parallel_neb import run_parallel_neb_search
@@ -534,7 +534,10 @@ def test_run_parallel_neb_preserves_batch_oom_error(tmp_path, cu3_triangle, cu3_
     assert results[0]["status"] == "failed"
     assert results[0]["neb_converged"] is False
     assert oom in str(results[0].get("error", ""))
-    assert "endpoint as TS" not in str(results[0].get("error", ""))
+    # Real OOM/error text must remain; do not overwrite with endpoint-saddle message.
+    err = str(results[0].get("error", "")).lower()
+    assert "no interior saddle" not in err
+    assert "endpoint as ts" not in err
     finalize_mock.assert_not_called()
 
 

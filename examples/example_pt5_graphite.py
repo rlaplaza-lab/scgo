@@ -18,6 +18,7 @@ and optional ``go_ts_timing.json`` (see docs quickstart, *On-disk layout*).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from scgo import (
@@ -33,6 +34,14 @@ SEED = 42
 SYSTEM_TYPE = "surface_cluster"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
 OUTPUT_STEM = "pt5_graphite"
+
+
+def _resolve_output_stem() -> str:
+    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
+    return (
+        os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
+    )
+
 
 NITER = 6
 POPULATION_SIZE = 24
@@ -77,7 +86,7 @@ def main() -> None:
         seed=SEED,
         verbosity=1,
         output_root=DEFAULT_OUTPUT_ROOT,
-        output_stem=OUTPUT_STEM,
+        output_stem=_resolve_output_stem(),
         surface_config=surface_config,
         system_type=SYSTEM_TYPE,
     )

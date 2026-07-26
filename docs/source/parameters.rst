@@ -303,9 +303,6 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
    * - ``use_torchsim``
      - ``True``
      - Use TorchSim for NEB
-   * - ``use_parallel_neb``
-     - ``False`` / ``True`` (gas adsorbate only)
-     - Batch multiple NEB bands (see NEB table)
    * - ``dedupe_minima``
      - ``True``
      - Remove duplicate minima before pairing
@@ -353,8 +350,8 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - ``False`` / ``True`` (gas adsorbate only)
      - Batch multiple NEB bands in one TorchSim force eval; surface adsorbates default serial to avoid GPU OOM
    * - ``max_endpoint_mismatch``
-     - ``None`` / ``1.25``–``1.5`` (adsorbate)
-     - Hard reject pairs whose comparator ``max_diff`` exceeds this (Å)
+     - ``None`` / ``1.25`` (gas adsorbate) / ``1.5`` (surface adsorbate)
+     - Å geometric gate on comparator ``max_diff``; when set, also enables pre-NEB clash/IDPP energy checks
    * - ``neb_align_endpoints``
      - ``True``
      - Align endpoints before interpolation
@@ -372,14 +369,13 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - NEB tangent method
    * - ``torchsim_fmax``
      - ``0.05`` / ``0.1`` / ``0.20`` (gas adsorbate) / ``0.25`` (surface adsorbate)
-     - TorchSim force tolerance (not a runner kwarg; mapped internally)
+     - TorchSim force tolerance (mapped internally). Keep equal to ``neb_fmax`` unless you intentionally diverge them
    * - ``torchsim_max_steps``
      - ``"auto"`` / ``500`` / ``4000`` (adsorbate)
      - TorchSim step budget (mapped internally)
 
 **Adsorbate NEB extras** (beyond the table defaults above):
 
-- ``energy_gap_threshold=0.75`` eV (closer pairs than bare-cluster ``2.0``)
 - Fragment-wise adsorbate matching and core-anchored alignment
 - Pair selection prefers activated hops (moderate mismatch / core RMS),
   oversamples candidates (``5× max_pairs``), and re-ranks by IDPP profile so

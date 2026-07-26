@@ -22,6 +22,7 @@ quickstart *On-disk layout* section in the docs.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from scgo import get_torchsim_ga_params, get_ts_search_params, run_go_ts
@@ -31,6 +32,14 @@ SEED = 42
 SYSTEM_TYPE = "gas_cluster"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
 OUTPUT_STEM = "pt5_gas"
+
+
+def _resolve_output_stem() -> str:
+    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
+    return (
+        os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
+    )
+
 
 NITER = 10
 POPULATION_SIZE = 50
@@ -63,7 +72,7 @@ def main() -> None:
         seed=SEED,
         verbosity=1,
         output_root=DEFAULT_OUTPUT_ROOT,
-        output_stem=OUTPUT_STEM,
+        output_stem=_resolve_output_stem(),
         system_type=SYSTEM_TYPE,
     )
 

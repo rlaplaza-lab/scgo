@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
+from scgo._version import __version__ as SCGO_VERSION
 from scgo.utils.logging import get_logger
 
 _logger = get_logger(__name__)
@@ -35,6 +36,13 @@ def ts_output_provenance(*, extra: dict[str, Any] | None = None) -> dict[str, An
 
 
 def package_version(dist_name: str) -> str:
+    """Resolve a distribution version for provenance JSON.
+
+    For ``scgo``, prefer the in-tree :data:`scgo.__version__` so editable
+    checkouts are not stuck on a stale ``dist-info`` after a bump.
+    """
+    if dist_name == "scgo":
+        return str(SCGO_VERSION)
     try:
         return version(dist_name)
     except PackageNotFoundError:

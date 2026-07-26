@@ -447,7 +447,7 @@ def run_parallel_neb_search(
                 product_energy=prod_e,
                 error=str(e),
             )
-            skipped["status"] = "failed"
+            skipped["status"] = "skipped"
             skipped["system_type"] = system_type
             attach_minima_traceability(skipped, minima, i, j)
             pair_dir = run_dir / f"pair_{pair_id}"
@@ -578,7 +578,7 @@ def run_parallel_neb_search(
         result["steps_taken"] = summary.get("steps_taken")
 
         # Batch failures (e.g. CUDA OOM) leave only GO endpoint energies on the
-        # band; finalize would overwrite the real error with "endpoint as TS".
+        # band; finalize would overwrite the real error with endpoint-as-TS.
         batch_never_ran = (
             result.get("error")
             and (result.get("force_calls") or 0) == 0

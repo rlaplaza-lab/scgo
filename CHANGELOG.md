@@ -40,6 +40,12 @@
   adsorbate hops (``max_diff < 0.20`` Å) that are usually barrierless slides.
 - Parallel NEB no longer overwrites batch failures (e.g. CUDA OOM with
   ``force_calls=0``) as ``endpoint as TS`` during finalize.
+- Pre-NEB path/energy rejects in parallel NEB are recorded as ``skipped``
+  (consistent with structure-validation skips and the serial path), not
+  ``failed``.
+- Provenance ``scgo_version`` now reads the in-tree version
+  (``scgo._version``) so editable checkouts are not stuck on stale
+  ``dist-info`` after a bump.
 - Adsorbate NEBs reject IDPP bands with absurdly high barriers
   (``> 8`` eV; likely discontinuous) before optimization, and use two-stage
   CI-NEB (relax without climb, then climb). Stage 2 always runs and keeps at
