@@ -38,6 +38,7 @@ from scgo.system_types import (
 from scgo.utils.comparators import get_shared_mobile_atom_indices
 from scgo.utils.helpers import (
     auto_niter_ts,
+    copy_atoms,
     filter_unique_minima,
     get_cluster_formula,
     validate_pair_id,
@@ -61,9 +62,14 @@ from .parallel_neb import run_parallel_neb_search
 from .transition_state import (
     _detach_calc,
     attach_minima_traceability,
+    evaluate_neb_image_energies,
     find_transition_state,
+    idpp_band_optimization_priority,
+    interpolate_path,
     make_ts_result,
     save_neb_result,
+    validate_initial_neb_energy_profile,
+    validate_initial_neb_path,
 )
 from .transition_state_io import (
     load_minima_by_composition,
@@ -82,6 +88,98 @@ __all__ = [
     "run_transition_state_campaign",
     "integrate_ts_to_database",
 ]
+
+
+def _prioritize_adsorbate_pairs_by_idpp(
+    pairs: list[tuple[int, int]],
+    minima: list[tuple[float, Any]],
+    *,
+    max_pairs: int,
+    relaxer: Any,
+    neb_n_images: int,
+    neb_interpolation_method: str,
+    neb_interpolation_mic: bool,
+    neb_align_endpoints: bool,
+    neb_perturb_sigma: float,
+    rng: Any,
+    system_type: SystemType | None,
+    n_slab: int,
+    n_core_mobile: int | None,
+    n_adsorbate_mobile: int | None,
+    adsorbate_fragment_lengths: list[int] | None,
+    neb_surface_cell_remap: bool,
+    neb_surface_lattice_rotation: bool,
+    neb_surface_max_lattice_shift: int,
+    max_endpoint_mismatch: float,
+    logger: Any,
+) -> list[tuple[int, int]]:
+    """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
+
+    Endpoint-max IDPP paths are retained only when too few robust-interior
+    candidates exist in the oversampled pool (CI-NEB can still salvage some).
+    """
+    ranked: list[tuple[tuple[int, float, float], int, int]] = []
+    for i, j in pairs:
+        try:
+            images = interpolate_path(
+                copy_atoms(minima[i][1]),
+                copy_atoms(minima[j][1]),
+                n_images=neb_n_images,
+                method=neb_interpolation_method,
+                mic=neb_interpolation_mic,
+                align_endpoints=neb_align_endpoints,
+                perturb_sigma=neb_perturb_sigma,
+                rng=rng,
+                system_type=system_type,
+                n_slab=n_slab,
+                n_core_mobile=n_core_mobile,
+                n_adsorbate_mobile=n_adsorbate_mobile,
+                adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+                neb_surface_cell_remap=neb_surface_cell_remap,
+                neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+                neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+            )
+            validate_initial_neb_path(
+                images,
+                n_slab=n_slab,
+                mic=neb_interpolation_mic,
+                max_endpoint_mismatch=max_endpoint_mismatch,
+            )
+            energies = evaluate_neb_image_energies(images, relaxer)
+            validate_initial_neb_energy_profile(
+                energies,
+                reference_reactant_energy=float(minima[i][0]),
+                reference_product_energy=float(minima[j][0]),
+            )
+        except (SCGOValidationError, ValueError, RuntimeError) as exc:
+            logger.debug(
+                "Adsorbate pair %s_%s dropped during IDPP priority screen: %s",
+                i,
+                j,
+                exc,
+            )
+            continue
+        priority = idpp_band_optimization_priority(energies)
+        if priority[0] <= 0:
+            continue
+        ranked.append((priority, i, j))
+
+    ranked.sort(
+        key=lambda item: (-item[0][0], -item[0][1], -item[0][2], item[1], item[2])
+    )
+    robust = [item for item in ranked if item[0][0] >= 2]
+    # When the oversampled pool has activated IDPP bands, do not spend the
+    # NEB budget on endpoint-max slides (CI-NEB often climbs into junk).
+    chosen = robust if robust else ranked
+    kept = [(i, j) for _priority, i, j in chosen[: int(max_pairs)]]
+    logger.info(
+        "Adsorbate IDPP priority screen: %d/%d pairs kept "
+        "(%d robust-interior candidates in pool)",
+        len(kept),
+        len(pairs),
+        len(robust),
+    )
+    return kept
 
 
 def _run_serial_neb_search(
@@ -111,6 +209,8 @@ def _run_serial_neb_search(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    max_endpoint_mismatch: float | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
@@ -153,8 +253,8 @@ def _run_serial_neb_search(
                 f"{energy_j:.6f}" if energy_j is not None else "None",
             )
 
-        react_ep = atoms_i.copy()
-        prod_ep = atoms_j.copy()
+        react_ep = copy_atoms(atoms_i)
+        prod_ep = copy_atoms(atoms_j)
         if surface_config is not None:
             attach_slab_constraints_from_surface_config(react_ep, surface_config)
             attach_slab_constraints_from_surface_config(prod_ep, surface_config)
@@ -240,6 +340,8 @@ def _run_serial_neb_search(
                 n_slab=n_slab,
                 n_core_mobile=n_core_mobile,
                 n_adsorbate_mobile=n_adsorbate_mobile,
+                adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+                max_endpoint_mismatch=max_endpoint_mismatch,
                 neb_surface_cell_remap=neb_surface_cell_remap,
                 neb_surface_lattice_rotation=neb_surface_lattice_rotation,
                 neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
@@ -423,6 +525,7 @@ def run_transition_state_search(
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
     neb_tangent_method: str = DEFAULT_NEB_TANGENT_METHOD,
+    max_endpoint_mismatch: float | None = None,
     use_torchsim: bool = False,
     use_parallel_neb: bool = False,
     torchsim_params: dict | None = None,
@@ -531,6 +634,7 @@ def run_transition_state_search(
     )
     neb_n_core_m: int | None = None
     neb_n_ads_m: int | None = None
+    neb_ads_frag_lengths: list[int] | None = None
     if (
         neb_align_endpoints
         and system_policy.has_adsorbate
@@ -543,6 +647,12 @@ def run_transition_state_search(
         )
         if len(c_syms) > 0 and len(a_syms) > 0:
             neb_n_core_m, neb_n_ads_m = len(c_syms), len(a_syms)
+            try:
+                neb_ads_frag_lengths = _adsorbate_fragment_lengths_from_definition(
+                    adsorbate_definition
+                )
+            except (TypeError, ValueError, SCGOValidationError):
+                neb_ads_frag_lengths = None
     rng = ensure_rng(seed)
 
     if use_parallel_neb and not use_torchsim:
@@ -638,10 +748,14 @@ def run_transition_state_search(
             if surface_config is not None
             else False
         )
+        # Match GA ``n_to_optimize``: trailing mobile atoms (core + adsorbates).
+        dedupe_n_top = len(adsorbate_composition)
+        if neb_n_core_m is not None and neb_n_ads_m is not None:
+            dedupe_n_top = int(neb_n_core_m) + int(neb_n_ads_m)
         minima = filter_unique_minima(
             minima,
             minima_energy_tolerance,
-            n_top=len(adsorbate_composition),
+            n_top=dedupe_n_top,
             mic=ts_dedupe_mic,
         )
         if verbosity >= 1 and len(minima) != original_count:
@@ -667,20 +781,73 @@ def run_transition_state_search(
         )
     _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 
+    # Adsorbate pre-NEB gates drop many candidates; oversample then re-rank by
+    # IDPP profile so ``max_pairs`` favors robust interior maxima.
+    pair_select_cap = max_pairs
+    if (
+        max_endpoint_mismatch is not None
+        and max_pairs is not None
+        and int(max_pairs) > 0
+    ):
+        pair_select_cap = int(max_pairs) * 5
     pairs = select_structure_pairs(
         minima,
-        max_pairs=max_pairs,
+        max_pairs=pair_select_cap,
         energy_gap_threshold=energy_gap_threshold,
         similarity_tolerance=similarity_tolerance,
         similarity_pair_cor_max=similarity_pair_cor_max,
         surface_aware=bool(neb_interpolation_mic),
         n_slab=neb_n_slab if neb_n_slab > 0 else None,
+        max_endpoint_mismatch=max_endpoint_mismatch,
+        adsorbate_aware=bool(system_policy.has_adsorbate),
+        n_core_mobile=neb_n_core_m,
     )
 
     if not pairs:
         logger.error("No suitable pairs found for TS search")
         cleanup_torch_cuda(logger=logger)
         return []
+
+    if (
+        bool(system_policy.has_adsorbate)
+        and use_torchsim
+        and max_endpoint_mismatch is not None
+        and max_pairs is not None
+        and int(max_pairs) > 0
+        and len(pairs) > int(max_pairs)
+    ):
+        from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+        screen_relaxer = TorchSimBatchRelaxer(**(torchsim_params or {}))
+        pairs = _prioritize_adsorbate_pairs_by_idpp(
+            pairs,
+            minima,
+            max_pairs=int(max_pairs),
+            relaxer=screen_relaxer,
+            neb_n_images=neb_n_images,
+            neb_interpolation_method=neb_interpolation_method,
+            neb_interpolation_mic=neb_interpolation_mic,
+            neb_align_endpoints=neb_align_endpoints,
+            neb_perturb_sigma=neb_perturb_sigma,
+            rng=rng,
+            system_type=system_type,
+            n_slab=neb_n_slab,
+            n_core_mobile=neb_n_core_m,
+            n_adsorbate_mobile=neb_n_ads_m,
+            adsorbate_fragment_lengths=neb_ads_frag_lengths,
+            neb_surface_cell_remap=neb_surface_cell_remap,
+            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+            max_endpoint_mismatch=float(max_endpoint_mismatch),
+            logger=logger,
+        )
+        del screen_relaxer
+
+        if not pairs:
+            logger.error(
+                "No adsorbate pairs survived IDPP priority screening for TS search"
+            )
+            return []
 
     if verbosity >= 1:
         logger.info("Selected %d structure pairs for TS search", len(pairs))
@@ -727,6 +894,8 @@ def run_transition_state_search(
             n_slab=neb_n_slab,
             n_core_mobile=neb_n_core_m,
             n_adsorbate_mobile=neb_n_ads_m,
+            adsorbate_fragment_lengths=neb_ads_frag_lengths,
+            max_endpoint_mismatch=max_endpoint_mismatch,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
@@ -764,6 +933,8 @@ def run_transition_state_search(
             n_slab=neb_n_slab,
             n_core_mobile=neb_n_core_m,
             n_adsorbate_mobile=neb_n_ads_m,
+            adsorbate_fragment_lengths=neb_ads_frag_lengths,
+            max_endpoint_mismatch=max_endpoint_mismatch,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,

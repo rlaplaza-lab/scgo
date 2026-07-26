@@ -18,7 +18,6 @@ import logging
 import time
 import warnings
 from collections.abc import Sequence
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,7 +34,7 @@ from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
-from scgo.utils.helpers import ensure_float64_forces
+from scgo.utils.helpers import copy_atoms, ensure_float64_forces
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -202,7 +201,34 @@ def _register_torchsim_warning_filters() -> None:
         category=UserWarning,
         module=r"warp\._src\.torch",
     )
+    # Defense-in-depth: older SCGO used optimize(max_steps=0) for single-point
+    # evals; torch_sim warns (and logs) on that path. Prefer ts.static now, but
+    # keep this filter so any residual max_steps=0 call stays quiet in production.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"All systems have reached the maximum number of steps: 0\.?",
+        category=UserWarning,
+    )
+    _install_torchsim_max_steps_zero_log_filter()
     _TORCHSIM_WARNINGS_REGISTERED = True
+
+
+class _TorchSimMaxStepsZeroLogFilter(logging.Filter):
+    """Drop torch_sim's ``max_steps: 0`` WARNING (single-point optimize leftover)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "All systems have reached the maximum number of steps: 0" not in msg
+
+
+def _install_torchsim_max_steps_zero_log_filter() -> None:
+    """Attach a log filter so torch_sim's logger.warning for max_steps=0 is silent."""
+    runners_logger = logging.getLogger("torch_sim.runners")
+    if any(
+        isinstance(f, _TorchSimMaxStepsZeroLogFilter) for f in runners_logger.filters
+    ):
+        return
+    runners_logger.addFilter(_TorchSimMaxStepsZeroLogFilter())
 
 
 def build_torchsim_fixatoms_from_ase_batch(
@@ -770,7 +796,8 @@ class TorchSimBatchRelaxer:
 
         Args:
             atoms_list: List of Atoms objects to relax.
-            steps: Optional override for max_steps. Set to 0 for single-point calculation.
+            steps: Optional override for max_steps. Set to 0 for a true single-point
+                evaluation via ``torch_sim.static`` (used by NEB/TS force paths).
 
         Returns:
             A list of ``(energy, atoms)`` with matching order to the input
@@ -798,21 +825,15 @@ class TorchSimBatchRelaxer:
                 raise
         raise SCGORuntimeError("relax_batch retry loop exited without returning")
 
-    def _relax_batch_once(
-        self,
-        atoms_list: Sequence[Atoms],
-        *,
-        steps: int | None,
-        max_atoms_in_batch: int,
-    ) -> list[tuple[float, Atoms]]:
-        # Try to apply cached memory scaler to avoid expensive re-probing (~70s per new cluster size)
-        if self.max_memory_scaler is None and "autobatcher" in self._runner_kwargs:
-            self._apply_cached_memory_scaler(max_atoms_in_batch)
+    def _prepare_batch_atoms(
+        self, atoms_list: Sequence[Atoms]
+    ) -> tuple[list[Atoms], list[Atoms], object]:
+        """Prepare ASE atoms for TorchSim (metatomic cell + optional FixAtoms).
 
-        runner_kwargs = self._runner_kwargs.copy()
-        if steps is not None:
-            runner_kwargs["max_steps"] = steps
-
+        Returns:
+            ``(atoms_seq, reference_atoms, system_in)`` where ``system_in`` is either
+            the ASE list or a ``SimState`` with TorchSim ``FixAtoms`` attached.
+        """
         atoms_seq = list(atoms_list)
         reference_atoms = list(atoms_list)
         if self._uses_metatomic_model():
@@ -831,29 +852,139 @@ class TorchSimBatchRelaxer:
             system_in.constraints = ts_fix
         else:
             system_in = atoms_seq
+        return atoms_seq, reference_atoms, system_in
 
-        # `steps=0` is our single-point mode (endpoint energies and batched force
-        # evaluations in NEB/TS paths). We intentionally stay on ts.optimize rather
-        # than ts.static because we need the final SimState with positions/forces;
-        # ts.static returns property dicts only.
+    def _static_autobatcher_arg(self, *, n_structures: int, max_atoms: int) -> bool:
+        """Autobatcher setting for ``ts.static`` single-point calls.
+
+        ``ts.static(autobatcher=True)`` builds a fresh ``BinningAutoBatcher`` that
+        re-probes GPU memory on *every* call (unlike the cached InFlight
+        autobatcher used by ``optimize``). That probe climbs to thousands of
+        atoms and can burn hours during NEB force loops.
+
+        Default: no autobatcher for single-point (NEB batches are modest). Only
+        enable when the caller explicitly set ``autobatcher=True`` *and* the
+        batch is large enough that packing may matter.
+        """
+        on_cpu = str(self.device).split(":")[0] == "cpu"
+        if on_cpu:
+            return False
+        if self.autobatcher is not True:
+            # None (default) or False → skip probing BinningAutoBatcher.
+            return False
+        # Explicit opt-in: still skip tiny batches where one forward is fine.
+        return n_structures * max_atoms >= 256
+
+    def _results_from_static_props(
+        self,
+        props: Sequence[dict[str, Any]],
+        *,
+        atoms_seq: Sequence[Atoms],
+        reference_atoms: Sequence[Atoms],
+    ) -> list[tuple[float, Atoms]]:
+        """Map ``ts.static`` property dicts onto ASE ``(energy, atoms)`` results."""
+        if len(props) != len(reference_atoms):
+            raise SCGORuntimeError(
+                "TorchSim static returned mismatched counts for atoms and energies"
+            )
+
+        self.last_batch_relax_steps = [0] * len(reference_atoms)
+        results: list[tuple[float, Atoms]] = []
+        for idx, prop in enumerate(props):
+            energy_t = prop.get("potential_energy")
+            if energy_t is None:
+                raise SCGORuntimeError(
+                    "TorchSim static did not return potential_energy"
+                )
+            energy = float(energy_t.detach().cpu().reshape(-1)[0])
+
+            # Isolate nested info so raw_score writes cannot corrupt caller atoms
+            # (ASE Atoms.copy() shares key_value_pairs / metadata dicts).
+            out = copy_atoms(atoms_seq[idx])
+            if self._uses_metatomic_model():
+                _restore_ase_cell_from_reference(out, reference_atoms[idx])
+
+            forces_t = prop.get("forces")
+            if forces_t is not None:
+                forces = np.asarray(forces_t.detach().cpu().numpy(), dtype=np.float64)
+                if forces.shape[0] != len(out):
+                    raise SCGORuntimeError(
+                        f"Forces shape mismatch for structure {idx}: "
+                        f"expected {len(out)} atoms, got {forces.shape[0]}"
+                    )
+                out.arrays["forces"] = forces
+            elif "forces" in out.arrays or out.calc is not None:
+                ensure_float64_forces(out)
+
+            out.info.setdefault("key_value_pairs", {})
+            update_metadata(
+                out,
+                potential_energy=energy,
+                raw_score=-energy,
+                relaxation_steps=0,
+            )
+            results.append((energy, out))
+        return results
+
+    def _single_point_batch(
+        self,
+        atoms_list: Sequence[Atoms],
+        *,
+        max_atoms_in_batch: int,
+    ) -> list[tuple[float, Atoms]]:
+        """True single-point PES eval via ``ts.static`` (no FIRE / no max_steps warn).
+
+        Used for NEB/TS force evaluations and endpoint energies. Unlike
+        ``optimize(max_steps=0)``, positions are not updated and forces match the
+        input geometry (ASE calculator semantics).
+        """
+        atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
+        logger.debug("Running TorchSim single-point evaluation via static().")
+        props = self._ts.static(  # type: ignore[call-arg]
+            system=system_in,
+            model=self.model,
+            autobatcher=self._static_autobatcher_arg(
+                n_structures=len(atoms_seq),
+                max_atoms=max_atoms_in_batch,
+            ),
+        )
+        return self._results_from_static_props(
+            props, atoms_seq=atoms_seq, reference_atoms=reference_atoms
+        )
+
+    def _relax_batch_once(
+        self,
+        atoms_list: Sequence[Atoms],
+        *,
+        steps: int | None,
+        max_atoms_in_batch: int,
+    ) -> list[tuple[float, Atoms]]:
+        # Try to apply cached memory scaler to avoid expensive re-probing (~70s per new cluster size)
+        if self.max_memory_scaler is None and "autobatcher" in self._runner_kwargs:
+            self._apply_cached_memory_scaler(max_atoms_in_batch)
+
+        runner_kwargs = self._runner_kwargs.copy()
+        if steps is not None:
+            runner_kwargs["max_steps"] = steps
+
+        # `steps=0` is single-point mode (NEB/TS force evals and endpoint energies).
+        # Use ts.static: optimize(max_steps=0) still takes one FIRE step, displaces
+        # atoms, returns forces at the wrong geometry, and emits
+        # "All systems have reached the maximum number of steps: 0".
         max_steps_now = runner_kwargs.get("max_steps", self.max_steps)
         if max_steps_now == 0:
-            logger.debug(
-                "Running TorchSim single-point evaluation via optimize(max_steps=0)."
+            return self._single_point_batch(
+                atoms_list, max_atoms_in_batch=max_atoms_in_batch
             )
-        optimize_kwargs = runner_kwargs
-        with warnings.catch_warnings() if max_steps_now == 0 else nullcontext():
-            if max_steps_now == 0:
-                warnings.filterwarnings(
-                    "ignore",
-                    message="All systems have reached the maximum number of steps",
-                )
-            state = self._ts.optimize(  # type: ignore[call-arg]
-                system=system_in,
-                model=self.model,
-                optimizer=self.optimizer,
-                **optimize_kwargs,
-            )
+
+        atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
+
+        state = self._ts.optimize(  # type: ignore[call-arg]
+            system=system_in,
+            model=self.model,
+            optimizer=self.optimizer,
+            **runner_kwargs,
+        )
 
         # Cache the memory scaler if we computed a new estimate (avoid ~70s re-probing)
         if self.max_memory_scaler is None:

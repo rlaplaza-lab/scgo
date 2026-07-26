@@ -13,6 +13,7 @@ scgo.egg-info/
 test_output/
 examples/results/
 examples/logs/
+logs/
 
 # Generated analysis and documentation
 *_REPORT.md

@@ -25,10 +25,13 @@ from scgo.utils.helpers import get_cluster_formula
 
 
 def test_system_policy_surface_enables_remap_and_rotation():
-    for st in ("surface_cluster", "surface_cluster_adsorbate"):
-        policy = get_system_policy(st)
-        assert policy.neb_surface_cell_remap is True
-        assert policy.neb_surface_lattice_rotation is True
+    bare = get_system_policy("surface_cluster")
+    assert bare.neb_surface_cell_remap is True
+    assert bare.neb_surface_lattice_rotation is True
+    # Free in-plane Kabsch breaks adsorbate–slab registry; remap/MIC stay on.
+    ads = get_system_policy("surface_cluster_adsorbate")
+    assert ads.neb_surface_cell_remap is True
+    assert ads.neb_surface_lattice_rotation is False
 
 
 def test_validate_lattice_compatible_rotation_rejects_out_of_plane():

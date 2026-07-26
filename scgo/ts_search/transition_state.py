@@ -21,6 +21,7 @@ from ase.mep import NEB
 from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import pdist
 
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import (
@@ -28,14 +29,14 @@ from scgo.constants import (
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_PAIR_COR_MAX,
 )
-from scgo.database.metadata import get_metadata
+from scgo.database.metadata import get_metadata, update_metadata
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.comparators import (
     PureInteratomicDistanceComparator,
     get_shared_mobile_atom_indices,
 )
-from scgo.utils.helpers import extract_energy_from_atoms
+from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 from scgo.utils.logging import get_logger
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
@@ -80,19 +81,49 @@ def attach_singlepoint_from_relax_output(
     *,
     require_forces: bool = True,
 ) -> None:
-    """Attach ``SinglePointCalculator`` to ``atoms`` from one ``relax_batch`` result."""
+    """Attach ``SinglePointCalculator`` to ``atoms`` from one ``relax_batch`` result.
+
+    Also stores ``potential_energy`` in atoms metadata so barrier finalize can
+    still read energies if ASE invalidates the SinglePoint after a FIRE step.
+    """
+    energy_f = float(energy)
     forces = relaxed_atoms.arrays.get("forces")
     if forces is None and relaxed_atoms.calc is not None:
         with contextlib.suppress(AttributeError, NotImplementedError):
             forces = relaxed_atoms.get_forces()
     if forces is not None and getattr(forces, "size", 0) > 0:
-        atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
+        atoms.calc = SinglePointCalculator(atoms, energy=energy_f, forces=forces)
+        update_metadata(atoms, potential_energy=energy_f, raw_score=-energy_f)
         return
     if require_forces:
         raise SCGORuntimeError(
             "TorchSim did not return forces. Ensure the model is loaded with compute_forces=True."
         )
-    atoms.calc = SinglePointCalculator(atoms, energy=energy)
+    atoms.calc = SinglePointCalculator(atoms, energy=energy_f)
+    update_metadata(atoms, potential_energy=energy_f, raw_score=-energy_f)
+
+
+def _image_potential_energy(atoms: Atoms) -> float:
+    """Return image energy from calculator or cached metadata.
+
+    After an ASE optimizer ``step()``, ``SinglePointCalculator`` raises
+    ``PropertyNotImplementedError`` because positions changed. Metadata written
+    by :func:`attach_singlepoint_from_relax_output` remains valid for that
+    pre-step geometry; callers should refresh PES after the final step when
+    possible so positions and energies stay consistent.
+    """
+    with contextlib.suppress(AttributeError, NotImplementedError, RuntimeError):
+        return float(atoms.get_potential_energy())
+    stored = get_metadata(atoms, "potential_energy", default=None)
+    if stored is not None:
+        return float(stored)
+    extracted = extract_energy_from_atoms(atoms)
+    if extracted is not None:
+        return float(extracted)
+    raise SCGORuntimeError(
+        'The property "energy" is not available on NEB image '
+        "(no calculator energy and no cached potential_energy metadata)."
+    )
 
 
 def _image_has_cached_forces(img: Atoms) -> bool:
@@ -148,7 +179,13 @@ def calculate_structure_similarity(
 
 
 class TorchSimNEB(NEB):
-    """NEB that batches PES evaluations via TorchSim for GPU efficiency."""
+    """NEB that batches PES evaluations via TorchSim for GPU efficiency.
+
+    Spring forces, climbing-image, and tangent method are ASE ``NEB`` physics.
+    Only the per-image energy/force evaluation is replaced by a batched
+    ``TorchSimBatchRelaxer.relax_batch(..., steps=0)`` single-point call
+    (``torch_sim.static``), matching ASE calculator semantics at fixed positions.
+    """
 
     def __init__(
         self,
@@ -310,14 +347,147 @@ def _permute_atoms_block_to_match(
     *,
     mic_cell: np.ndarray | None = None,
     mic_pbc: np.ndarray | list[bool] | None = None,
+    method: str = "fingerprint",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (positions, atomic_numbers) for a2_block permuted to match a1_block."""
+    """Return (positions, atomic_numbers) for a2_block permuted to match a1_block.
+
+    ``method``:
+    - ``"fingerprint"``: local-distance fingerprints (rotation-robust).
+    - ``"spatial"``: Hungarian on Cartesian (MIC) distances — prefers minimal travel
+      for NEB cores that are already roughly aligned.
+    """
+    if method == "spatial":
+        return _permute_atoms_block_spatially(
+            a1_block, a2_block, mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
+    if method != "fingerprint":
+        raise SCGOValidationError(f"Unknown block permute method: {method!r}")
     mapping = _match_atoms_by_fingerprint(
         a1_block, a2_block, mic_cell=mic_cell, mic_pbc=mic_pbc
     )
     pos2 = a2_block.get_positions()
     nums2 = a2_block.numbers
     return pos2[mapping], nums2[mapping]
+
+
+def _permute_atoms_block_spatially(
+    a1_block: Atoms,
+    a2_block: Atoms,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Permute a2 onto a1 by minimizing per-species Cartesian (MIC) travel."""
+    if len(a1_block) != len(a2_block):
+        raise SCGOValidationError("spatial block match: length mismatch")
+    pos1 = a1_block.get_positions()
+    pos2 = a2_block.get_positions()
+    nums1 = a1_block.numbers
+    nums2 = a2_block.numbers
+    mapping = [-1] * len(a1_block)
+    use_mic = mic_cell is not None and mic_pbc is not None and bool(np.any(mic_pbc))
+    for z in set(nums1.tolist()):
+        idx1 = [i for i, x in enumerate(nums1) if int(x) == int(z)]
+        idx2 = [i for i, x in enumerate(nums2) if int(x) == int(z)]
+        if len(idx1) != len(idx2):
+            raise SCGOValidationError("spatial block match: composition mismatch")
+        p1 = pos1[idx1]
+        p2 = pos2[idx2]
+        cost = np.zeros((len(idx1), len(idx2)), dtype=float)
+        for i, r in enumerate(p1):
+            dlt = p2 - r
+            if use_mic:
+                dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
+            cost[i, :] = np.linalg.norm(dlt, axis=1)
+        rows, cols = linear_sum_assignment(cost)
+        for ri, ci in zip(rows, cols, strict=True):
+            mapping[idx1[ri]] = idx2[ci]
+    order = np.asarray(mapping, dtype=int)
+    return pos2[order], nums2[order]
+
+
+def _match_adsorbate_fragments_by_com(
+    a1_ads: Atoms,
+    a2_ads: Atoms,
+    fragment_lengths: list[int],
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Permute product adsorbate atoms so fragments match reactant by COM, then fingerprint."""
+    n_ads = len(a1_ads)
+    if len(a2_ads) != n_ads:
+        raise SCGOValidationError("adsorbate fragment match: length mismatch")
+    if sum(int(x) for x in fragment_lengths) != n_ads:
+        raise SCGOValidationError(
+            "adsorbate_fragment_lengths must sum to adsorbate atom count "
+            f"(sum={sum(int(x) for x in fragment_lengths)}, n_ads={n_ads})"
+        )
+    if any(int(x) <= 0 for x in fragment_lengths):
+        raise SCGOValidationError("adsorbate_fragment_lengths must be positive")
+
+    # Single fragment: fall back to ordinary block matching.
+    if len(fragment_lengths) <= 1:
+        return _permute_atoms_block_to_match(
+            a1_ads, a2_ads, mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
+
+    # Build equal-length fragment groups only when all fragments share a length
+    # (e.g. 2×OH). Mixed lengths are matched greedily by composition.
+    r_pos = a1_ads.get_positions()
+    p_pos = a2_ads.get_positions()
+    r_num = a1_ads.numbers
+    p_num = a2_ads.numbers
+
+    r_slices: list[slice] = []
+    p_slices: list[slice] = []
+    off = 0
+    for fl in fragment_lengths:
+        r_slices.append(slice(off, off + int(fl)))
+        off += int(fl)
+    off = 0
+    for fl in fragment_lengths:
+        p_slices.append(slice(off, off + int(fl)))
+        off += int(fl)
+
+    r_coms = [r_pos[s].mean(axis=0) for s in r_slices]
+
+    n_frag = len(fragment_lengths)
+    cost = np.full((n_frag, n_frag), np.inf, dtype=float)
+    for i, rs in enumerate(r_slices):
+        for j, ps in enumerate(p_slices):
+            if int(fragment_lengths[i]) != int(fragment_lengths[j]):
+                continue
+            if sorted(r_num[rs].tolist()) != sorted(p_num[ps].tolist()):
+                continue
+            dlt = p_pos[ps].mean(axis=0) - r_coms[i]
+            if mic_cell is not None and mic_pbc is not None and bool(np.any(mic_pbc)):
+                dlt, _ = find_mic(dlt.reshape(1, 3), mic_cell, mic_pbc)
+                dlt = np.asarray(dlt, dtype=float).reshape(3)
+            cost[i, j] = float(np.linalg.norm(dlt))
+
+    if not np.isfinite(cost).any():
+        # Composition/length mismatch across fragments: whole-block fallback.
+        return _permute_atoms_block_to_match(
+            a1_ads, a2_ads, mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
+
+    rows, cols = linear_sum_assignment(cost)
+    if not np.isfinite(cost[rows, cols]).all():
+        return _permute_atoms_block_to_match(
+            a1_ads, a2_ads, mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
+
+    out_pos = np.empty_like(p_pos)
+    out_num = np.empty_like(p_num)
+    for i, j in zip(rows, cols, strict=True):
+        rs, ps = r_slices[i], p_slices[j]
+        p_blk, n_blk = _permute_atoms_block_to_match(
+            a1_ads[rs], a2_ads[ps], mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
+        out_pos[rs] = p_blk
+        out_num[rs] = n_blk
+    return out_pos, out_num
 
 
 def _align_endpoints_blockwise(
@@ -329,8 +499,13 @@ def _align_endpoints_blockwise(
     *,
     mic_cell: np.ndarray | None = None,
     mic_pbc: np.ndarray | list[bool] | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
 ) -> None:
-    """Match product to reactant per block (slab indices unchanged; core/ads via fingerprint)."""
+    """Match product to reactant per block (slab indices unchanged; core/ads via match).
+
+    Core atoms use spatial Hungarian (minimal travel). Adsorbate atoms use
+    fingerprint matching, or fragment COM matching when lengths are provided.
+    """
     n = len(a1)
     if len(a2) != n:
         raise SCGOValidationError("align blockwise: endpoint length mismatch")
@@ -343,16 +518,29 @@ def _align_endpoints_blockwise(
     if n_core > 0:
         s1, s2 = n_slab, n_slab + n_core
         p_blk, n_blk = _permute_atoms_block_to_match(
-            a1[s1:s2], a2[s1:s2], mic_cell=mic_cell, mic_pbc=mic_pbc
+            a1[s1:s2],
+            a2[s1:s2],
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
+            method="spatial",
         )
         p2[s1:s2] = p_blk
         n2[s1:s2] = n_blk
     if n_ads > 0:
         t1 = n_slab + n_core
         t2 = t1 + n_ads
-        p_blk, n_blk = _permute_atoms_block_to_match(
-            a1[t1:t2], a2[t1:t2], mic_cell=mic_cell, mic_pbc=mic_pbc
-        )
+        if adsorbate_fragment_lengths:
+            p_blk, n_blk = _match_adsorbate_fragments_by_com(
+                a1[t1:t2],
+                a2[t1:t2],
+                list(adsorbate_fragment_lengths),
+                mic_cell=mic_cell,
+                mic_pbc=mic_pbc,
+            )
+        else:
+            p_blk, n_blk = _permute_atoms_block_to_match(
+                a1[t1:t2], a2[t1:t2], mic_cell=mic_cell, mic_pbc=mic_pbc
+            )
         p2[t1:t2] = p_blk
         n2[t1:t2] = n_blk
     a2.set_positions(p2)
@@ -556,6 +744,26 @@ def _score_mobile_endpoint_displacement(
     return float(np.max(norms)), float(np.sqrt(np.mean(norms**2)))
 
 
+def _core_alignment_mask(
+    *,
+    n_slab: int,
+    n_core_mobile: int | None,
+    n_atoms: int,
+    mobile_mask: np.ndarray,
+) -> np.ndarray:
+    """Mask of core atoms used to drive rigid/PBC alignment when adsorbate blocks exist."""
+    if n_core_mobile is None or int(n_core_mobile) <= 0:
+        return mobile_mask
+    core = np.zeros(n_atoms, dtype=bool)
+    i0 = max(0, int(n_slab))
+    i1 = min(n_atoms, i0 + int(n_core_mobile))
+    core[i0:i1] = True
+    core &= mobile_mask
+    if not np.any(core):
+        return mobile_mask
+    return core
+
+
 def _collective_mobile_lattice_snap(
     ref_pos: np.ndarray,
     prod_pos: np.ndarray,
@@ -566,14 +774,16 @@ def _collective_mobile_lattice_snap(
     axis_a: int,
     axis_b: int,
     max_shift: int,
+    score_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Pick a uniform in-plane lattice image for mobile atoms before per-atom MIC snap."""
     if not np.any(mobile_mask):
         return prod_pos
+    rank_mask = mobile_mask if score_mask is None else score_mask
 
     best_pos = prod_pos.copy()
     best_score, _ = _score_mobile_endpoint_displacement(
-        ref_pos, best_pos, mobile_mask, cell, pbc
+        ref_pos, best_pos, rank_mask, cell, pbc
     )
     for shift in _lattice_translation_candidates(
         cell, axis_a, axis_b, max_shift=max_shift
@@ -581,7 +791,7 @@ def _collective_mobile_lattice_snap(
         shifted = prod_pos.copy()
         shifted[mobile_mask] += shift
         score, _ = _score_mobile_endpoint_displacement(
-            ref_pos, shifted, mobile_mask, cell, pbc
+            ref_pos, shifted, rank_mask, cell, pbc
         )
         if score < best_score:
             best_score = score
@@ -592,13 +802,19 @@ def _collective_mobile_lattice_snap(
 def _apply_global_inplane_kabsch(
     ref_pos: np.ndarray,
     prod_pos: np.ndarray,
-    mobile_mask: np.ndarray,
+    fit_mask: np.ndarray,
     *,
     normal_axis: int,
     anchor_mask: np.ndarray,
+    apply_mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Apply one global in-plane rotation derived from mobile-atom Kabsch."""
-    idx = np.where(mobile_mask)[0]
+    """Apply one global in-plane rotation derived from ``fit_mask`` Kabsch.
+
+    Rotation is fit on ``fit_mask`` atoms and applied to ``apply_mask`` (default:
+    all atoms except anchors). Adsorbate cores can therefore drive alignment
+    without ads hops dragging the frame.
+    """
+    idx = np.where(fit_mask)[0]
     if idx.size < 2:
         return prod_pos
     center = ref_pos[idx].mean(axis=0)
@@ -606,7 +822,10 @@ def _apply_global_inplane_kabsch(
     p_prod_c = prod_pos[idx] - center
     rot = _kabsch_rotation_in_plane(p_ref_c, p_prod_c, surface_normal_axis=normal_axis)
     _validate_lattice_compatible_rotation(rot, normal_axis)
-    out = (prod_pos - center) @ rot.T + center
+    out = prod_pos.copy()
+    move = apply_mask if apply_mask is not None else ~anchor_mask
+    if np.any(move):
+        out[move] = (prod_pos[move] - center) @ rot.T + center
     if np.any(anchor_mask):
         out[anchor_mask] = ref_pos[anchor_mask]
     return out
@@ -620,6 +839,7 @@ def _align_product_surface_pbc(
     enable_cell_remap: bool = True,
     enable_lattice_rotation: bool = True,
     max_lattice_shift: int = 1,
+    n_core_mobile: int | None = None,
 ) -> np.ndarray:
     """Align product to reactant using MIC, lattice shifts, and global in-plane rotation.
 
@@ -634,6 +854,9 @@ def _align_product_surface_pbc(
     - global in-plane rigid rotation (same ``R`` for all atoms; evaluated jointly
       with each shift candidate; anchors reset to reactant afterward).
 
+    When ``n_core_mobile`` is set, lattice-image / rotation scoring uses the core
+    block while transforms still apply to all mobile atoms.
+
     Does **not** rotate mobile atoms independently of the lattice frame.
     """
     ref_pos = reactant.get_positions()
@@ -647,6 +870,12 @@ def _align_product_surface_pbc(
     mobile_mask = _mobile_alignment_mask(
         anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
     )
+    score_mask = _core_alignment_mask(
+        n_slab=n_slab,
+        n_core_mobile=n_core_mobile,
+        n_atoms=len(reactant),
+        mobile_mask=mobile_mask,
+    )
 
     prod = np.asarray(product_positions, dtype=float).copy()
     if enable_cell_remap:
@@ -659,13 +888,14 @@ def _align_product_surface_pbc(
             axis_a=axis_a,
             axis_b=axis_b,
             max_shift=max_lattice_shift,
+            score_mask=score_mask,
         )
 
     prod = _snap_to_reactant_mic_frame(ref_pos, prod, cell, pbc_mic, anchor_mask)
 
     best_pos = prod.copy()
     best_score, _ = _score_mobile_endpoint_displacement(
-        ref_pos, best_pos, mobile_mask, cell, pbc_mic
+        ref_pos, best_pos, score_mask, cell, pbc_mic
     )
 
     shifts = _lattice_translation_candidates(
@@ -681,7 +911,7 @@ def _align_product_surface_pbc(
         )
         candidates: list[tuple[float, np.ndarray]] = []
         score, _ = _score_mobile_endpoint_displacement(
-            ref_pos, prod_snapped, mobile_mask, cell, pbc_mic
+            ref_pos, prod_snapped, score_mask, cell, pbc_mic
         )
         candidates.append((score, prod_snapped))
 
@@ -689,15 +919,16 @@ def _align_product_surface_pbc(
             prod_rot = _apply_global_inplane_kabsch(
                 ref_pos,
                 prod_snapped,
-                mobile_mask,
+                score_mask,
                 normal_axis=normal_axis,
                 anchor_mask=anchor_mask,
+                apply_mask=mobile_mask,
             )
             prod_rot_snapped = _snap_to_reactant_mic_frame(
                 ref_pos, prod_rot, cell, pbc_mic, anchor_mask
             )
             score_rot, _ = _score_mobile_endpoint_displacement(
-                ref_pos, prod_rot_snapped, mobile_mask, cell, pbc_mic
+                ref_pos, prod_rot_snapped, score_mask, cell, pbc_mic
             )
             candidates.append((score_rot, prod_rot_snapped))
 
@@ -722,6 +953,7 @@ def _align_product_for_neb(
     surface_cell_remap: bool = True,
     surface_lattice_rotation: bool = True,
     surface_max_lattice_shift: int = 1,
+    n_core_mobile: int | None = None,
 ) -> np.ndarray:
     """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC)."""
     if _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
@@ -732,12 +964,14 @@ def _align_product_for_neb(
             enable_cell_remap=surface_cell_remap,
             enable_lattice_rotation=surface_lattice_rotation,
             max_lattice_shift=surface_max_lattice_shift,
+            n_core_mobile=n_core_mobile,
         )
     return _align_product_kabsch_to_reactant(
         reactant,
         product_positions,
         n_slab=n_slab,
         in_plane_only=False,
+        n_core_mobile=n_core_mobile,
     )
 
 
@@ -747,8 +981,13 @@ def _align_product_kabsch_to_reactant(
     *,
     n_slab: int = 0,
     in_plane_only: bool = False,
+    n_core_mobile: int | None = None,
 ) -> np.ndarray:
-    """Rigidly align product to reactant (gas-phase clusters without periodic endpoints)."""
+    """Rigidly align product to reactant (gas-phase clusters without periodic endpoints).
+
+    When ``n_core_mobile`` is set, Kabsch is derived from the core block only and
+    applied to all mobile atoms so adsorbate hops do not drag the frame.
+    """
     if n_slab > 0:
         raise SCGORuntimeError(
             "Slab NEB endpoints must use _align_product_surface_pbc, not Kabsch-only alignment."
@@ -759,32 +998,46 @@ def _align_product_kabsch_to_reactant(
     mobile_mask = _mobile_alignment_mask(
         anchor_mask, n_slab=n_slab, n_atoms=len(reactant)
     )
+    fit_mask = _core_alignment_mask(
+        n_slab=n_slab,
+        n_core_mobile=n_core_mobile,
+        n_atoms=len(reactant),
+        mobile_mask=mobile_mask,
+    )
 
-    if np.any(mobile_mask) and mobile_mask.size < len(reactant):
+    if np.any(mobile_mask):
         out = product_positions.copy()
-        p_ref = ref_pos[mobile_mask]
-        p_prod = product_positions[mobile_mask]
-        center = p_ref.mean(axis=0)
-        p_ref_c = p_ref - center
-        p_prod_c = p_prod - center
+        p_ref = ref_pos[fit_mask]
+        if p_ref.shape[0] < 1:
+            return product_positions
+        center_ref = p_ref.mean(axis=0)
+        center_prod = product_positions[fit_mask].mean(axis=0)
+        p_ref_c = p_ref - center_ref
+        p_prod_c = product_positions[fit_mask] - center_prod
         if in_plane_only:
             rot = _kabsch_rotation_in_plane(
                 p_ref_c,
                 p_prod_c,
                 surface_normal_axis=_infer_surface_normal_axis(reactant.pbc),
             )
-        else:
+        elif p_ref.shape[0] >= 2:
             rot = _kabsch_rotation(p_ref_c, p_prod_c)
-        out[mobile_mask] = (p_prod_c @ rot.T) + center
+        else:
+            rot = np.eye(3)
+        # Apply the core-derived transform to all mobile atoms.
+        out[mobile_mask] = (
+            product_positions[mobile_mask] - center_prod
+        ) @ rot.T + center_ref
         if np.any(anchor_mask):
             out[anchor_mask] = ref_pos[anchor_mask]
         return out
 
     p_ref = ref_pos
     p_prod = product_positions
-    center = p_ref.mean(axis=0)
-    p_ref_c = p_ref - center
-    p_prod_c = p_prod - center
+    center_ref = p_ref.mean(axis=0)
+    center_prod = p_prod.mean(axis=0)
+    p_ref_c = p_ref - center_ref
+    p_prod_c = p_prod - center_prod
     if in_plane_only:
         rot = _kabsch_rotation_in_plane(
             p_ref_c,
@@ -793,7 +1046,7 @@ def _align_product_kabsch_to_reactant(
         )
     else:
         rot = _kabsch_rotation(p_ref_c, p_prod_c)
-    return (p_prod_c @ rot.T) + center
+    return (p_prod_c @ rot.T) + center_ref
 
 
 def _reorder_product_to_match_reactant(
@@ -803,6 +1056,7 @@ def _reorder_product_to_match_reactant(
     n_slab: int,
     n_core_mobile: int | None,
     n_adsorbate_mobile: int | None,
+    adsorbate_fragment_lengths: list[int] | None = None,
 ) -> np.ndarray:
     """Reorder product atoms (positions and species) to match reactant ordering."""
     n_atom = len(reactant)
@@ -821,6 +1075,7 @@ def _reorder_product_to_match_reactant(
             int(n_adsorbate_mobile),
             mic_cell=mic_cell,
             mic_pbc=mic_pbc,
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
         )
         return product.get_positions()
     if 0 < n_slab < n_atom:
@@ -859,6 +1114,7 @@ def interpolate_path(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
@@ -878,7 +1134,8 @@ def interpolate_path(
 
     If ``n_slab`` + ``n_core_mobile`` + ``n_adsorbate_mobile`` equals
     ``len(atoms)``, match endpoints per slab / core / adsorbate block instead
-    of one global permutation.
+    of one global permutation. When ``adsorbate_fragment_lengths`` is provided,
+    adsorbate fragments are COM-matched before intra-fragment fingerprinting.
 
     For constrained slab systems we always interpolate with
     ``apply_constraint=False``; constraints remain attached and are enforced
@@ -887,8 +1144,8 @@ def interpolate_path(
     validate_atoms(atoms1)
     validate_atoms(atoms2)
 
-    a1_copy = atoms1.copy()
-    a2_copy = atoms2.copy()
+    a1_copy = copy_atoms(atoms1)
+    a2_copy = copy_atoms(atoms2)
 
     surface_cell_remap = neb_surface_cell_remap
     surface_lattice_rotation = neb_surface_lattice_rotation
@@ -912,6 +1169,7 @@ def interpolate_path(
             n_slab=n_slab,
             n_core_mobile=n_core_mobile,
             n_adsorbate_mobile=n_adsorbate_mobile,
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
         )
         # Keep species order consistent with reactant for downstream NEB.
         a2_copy.numbers = a1_copy.numbers.copy()
@@ -922,6 +1180,7 @@ def interpolate_path(
             surface_cell_remap=surface_cell_remap,
             surface_lattice_rotation=surface_lattice_rotation,
             surface_max_lattice_shift=neb_surface_max_lattice_shift,
+            n_core_mobile=n_core_mobile,
         )
         a2_copy.set_positions(aligned)
         if _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab):
@@ -946,6 +1205,227 @@ def interpolate_path(
             img.set_positions(img.get_positions() + disp)
 
     return images
+
+
+def _mobile_min_pairwise_distance(
+    atoms: Atoms,
+    *,
+    n_slab: int = 0,
+    mic: bool = False,
+) -> float:
+    """Minimum pairwise distance among mobile atoms (slab prefix excluded)."""
+    pos = atoms.get_positions()[max(0, int(n_slab)) :]
+    if pos.shape[0] < 2:
+        return float("inf")
+    if mic and bool(np.any(atoms.pbc)):
+        cell = _cell_array(atoms.cell)
+        pbc = _pbc_for_mic_alignment(atoms.pbc)
+        min_d = float("inf")
+        for i in range(len(pos)):
+            dlt = pos[i + 1 :] - pos[i]
+            dlt, _ = find_mic(dlt, cell, pbc)
+            if len(dlt):
+                min_d = min(min_d, float(np.linalg.norm(dlt, axis=1).min()))
+        return min_d
+    return float(np.min(pdist(pos)))
+
+
+def _endpoint_mobile_max_displacement(
+    reactant: Atoms,
+    product: Atoms,
+    *,
+    n_slab: int = 0,
+    mic: bool = False,
+) -> float:
+    """Max Cartesian displacement of mobile atoms between aligned endpoints."""
+    i0 = max(0, int(n_slab))
+    dlt = product.get_positions()[i0:] - reactant.get_positions()[i0:]
+    if dlt.size == 0:
+        return 0.0
+    if mic and bool(np.any(reactant.pbc)):
+        dlt, _ = find_mic(
+            dlt, _cell_array(reactant.cell), _pbc_for_mic_alignment(reactant.pbc)
+        )
+    return float(np.linalg.norm(dlt, axis=1).max())
+
+
+def neb_uses_two_stage_climb(
+    climb: bool,
+    neb_steps: int,
+    *,
+    initial_energies: list[float] | np.ndarray | None = None,
+    allow_two_stage: bool = True,
+    min_interior_barrier: float = 1.0,
+) -> bool:
+    """True when CI-NEB should relax without climb first, then enable climb.
+
+    Two-stage helps when the IDPP band already has a *robust* interior maximum
+    (climb can otherwise pin to a terminus on a messy barrier). It *hurts*:
+
+    - endpoint-max / barrierless IDPP bands (no-climb collapses the MEP);
+    - soft adsorbate hops with a shallow interior max (no-climb also flattens
+      them; seen on graphite OH pairs with ~0.9 eV IDPP barriers).
+
+    Soft interior maxima (barrier ``< min_interior_barrier``) climb from step 0.
+    """
+    if not (bool(climb) and int(neb_steps) >= 4 and bool(allow_two_stage)):
+        return False
+    if initial_energies is None:
+        return True
+    e = np.asarray(initial_energies, dtype=float)
+    if e.size < 3 or not np.all(np.isfinite(e)):
+        return True
+    max_idx = int(np.argmax(e))
+    if max_idx in (0, len(e) - 1):
+        return False
+    barrier = float(e[max_idx] - min(float(e[0]), float(e[-1])))
+    return barrier >= float(min_interior_barrier)
+
+
+def validate_initial_neb_path(
+    images: list[Atoms],
+    *,
+    n_slab: int = 0,
+    mic: bool = False,
+    max_endpoint_mismatch: float | None = None,
+    clash_distance: float = 0.7,
+) -> None:
+    """Reject discontinuous/clashing IDPP bands before NEB optimization.
+
+    Enabled when ``max_endpoint_mismatch`` is set (adsorbate presets). Checks:
+    - aligned mobile Cartesian residual vs ``max(6.0, 3.0 * max_endpoint_mismatch)``;
+    - interior-image min mobile pairwise distance vs ``clash_distance``
+      (endpoints are skipped — they are relaxed minima that may contain bonds).
+
+    Raises:
+        SCGOValidationError: when the initial path is unsuitable for NEB.
+    """
+    if max_endpoint_mismatch is None:
+        return
+    if len(images) < 2:
+        raise SCGOValidationError(
+            "Initial NEB path rejected (clashing/discontinuous interpolation): "
+            "fewer than 2 images"
+        )
+    cartesian_limit = max(6.0, 3.0 * float(max_endpoint_mismatch))
+    max_disp = _endpoint_mobile_max_displacement(
+        images[0], images[-1], n_slab=n_slab, mic=mic
+    )
+    if max_disp > cartesian_limit:
+        raise SCGOValidationError(
+            "Initial NEB path rejected (clashing/discontinuous interpolation): "
+            f"aligned endpoint mobile max displacement {max_disp:.3f} Å exceeds "
+            f"cartesian limit {cartesian_limit:.3f} Å"
+        )
+    interiors = images[1:-1] if len(images) > 2 else images
+    for i, img in enumerate(interiors, start=1):
+        min_d = _mobile_min_pairwise_distance(img, n_slab=n_slab, mic=mic)
+        if min_d < float(clash_distance):
+            raise SCGOValidationError(
+                "Initial NEB path rejected (clashing/discontinuous interpolation): "
+                f"image {i} min mobile distance {min_d:.3f} Å < {float(clash_distance):.3f} Å"
+            )
+
+
+def validate_initial_neb_energy_profile(
+    energies: list[float] | np.ndarray,
+    *,
+    max_spurious_barrier: float = 8.0,
+    reference_reactant_energy: float | None = None,
+    reference_product_energy: float | None = None,
+    max_endpoint_energy_drift: float = 0.5,
+    min_saddle_prominence: float | None = 0.40,
+) -> None:
+    """Reject IDPP bands with absurdly high barriers (discontinuous paths).
+
+    Endpoint-max IDPP profiles are allowed: climbing NEB can still locate an
+    interior saddle after the band relaxes (observed for adsorbate OH hops).
+    Huge barriers (tens of eV) usually indicate a discontinuous hop.
+
+    When reference endpoint energies are supplied (canonical minima energies),
+    also reject bands whose aligned endpoint single-points drifted by more than
+    ``max_endpoint_energy_drift`` — a signature of registry-breaking alignment.
+
+    When ``min_saddle_prominence`` is set, reject interior maxima that sit less
+    than that above *both* endpoints (one-sided slides that CI-NEB collapses).
+    """
+    e = np.asarray(energies, dtype=float)
+    if e.size < 3:
+        return
+    if not np.all(np.isfinite(e)):
+        raise SCGOValidationError(
+            "Initial NEB path rejected (energy profile): non-finite image energies"
+        )
+    barrier = float(e.max() - min(float(e[0]), float(e[-1])))
+    if barrier > float(max_spurious_barrier):
+        raise SCGOValidationError(
+            "Initial NEB path rejected (energy profile): "
+            f"IDPP barrier {barrier:.3f} eV exceeds "
+            f"{float(max_spurious_barrier):.3f} eV (likely discontinuous)"
+        )
+    drift_limit = float(max_endpoint_energy_drift)
+    if reference_reactant_energy is not None:
+        drift_r = abs(float(e[0]) - float(reference_reactant_energy))
+        if drift_r > drift_limit:
+            raise SCGOValidationError(
+                "Initial NEB path rejected (energy profile): "
+                f"aligned reactant energy drifted by {drift_r:.3f} eV "
+                f"(limit {drift_limit:.3f} eV)"
+            )
+    if reference_product_energy is not None:
+        drift_p = abs(float(e[-1]) - float(reference_product_energy))
+        if drift_p > drift_limit:
+            raise SCGOValidationError(
+                "Initial NEB path rejected (energy profile): "
+                f"aligned product energy drifted by {drift_p:.3f} eV "
+                f"(limit {drift_limit:.3f} eV)"
+            )
+    # Prominence gate only when validating against canonical minima (adsorbate
+    # TorchSim path). Unit/mock bands without references keep the looser check.
+    if (
+        min_saddle_prominence is not None
+        and reference_reactant_energy is not None
+        and reference_product_energy is not None
+    ):
+        max_idx = int(np.argmax(e))
+        if max_idx not in (0, len(e) - 1):
+            prominence = float(e[max_idx] - max(float(e[0]), float(e[-1])))
+            if prominence < float(min_saddle_prominence):
+                raise SCGOValidationError(
+                    "Initial NEB path rejected (energy profile): "
+                    f"interior max prominence {prominence:.3f} eV is below "
+                    f"{float(min_saddle_prominence):.3f} eV (one-sided slide)"
+                )
+
+
+def evaluate_neb_image_energies(images: list[Atoms], relaxer: Any) -> list[float]:
+    """Single-point energies for a NEB band via TorchSim ``relax_batch(steps=0)``."""
+    batch = relaxer.relax_batch(list(images), steps=0)
+    return [float(energy) for energy, _atoms in batch]
+
+
+def idpp_band_optimization_priority(
+    energies: list[float] | np.ndarray,
+    *,
+    min_saddle_prominence: float = 0.40,
+) -> tuple[int, float, float]:
+    """Sort key for adsorbate NEB attempt order (higher tuple sorts first).
+
+    Prefers IDPP bands with a robust interior maximum (tier 2) over endpoint-max
+    bands (tier 1). Soft interior maxima (prominence below the gate) get tier 0.
+    Within a tier, larger prominence / barrier is preferred.
+    """
+    e = np.asarray(energies, dtype=float)
+    if e.size < 3 or not np.all(np.isfinite(e)):
+        return (0, 0.0, 0.0)
+    max_idx = int(np.argmax(e))
+    barrier = float(e[max_idx] - min(float(e[0]), float(e[-1])))
+    if max_idx in (0, len(e) - 1):
+        return (1, barrier, 0.0)
+    prominence = float(e[max_idx] - max(float(e[0]), float(e[-1])))
+    if prominence < float(min_saddle_prominence):
+        return (0, prominence, barrier)
+    return (2, prominence, barrier)
 
 
 def _coerce_neb_steps(neb_steps: int | str | None) -> int | str | None:
@@ -1070,7 +1550,7 @@ def _finalize_neb_result(
     max_energy = -np.inf
     ts_atoms: Atoms | None = None
     for idx, atoms in enumerate(images):
-        energy = float(atoms.get_potential_energy())
+        energy = _image_potential_energy(atoms)
         if energy > max_energy:
             max_energy = energy
             max_energy_idx = idx
@@ -1099,6 +1579,8 @@ def _finalize_neb_result(
     result["barrier_reverse"] = ts_energy - product_energy
 
     endpoint_ts = max_energy_idx == 0 or max_energy_idx == len(images) - 1
+    # Match pre-NEB IDPP gate: absurd barriers are discontinuous / unphysical.
+    max_final_barrier = 8.0
     if endpoint_ts:
         result["status"] = "failed"
         result["neb_converged"] = False
@@ -1111,6 +1593,19 @@ def _finalize_neb_result(
                 "NEB reported endpoint as TS for pair %s (image %d) — marking as non-converged",
                 pair_id,
                 max_energy_idx,
+            )
+    elif barrier_height > max_final_barrier:
+        result["status"] = "failed"
+        result["neb_converged"] = False
+        result["error"] = (
+            f"NEB barrier {barrier_height:.3f} eV exceeds "
+            f"{max_final_barrier:.3f} eV (likely discontinuous path)"
+        )
+        if logger is not None:
+            logger.warning(
+                "NEB barrier too high for pair %s (%.3f eV) — marking as failed",
+                pair_id,
+                barrier_height,
             )
     else:
         result["status"] = "success" if result.get("neb_converged") else "failed"
@@ -1143,6 +1638,8 @@ def find_transition_state(
     n_slab: int = 0,
     n_core_mobile: int | None = None,
     n_adsorbate_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    max_endpoint_mismatch: float | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
@@ -1159,6 +1656,8 @@ def find_transition_state(
         n_slab: Blockwise alignment: slab length (default 0).
         n_core_mobile: Mobile core count (with ``n_adsorbate_mobile`` for blockwise NEB).
         n_adsorbate_mobile: Mobile adsorbate fragment count.
+        adsorbate_fragment_lengths: Optional per-fragment lengths for adsorbate matching.
+        max_endpoint_mismatch: Optional Å gate for post-alignment path quality.
         neb_surface_cell_remap: Enable in-plane lattice-image search (surface).
         neb_surface_lattice_rotation: Enable global in-plane rotation (surface).
         neb_surface_max_lattice_shift: Max integer cell index searched in-plane
@@ -1258,9 +1757,16 @@ def find_transition_state(
             n_slab=n_slab,
             n_core_mobile=n_core_mobile,
             n_adsorbate_mobile=n_adsorbate_mobile,
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
             neb_surface_cell_remap=neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+        )
+        validate_initial_neb_path(
+            images,
+            n_slab=n_slab,
+            mic=neb_interpolation_mic,
+            max_endpoint_mismatch=max_endpoint_mismatch,
         )
 
         if np.allclose(
@@ -1286,14 +1792,31 @@ def find_transition_state(
                 result["reactant_energy"] = float(ep_results[0][0])
                 result["product_energy"] = float(ep_results[1][0])
 
+            band_energies: list[float] | None = None
+            if max_endpoint_mismatch is not None:
+                band_energies = evaluate_neb_image_energies(images, ts_relaxer)
+                validate_initial_neb_energy_profile(
+                    band_energies,
+                    reference_reactant_energy=reactant_energy,
+                    reference_product_energy=product_energy,
+                )
+                # Prefer SP energies of the aligned band over possibly stale
+                # raw_score metadata on the endpoint Atoms copies.
+                result["reactant_energy"] = float(band_energies[0])
+                result["product_energy"] = float(band_energies[-1])
+
             if verbosity >= 2:
                 logger.info("Using TorchSim batched NEB (climb=%s)", climb)
 
+            steps_budget = int(neb_steps)
+            use_two_stage = neb_uses_two_stage_climb(
+                climb, steps_budget, initial_energies=band_energies
+            )
             neb = TorchSimNEB(
                 images,
                 ts_relaxer,
                 k=spring_constant,
-                climb=climb,
+                climb=bool(climb) and not use_two_stage,
                 method=neb_tangent_method,
             )
         else:
@@ -1305,21 +1828,39 @@ def find_transition_state(
                 except (TypeError, AttributeError):
                     img.calc = calculator
 
+            steps_budget = int(neb_steps)
+            use_two_stage = neb_uses_two_stage_climb(climb, steps_budget)
             neb = NEB(
                 images,
                 k=spring_constant,
-                climb=climb,
+                climb=bool(climb) and not use_two_stage,
                 method=neb_tangent_method,
             )
 
         opt_logfile = None if verbosity <= 1 else sys.stdout
-        dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
+        # Two-stage CI-NEB: relax without climb, then climb (see helper docstring).
+        # Cap stage 1 at half the budget; stage 2 gets whatever remains after stage 1
+        # actually used (so early stage-1 convergence does not starve climb).
+        stage1_cap = steps_budget // 2 if use_two_stage else steps_budget
 
         if verbosity >= 2:
             logger.info("Starting NEB optimization with %s", optimizer.__name__)
 
         t_neb0 = perf_counter()
-        dyn.run(fmax=fmax, steps=neb_steps)
+        dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
+        dyn.run(fmax=fmax, steps=stage1_cap)
+        steps_taken = int(dyn.nsteps)
+        if use_two_stage:
+            neb.climb = True
+            stage2_steps = max(1, steps_budget - steps_taken)
+            if verbosity >= 2:
+                logger.info(
+                    "Enabling climbing image for second NEB stage (%d steps)",
+                    stage2_steps,
+                )
+            dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
+            dyn.run(fmax=fmax, steps=stage2_steps)
+            steps_taken += int(dyn.nsteps)
         neb_opt = perf_counter() - t_neb0
 
         try:
@@ -1330,7 +1871,7 @@ def find_transition_state(
 
         result["final_fmax"] = final_fmax
         result["neb_converged"] = final_fmax is not None and final_fmax < fmax
-        result["steps_taken"] = int(dyn.nsteps)
+        result["steps_taken"] = steps_taken
 
         if not result["neb_converged"] and result.get("error") is None:
             result["error"] = (
@@ -1353,6 +1894,11 @@ def find_transition_state(
                     fmax_str,
                     fmax,
                 )
+
+        # Last optimizer step can invalidate SinglePoint caches; refresh PES at
+        # the final geometries before barrier finalize (TorchSim path only).
+        if use_torchsim:
+            neb.get_forces()
 
         _finalize_neb_result(result, neb.images, logger=logger)
 

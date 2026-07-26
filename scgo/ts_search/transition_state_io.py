@@ -7,6 +7,7 @@ import math
 import os
 from typing import Any
 
+import numpy as np
 from ase import Atoms
 from ase.io import write as ase_write
 
@@ -21,7 +22,7 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.ts_search.ts_statistics import compute_ts_statistics
-from scgo.utils.helpers import get_cluster_formula, validate_pair_id
+from scgo.utils.helpers import copy_atoms, get_cluster_formula, validate_pair_id
 from scgo.utils.logging import get_logger
 from scgo.utils.ts_provenance import ts_output_provenance
 
@@ -112,7 +113,7 @@ def load_minima_by_composition(
                 minima_by_formula[formula] = []
 
             for energy, atoms in minima:
-                atoms_copy = atoms.copy()
+                atoms_copy = copy_atoms(atoms)
                 add_metadata(
                     atoms_copy,
                     run_id=run_id,
@@ -140,6 +141,31 @@ def load_minima_by_composition(
     return minima_by_formula
 
 
+def _core_rms_displacement(
+    atoms_i: Atoms,
+    atoms_j: Atoms,
+    *,
+    n_slab: int,
+    n_core: int,
+    use_mic: bool,
+) -> float:
+    """RMS Cartesian displacement of the core block (optional MIC)."""
+    if n_core <= 0:
+        return 0.0
+    i0 = max(0, int(n_slab))
+    i1 = i0 + int(n_core)
+    if i1 > len(atoms_i) or i1 > len(atoms_j):
+        return 0.0
+    dlt = atoms_j.get_positions()[i0:i1] - atoms_i.get_positions()[i0:i1]
+    if use_mic and bool(np.any(atoms_i.pbc)):
+        cell = np.asarray(atoms_i.cell.array, dtype=float)
+        inv = np.linalg.inv(cell)
+        frac = dlt @ inv.T
+        frac -= np.round(frac)
+        dlt = frac @ cell
+    return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
+
+
 def select_structure_pairs(
     minima: list[tuple[float, Atoms]],
     max_pairs: int | None = None,
@@ -148,6 +174,9 @@ def select_structure_pairs(
     similarity_pair_cor_max: float = 0.1,
     surface_aware: bool = False,
     n_slab: int | None = None,
+    max_endpoint_mismatch: float | None = None,
+    adsorbate_aware: bool = False,
+    n_core_mobile: int | None = None,
 ) -> list[tuple[int, int]]:
     """Select pairs of minima for TS calculations.
 
@@ -170,6 +199,10 @@ def select_structure_pairs(
         surface_aware: Use slightly looser scoring scales (slab / periodic systems).
         n_slab: When set (from ``SurfaceSystemConfig.slab``), structural comparison
             uses only atoms ``n_slab:`` so pair selection ignores frozen slab motion.
+        max_endpoint_mismatch: Hard reject when comparator ``max_diff`` exceeds this (Å).
+            ``None`` disables the gate (bare-cluster default).
+        adsorbate_aware: Prefer modest core RMS and weight mismatch more heavily.
+        n_core_mobile: Core atom count for adsorbate-aware core-RMS scoring.
 
     Returns:
         List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
@@ -182,29 +215,75 @@ def select_structure_pairs(
 
     scored_pairs: list[tuple[float, int, int]] = []
     n_skipped_similar = 0
+    n_skipped_mismatch = 0
+    slab_len = int(n_slab) if n_slab is not None else 0
 
-    def _score_candidate(gap: float, cum_diff: float, max_diff: float) -> float:
+    def _score_candidate(
+        gap: float,
+        cum_diff: float,
+        max_diff: float,
+        core_rms: float | None,
+    ) -> float:
         """Return higher-is-better physics-guided priority score.
 
         Uses a compact blend of:
         - energy-gap proximity to a regime-dependent target window,
         - moderate structural dissimilarity preference,
-        - endpoint mismatch penalty to avoid overly-discontinuous paths.
+        - endpoint mismatch penalty to avoid overly-discontinuous paths,
+        - optional preference for modest core RMS (adsorbate systems).
         """
         # Surface systems often tolerate/require slightly larger endpoint deltas.
         gap_center = 0.45 if surface_aware else 0.30
         gap_width = 0.55 if surface_aware else 0.40
         gap_score = math.exp(-(((gap - gap_center) / max(1e-8, gap_width)) ** 2))
 
-        # Prefer distinct structures, but saturate to avoid over-valuing extremes.
-        cum_scale = 0.12 if surface_aware else 0.09
-        distinct_score = 1.0 - math.exp(-max(0.0, cum_diff) / max(1e-8, cum_scale))
+        if adsorbate_aware:
+            # Prefer activated local hops: mid energy gaps, moderate endpoint
+            # mismatch (~0.35–0.7 Å), and core RMS ~0.5 Å. Tiny-mismatch /
+            # tiny-core pairs are often barrierless endothermic slides whose
+            # IDPP bands are endpoint-max and CI-NEB climbs into junk saddles.
+            mismatch_weight = 0.25
+            distinct_weight = 0.20
+            gap_weight = 0.25
+            core_weight = 0.30
+            cum_scale = 0.10 if surface_aware else 0.08
+            gap_center = 0.55 if surface_aware else 0.50
+            gap_width = 0.50 if surface_aware else 0.45
+            gap_score = math.exp(-(((gap - gap_center) / max(1e-8, gap_width)) ** 2))
+            # Peak distinctness above near-isomer noise.
+            distinct_center = 0.12 if surface_aware else 0.10
+            distinct_score = math.exp(
+                -(((cum_diff - distinct_center) / max(1e-8, cum_scale)) ** 2)
+            )
+            mismatch_center = 0.55 if surface_aware else 0.50
+            mismatch_width = 0.35 if surface_aware else 0.28
+            mismatch_score = math.exp(
+                -(((max_diff - mismatch_center) / max(1e-8, mismatch_width)) ** 2)
+            )
+        else:
+            mismatch_scale = 0.45 if surface_aware else 0.35
+            mismatch_weight = 0.15
+            distinct_weight = 0.35
+            gap_weight = 0.50
+            core_weight = 0.0
+            cum_scale = 0.12 if surface_aware else 0.09
+            distinct_score = 1.0 - math.exp(-max(0.0, cum_diff) / max(1e-8, cum_scale))
+            mismatch_score = math.exp(-max(0.0, max_diff) / max(1e-8, mismatch_scale))
 
-        # Strongly penalize very large single-pair distortions.
-        mismatch_scale = 0.45 if surface_aware else 0.35
-        mismatch_penalty = math.exp(-max(0.0, max_diff) / max(1e-8, mismatch_scale))
-
-        return 0.5 * gap_score + 0.35 * distinct_score + 0.15 * mismatch_penalty
+        score = (
+            gap_weight * gap_score
+            + distinct_weight * distinct_score
+            + mismatch_weight * mismatch_score
+        )
+        if core_weight > 0.0 and core_rms is not None:
+            # Prefer core rearrangements that accompany real adsorbate hops.
+            core_center = 0.50 if surface_aware else 0.55
+            core_width = 0.45 if surface_aware else 0.35
+            core_score = math.exp(
+                -(((core_rms - core_center) / max(1e-8, core_width)) ** 2)
+            )
+            score += core_weight * core_score
+        return score
 
     for i in range(len(minima)):
         for j in range(i + 1, len(minima)):
@@ -240,20 +319,77 @@ def select_structure_pairs(
                         max_diff,
                     )
                     continue
+                # Adsorbate near-isomers with tiny max displacement are usually
+                # barrierless endothermic slides; climb cannot salvage them.
+                if adsorbate_aware and float(max_diff) < 0.20:
+                    n_skipped_similar += 1
+                    logger.debug(
+                        "Skipping pair (%s, %s): adsorbate hop too small "
+                        "(max_diff=%.3f Å < 0.20 Å)",
+                        i,
+                        j,
+                        max_diff,
+                    )
+                    continue
+                if max_endpoint_mismatch is not None and float(max_diff) > float(
+                    max_endpoint_mismatch
+                ):
+                    n_skipped_mismatch += 1
+                    logger.debug(
+                        "Skipping pair (%s, %s): endpoint mismatch too large "
+                        "(max_diff=%.3f Å > %.3f Å)",
+                        i,
+                        j,
+                        max_diff,
+                        max_endpoint_mismatch,
+                    )
+                    continue
             except (ValueError, RuntimeError) as e:
                 logger.warning(
                     f"Failed to calculate similarity for pair ({i}, {j}): {type(e).__name__}: {e}"
                 )
                 continue
 
+            core_rms: float | None = None
+            if adsorbate_aware and n_core_mobile is not None and int(n_core_mobile) > 0:
+                core_rms = _core_rms_displacement(
+                    atoms_i,
+                    atoms_j,
+                    n_slab=slab_len,
+                    n_core=int(n_core_mobile),
+                    use_mic=surface_aware,
+                )
+                # Large core rearrangements rarely yield usable adsorbate NEBs.
+                core_rms_limit = 2.0 if surface_aware else 1.5
+                if core_rms > core_rms_limit:
+                    n_skipped_mismatch += 1
+                    logger.debug(
+                        "Skipping pair (%s, %s): core RMS too large "
+                        "(core_rms=%.3f Å > %.3f Å)",
+                        i,
+                        j,
+                        core_rms,
+                        core_rms_limit,
+                    )
+                    continue
+
             scored_pairs.append(
-                (_score_candidate(gap, float(cum_diff), float(max_diff)), i, j)
+                (
+                    _score_candidate(gap, float(cum_diff), float(max_diff), core_rms),
+                    i,
+                    j,
+                )
             )
 
     if n_skipped_similar:
         logger.debug(
             "Pair selection: skipped %d too-similar candidate pairs",
             n_skipped_similar,
+        )
+    if n_skipped_mismatch:
+        logger.debug(
+            "Pair selection: skipped %d high-mismatch candidate pairs",
+            n_skipped_mismatch,
         )
 
     if not scored_pairs:

@@ -197,9 +197,15 @@ def _resolve_surface_alignment_kwargs(
     if not policy.uses_surface:
         return None
 
-    cell_remap = bool(global_optimizer_kwargs.get("neb_surface_cell_remap", True))
+    cell_remap = bool(
+        global_optimizer_kwargs.get(
+            "neb_surface_cell_remap", policy.neb_surface_cell_remap
+        )
+    )
     lattice_rotation = bool(
-        global_optimizer_kwargs.get("neb_surface_lattice_rotation", True)
+        global_optimizer_kwargs.get(
+            "neb_surface_lattice_rotation", policy.neb_surface_lattice_rotation
+        )
     )
     max_shift = int(global_optimizer_kwargs.get("neb_surface_max_lattice_shift", 1))
     cell_remap = policy.neb_surface_cell_remap and cell_remap

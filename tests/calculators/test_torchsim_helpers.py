@@ -548,3 +548,111 @@ def test_torchsim_relax_batch_retries_after_max_metric_error(monkeypatch):
     assert calls["count"] == 2
     assert invalidated == [1]
     assert len(results) == 1
+
+
+def test_relax_batch_steps_zero_routes_to_static(monkeypatch):
+    """``steps=0`` must use ``ts.static``, not ``optimize(max_steps=0)``."""
+    import numpy as np
+    import torch
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.max_memory_scaler = None
+    relaxer._runner_kwargs = {"max_steps": 100}
+    relaxer.max_steps = 100
+    relaxer.device = torch.device("cpu")
+    relaxer.dtype = torch.float64
+    relaxer.model = object()
+    relaxer.optimizer = object()
+    relaxer.model_kind = "mace"
+    relaxer.autobatcher = False
+    relaxer.last_batch_relax_steps = []
+
+    class _FakeTS:
+        def static(self, **kwargs):
+            calls["static"] += 1
+            assert "optimizer" not in kwargs
+            n = len(kwargs["system"]) if isinstance(kwargs["system"], list) else 1
+            return [
+                {
+                    "potential_energy": torch.tensor([1.5]),
+                    "forces": torch.zeros((1, 3)),
+                }
+                for _ in range(n)
+            ]
+
+        def optimize(self, **kwargs):
+            calls["optimize"] += 1
+            raise AssertionError("optimize must not be used for steps=0")
+
+        def initialize_state(self, *args, **kwargs):
+            raise AssertionError("unused in this stub path")
+
+    calls = {"static": 0, "optimize": 0}
+    relaxer._ts = _FakeTS()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    results = relaxer.relax_batch([atoms], steps=0)
+    assert calls["static"] == 1
+    assert calls["optimize"] == 0
+    assert len(results) == 1
+    energy, out = results[0]
+    assert energy == pytest.approx(1.5)
+    assert np.allclose(out.get_positions(), [[0.0, 0.0, 0.0]])
+    assert "forces" in out.arrays
+    assert relaxer.last_batch_relax_steps == [0]
+
+
+def test_torchsim_max_steps_zero_log_filter_suppresses_spam():
+    """Production captureWarnings must not surface torch_sim max_steps:0 noise."""
+    import logging
+
+    from scgo.calculators.torchsim_helpers import (
+        _register_torchsim_warning_filters,
+        _TorchSimMaxStepsZeroLogFilter,
+    )
+
+    _register_torchsim_warning_filters()
+    filt = _TorchSimMaxStepsZeroLogFilter()
+    record_zero = logging.LogRecord(
+        name="torch_sim.runners",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="All systems have reached the maximum number of steps: 0.",
+        args=(),
+        exc_info=None,
+    )
+    record_other = logging.LogRecord(
+        name="torch_sim.runners",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="All systems have reached the maximum number of steps: 100.",
+        args=(),
+        exc_info=None,
+    )
+    assert filt.filter(record_zero) is False
+    assert filt.filter(record_other) is True
+
+
+def test_static_autobatcher_disabled_by_default():
+    """NEB single-point must not enable probing BinningAutoBatcher by default."""
+    import torch
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.device = torch.device("cuda")
+    relaxer.autobatcher = None
+    assert relaxer._static_autobatcher_arg(n_structures=84, max_atoms=7) is False
+    relaxer.autobatcher = True
+    assert relaxer._static_autobatcher_arg(n_structures=10, max_atoms=7) is False
+    assert relaxer._static_autobatcher_arg(n_structures=50, max_atoms=10) is True

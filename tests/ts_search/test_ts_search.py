@@ -44,6 +44,64 @@ def test_neb_max_atom_force_uses_per_atom_norm():
     assert float(np.max(np.abs(forces))) < 0.05
 
 
+def test_image_potential_energy_falls_back_to_metadata():
+    """Finalize helper reads cached potential_energy when SinglePoint is stale."""
+    from ase.calculators.singlepoint import SinglePointCalculator
+
+    from scgo.database.metadata import update_metadata
+    from scgo.ts_search.transition_state import _image_potential_energy
+
+    atoms = Atoms("Cu", positions=[[0.0, 0.0, 0.0]])
+    atoms.calc = SinglePointCalculator(atoms, energy=-1.5, forces=np.zeros((1, 3)))
+    update_metadata(atoms, potential_energy=-1.5, raw_score=1.5)
+    atoms.positions += 0.2  # invalidate SinglePoint
+    assert _image_potential_energy(atoms) == pytest.approx(-1.5)
+
+
+def test_torchsim_neb_forces_match_ase_neb_with_same_pes(cu3_triangle, cu3_linear):
+    """TorchSimNEB must reuse ASE spring/climb/tangent; only PES eval is batched.
+
+    With identical per-image forces from a fake relaxer, NEB band forces must
+    match a plain ASE ``NEB`` on the same images.
+    """
+    from ase.calculators.singlepoint import SinglePointCalculator
+    from ase.mep import NEB
+
+    from scgo.ts_search.transition_state import TorchSimNEB
+
+    images_ase = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    images_ts = [img.copy() for img in images_ase]
+
+    rng = np.random.default_rng(0)
+    pes_forces = [rng.normal(scale=0.05, size=(len(img), 3)) for img in images_ase]
+    for img, forces in zip(images_ase, pes_forces, strict=True):
+        img.calc = SinglePointCalculator(img, energy=0.0, forces=forces)
+
+    class _PesRelaxer:
+        def relax_batch(self, atoms_list, steps=0):
+            assert steps == 0
+            out = []
+            for atoms in atoms_list:
+                idx = next(i for i, im in enumerate(images_ts) if im is atoms)
+                ra = atoms.copy()
+                ra.arrays["forces"] = np.asarray(pes_forces[idx], dtype=float)
+                out.append((0.0, ra))
+            return out
+
+    ase_neb = NEB(images_ase, k=0.1, climb=True, method="improvedtangent")
+    ts_neb = TorchSimNEB(
+        images_ts,
+        _PesRelaxer(),
+        k=0.1,
+        climb=True,
+        method="improvedtangent",
+    )
+    ase_f = ase_neb.get_forces()
+    ts_f = ts_neb.get_forces()
+    assert ts_neb.get_force_calls() == 1
+    np.testing.assert_allclose(ts_f, ase_f, atol=1e-12)
+
+
 def test_interpolate_path_basic(h2_reactant, h2_product):
     """Test basic geodesic interpolation between two structures."""
     n_images = 5
@@ -774,6 +832,102 @@ def test_select_structure_pairs_physics_ranking_when_capped(monkeypatch):
 
     ranked = select_structure_pairs(minima, max_pairs=2)
     assert ranked == [(1, 2), (0, 2)]
+
+
+def test_select_structure_pairs_adsorbate_prefers_activated_hops(monkeypatch):
+    """Adsorbate scoring prefers moderate mismatch / core RMS over near-isomers."""
+    atoms0 = Atoms(
+        "Pt2OH", positions=[[0, 0, 0], [2.5, 0, 0], [1.2, 0, 1.5], [1.2, 0, 2.5]]
+    )
+    atoms_slide = Atoms(
+        "Pt2OH", positions=[[0.05, 0, 0], [2.55, 0, 0], [1.25, 0, 1.5], [1.25, 0, 2.5]]
+    )
+    atoms_hop = Atoms(
+        "Pt2OH", positions=[[0.3, 0, 0], [2.7, 0, 0], [1.8, 0, 1.6], [1.9, 0, 2.5]]
+    )
+    minima = [(-1.0, atoms0), (-0.55, atoms_slide), (-0.50, atoms_hop)]
+
+    def _fake_similarity(
+        a_i: Atoms,
+        a_j: Atoms,
+        tolerance: float = 0.1,
+        pair_cor_max: float = 0.1,
+        use_mic: bool = False,
+        **kwargs: object,
+    ) -> tuple[float, float, bool]:
+        oi = float(a_i.get_positions()[2, 0])
+        oj = float(a_j.get_positions()[2, 0])
+        pair = tuple(sorted((round(oi, 2), round(oj, 2))))
+        table = {
+            (1.2, 1.25): (0.03, 0.25, False),  # near-isomer slide
+            (1.2, 1.8): (0.10, 0.55, False),  # activated hop
+            (1.25, 1.8): (0.09, 0.50, False),
+        }
+        return table[pair]
+
+    def _fake_core_rms(
+        a_i: Atoms,
+        a_j: Atoms,
+        **_kwargs: object,
+    ) -> float:
+        oi = float(a_i.get_positions()[2, 0])
+        oj = float(a_j.get_positions()[2, 0])
+        pair = tuple(sorted((round(oi, 2), round(oj, 2))))
+        return {
+            (1.2, 1.25): 0.20,
+            (1.2, 1.8): 0.55,
+            (1.25, 1.8): 0.50,
+        }[pair]
+
+    monkeypatch.setattr(
+        "scgo.ts_search.transition_state_io.calculate_structure_similarity",
+        _fake_similarity,
+    )
+    monkeypatch.setattr(
+        "scgo.ts_search.transition_state_io._core_rms_displacement",
+        _fake_core_rms,
+    )
+    ranked = select_structure_pairs(
+        minima,
+        max_pairs=1,
+        adsorbate_aware=True,
+        n_core_mobile=2,
+        max_endpoint_mismatch=1.25,
+    )
+    assert ranked == [(0, 2)]
+
+
+def test_select_structure_pairs_max_endpoint_mismatch_hard_gate(monkeypatch):
+    """Pairs with comparator max_diff above the gate are dropped."""
+    atoms0 = Atoms("H2", positions=[[0.0, 0, 0], [1.0, 0, 0]])
+    atoms1 = Atoms("H2", positions=[[0.2, 0, 0], [1.2, 0, 0]])
+    atoms2 = Atoms("H2", positions=[[3.0, 0, 0], [4.0, 0, 0]])
+    minima = [(-1.0, atoms0), (-0.95, atoms1), (-0.90, atoms2)]
+
+    def _fake_similarity(
+        a_i: Atoms,
+        a_j: Atoms,
+        tolerance: float = 0.1,
+        pair_cor_max: float = 0.1,
+        use_mic: bool = False,
+        **kwargs: object,
+    ) -> tuple[float, float, bool]:
+        xi = float(a_i.get_positions()[0, 0])
+        xj = float(a_j.get_positions()[0, 0])
+        pair = tuple(sorted((xi, xj)))
+        table = {
+            (0.0, 0.2): (0.05, 0.4, False),
+            (0.0, 3.0): (0.20, 2.5, False),
+            (0.2, 3.0): (0.18, 2.2, False),
+        }
+        return table[pair]
+
+    monkeypatch.setattr(
+        "scgo.ts_search.transition_state_io.calculate_structure_similarity",
+        _fake_similarity,
+    )
+    pairs = select_structure_pairs(minima, max_endpoint_mismatch=1.25)
+    assert pairs == [(0, 1)]
 
 
 @pytest.mark.slow

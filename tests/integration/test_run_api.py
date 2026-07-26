@@ -421,15 +421,19 @@ def test_run_go_system_type_matrix(monkeypatch, system_type):
 
 def test_system_policy_surface_neb_defaults():
     gas = get_system_policy("gas_cluster")
-    surf = get_system_policy("surface_cluster_adsorbate")
+    bare = get_system_policy("surface_cluster")
+    ads = get_system_policy("surface_cluster_adsorbate")
     assert gas.neb_force_mic is False
     assert gas.neb_disable_alignment is False
     assert gas.neb_surface_cell_remap is False
     assert gas.neb_surface_lattice_rotation is False
-    assert surf.neb_force_mic is True
-    assert surf.neb_disable_alignment is False
-    assert surf.neb_surface_cell_remap is True
-    assert surf.neb_surface_lattice_rotation is True
+    assert bare.neb_force_mic is True
+    assert bare.neb_surface_cell_remap is True
+    assert bare.neb_surface_lattice_rotation is True
+    assert ads.neb_force_mic is True
+    assert ads.neb_disable_alignment is False
+    assert ads.neb_surface_cell_remap is True
+    assert ads.neb_surface_lattice_rotation is False
 
 
 def test_run_go_requires_system_type():

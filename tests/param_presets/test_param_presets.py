@@ -79,6 +79,7 @@ def test_coerce_sparse_ts_params_falls_back_to_per_system_defaults(system_type):
         "neb_surface_cell_remap",
         "neb_surface_lattice_rotation",
         "neb_surface_max_lattice_shift",
+        "max_endpoint_mismatch",
     ):
         expected = defaults[key]
         assert kwargs[key] == expected, (
@@ -126,6 +127,41 @@ def test_ts_search_params_expose_adsorbate_subgraph_integrity_default():
     assert ts["enforce_adsorbate_subgraph_integrity"] is True
     kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster_adsorbate")
     assert kwargs["enforce_adsorbate_subgraph_integrity"] is True
+
+
+def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
+    gas = get_ts_search_params(system_type="gas_cluster_adsorbate")
+    assert gas["neb_climb"] is True
+    assert gas["neb_spring_constant"] == pytest.approx(0.5)
+    assert gas["neb_fmax"] == pytest.approx(0.20)
+    assert gas["neb_n_images"] == 7
+    assert gas["neb_steps"] == 4000
+    assert gas["use_parallel_neb"] is True
+    assert gas["max_endpoint_mismatch"] == pytest.approx(1.25)
+    assert gas["energy_gap_threshold"] == pytest.approx(0.75)
+
+    bare = get_ts_search_params(system_type="gas_cluster")
+    assert bare["neb_climb"] is False
+    assert bare["use_parallel_neb"] is False
+    assert bare["max_endpoint_mismatch"] is None
+    assert bare["energy_gap_threshold"] == pytest.approx(2.0)
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, True]
+    cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+    surf = get_ts_search_params(
+        system_type="surface_cluster_adsorbate", surface_config=cfg
+    )
+    assert surf["neb_climb"] is True
+    assert surf["neb_steps"] == 4000
+    assert surf["neb_fmax"] == pytest.approx(0.25)
+    assert surf["torchsim_fmax"] == pytest.approx(0.25)
+    assert surf["use_parallel_neb"] is False
+    assert surf["max_endpoint_mismatch"] == pytest.approx(1.5)
+    assert surf["neb_n_images"] == 7
+    assert surf["energy_gap_threshold"] == pytest.approx(0.75)
+    assert surf["neb_surface_cell_remap"] is True
+    assert surf["neb_surface_lattice_rotation"] is False
 
 
 def test_ts_search_params_allow_overrides():
