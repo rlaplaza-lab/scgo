@@ -526,11 +526,11 @@ def run_transition_state_search(
             mobile composition here. For surface types without explicit adsorbate
             blocks, this is the supported cluster on the slab.
         output_dir: Campaign root directory. TS results are written to
-            ``{formula}_ts_results/`` as a sibling of ``{formula}_searches/``.
+            ``{path_key}_ts_results/`` as a sibling of ``{path_key}_searches/``.
             If None, uses the current working directory.
         searches_dir: Optional explicit path to the GO searches directory
-            (``{formula}_searches/``). When set, minima are loaded from here
-            instead of ``{output_dir}/{formula}_searches``.
+            (``{path_key}_searches/``). When set, minima are loaded from here
+            instead of ``{output_dir}/{path_key}_searches``.
         params: Dictionary of run parameters including:
             - "calculator": Calculator name (e.g., "MACE", "EMT"). Required.
             - "calculator_kwargs": Optional kwargs for calculator initialization.

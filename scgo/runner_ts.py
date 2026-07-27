@@ -92,8 +92,8 @@ def _run_go_ts_pipeline(
     """Run global optimization then transition-state search; return a compact run summary.
 
     ``go_params`` is the same global-optimization dict as ``run_go`` / ``run_go_ts``'s
-    ``go_params=``. Minima and TS artifacts are sibling ``{formula}_searches/`` and
-    ``{formula}_ts_results/`` directories under ``output_path`` (see
+    ``go_params=``. Minima and TS artifacts are sibling ``{path_key}_searches/`` and
+    ``{path_key}_ts_results/`` directories under ``output_path`` (see
     :mod:`scgo.utils.output_paths`).
     ``adsorbate_definition`` (when provided) is forwarded to TS search so endpoint
     alignment can use explicit core/adsorbate block sizes.
@@ -488,8 +488,8 @@ def run_ts_search(
     """Run transition-state search for one composition.
 
     ``output_dir`` is the campaign root. Minima are loaded from
-    ``{formula}_searches/`` (or from ``searches_dir`` when provided). TS
-    artifacts are written to sibling ``{formula}_ts_results/`` with
+    ``{path_key}_searches/`` (or from ``searches_dir`` when provided). TS
+    artifacts are written to sibling ``{path_key}_ts_results/`` with
     ``run_*/pair_*/`` subdirectories. If ``output_dir`` points at an existing
     ``*_searches`` directory, its parent is treated as the campaign root.
     """

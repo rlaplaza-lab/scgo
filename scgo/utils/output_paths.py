@@ -6,12 +6,12 @@ from pathlib import Path
 
 
 def formula_searches_dir(root: str | Path, formula: str) -> Path:
-    """Return ``{root}/{formula}_searches``."""
+    """Return ``{root}/{path_key}_searches`` (``formula`` is the path key)."""
     return Path(root) / f"{formula}_searches"
 
 
 def formula_ts_results_dir(root: str | Path, formula: str) -> Path:
-    """Return ``{root}/{formula}_ts_results``."""
+    """Return ``{root}/{path_key}_ts_results`` (``formula`` is the path key)."""
     return Path(root) / f"{formula}_ts_results"
 
 
@@ -86,10 +86,10 @@ def resolve_go_searches_dir(
     output_dir: str | Path | None,
     formula: str,
 ) -> Path:
-    """Return the GO ``{formula}_searches/`` directory for ``run_go``.
+    """Return the GO ``{path_key}_searches/`` directory for ``run_go``.
 
     When ``output_dir`` is provided, it is the searches directory itself.
-    When ``output_dir`` is ``None``, use ``{formula}_searches`` under CWD.
+    When ``output_dir`` is ``None``, use ``{path_key}_searches`` under CWD.
     """
     if output_dir is not None:
         return Path(output_dir).expanduser().resolve()
@@ -100,7 +100,7 @@ def resolve_go_campaign_searches_dir(
     campaign_parent: str | Path | None,
     formula: str,
 ) -> Path | None:
-    """Return ``{parent}/{formula}_searches`` for ``run_go_campaign``.
+    """Return ``{parent}/{path_key}_searches`` for ``run_go_campaign``.
 
     When ``campaign_parent`` is ``None``, return ``None`` so ``run_go`` applies
     its own default searches path.
@@ -114,7 +114,11 @@ def resolve_go_ts_pipeline_paths(
     campaign_root: str | Path,
     formula: str,
 ) -> tuple[Path, Path]:
-    """Return ``(searches_dir, ts_results_dir)`` under a GO+TS campaign root."""
+    """Return ``(searches_dir, ts_results_dir)`` under a GO+TS campaign root.
+
+    ``formula`` is the component-aware path key
+    (e.g. ``Pt5`` or ``Pt5_OH_OH_graphite``).
+    """
     root = Path(campaign_root)
     return (
         formula_searches_dir(root, formula),
