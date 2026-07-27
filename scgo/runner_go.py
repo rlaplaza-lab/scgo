@@ -351,9 +351,7 @@ def _run_go_campaign_compositions(
                 logger.warning("No minima found for %s (results empty)", path_key)
             if verbosity >= 1:
                 logger.info("Finished processing %s.", path_key)
-                logger.info(
-                    "  Returned %d final minima for %s", len(results), path_key
-                )
+                logger.info("  Returned %d final minima for %s", len(results), path_key)
         except (
             RuntimeError,
             ValueError,

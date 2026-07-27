@@ -1088,11 +1088,11 @@ def run_transition_state_campaign(
     """Run :func:`run_transition_state_search` for multiple compositions in sequence.
 
     ``output_dir`` is the campaign root. Minima are read from
-    ``{output_dir}/{formula}_searches`` (or ``{formula}_searches`` under the
+    ``{output_dir}/{path_key}_searches`` (or ``{path_key}_searches`` under the
     current working directory when ``output_dir`` is None). TS results are
-    written to sibling ``{formula}_ts_results/`` directories. Extra search/NEB
+    written to sibling ``{path_key}_ts_results/`` directories. Extra search/NEB
     arguments are forwarded via ``ts_kwargs``. Failures for one composition never
-    abort the whole campaign — they are logged and that formula gets an empty
+    abort the whole campaign — they are logged and that path key gets an empty
     result list.
     """
     configure_logging(verbosity)
@@ -1100,16 +1100,29 @@ def run_transition_state_campaign(
 
     ts_kwargs = ts_kwargs or {}
     campaign_results: dict[str, list[dict[str, Any]]] = {}
+    ads_def = ts_kwargs.get("adsorbate_definition")
+    if not isinstance(ads_def, dict):
+        ads_def = None
+    surface_cfg = ts_kwargs.get("surface_config")
+    if not isinstance(surface_cfg, SurfaceSystemConfig):
+        surface_cfg = None
+    system_policy = get_system_policy(system_type)
 
     for composition in compositions:
-        formula = get_cluster_formula(composition)
+        path_key = get_system_path_key(
+            composition,
+            adsorbate_definition=ads_def,
+            surface_name=(
+                surface_cfg.name if system_policy.uses_surface and surface_cfg else None
+            ),
+        )
         campaign_root = (
             str(Path(output_dir).expanduser().resolve())
             if output_dir is not None
             else None
         )
         if verbosity >= 1:
-            logger.info("Running TS search campaign for %s", formula)
+            logger.info("Running TS search campaign for %s", path_key)
 
         results = run_transition_state_search(
             composition,
@@ -1124,6 +1137,6 @@ def run_transition_state_campaign(
         for r in results:
             if r.get("transition_state") is not None:
                 _detach_calc(r["transition_state"])
-        campaign_results[formula] = results
+        campaign_results[path_key] = results
 
     return campaign_results

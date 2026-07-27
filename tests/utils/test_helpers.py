@@ -390,9 +390,32 @@ class TestGetSystemPathKey:
         )
 
     def test_surface_default_slab_name(self):
-        assert (
-            get_system_path_key(["Pt"] * 5, surface_name="slab") == "Pt5_slab"
+        assert get_system_path_key(["Pt"] * 5, surface_name="slab") == "Pt5_slab"
+
+    def test_go_ts_alignment_matches_expected_keys(self):
+        """GO resolve_run_path_key and TS get_system_path_key must agree."""
+        from scgo.runner_params import resolve_run_path_key
+        from scgo.surface.presets import make_graphite_surface_config
+
+        ads_def = {
+            "core_symbols": ["Pt"] * 5,
+            "adsorbate_symbols": ["O", "H", "O", "H"],
+            "adsorbate_fragment_lengths": [2, 2],
+        }
+        cfg = make_graphite_surface_config(slab_layers=2, slab_repeat_xy=1)
+        full = ["Pt"] * 5 + ["O", "H", "O", "H"]
+        go = resolve_run_path_key(
+            full,
+            system_type="surface_cluster_adsorbate",
+            adsorbate_definition=ads_def,
+            surface_config=cfg,
         )
+        ts = get_system_path_key(
+            full,
+            adsorbate_definition=ads_def,
+            surface_name=cfg.name,
+        )
+        assert go == ts == "Pt5_OH_OH_graphite"
 
 
 class TestEnsureFloat64Forces:

@@ -30,8 +30,7 @@ def validate_surface_name(name: str) -> str:
         raise SCGOValidationError("surface name must be a non-empty string")
     if not _SURFACE_NAME_RE.fullmatch(cleaned):
         raise SCGOValidationError(
-            "surface name must be alphanumeric with optional '_' / '-' "
-            f"(got {name!r})"
+            f"surface name must be alphanumeric with optional '_' / '-' (got {name!r})"
         )
     return cleaned
 
