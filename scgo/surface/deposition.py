@@ -438,11 +438,15 @@ def create_deposited_cluster(
             surface_config=config,
         )
 
+        # Late import: scgo.system_types imports surface.config while
+        # surface.__init__ eagerly imports this module.
+        from scgo.system_types import resolve_structure_mic
+
         ok, err = validate_supported_cluster_deposit(
             combined,
             n_slab,
             surface_normal_axis=config.surface_normal_axis,
-            use_mic=bool(config.comparator_use_mic),
+            use_mic=resolve_structure_mic("surface_cluster", config),
             connectivity_factor=connectivity_factor,
         )
         if not ok:

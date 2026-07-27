@@ -66,6 +66,7 @@ from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
+    _adsorbate_fragment_lengths_from_definition,
     get_system_policy,
     uses_surface,
     validate_composition_against_adsorbate,
@@ -157,6 +158,38 @@ def ga_run_metadata_extras(
     return out
 
 
+def canonicalize_and_validate_for_storage(
+    atoms: Atoms,
+    *,
+    surface_mode: bool,
+    n_slab: int,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    connectivity_factor: float | None = None,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+) -> None:
+    """Canonicalize then validate; raises on validation failure."""
+    canonicalize_relaxed_for_storage(
+        atoms,
+        surface_mode=surface_mode,
+        n_slab=n_slab,
+    )
+    validate_structure_for_system_type(
+        atoms,
+        system_type=system_type,
+        surface_config=surface_config,
+        n_slab=n_slab if surface_mode else None,
+        adsorbate_definition=adsorbate_definition,
+        connectivity_factor=connectivity_factor,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+    )
+
+
 def validate_structure_for_ga_storage(
     atoms: Atoms,
     *,
@@ -181,17 +214,13 @@ def validate_structure_for_ga_storage(
     (or before initial unrelaxed insert) must use this helper so pre- and
     post-relax checks see the same canonical frame.
     """
-    canonicalize_relaxed_for_storage(
-        atoms,
-        surface_mode=surface_mode,
-        n_slab=n_slab,
-    )
     try:
-        validate_structure_for_system_type(
+        canonicalize_and_validate_for_storage(
             atoms,
+            surface_mode=surface_mode,
+            n_slab=n_slab,
             system_type=system_type,
             surface_config=surface_config,
-            n_slab=n_slab if surface_mode else None,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
@@ -207,8 +236,14 @@ def core_adsorbate_partition_counts(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None,
+    *,
+    allow_empty_core: bool = False,
 ) -> tuple[int, int] | None:
-    """(n_core, n_ads) for the mobile region, or None if not a two-block adsorbate run."""
+    """(n_core, n_ads) for the mobile region, or None if not a two-block adsorbate run.
+
+    When ``allow_empty_core`` is True (TS empty-core adsorbates), only the
+    adsorbate block must be nonempty.
+    """
     if not get_system_policy(system_type).has_adsorbate or adsorbate_definition is None:
         return None
     try:
@@ -220,7 +255,9 @@ def core_adsorbate_partition_counts(
     except (ValueError, SCGOValidationError) as exc:
         logger.debug("core_adsorbate_partition_counts validation failed: %s", exc)
         return None
-    if len(core_list) == 0 or len(ads_list) == 0:
+    if len(ads_list) == 0:
+        return None
+    if len(core_list) == 0 and not allow_empty_core:
         return None
     return (len(core_list), len(ads_list))
 
@@ -229,27 +266,58 @@ def core_adsorbate_partition_details(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None,
+    *,
+    allow_empty_core: bool = False,
 ) -> tuple[int, list[int]] | None:
     """Mobile partition details as ``(n_core, ads_fragment_lengths)``."""
-    if not get_system_policy(system_type).has_adsorbate or adsorbate_definition is None:
+    counts = core_adsorbate_partition_counts(
+        system_type,
+        composition,
+        adsorbate_definition,
+        allow_empty_core=allow_empty_core,
+    )
+    if counts is None or adsorbate_definition is None:
         return None
-    try:
-        core_list, ads_list = validate_composition_against_adsorbate(
-            composition,
-            adsorbate_definition,
-            context="core_adsorbate_partition_details",
-        )
-    except (ValueError, SCGOValidationError) as exc:
-        logger.debug("core_adsorbate_partition_details validation failed: %s", exc)
-        return None
-    if len(core_list) == 0 or len(ads_list) == 0:
-        return None
+    n_core, n_ads = counts
     lengths = parse_positive_fragment_lengths(
         adsorbate_definition.get("adsorbate_fragment_lengths")
     )
-    if sum(lengths) != len(ads_list):
-        lengths = [len(ads_list)]
-    return (len(core_list), lengths)
+    if sum(lengths) != n_ads:
+        lengths = [n_ads]
+    return (n_core, lengths)
+
+
+def resolve_neb_mobile_dims(
+    system_type: SystemType,
+    composition: list[str],
+    adsorbate_definition: AdsorbateDefinition | None,
+    *,
+    neb_align_endpoints: bool,
+) -> tuple[int | None, int | None, list[int] | None]:
+    """Raise-style NEB block dims: ``(n_core, n_ads, fragment_lengths)``.
+
+    Empty-core adsorbates are allowed (``n_core=0``). Bare surface / no-align /
+    missing definition returns ``(None, None, None)``. Invalid definitions raise.
+    """
+    if (
+        not neb_align_endpoints
+        or not get_system_policy(system_type).has_adsorbate
+        or adsorbate_definition is None
+    ):
+        return None, None, None
+    core_list, ads_list = validate_composition_against_adsorbate(
+        composition,
+        adsorbate_definition,
+        context="resolve_neb_mobile_dims",
+    )
+    if len(ads_list) == 0:
+        return None, None, None
+    n_core, n_ads = len(core_list), len(ads_list)
+    try:
+        frag_lengths = _adsorbate_fragment_lengths_from_definition(adsorbate_definition)
+    except (TypeError, ValueError, SCGOValidationError):
+        frag_lengths = None
+    return n_core, n_ads, frag_lengths
 
 
 def apply_mobile_core_ads_tags(

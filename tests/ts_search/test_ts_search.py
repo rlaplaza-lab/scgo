@@ -22,6 +22,7 @@ from scgo.ts_search.transition_state import (
     save_neb_result,
 )
 from scgo.ts_search.transition_state_io import (
+    adsorbate_pair_select_cap,
     select_structure_pairs,
 )
 from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
@@ -318,9 +319,8 @@ def test_calculate_similarity_ignores_fixed_slab_atoms():
 def test_calculate_similarity_uses_mic_for_periodic_surfaces():
     """MIC-aware similarity should treat periodic translations as equivalent.
 
-    ``PureInteratomicDistanceComparator`` enables MIC whenever the structure has
-    any PBC, so ``use_mic=False`` still compares via the minimum image when
-    ``pbc`` is set; both paths must therefore agree for this pair.
+    ``PureInteratomicDistanceComparator`` honors ``mic`` literally even when the
+    cell has PBC, so ``use_mic=False`` must not fold images across the boundary.
     """
     cell = [8.0, 8.0, 12.0]
     a1 = Atoms(
@@ -337,7 +337,7 @@ def test_calculate_similarity_uses_mic_for_periodic_surfaces():
     )
     _, _, no_mic_flag_similar = calculate_structure_similarity(a1, a2, use_mic=False)
     _, _, mic_similar = calculate_structure_similarity(a1, a2, use_mic=True)
-    assert bool(no_mic_flag_similar) is True
+    assert bool(no_mic_flag_similar) is False
     assert bool(mic_similar) is True
 
 
@@ -740,6 +740,12 @@ def test_save_neb_result_failed(temp_output_dir):
     assert not os.path.exists(os.path.join(temp_output_dir, "ts_1_2.xyz"))
 
 
+def test_adsorbate_pair_select_cap_bounds_oversample() -> None:
+    assert adsorbate_pair_select_cap(3) == 30
+    assert adsorbate_pair_select_cap(10) == 50
+    assert adsorbate_pair_select_cap(60) == 60
+
+
 def test_select_structure_pairs_basic():
     """Test basic pair selection."""
     # Create mock minima
@@ -927,6 +933,58 @@ def test_select_structure_pairs_max_endpoint_mismatch_hard_gate(monkeypatch):
         _fake_similarity,
     )
     pairs = select_structure_pairs(minima, max_endpoint_mismatch=1.25)
+    assert pairs == [(0, 1)]
+
+
+def test_core_rms_displacement_is_permutation_invariant() -> None:
+    """Same-element core reorder must not inflate core RMS after spatial match."""
+    from scgo.ts_search.transition_state_io import _core_rms_displacement
+
+    atoms_i = Atoms(
+        "Pt2OH",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
+    )
+    atoms_j = Atoms(
+        "Pt2OH",
+        positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.3, 0.0, 1.5], [1.3, 0.0, 2.5]],
+    )
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=2, use_mic=False)
+    assert rms < 0.05
+
+
+def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop(monkeypatch) -> None:
+    """Permuted identical cores should pass the core-RMS gate and remain selectable."""
+    atoms0 = Atoms(
+        "Pt2OH",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
+    )
+    atoms1 = Atoms(
+        "Pt2OH",
+        positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.8, 0.0, 1.6], [1.9, 0.0, 2.5]],
+    )
+    minima = [(-1.0, atoms0), (-0.5, atoms1)]
+
+    def _fake_similarity(
+        a_i: Atoms,
+        a_j: Atoms,
+        tolerance: float = 0.1,
+        pair_cor_max: float = 0.1,
+        use_mic: bool = False,
+        **kwargs: object,
+    ) -> tuple[float, float, bool]:
+        return (0.08, 0.55, False)
+
+    monkeypatch.setattr(
+        "scgo.ts_search.transition_state_io.calculate_structure_similarity",
+        _fake_similarity,
+    )
+    pairs = select_structure_pairs(
+        minima,
+        max_pairs=1,
+        adsorbate_aware=True,
+        n_core_mobile=2,
+        max_endpoint_mismatch=1.25,
+    )
     assert pairs == [(0, 1)]
 
 

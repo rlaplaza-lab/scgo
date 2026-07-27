@@ -102,10 +102,25 @@ def test_get_ts_search_params_uma_has_torchsim_when_available(monkeypatch):
         calculator="UMA", calculator_kwargs={}, system_type="gas_cluster"
     )
     assert ts["use_torchsim"] is True
-    assert ts["use_parallel_neb"] is False
+    assert ts["use_parallel_neb"] is True
 
 
-def test_resolve_ts_torchsim_flags_upet_requires_stacks(monkeypatch):
+def test_resolve_ts_torchsim_flags_parallel_defaults_on_when_none(monkeypatch):
+    real_find_spec = importlib.util.find_spec
+
+    def fake_spec(name: str):
+        if name == "torch_sim":
+            return object()
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_spec)
+    us, up = resolve_ts_torchsim_flags("MACE", True, None)
+    assert us is True and up is True
+    us, up = resolve_ts_torchsim_flags("MACE", True, False)
+    assert us is True and up is False
+    us, up = resolve_ts_torchsim_flags("MACE", False, None)
+    assert us is False and up is False
+
     real_find_spec = importlib.util.find_spec
 
     def fake_spec(name: str):
@@ -155,7 +170,7 @@ def test_coerce_ts_params_uma_sets_fairchem_model_fields(monkeypatch):
     )
     kw = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
     assert kw["use_torchsim"] is True
-    assert kw["use_parallel_neb"] is False
+    assert kw["use_parallel_neb"] is True
     tsp = kw["torchsim_params"]
     assert tsp["model_kind"] == "fairchem"
     assert tsp["fairchem_model_name"] == "uma-s-1p2"

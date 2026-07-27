@@ -41,8 +41,10 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.system_types import (
+    _n_core_mobile_from_adsorbate_definition,
     get_system_policy,
     resolve_mobile_composition,
+    resolve_structure_mic,
     validate_adsorbate_definition,
     validate_system_type_settings,
 )
@@ -217,6 +219,29 @@ def _resolve_surface_alignment_kwargs(
     }
 
 
+def _resolve_n_core_mobile_for_alignment(
+    atoms: Atoms,
+    global_optimizer_kwargs: dict[str, Any],
+) -> int | None:
+    """Resolve core mobile count for surface PBC final-write alignment."""
+    n_core_meta = get_metadata(atoms, "n_core_atoms", None)
+    if n_core_meta is not None:
+        try:
+            n_core = int(n_core_meta)
+        except (TypeError, ValueError):
+            n_core = None
+        else:
+            if n_core >= 0:
+                return n_core
+
+    ads_def = global_optimizer_kwargs.get("adsorbate_definition")
+    if isinstance(ads_def, dict):
+        n_core = _n_core_mobile_from_adsorbate_definition(ads_def)
+        if n_core is not None:
+            return int(n_core)
+    return None
+
+
 def _align_slab_minimum_to_reference(
     reference: Atoms,
     candidate: Atoms,
@@ -225,6 +250,7 @@ def _align_slab_minimum_to_reference(
     enable_cell_remap: bool,
     enable_lattice_rotation: bool,
     max_lattice_shift: int,
+    n_core_mobile: int | None = None,
 ) -> None:
     """Align ``candidate`` to ``reference`` using the TS slab PBC protocol (in-place)."""
     from scgo.ts_search.transition_state import _align_product_surface_pbc
@@ -236,6 +262,7 @@ def _align_slab_minimum_to_reference(
         enable_cell_remap=enable_cell_remap,
         enable_lattice_rotation=enable_lattice_rotation,
         max_lattice_shift=max_lattice_shift,
+        n_core_mobile=n_core_mobile,
     )
     candidate.set_positions(aligned)
     candidate.set_cell(reference.cell)
@@ -764,9 +791,12 @@ def run_trials(
     )
     logger.info("Filtering for unique structures across all runs...")
     surface_cfg = global_optimizer_kwargs.get("surface_config")
-    dedupe_mic = (
-        bool(surface_cfg.comparator_use_mic) if surface_cfg is not None else False
-    )
+    system_type_for_mic = global_optimizer_kwargs.get("system_type")
+    if not isinstance(system_type_for_mic, str):
+        raise SCGOValidationError(
+            "system_type must be set in global_optimizer_kwargs for minima dedupe."
+        )
+    dedupe_mic = resolve_structure_mic(system_type_for_mic, surface_cfg)
     unique_candidates = filter_unique_minima(
         all_minima_for_filtering,
         n_top=len(composition),
@@ -943,6 +973,9 @@ def run_trials(
         if reference_atoms is not None and surface_align_kwargs is not None:
             is_slab_candidate, _ = _is_slab_surface_minimum(atoms_clean)
             if is_slab_candidate:
+                n_core_mobile = _resolve_n_core_mobile_for_alignment(
+                    atoms_clean, align_kwargs_source
+                )
                 _align_slab_minimum_to_reference(
                     reference_atoms,
                     atoms_clean,
@@ -952,6 +985,7 @@ def run_trials(
                         "enable_lattice_rotation"
                     ],
                     max_lattice_shift=surface_align_kwargs["max_lattice_shift"],
+                    n_core_mobile=n_core_mobile,
                 )
                 aligned_to_surface_reference = True
                 if reference_primary_cell_shift is not None and np.any(

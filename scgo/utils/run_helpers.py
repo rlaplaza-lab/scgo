@@ -569,6 +569,7 @@ def log_ts_configuration(
         "minima_energy_tolerance",
         "use_torchsim",
         "use_parallel_neb",
+        "parallel_neb_max_bands",
         "neb_align_endpoints",
         "neb_interpolation_mic",
         "neb_n_images",

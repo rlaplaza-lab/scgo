@@ -150,6 +150,7 @@ def calculate_structure_similarity(
     ignore_fixed_atoms: bool = True,
     use_mic: bool = False,
     n_slab: int | None = None,
+    comparator: PureInteratomicDistanceComparator | None = None,
 ) -> tuple[float, float, bool]:
     """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ."""
     if len(atoms1) != len(atoms2):
@@ -168,12 +169,21 @@ def calculate_structure_similarity(
     atoms1_cmp = atoms1[comparison_indices]
     atoms2_cmp = atoms2[comparison_indices]
 
-    comparator = PureInteratomicDistanceComparator(
-        n_top=len(atoms1_cmp),
-        tol=tolerance,
-        pair_cor_max=pair_cor_max,
-        mic=use_mic,
-    )
+    if comparator is None:
+        comparator = PureInteratomicDistanceComparator(
+            n_top=len(atoms1_cmp),
+            tol=tolerance,
+            pair_cor_max=pair_cor_max,
+            mic=use_mic,
+        )
+    elif comparator.n_top != len(atoms1_cmp):
+        # Mobile count changed; fall back to a matching comparator.
+        comparator = PureInteratomicDistanceComparator(
+            n_top=len(atoms1_cmp),
+            tol=tolerance,
+            pair_cor_max=pair_cor_max,
+            mic=use_mic,
+        )
 
     cum_diff, max_diff = comparator.get_differences(atoms1_cmp, atoms2_cmp)
     are_similar = comparator.looks_like(atoms1_cmp, atoms2_cmp)

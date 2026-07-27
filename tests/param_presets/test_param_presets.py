@@ -134,6 +134,7 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert gas["neb_climb"] is True
     assert gas["neb_spring_constant"] == pytest.approx(0.5)
     assert gas["neb_fmax"] == pytest.approx(0.20)
+    assert gas["torchsim_fmax"] == pytest.approx(0.20)
     assert gas["neb_n_images"] == 7
     assert gas["neb_steps"] == 4000
     assert gas["use_parallel_neb"] is True
@@ -142,7 +143,9 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
 
     bare = get_ts_search_params(system_type="gas_cluster")
     assert bare["neb_climb"] is False
-    assert bare["use_parallel_neb"] is False
+    assert bare["use_parallel_neb"] is True
+    assert bare["parallel_neb_max_bands"] is None
+    assert bare["neb_fmax"] == pytest.approx(0.20)
     assert bare["max_endpoint_mismatch"] is None
     assert bare["energy_gap_threshold"] == pytest.approx(2.0)
 
@@ -154,14 +157,25 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     )
     assert surf["neb_climb"] is True
     assert surf["neb_steps"] == 4000
-    assert surf["neb_fmax"] == pytest.approx(0.25)
-    assert surf["torchsim_fmax"] == pytest.approx(0.25)
-    assert surf["use_parallel_neb"] is False
+    assert surf["neb_fmax"] == pytest.approx(0.20)
+    assert surf["torchsim_fmax"] == pytest.approx(0.20)
+    assert surf["use_parallel_neb"] is True
+    assert surf["parallel_neb_max_bands"] == 1
+    assert "torchsim_batch_size" not in surf
     assert surf["max_endpoint_mismatch"] == pytest.approx(1.5)
     assert surf["neb_n_images"] == 7
     assert surf["energy_gap_threshold"] == pytest.approx(0.75)
     assert surf["neb_surface_cell_remap"] is True
     assert surf["neb_surface_lattice_rotation"] is False
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_ts_force_convergence_and_parallel_neb_are_shared(system_type):
+    """Force tolerance and parallel NEB are defaults for every system type."""
+    ts = _ts_search_params_for(system_type)
+    assert ts["neb_fmax"] == pytest.approx(0.20)
+    assert ts["torchsim_fmax"] == pytest.approx(0.20)
+    assert ts["use_parallel_neb"] is True
 
 
 def test_ts_search_params_allow_overrides():
@@ -203,10 +217,13 @@ def test_ts_search_surface_regime_mic_and_fmax():
     ts = get_ts_search_params(system_type="surface_cluster", surface_config=cfg)
     assert ts["neb_interpolation_mic"] is True
     assert ts["neb_n_images"] == 5
-    assert ts["neb_fmax"] == pytest.approx(0.1)
-    assert ts["torchsim_fmax"] == pytest.approx(0.1)
-    assert ts["neb_steps"] == 500
-    assert ts["torchsim_max_steps"] == 500
+    assert ts["neb_fmax"] == pytest.approx(0.20)
+    assert ts["torchsim_fmax"] == pytest.approx(0.20)
+    assert ts["neb_steps"] == 2000
+    assert ts["torchsim_max_steps"] == 2000
+    assert ts["use_parallel_neb"] is True
+    assert ts["parallel_neb_max_bands"] == 1
+    assert "torchsim_batch_size" not in ts
     assert ts["neb_climb"] is False
     assert ts["neb_interpolation_method"] == "idpp"
     assert ts["neb_align_endpoints"] is True
@@ -214,11 +231,12 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert kwargs["neb_interpolation_mic"] is True
     assert kwargs["neb_n_images"] == 5
     assert kwargs["neb_climb"] is False
-    assert kwargs["neb_fmax"] == pytest.approx(0.1)
-    assert kwargs["neb_steps"] == 500
+    assert kwargs["neb_fmax"] == pytest.approx(0.20)
+    assert kwargs["neb_steps"] == 2000
+    assert kwargs["use_parallel_neb"] is True
     assert kwargs["neb_interpolation_method"] == "idpp"
-    assert kwargs["torchsim_params"]["force_tol"] == pytest.approx(0.1)
-    assert kwargs["torchsim_params"]["max_steps"] == 500
+    assert kwargs["torchsim_params"]["force_tol"] == pytest.approx(0.20)
+    assert kwargs["torchsim_params"]["max_steps"] == 2000
     assert kwargs["neb_align_endpoints"] is True
     assert kwargs["neb_surface_cell_remap"] is True
     assert kwargs["neb_surface_lattice_rotation"] is True

@@ -28,7 +28,7 @@ from scgo.constants import (
     MIN_ATOMIC_DISTANCE_WARNING,
     PENALTY_ENERGY,
 )
-from scgo.database.metadata import get_metadata
+from scgo.database.metadata import add_metadata, get_metadata
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -96,8 +96,6 @@ def _assign_penalty_energy(atoms: Atoms) -> float:
     Returns:
         The penalty energy value (PENALTY_ENERGY).
     """
-    from scgo.database.metadata import add_metadata
-
     add_metadata(
         atoms,
         potential_energy=PENALTY_ENERGY,
@@ -206,6 +204,8 @@ def perform_local_relaxation(
     trajectory: str | None = None,
     *,
     center_after_relax: bool = True,
+    surface_mode: bool = False,
+    n_slab: int = 0,
 ) -> float:
     """Performs a local structure relaxation on an ASE Atoms object.
 
@@ -218,8 +218,11 @@ def perform_local_relaxation(
         logfile: Optional path to a file for logging optimizer output.
         trajectory: Optional path to a file for saving the optimization trajectory.
         center_after_relax: If True (default), call
-            :func:`canonicalize_relaxed_for_storage` after relaxation. Use False
-            for slab+adsorbate systems.
+            :func:`canonicalize_relaxed_for_storage` after relaxation (gas frame).
+            Use False with ``surface_mode=True`` for slab+adsorbate systems.
+        surface_mode: When True and ``center_after_relax`` is False, apply the
+            slab-aware storage canonicalize (no bare PBC wrap / COM recenter).
+        n_slab: Slab atom count for surface-mode canonicalize.
 
     Returns:
         The potential energy of the relaxed structure. Returns penalty energy if relaxation fails.
@@ -247,10 +250,10 @@ def perform_local_relaxation(
         forces = ensure_float64_forces(atoms)
         if center_after_relax:
             canonicalize_relaxed_for_storage(atoms)
+        elif surface_mode:
+            canonicalize_relaxed_for_storage(atoms, surface_mode=True, n_slab=n_slab)
         elif np.any(atoms.get_pbc()):
             atoms.wrap()
-
-        from scgo.database.metadata import add_metadata
 
         add_metadata(atoms, potential_energy=energy, raw_score=-energy)
 

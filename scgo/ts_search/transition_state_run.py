@@ -12,6 +12,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from scgo.algorithms.ga_common import resolve_neb_mobile_dims
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
@@ -21,7 +22,6 @@ from scgo.exceptions import SCGOValidationError
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
-    attach_slab_constraints_from_surface_config,
     surface_slab_constraint_summary,
 )
 from scgo.surface.validation import validate_supported_cluster_deposit
@@ -31,8 +31,8 @@ from scgo.system_types import (
     _n_core_mobile_from_adsorbate_definition,
     get_system_policy,
     resolve_connectivity_factor,
-    validate_composition_against_adsorbate,
-    validate_structure_for_system_type,
+    resolve_neb_mic,
+    resolve_structure_mic,
     validate_system_type_settings,
 )
 from scgo.utils.comparators import get_shared_mobile_atom_indices
@@ -56,8 +56,10 @@ from scgo.utils.timing_report import (
 )
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
 from scgo.utils.ts_provenance import is_cuda_oom_error
+from scgo.utils.ts_runner_kwargs import NebRunConfig
 from scgo.utils.validation import validate_composition
 
+from .neb_endpoints import prepare_neb_endpoints
 from .parallel_neb import run_parallel_neb_search
 from .transition_state import (
     _detach_calc,
@@ -72,6 +74,7 @@ from .transition_state import (
     validate_initial_neb_path,
 )
 from .transition_state_io import (
+    adsorbate_pair_select_cap,
     load_minima_by_composition,
     save_transition_state_results,
     select_structure_pairs,
@@ -186,49 +189,31 @@ def _run_serial_neb_search(
     pairs: list[tuple[int, int]],
     minima: list[tuple[float, Any]],
     *,
+    neb_cfg: NebRunConfig,
     run_dir: Path,
     calculator_class: Any,
     calculator_kwargs: dict[str, Any],
-    surface_config: SurfaceSystemConfig | None,
     rng: Any,
     use_torchsim: bool,
-    torchsim_params: dict[str, Any],
-    neb_n_images: int,
-    neb_spring_constant: float,
-    neb_fmax: float,
-    neb_steps: int,
-    neb_climb: bool,
-    neb_interpolation_method: str,
-    neb_align_endpoints: bool,
-    neb_perturb_sigma: float,
-    neb_interpolation_mic: bool,
-    neb_tangent_method: str,
     verbosity: int,
-    system_type: SystemType | None = None,
     write_timing_json: bool = False,
-    n_slab: int = 0,
-    n_core_mobile: int | None = None,
-    n_adsorbate_mobile: int | None = None,
-    adsorbate_fragment_lengths: list[int] | None = None,
-    max_endpoint_mismatch: float | None = None,
-    neb_surface_cell_remap: bool = True,
-    neb_surface_lattice_rotation: bool = True,
-    neb_surface_max_lattice_shift: int = 1,
-    adsorbate_definition: Any | None = None,
-    connectivity_factor: float | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
 ) -> list[dict[str, Any]]:
     """Run NEBs sequentially via :func:`find_transition_state` (one calc per pair)."""
     logger = get_logger(__name__)
     ts_results: list[dict[str, Any]] = []
+    torchsim_params = neb_cfg.torchsim_params or {}
+    system_type = neb_cfg.system_type
+    neb_steps = (
+        int(neb_cfg.neb_steps)
+        if isinstance(neb_cfg.neb_steps, int)
+        else neb_cfg.neb_steps
+    )
 
     shared_relaxer = None
     if use_torchsim:
         from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
-        shared_relaxer = TorchSimBatchRelaxer(**(torchsim_params or {}))
+        shared_relaxer = TorchSimBatchRelaxer(**torchsim_params)
 
     for idx, (i, j) in enumerate(pairs, 1):
         if not use_torchsim:
@@ -253,51 +238,25 @@ def _run_serial_neb_search(
                 f"{energy_j:.6f}" if energy_j is not None else "None",
             )
 
-        react_ep = copy_atoms(atoms_i)
-        prod_ep = copy_atoms(atoms_j)
-        if surface_config is not None:
-            attach_slab_constraints_from_surface_config(react_ep, surface_config)
-            attach_slab_constraints_from_surface_config(prod_ep, surface_config)
         try:
-            validate_structure_for_system_type(
-                react_ep,
-                system_type=system_type,
-                surface_config=surface_config,
-                n_slab=n_slab,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            )
-            validate_structure_for_system_type(
-                prod_ep,
-                system_type=system_type,
-                surface_config=surface_config,
-                n_slab=n_slab,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            )
-        except ValueError as e:
+            react_ep, prod_ep = prepare_neb_endpoints(atoms_i, atoms_j, neb_cfg)
+        except (ValueError, SCGOValidationError) as e:
             logger.warning(
                 "Skipping pair %s due to structure validation error: %s", pair_id, e
             )
             skipped = make_ts_result(
                 pair_id=pair_id,
-                n_images=neb_n_images,
-                spring_constant=neb_spring_constant,
+                n_images=neb_cfg.neb_n_images,
+                spring_constant=neb_cfg.neb_spring_constant,
                 use_torchsim=use_torchsim,
-                fmax=neb_fmax,
+                fmax=neb_cfg.neb_fmax,
                 neb_steps=neb_steps,
-                interpolation_method=neb_interpolation_method,
-                climb=neb_climb,
-                align_endpoints=neb_align_endpoints,
-                perturb_sigma=neb_perturb_sigma,
-                neb_interpolation_mic=neb_interpolation_mic,
-                neb_tangent_method=neb_tangent_method,
+                interpolation_method=neb_cfg.neb_interpolation_method,
+                climb=neb_cfg.neb_climb,
+                align_endpoints=neb_cfg.neb_align_endpoints,
+                perturb_sigma=neb_cfg.neb_perturb_sigma,
+                neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
+                neb_tangent_method=neb_cfg.neb_tangent_method,
                 reactant_energy=energy_i,
                 product_energy=energy_j,
                 error=str(e),
@@ -321,30 +280,30 @@ def _run_serial_neb_search(
                 output_dir=str(pair_dir),
                 pair_id=pair_id,
                 rng=rng,
-                n_images=neb_n_images,
-                spring_constant=neb_spring_constant,
-                fmax=neb_fmax,
+                n_images=neb_cfg.neb_n_images,
+                spring_constant=neb_cfg.neb_spring_constant,
+                fmax=neb_cfg.neb_fmax,
                 neb_steps=neb_steps,
-                climb=neb_climb,
-                interpolation_method=neb_interpolation_method,
-                align_endpoints=neb_align_endpoints,
-                perturb_sigma=neb_perturb_sigma,
-                neb_interpolation_mic=neb_interpolation_mic,
-                neb_tangent_method=neb_tangent_method,
+                climb=neb_cfg.neb_climb,
+                interpolation_method=neb_cfg.neb_interpolation_method,
+                align_endpoints=neb_cfg.neb_align_endpoints,
+                perturb_sigma=neb_cfg.neb_perturb_sigma,
+                neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
+                neb_tangent_method=neb_cfg.neb_tangent_method,
                 system_type=system_type,
                 use_torchsim=use_torchsim,
                 torchsim_params=torchsim_params,
                 relaxer=shared_relaxer,
                 verbosity=verbosity,
                 write_timing_json=write_timing_json,
-                n_slab=n_slab,
-                n_core_mobile=n_core_mobile,
-                n_adsorbate_mobile=n_adsorbate_mobile,
-                adsorbate_fragment_lengths=adsorbate_fragment_lengths,
-                max_endpoint_mismatch=max_endpoint_mismatch,
-                neb_surface_cell_remap=neb_surface_cell_remap,
-                neb_surface_lattice_rotation=neb_surface_lattice_rotation,
-                neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+                n_slab=neb_cfg.n_slab,
+                n_core_mobile=neb_cfg.n_core_mobile,
+                n_adsorbate_mobile=neb_cfg.n_adsorbate_mobile,
+                adsorbate_fragment_lengths=neb_cfg.adsorbate_fragment_lengths,
+                max_endpoint_mismatch=neb_cfg.max_endpoint_mismatch,
+                neb_surface_cell_remap=neb_cfg.neb_surface_cell_remap,
+                neb_surface_lattice_rotation=neb_cfg.neb_surface_lattice_rotation,
+                neb_surface_max_lattice_shift=neb_cfg.neb_surface_max_lattice_shift,
             )
         except (RuntimeError, ValueError, SCGOValidationError) as e:
             logger.error(
@@ -361,17 +320,17 @@ def _run_serial_neb_search(
                 )
             result = make_ts_result(
                 pair_id=pair_id,
-                n_images=neb_n_images,
-                spring_constant=neb_spring_constant,
+                n_images=neb_cfg.neb_n_images,
+                spring_constant=neb_cfg.neb_spring_constant,
                 use_torchsim=use_torchsim,
-                fmax=neb_fmax,
+                fmax=neb_cfg.neb_fmax,
                 neb_steps=neb_steps,
-                interpolation_method=neb_interpolation_method,
-                climb=neb_climb,
-                align_endpoints=neb_align_endpoints,
-                perturb_sigma=neb_perturb_sigma,
-                neb_interpolation_mic=neb_interpolation_mic,
-                neb_tangent_method=neb_tangent_method,
+                interpolation_method=neb_cfg.neb_interpolation_method,
+                climb=neb_cfg.neb_climb,
+                align_endpoints=neb_cfg.neb_align_endpoints,
+                perturb_sigma=neb_cfg.neb_perturb_sigma,
+                neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
+                neb_tangent_method=neb_cfg.neb_tangent_method,
                 reactant_energy=energy_i,
                 product_energy=energy_j,
                 error=str(e),
@@ -459,7 +418,7 @@ def _apply_surface_ts_geometry_gate(
         return
 
     n_slab = len(surface_config.slab)
-    use_mic = bool(surface_config.comparator_use_mic)
+    use_mic = resolve_structure_mic(system_type, surface_config)
     axis = int(surface_config.surface_normal_axis)
     cf = resolve_connectivity_factor(connectivity_factor, surface_config=surface_config)
     checks = (
@@ -514,7 +473,7 @@ def run_transition_state_search(
     similarity_pair_cor_max: float = 0.1,
     neb_n_images: int = 3,
     neb_spring_constant: float = 0.1,
-    neb_fmax: float = 0.05,
+    neb_fmax: float = 0.20,
     neb_steps: int | str = "auto",
     neb_climb: bool = False,
     neb_interpolation_method: str = "idpp",
@@ -527,7 +486,8 @@ def run_transition_state_search(
     neb_tangent_method: str = DEFAULT_NEB_TANGENT_METHOD,
     max_endpoint_mismatch: float | None = None,
     use_torchsim: bool = False,
-    use_parallel_neb: bool = False,
+    use_parallel_neb: bool | None = None,
+    parallel_neb_max_bands: int | None = None,
     torchsim_params: dict | None = None,
     # Post-processing controls
     dedupe_minima: bool = True,
@@ -550,10 +510,13 @@ def run_transition_state_search(
     geodesic interpolation for initial path generation.
 
     Prefer :func:`scgo.param_presets.get_ts_search_params` (or ``run_ts_search`` /
-    ``run_go_ts``) for production defaults: bare gas uses 5 images / serial TorchSim;
-    adsorbates use 7 images, climb, and ``energy_gap_threshold=0.75``. The signature
-    defaults below are a minimal low-level fallback when calling this function
-    directly without presets.
+    ``run_go_ts``) for production defaults: shared ``neb_fmax=0.20`` and parallel
+    TorchSim NEB for every system type; bare gas uses 5 images; adsorbates use
+    7 images, climb, and ``energy_gap_threshold=0.75``. Signature ``neb_fmax``
+    matches those presets; ``use_parallel_neb`` defaults to ``True`` whenever
+    TorchSim is enabled (``None`` → on with TorchSim, off without). Other knobs
+    (image count, climb, energy gap) still use a minimal low-level fallback
+    when calling this function directly without presets.
 
     Args:
         composition: List of atomic symbols for the mobile region. For high-level
@@ -581,7 +544,8 @@ def run_transition_state_search(
         neb_n_images: Number of intermediate NEB images. Low-level default ``3``;
             presets use ``5`` (bare) / ``7`` (adsorbate).
         neb_spring_constant: Spring constant for NEB band (eV/Ų). Default 0.1.
-        neb_fmax: Maximum force convergence for NEB (eV/Å). Default 0.05.
+        neb_fmax: Maximum force convergence for NEB (eV/Å). Default 0.20
+            (shared across system types; same as presets).
         neb_steps: Maximum NEB optimization steps. Default 'auto' (resolved with auto_niter_ts).
         neb_climb: Use climbing image NEB for better TS convergence. Default False.
         neb_interpolation_method: Path interpolation method ('idpp' or 'linear'). Default 'idpp'.
@@ -592,8 +556,13 @@ def run_transition_state_search(
             when set (adsorbate presets), also enables pre-NEB path/energy checks.
         use_torchsim: Use TorchSim for GPU-efficient batched force evaluation (MACE/UMA only).
             Low-level default ``False``; presets set ``True``.
-        use_parallel_neb: Batch multiple NEB bands (requires TorchSim). Presets enable
-            this only for gas adsorbates.
+        use_parallel_neb: Batch multiple NEB bands (requires TorchSim). Default
+            ``None`` resolves to ``True`` when ``use_torchsim=True`` (same as
+            presets) and ``False`` otherwise. Explicit ``True`` without TorchSim
+            raises.
+        parallel_neb_max_bands: Cap concurrent bands inside parallel NEB (``None`` =
+            all selected pairs). Surface presets use ``1`` to avoid GPU OOM on
+            large slab cells while keeping the parallel NEB path.
         torchsim_params: Optional parameters for TorchSimBatchRelaxer when use_torchsim=True.
         surface_config: When set, the same :class:`scgo.surface.config.SurfaceSystemConfig`
             used for GA. Endpoint structures are copied per pair and slab
@@ -645,30 +614,15 @@ def run_transition_state_search(
         if surface_config is not None and system_policy.uses_surface
         else 0
     )
-    neb_n_core_m: int | None = None
-    neb_n_ads_m: int | None = None
-    neb_ads_frag_lengths: list[int] | None = None
-    if (
-        neb_align_endpoints
-        and system_policy.has_adsorbate
-        and adsorbate_definition is not None
-    ):
-        c_syms, a_syms = validate_composition_against_adsorbate(
-            adsorbate_composition,
-            adsorbate_definition,
-            context="run_transition_state_search",
-        )
-        if len(c_syms) > 0 and len(a_syms) > 0:
-            neb_n_core_m, neb_n_ads_m = len(c_syms), len(a_syms)
-            try:
-                neb_ads_frag_lengths = _adsorbate_fragment_lengths_from_definition(
-                    adsorbate_definition
-                )
-            except (TypeError, ValueError, SCGOValidationError):
-                neb_ads_frag_lengths = None
+    neb_n_core_m, neb_n_ads_m, neb_ads_frag_lengths = resolve_neb_mobile_dims(
+        system_type,
+        adsorbate_composition,
+        adsorbate_definition,
+        neb_align_endpoints=neb_align_endpoints,
+    )
     rng = ensure_rng(seed)
 
-    if use_parallel_neb and not use_torchsim:
+    if use_parallel_neb is True and not use_torchsim:
         raise SCGOValidationError("use_parallel_neb requires use_torchsim=True")
 
     path_key_formula = (
@@ -730,6 +684,7 @@ def run_transition_state_search(
         else neb_steps,
         "neb_backend": "torchsim" if use_torchsim else "ase",
         "use_parallel_neb": use_parallel_neb,
+        "parallel_neb_max_bands": parallel_neb_max_bands,
         "neb_climb": neb_climb,
         "neb_interpolation_method": neb_interpolation_method,
         "neb_n_images": neb_n_images,
@@ -756,11 +711,8 @@ def run_transition_state_search(
 
     if dedupe_minima:
         original_count = len(minima)
-        ts_dedupe_mic = (
-            bool(surface_config.comparator_use_mic)
-            if surface_config is not None
-            else False
-        )
+        # Match NEB MIC geometry (resolve_neb_mic), not GA comparator knob.
+        ts_dedupe_mic = resolve_neb_mic(system_type)
         # Match GA ``n_to_optimize``: trailing mobile atoms (core + adsorbates).
         dedupe_n_top = len(adsorbate_composition)
         if neb_n_core_m is not None and neb_n_ads_m is not None:
@@ -795,21 +747,23 @@ def run_transition_state_search(
     _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 
     # Adsorbate pre-NEB gates drop many candidates; oversample then re-rank by
-    # IDPP profile so ``max_pairs`` favors robust interior maxima.
+    # IDPP profile so ``max_pairs`` favors robust interior maxima. Cap the pool
+    # absolutely (``adsorbate_pair_select_cap``) so cost stays bounded.
     pair_select_cap = max_pairs
     if (
         max_endpoint_mismatch is not None
         and max_pairs is not None
         and int(max_pairs) > 0
     ):
-        pair_select_cap = int(max_pairs) * 5
+        pair_select_cap = adsorbate_pair_select_cap(int(max_pairs))
     pairs = select_structure_pairs(
         minima,
         max_pairs=pair_select_cap,
         energy_gap_threshold=energy_gap_threshold,
         similarity_tolerance=similarity_tolerance,
         similarity_pair_cor_max=similarity_pair_cor_max,
-        surface_aware=bool(neb_interpolation_mic),
+        surface_aware=bool(system_policy.uses_surface),
+        use_mic=resolve_neb_mic(system_type),
         n_slab=neb_n_slab if neb_n_slab > 0 else None,
         max_endpoint_mismatch=max_endpoint_mismatch,
         adsorbate_aware=bool(system_policy.has_adsorbate),
@@ -882,77 +836,58 @@ def run_transition_state_search(
 
     t_ts0 = perf_counter()
     parallel_meta: dict[str, float] = {}
+    neb_cfg = NebRunConfig(
+        neb_n_images=neb_n_images,
+        neb_spring_constant=neb_spring_constant,
+        neb_fmax=neb_fmax,
+        neb_steps=neb_steps,
+        neb_climb=neb_climb,
+        neb_interpolation_method=neb_interpolation_method,
+        neb_align_endpoints=neb_align_endpoints,
+        neb_perturb_sigma=neb_perturb_sigma,
+        neb_interpolation_mic=neb_interpolation_mic,
+        neb_tangent_method=neb_tangent_method,
+        neb_surface_cell_remap=neb_surface_cell_remap,
+        neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+        neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+        n_slab=neb_n_slab,
+        n_core_mobile=neb_n_core_m,
+        n_adsorbate_mobile=neb_n_ads_m,
+        adsorbate_fragment_lengths=neb_ads_frag_lengths,
+        max_endpoint_mismatch=max_endpoint_mismatch,
+        adsorbate_definition=adsorbate_definition,
+        connectivity_factor=connectivity_factor,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        system_type=system_type,
+        surface_config=surface_config,
+        torchsim_params=torchsim_params,
+    )
     if use_parallel_neb:
+        # Always use the parallel runner when requested; surface presets pass
+        # parallel_neb_max_bands=1 so bands are chunked one-at-a-time (OOM-safe).
         ts_results, parallel_meta = run_parallel_neb_search(
             pairs,
             minima,
+            neb_cfg=neb_cfg,
             run_dir=run_dir,
-            surface_config=surface_config,
             rng=rng,
-            neb_n_images=neb_n_images,
-            neb_spring_constant=neb_spring_constant,
-            neb_fmax=neb_fmax,
-            neb_steps=int(neb_steps),
-            neb_climb=neb_climb,
-            neb_interpolation_method=neb_interpolation_method,
-            neb_align_endpoints=neb_align_endpoints,
-            neb_perturb_sigma=neb_perturb_sigma,
-            neb_interpolation_mic=neb_interpolation_mic,
-            neb_tangent_method=neb_tangent_method,
-            neb_surface_cell_remap=neb_surface_cell_remap,
-            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
-            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
-            torchsim_params=torchsim_params,
-            system_type=system_type,
-            n_slab=neb_n_slab,
-            n_core_mobile=neb_n_core_m,
-            n_adsorbate_mobile=neb_n_ads_m,
-            adsorbate_fragment_lengths=neb_ads_frag_lengths,
-            max_endpoint_mismatch=max_endpoint_mismatch,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            parallel_neb_max_bands=parallel_neb_max_bands,
         )
         cleanup_torch_cuda(logger=logger)
     else:
         ts_results = _run_serial_neb_search(
             pairs,
             minima,
+            neb_cfg=neb_cfg,
             run_dir=run_dir,
             calculator_class=calculator_class,
             calculator_kwargs=calculator_kwargs,
-            surface_config=surface_config,
             rng=rng,
             use_torchsim=use_torchsim,
-            torchsim_params=torchsim_params,
-            neb_n_images=neb_n_images,
-            neb_spring_constant=neb_spring_constant,
-            neb_fmax=neb_fmax,
-            neb_steps=int(neb_steps) if isinstance(neb_steps, int) else neb_steps,
-            neb_climb=neb_climb,
-            neb_interpolation_method=neb_interpolation_method,
-            neb_align_endpoints=neb_align_endpoints,
-            neb_perturb_sigma=neb_perturb_sigma,
-            neb_interpolation_mic=neb_interpolation_mic,
-            neb_tangent_method=neb_tangent_method,
-            neb_surface_cell_remap=neb_surface_cell_remap,
-            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
-            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             verbosity=verbosity,
-            system_type=system_type,
             write_timing_json=write_timing_json,
-            n_slab=neb_n_slab,
-            n_core_mobile=neb_n_core_m,
-            n_adsorbate_mobile=neb_n_ads_m,
-            adsorbate_fragment_lengths=neb_ads_frag_lengths,
-            max_endpoint_mismatch=max_endpoint_mismatch,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
 
     ts_phase_wall = perf_counter() - t_ts0

@@ -22,14 +22,25 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.ts_search.ts_statistics import compute_ts_statistics
+from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.helpers import copy_atoms, get_cluster_formula, validate_pair_id
 from scgo.utils.logging import get_logger
 from scgo.utils.ts_provenance import ts_output_provenance
 
 from .transition_state import (
+    _permute_atoms_block_to_match,
     calculate_structure_similarity,
     minima_provenance_dict,
 )
+
+# Absolute ceiling for adsorbate pair oversample before IDPP re-rank.
+_ADSORBATE_PAIR_OVERSAMPLE_CAP = 50
+
+
+def adsorbate_pair_select_cap(max_pairs: int) -> int:
+    """Return oversample size: ``min(max_pairs * 10, max(max_pairs, 50))``."""
+    mp = int(max_pairs)
+    return min(mp * 10, max(mp, _ADSORBATE_PAIR_OVERSAMPLE_CAP))
 
 
 def _relative_db_path(db_file: str, base_dir: str) -> str:
@@ -149,20 +160,43 @@ def _core_rms_displacement(
     n_core: int,
     use_mic: bool,
 ) -> float:
-    """RMS Cartesian displacement of the core block (optional MIC)."""
+    """RMS Cartesian displacement of the core block after spatial matching.
+
+    Same-element core permutations (common from GA) are resolved with a
+    Hungarian spatial match on copies so the gate is order-invariant. Minima
+    atoms are never mutated.
+    """
     if n_core <= 0:
         return 0.0
     i0 = max(0, int(n_slab))
     i1 = i0 + int(n_core)
     if i1 > len(atoms_i) or i1 > len(atoms_j):
         return 0.0
-    dlt = atoms_j.get_positions()[i0:i1] - atoms_i.get_positions()[i0:i1]
+    # Array views → thin Atoms (avoid full ASE slice copies with constraints/info).
+    pos_i = np.asarray(atoms_i.get_positions()[i0:i1], dtype=float)
+    pos_j = np.asarray(atoms_j.get_positions()[i0:i1], dtype=float)
+    nums_i = np.asarray(atoms_i.numbers[i0:i1], dtype=int)
+    nums_j = np.asarray(atoms_j.numbers[i0:i1], dtype=int)
+    core_i = Atoms(numbers=nums_i, positions=pos_i, cell=atoms_i.cell, pbc=atoms_i.pbc)
+    core_j = Atoms(numbers=nums_j, positions=pos_j, cell=atoms_j.cell, pbc=atoms_j.pbc)
+    mic_cell = None
+    mic_pbc = None
     if use_mic and bool(np.any(atoms_i.pbc)):
-        cell = np.asarray(atoms_i.cell.array, dtype=float)
-        inv = np.linalg.inv(cell)
+        mic_cell = np.asarray(atoms_i.cell.array, dtype=float)
+        mic_pbc = np.asarray(atoms_i.pbc, dtype=bool)
+    matched_pos, _matched_nums = _permute_atoms_block_to_match(
+        core_i,
+        core_j,
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+        method="spatial",
+    )
+    dlt = matched_pos - pos_i
+    if mic_cell is not None and mic_pbc is not None:
+        inv = np.linalg.inv(mic_cell)
         frac = dlt @ inv.T
         frac -= np.round(frac)
-        dlt = frac @ cell
+        dlt = frac @ mic_cell
     return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
 
 
@@ -173,6 +207,7 @@ def select_structure_pairs(
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
     similarity_pair_cor_max: float = 0.1,
     surface_aware: bool = False,
+    use_mic: bool | None = None,
     n_slab: int | None = None,
     max_endpoint_mismatch: float | None = None,
     adsorbate_aware: bool = False,
@@ -197,6 +232,8 @@ def select_structure_pairs(
         similarity_pair_cor_max: Maximum single distance difference tolerance.
             Default 0.1 Å (tighter than GA to ensure truly distinct structures).
         surface_aware: Use slightly looser scoring scales (slab / periodic systems).
+        use_mic: MIC for distance/similarity geometry. Defaults to ``surface_aware``
+            when omitted (backward compatible).
         n_slab: When set (from ``SurfaceSystemConfig.slab``), structural comparison
             uses only atoms ``n_slab:`` so pair selection ignores frozen slab motion.
         max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``.
@@ -209,6 +246,7 @@ def select_structure_pairs(
         List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
     """
     logger = get_logger(__name__)
+    mic = bool(surface_aware) if use_mic is None else bool(use_mic)
 
     if len(minima) < 2:
         logger.info("Only %d minima, need at least 2 to pair", len(minima))
@@ -218,6 +256,14 @@ def select_structure_pairs(
     n_skipped_similar = 0
     n_skipped_mismatch = 0
     slab_len = int(n_slab) if n_slab is not None else 0
+    # Reuse one comparator when mobile counts are uniform (typical).
+    shared_n_top = max(0, len(minima[0][1]) - slab_len)
+    shared_comparator = PureInteratomicDistanceComparator(
+        n_top=shared_n_top,
+        tol=similarity_tolerance,
+        pair_cor_max=similarity_pair_cor_max,
+        mic=mic,
+    )
 
     def _score_candidate(
         gap: float,
@@ -305,8 +351,9 @@ def select_structure_pairs(
                     atoms_j,
                     tolerance=similarity_tolerance,
                     pair_cor_max=similarity_pair_cor_max,
-                    use_mic=surface_aware,
+                    use_mic=mic,
                     n_slab=n_slab,
+                    comparator=shared_comparator,
                 )
 
                 if are_similar:
@@ -358,7 +405,7 @@ def select_structure_pairs(
                     atoms_j,
                     n_slab=slab_len,
                     n_core=int(n_core_mobile),
-                    use_mic=surface_aware,
+                    use_mic=mic,
                 )
                 # Large core rearrangements rarely yield usable adsorbate NEBs.
                 core_rms_limit = 2.0 if surface_aware else 1.5

@@ -44,6 +44,7 @@ from scgo.system_types import (
     AdsorbateFragmentInput,
     SystemType,
     get_system_policy,
+    resolve_structure_mic,
     validate_structure_for_system_type,
     validate_system_type_settings,
 )
@@ -86,6 +87,7 @@ def _move_atoms(
     movable_indices: list[int] | None = None,
     *,
     move_by_tag_groups: bool = False,
+    recenter_com: bool = True,
 ) -> tuple[Atoms, str]:
     """Apply a random displacement to a subset of atoms.
 
@@ -97,6 +99,11 @@ def _move_atoms(
         move_strategy: The strategy for selecting atoms to move ('random',
             'highest_force', 'lowest_force').
         rng: Optional numpy random number generator for reproducibility.
+        movable_indices: Indices that may be displaced.
+        move_by_tag_groups: Move whole tag groups together when True.
+        recenter_com: If True (default), restore the pre-move center of mass
+            after the displacement. Set False for surface systems so the slab
+            registry is preserved.
 
     Returns:
         A tuple (Atoms, description) where description lists moved atoms
@@ -167,7 +174,8 @@ def _move_atoms(
         disp *= dr
 
     atoms_new.set_positions(positions + disp)
-    atoms_new.translate(cm - atoms_new.get_center_of_mass())
+    if recenter_com:
+        atoms_new.translate(cm - atoms_new.get_center_of_mass())
 
     moved_indices_str = " ".join(str(i + 1) for i in sorted(indices_to_move))
     return atoms_new, f"Moved_atoms: {moved_indices_str}"
@@ -326,13 +334,6 @@ def bh_go(
         ensure_fitness_strategy_resolved(fitness_strategy)
     )
 
-    # Create comparator for diversity calculations and deduplication
-    comparator = PureInteratomicDistanceComparator(
-        n_top=comparator_n_top,
-        tol=comparator_tol,
-        pair_cor_max=comparator_pair_cor_max,
-        mic=surface_mode,
-    )
     movable_indices = list(range(len(atoms)))
     if surface_mode:
         if n_slab <= 0:
@@ -345,16 +346,28 @@ def bh_go(
         if not movable_indices:
             raise SCGOValidationError("Surface system has no movable atoms above slab.")
 
+    # Match GA/GO: mobile-only n_top and comparator_use_mic (not surface_mode alone).
+    effective_n_top = (
+        int(comparator_n_top) if comparator_n_top is not None else len(movable_indices)
+    )
+    comp_mic = resolve_structure_mic(system_type, surface_config)
+    comparator = PureInteratomicDistanceComparator(
+        n_top=effective_n_top,
+        tol=comparator_tol,
+        pair_cor_max=comparator_pair_cor_max,
+        mic=comp_mic,
+    )
+
     # Load reference structures and create DiversityScorer for diversity strategy
     diversity_scorer = setup_diversity_scorer(
         fitness_strategy=fitness_strategy,
         diversity_reference_db=diversity_reference_db,
-        composition=list(atoms.get_chemical_symbols()),
-        n_to_optimize=comparator_n_top,
+        composition=mobile_composition,
+        n_to_optimize=effective_n_top,
         diversity_max_references=diversity_max_references,
         logger=logger,
         base_dir=output_dir,
-        mic=surface_mode,
+        mic=comp_mic,
     )
 
     # Detach calculator temporarily for DB setup to avoid pickling issues
@@ -437,6 +450,9 @@ def bh_go(
             optimizer,
             fmax,
             niter_local_relaxation,
+            center_after_relax=not surface_mode,
+            surface_mode=surface_mode,
+            n_slab=n_slab,
         )
         profile_timings["initial_local_relaxation_s"] = perf_counter() - t_rel0
         validate_structure_for_system_type(
@@ -500,6 +516,7 @@ def bh_go(
                 rng=rng,
                 movable_indices=movable_indices,
                 move_by_tag_groups=freeze_adsorbate_internal_geometry,
+                recenter_com=not surface_mode,
             )
             if surface_mode and surface_config is not None:
                 attach_slab_constraints_from_surface_config(a_trial, surface_config)
@@ -540,6 +557,9 @@ def bh_go(
                 optimizer,
                 fmax,
                 niter_local_relaxation,
+                center_after_relax=not surface_mode,
+                surface_mode=surface_mode,
+                n_slab=n_slab,
             )
             dt_rel = perf_counter() - t_rel0
             profile_timings["offspring_local_relaxation_s"] = (

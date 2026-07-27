@@ -4,12 +4,35 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from ase.constraints import FixAtoms
 
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+from scgo.ts_search.neb_endpoints import prepare_neb_endpoints
 from scgo.ts_search.parallel_neb import ParallelNEBBatch, _neb_image_dedup_key
 from scgo.ts_search.transition_state import TorchSimNEB, interpolate_path
+from scgo.utils.ts_runner_kwargs import NebRunConfig
 
 pytestmark = pytest.mark.requires_cuda
+
+
+def _gas_neb_cfg(**overrides) -> NebRunConfig:
+    """Minimal gas-cluster NebRunConfig for parallel NEB unit tests."""
+    kwargs = {
+        "system_type": "gas_cluster",
+        "neb_n_images": 3,
+        "neb_spring_constant": 0.1,
+        "neb_fmax": 0.05,
+        "neb_steps": 2,
+        "neb_climb": False,
+        "neb_interpolation_method": "linear",
+        "neb_align_endpoints": False,
+        "neb_perturb_sigma": 0.0,
+        "neb_interpolation_mic": False,
+        "neb_tangent_method": "aseneb",
+        "torchsim_params": {},
+    }
+    kwargs.update(overrides)
+    return NebRunConfig.from_kwargs(**kwargs)
 
 
 def _unique_neb_image_count(*image_lists: list) -> int:
@@ -18,7 +41,12 @@ def _unique_neb_image_count(*image_lists: list) -> int:
 
 
 class _CountingFakeRelaxer:
-    """Relaxer stub that records batch sizes and returns zero forces."""
+    """Relaxer stub that records batch sizes and returns zero forces.
+
+    Energies use ``sum(positions**2)`` so ASE ``improvedtangent`` sees a
+    non-flat band (``sum(positions)`` is accidentally constant along the Cu3
+    IDPP path). Identical images still share the same energy for dedup.
+    """
 
     def __init__(self) -> None:
         self.calls = 0
@@ -31,7 +59,8 @@ class _CountingFakeRelaxer:
         for a in atoms_list:
             ra = a.copy()
             ra.arrays["forces"] = np.zeros((len(a), 3))
-            results.append((0.0, ra))
+            energy = float(np.sum(a.get_positions() ** 2))
+            results.append((energy, ra))
         return results
 
 
@@ -353,6 +382,33 @@ def test_parallel_neb_skips_endpoints_after_first_step(cu3_triangle, cu3_linear)
     assert relaxer.batch_sizes[2] == 5  # post-loop refresh
 
 
+def test_parallel_neb_refuses_step_on_nonfinite_fmax(cu3_triangle, cu3_linear):
+    """Non-finite NEB fmax must fail the band without calling the optimizer."""
+
+    class _NanForceRelaxer:
+        def relax_batch(self, atoms_list, steps=0):
+            out = []
+            for a in atoms_list:
+                ra = a.copy()
+                # Direct non-finite forces (ASE improvedtangent flat-band NaNs
+                # are version-dependent; assert the refuse-step path itself).
+                ra.arrays["forces"] = np.full((len(a), 3), np.nan)
+                out.append((0.0, ra))
+            return out
+
+    relaxer = _NanForceRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False, method="improvedtangent")
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=5)
+    results = batch.run_optimization(fmax=0.1, max_steps=2)
+
+    assert results[0]["converged"] is False
+    assert not np.isfinite(results[0]["final_fmax"])
+    assert "non-finite" in (results[0]["error"] or "")
+    assert 0 not in batch._optimizers
+    assert 0 in batch.failed_nebs
+
+
 def test_parallel_neb_refresh_keeps_energies_after_steps(cu3_triangle, cu3_linear):
     """Post-loop PES refresh must leave readable energies after FIRE steps."""
     from scgo.ts_search.transition_state import (
@@ -362,7 +418,12 @@ def test_parallel_neb_refresh_keeps_energies_after_steps(cu3_triangle, cu3_linea
     )
 
     class _SteppingRelaxer:
-        """Return nonzero forces so FIRE actually moves interiors."""
+        """Nonzero forces so FIRE moves interiors; band energies are not flat.
+
+        Flat equal energies make ASE ``improvedtangent`` emit NaN tangents
+        (zero-length tangent when all neighbor ΔE are 0). ``sum(positions)``
+        is constant on the Cu3 IDPP path; use ``sum(positions**2)`` instead.
+        """
 
         def __init__(self) -> None:
             self.calls = 0
@@ -375,7 +436,8 @@ def test_parallel_neb_refresh_keeps_energies_after_steps(cu3_triangle, cu3_linea
                 forces = np.zeros((len(a), 3))
                 forces[0, 0] = 0.5  # enough to move when not converged
                 ra.arrays["forces"] = forces
-                out.append((float(-self.calls), ra))
+                energy = float(np.sum(a.get_positions() ** 2)) - 0.01 * self.calls
+                out.append((energy, ra))
             return out
 
     relaxer = _SteppingRelaxer()
@@ -430,6 +492,35 @@ def test_parallel_neb_require_forces_raises_when_missing(cu3_triangle, cu3_linea
         batch.run_optimization(fmax=1.0, max_steps=1)
 
 
+def test_prepare_neb_endpoints_attaches_slab_fixatoms():
+    """Shared prep copies endpoints and attaches FixAtoms from surface_config."""
+    from ase import Atoms
+    from ase.build import fcc111
+
+    from scgo.surface.config import SurfaceSystemConfig
+
+    slab = fcc111("Cu", size=(2, 2, 2), vacuum=8.0, orthogonal=True)
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max() + 2.0)
+    atoms_a = slab.copy() + Atoms("Cu2", positions=[[1.0, 1.0, z0], [3.0, 1.0, z0]])
+    atoms_b = slab.copy() + Atoms("Cu2", positions=[[1.5, 1.5, z0], [3.5, 1.5, z0]])
+    cfg = SurfaceSystemConfig(
+        slab=slab,
+        fix_all_slab_atoms=True,
+    )
+    neb_cfg = NebRunConfig.from_kwargs(
+        system_type="surface_cluster",
+        surface_config=cfg,
+        n_slab=n_slab,
+        neb_align_endpoints=False,
+    )
+    react, prod = prepare_neb_endpoints(atoms_a, atoms_b, neb_cfg)
+    assert any(isinstance(c, FixAtoms) for c in react.constraints)
+    assert any(isinstance(c, FixAtoms) for c in prod.constraints)
+    assert react is not atoms_a
+    assert prod is not atoms_b
+
+
 def test_run_parallel_neb_search_skips_invalid_pair(tmp_path, cu3_triangle, cu3_linear):
     """Validation failure on one pair skips it without aborting the batch."""
     from unittest.mock import patch
@@ -441,7 +532,7 @@ def test_run_parallel_neb_search_skips_invalid_pair(tmp_path, cu3_triangle, cu3_
 
     with (
         patch(
-            "scgo.ts_search.parallel_neb._neb_endpoint_copies",
+            "scgo.ts_search.parallel_neb.prepare_neb_endpoints",
             side_effect=ValueError("bad structure"),
         ),
         patch(
@@ -452,21 +543,9 @@ def test_run_parallel_neb_search_skips_invalid_pair(tmp_path, cu3_triangle, cu3_
         results, _meta = run_parallel_neb_search(
             pairs,
             minima,
+            neb_cfg=_gas_neb_cfg(),
             run_dir=tmp_path,
-            surface_config=None,
             rng=None,
-            neb_n_images=3,
-            neb_spring_constant=0.1,
-            neb_fmax=0.05,
-            neb_steps=2,
-            neb_climb=False,
-            neb_interpolation_method="linear",
-            neb_align_endpoints=False,
-            neb_perturb_sigma=0.0,
-            neb_interpolation_mic=False,
-            neb_tangent_method="aseneb",
-            torchsim_params={},
-            system_type="gas_cluster",
         )
 
     assert len(results) == 1
@@ -513,21 +592,9 @@ def test_run_parallel_neb_preserves_batch_oom_error(tmp_path, cu3_triangle, cu3_
         results, _meta = run_parallel_neb_search(
             pairs,
             minima,
+            neb_cfg=_gas_neb_cfg(),
             run_dir=tmp_path,
-            surface_config=None,
             rng=None,
-            neb_n_images=3,
-            neb_spring_constant=0.1,
-            neb_fmax=0.05,
-            neb_steps=2,
-            neb_climb=False,
-            neb_interpolation_method="linear",
-            neb_align_endpoints=False,
-            neb_perturb_sigma=0.0,
-            neb_interpolation_mic=False,
-            neb_tangent_method="aseneb",
-            torchsim_params={},
-            system_type="gas_cluster",
         )
 
     assert len(results) == 1
@@ -596,22 +663,14 @@ def test_parallel_endpoint_max_idpp_uses_single_stage_climb(
         results, _meta = run_parallel_neb_search(
             pairs,
             minima,
+            neb_cfg=_gas_neb_cfg(
+                system_type="gas_cluster_adsorbate",
+                neb_steps=20,
+                neb_climb=True,
+                max_endpoint_mismatch=1.25,
+            ),
             run_dir=tmp_path,
-            surface_config=None,
             rng=None,
-            neb_n_images=3,
-            neb_spring_constant=0.1,
-            neb_fmax=0.05,
-            neb_steps=20,
-            neb_climb=True,
-            neb_interpolation_method="linear",
-            neb_align_endpoints=False,
-            neb_perturb_sigma=0.0,
-            neb_interpolation_mic=False,
-            neb_tangent_method="aseneb",
-            max_endpoint_mismatch=1.25,
-            torchsim_params={},
-            system_type="gas_cluster_adsorbate",
         )
 
     assert len(results) == 1
@@ -675,22 +734,14 @@ def test_parallel_two_stage_climb_runs_after_stage1_converges(
         results, _meta = run_parallel_neb_search(
             pairs,
             minima,
+            neb_cfg=_gas_neb_cfg(
+                system_type="gas_cluster_adsorbate",
+                neb_steps=20,
+                neb_climb=True,
+                max_endpoint_mismatch=1.25,
+            ),
             run_dir=tmp_path,
-            surface_config=None,
             rng=None,
-            neb_n_images=3,
-            neb_spring_constant=0.1,
-            neb_fmax=0.05,
-            neb_steps=20,
-            neb_climb=True,
-            neb_interpolation_method="linear",
-            neb_align_endpoints=False,
-            neb_perturb_sigma=0.0,
-            neb_interpolation_mic=False,
-            neb_tangent_method="aseneb",
-            max_endpoint_mismatch=1.25,
-            torchsim_params={},
-            system_type="gas_cluster_adsorbate",
         )
 
     assert len(results) == 1
