@@ -45,13 +45,16 @@ results = run_go(
 | GO then TS | `run_go_ts` |
 | Multi-composition TS / GO+TS | `run_ts_campaign` / `run_go_ts_campaign` |
 
-`system_type` is always a run argument: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, or `surface_cluster_adsorbate`. Surfaces need `surface_config=`; adsorbates need `adsorbates=`.
+`system_type` is always a run argument: `gas_cluster`, `surface_cluster`,
+`gas_cluster_adsorbate`, `surface_cluster_adsorbate`, `surface`, or
+`surface_adsorbate`. Surfaces need `surface_config=`; adsorbates need
+`adsorbates=`.
 
 Output: `run_go` writes `{path_key}_searches/`; GO+TS/TS use a campaign root with sibling `{path_key}_searches/` and `{path_key}_ts_results/` (e.g. `Pt5_OH_OH_graphite_searches`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
 ## Examples
 
-[`examples/`](examples/) — MACE + TorchSim smoke scripts for all four system types (`example_pt5_*.py`).
+[`examples/`](examples/) — MACE + TorchSim smoke scripts for the supported system types (`example_pt5_*.py`, `example_defected_graphite.py`, `example_n_doped_graphite.py`).
 
 ## Development
 

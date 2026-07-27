@@ -26,8 +26,17 @@ from scgo.surface.presets import (
     DEFAULT_GRAPHITE_SLAB_LAYERS,
     DEFAULT_GRAPHITE_SLAB_REPEAT_XY,
     DEFAULT_GRAPHITE_SLAB_VACUUM,
+    build_defected_graphite_slab,
     build_graphite_slab,
+    build_n_doped_graphite_slab,
+    make_defected_graphite_surface_config,
     make_graphite_surface_config,
+    make_n_doped_graphite_surface_config,
+)
+from scgo.surface.partition import (
+    SlabSearchPartition,
+    prepare_slab_search_surface_config,
+    resolve_slab_search_partition,
 )
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
@@ -58,6 +67,13 @@ __all__ = [
     "DEFAULT_GRAPHITE_SLAB_REPEAT_XY",
     "DEFAULT_GRAPHITE_SLAB_VACUUM",
     "build_graphite_slab",
+    "build_defected_graphite_slab",
+    "build_n_doped_graphite_slab",
     "make_graphite_surface_config",
+    "make_defected_graphite_surface_config",
+    "make_n_doped_graphite_surface_config",
+    "SlabSearchPartition",
+    "prepare_slab_search_surface_config",
+    "resolve_slab_search_partition",
     "normalize_slab_pbc",
 ]

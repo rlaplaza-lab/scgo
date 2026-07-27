@@ -27,10 +27,12 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator
 
 from scgo.exceptions import SCGOValidationError
+from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     SystemType,
     extract_adsorbate_definition_from_params,
     get_system_policy,
+    resolve_search_mobile_composition,
 )
 from scgo.utils.helpers import get_cluster_formula, get_system_path_key
 from scgo.utils.logging import configure_logging, get_logger
@@ -112,7 +114,9 @@ def _run_go_trials(
     configure_logging(verbosity)
     logger = get_logger(__name__)
 
-    validate_composition(composition, allow_empty=False, allow_tuple=False)
+    policy = get_system_policy(system_type)
+    allow_empty_comp = policy.slab_is_search_target and not policy.has_adsorbate
+    validate_composition(composition, allow_empty=allow_empty_comp, allow_tuple=False)
 
     # Initialize and merge params with defaults
     if not params_already_merged:
@@ -140,8 +144,22 @@ def _run_go_trials(
     # Convert seed to generator at API boundary
     rng = ensure_rng(seed)
 
-    n_atoms = len(composition)
-    cluster_formula = get_cluster_formula(composition)
+    surface_cfg = params.get("surface_config")
+    ads_def = params.get("adsorbate_definition")
+    if not isinstance(ads_def, dict):
+        ads_def = None
+    search_comp = resolve_search_mobile_composition(
+        system_type=system_type,
+        composition=list(composition),
+        surface_config=surface_cfg if isinstance(surface_cfg, SurfaceSystemConfig) else None,
+        adsorbate_definition=ads_def,
+    )
+    n_atoms = len(search_comp)
+    cluster_formula = (
+        get_cluster_formula(composition)
+        if composition
+        else (getattr(surface_cfg, "name", None) or "surface")
+    )
     path_key = _go_path_key(composition, system_type, params)
     main_output_dir = str(resolve_go_searches_dir(output_dir, path_key))
 
@@ -156,7 +174,7 @@ def _run_go_trials(
             "Selected Basin Hopping for %d-atom cluster (small cluster)", n_atoms
         )
     else:
-        logger.info("Selected Genetic Algorithm for %d-atom cluster", n_atoms)
+        logger.info("Selected Genetic Algorithm for %d search-mobile atoms", n_atoms)
 
     # Extract algorithm-specific parameters without mutation
     algo_params = params["optimizer_params"].get(chosen_go, {})

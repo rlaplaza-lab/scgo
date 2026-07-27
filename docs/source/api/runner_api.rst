@@ -40,7 +40,7 @@ All functions accept:
 - ``params`` / ``go_params``: GO parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_default_params` at run time)
 - ``ts_params``: TS parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_ts_search_params` at run time)
 - ``seed``: random seed for reproducibility (must agree across ``seed=``, ``go_params['seed']``, and ``ts_params['seed']`` when more than one is set)
-- ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, or ``"surface_cluster_adsorbate"`` (run argument only — not inside preset dicts)
+- ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, ``"surface_cluster_adsorbate"``, ``"surface"``, or ``"surface_adsorbate"`` (run argument only — not inside preset dicts)
 - ``surface_config``: required for surface system types (run argument preferred; may also appear in ``go_params`` / ``ts_params``)
 - ``adsorbates``: ASE Atoms or list of Atoms, required for adsorbate system types
 - ``verbosity``: 0 quiet … 3 trace (progress bars when ``verbosity >= 1``)

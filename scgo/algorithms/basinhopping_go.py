@@ -342,9 +342,21 @@ def bh_go(
                     "Surface system type requires n_slab > 0 or surface_config."
                 )
             n_slab = len(surface_config.slab)
-        movable_indices = list(range(n_slab, len(atoms)))
+        if policy.slab_is_search_target:
+            from scgo.surface.partition import resolve_slab_search_partition
+
+            if surface_config is None:
+                raise SCGOValidationError(
+                    f"system_type={system_type!r} requires surface_config."
+                )
+            part = resolve_slab_search_partition(surface_config)
+            movable_indices = list(range(part.n_fixed, len(atoms)))
+        else:
+            movable_indices = list(range(n_slab, len(atoms)))
         if not movable_indices:
-            raise SCGOValidationError("Surface system has no movable atoms above slab.")
+            raise SCGOValidationError(
+                "Surface system has no movable atoms for basin hopping."
+            )
 
     # Match GA/GO: mobile-only n_top and comparator_use_mic (not surface_mode alone).
     effective_n_top = (

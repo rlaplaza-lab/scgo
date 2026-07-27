@@ -6,7 +6,7 @@ SCGO helps you find the lowest-energy atomic structures using global optimizatio
 System Types
 ------------
 
-You must specify one of four system types:
+You must specify one of six system types:
 
 .. list-table::
    :widths: 25 75
@@ -22,8 +22,15 @@ You must specify one of four system types:
      - Optimizing a cluster with adsorbates in vacuum
    * - ``surface_cluster_adsorbate``
      - Optimizing a cluster with adsorbates on a surface
+   * - ``surface``
+     - Optimizing top layers of a bare slab (bottom layers fixed)
+   * - ``surface_adsorbate``
+     - Optimizing top slab layers plus adsorbates (no cluster core)
 
 For surface types, you need a ``surface_config``. For adsorbate types, you need ``adsorbates``.
+Slab-as-target modes (``surface`` / ``surface_adsorbate``) also require
+``fix_all_slab_atoms=False`` and ``n_relax_top_slab_layers`` (or
+``n_fix_bottom_slab_layers``).
 
 -----------
 Gas Cluster

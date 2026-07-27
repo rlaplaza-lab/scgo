@@ -18,12 +18,19 @@ structures for ``surface_cluster`` and ``surface_cluster_adsorbate``:
   directly on slab top-layer hull sites via
   :func:`~scgo.cluster_adsorbate.placement.place_fragment_on_cluster`.
 
+For ``surface`` / ``surface_adsorbate``, GA/BH search the top slab layers
+(see :mod:`scgo.surface.partition`). Bare ``surface`` seeds rattle top-layer
+atoms; ``surface_adsorbate`` deposits adsorbate fragments onto the slab and
+searches top layers plus adsorbates.
+
 .. autoclass:: scgo.surface.config.SurfaceSystemConfig
    :members:
    :show-inheritance:
 
 .. autofunction:: scgo.surface.make_surface_config
 .. autofunction:: scgo.surface.make_graphite_surface_config
+.. autofunction:: scgo.surface.make_defected_graphite_surface_config
+.. autofunction:: scgo.surface.make_n_doped_graphite_surface_config
 .. autofunction:: scgo.surface.describe_surface_config
 .. autofunction:: scgo.surface.create_deposited_cluster
 .. autofunction:: scgo.surface.create_deposited_cluster_batch

@@ -1,6 +1,6 @@
 # SCGO examples
 
-`run_go_ts` smoke scripts for all four system types (MACE + TorchSim; small
+`run_go_ts` smoke scripts for the supported system types (MACE + TorchSim; small
 `niter` / `population_size`). Each script builds params from
 `get_torchsim_ga_params` / `get_ts_search_params` for its `system_type` and only
 overrides campaign size (`niter`, `population_size`, `max_pairs`) plus a few
@@ -16,6 +16,8 @@ Full NEB defaults: `docs/source/parameters.rst`.
 | `example_pt5_oh_gas.py` | `gas_cluster_adsorbate` | 12 | climb, shared `neb_fmax=0.20`, 7 images, parallel NEB, `max_endpoint_mismatch=1.25` Å |
 | `example_pt5_graphite.py` | `surface_cluster` | 10 | no climb, shared `neb_fmax=0.20`, MIC + lattice rotation, parallel NEB |
 | `example_pt5_2oh_graphite.py` | `surface_cluster_adsorbate` | 6 | climb, shared `neb_fmax=0.20`, parallel NEB, no lattice rotation, `max_endpoint_mismatch=1.5` Å |
+| `example_defected_graphite.py` | `surface` | 4 | top-layer slab search on vacancy-defected graphite |
+| `example_n_doped_graphite.py` | `surface_adsorbate` | 4 | top-layer + OH on N-doped graphite |
 
 ```bash
 pip install -e ".[mace]"
@@ -23,12 +25,14 @@ python examples/example_pt5_gas.py
 python examples/example_pt5_oh_gas.py
 python examples/example_pt5_graphite.py
 python examples/example_pt5_2oh_graphite.py
+python examples/example_defected_graphite.py
+python examples/example_n_doped_graphite.py
 ```
 
 Each run creates a new datetime `run_*` under `examples/results/{stem}_mace/`
 (`{path_key}_searches/` and `{path_key}_ts_results/`; timing JSON enabled).
 Path keys are component-aware, e.g. `Pt5`, `Pt5_OH`, `Pt5_graphite`,
-`Pt5_OH_OH_graphite`. Reusing the same
+`Pt5_OH_OH_graphite`, `defected_graphite`, `OH_n_doped_graphite`. Reusing the same
 `output_stem` can seed GO from prior DBs in that tree — use a fresh stem (or
 delete the old tree) for a clean end-to-end check. Override the stem without
 editing the script via `SCGO_EXAMPLE_OUTPUT_STEM=my_fresh_stem`. See the docs

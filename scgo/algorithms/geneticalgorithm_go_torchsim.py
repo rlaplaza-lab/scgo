@@ -29,6 +29,7 @@ from tqdm import tqdm
 from scgo.algorithms.ga_common import (
     ClusterStartGenerator,
     SurfaceClusterStartGenerator,
+    SurfaceSlabStartGenerator,
     create_ga_pairing,
     create_mutation_operators,
     create_structure_comparator,
@@ -80,6 +81,8 @@ from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
+    get_system_policy,
+    resolve_search_mobile_composition,
     resolve_structure_mic,
     uses_surface,
     validate_structure_for_system_type,
@@ -845,26 +848,85 @@ def ga_go(
     # Normalize RNG early and enforce Generator-only policy
     rng = ensure_rng_or_create(rng)
 
-    n_to_optimize = len(composition)
-
+    policy = get_system_policy(system_type)
     surface_mode = uses_surface(system_type)
+    n_fixed = 0
+    search_composition = list(composition)
+    deposit_composition = list(composition)
+    n_mobile_slab = 0
+
     if surface_mode:
         if not isinstance(surface_config, SurfaceSystemConfig):
             raise SCGOValidationError(
                 "surface_config must be a SurfaceSystemConfig instance or None"
             )
+        if policy.slab_is_search_target:
+            from scgo.surface.partition import prepare_slab_search_surface_config
+
+            surface_config, partition = prepare_slab_search_surface_config(
+                surface_config
+            )
+            n_fixed = partition.n_fixed
+            n_mobile_slab = partition.n_mobile_slab
+            search_composition = resolve_search_mobile_composition(
+                system_type=system_type,
+                composition=list(composition),
+                surface_config=surface_config,
+                adsorbate_definition=adsorbate_definition,
+            )
+            if policy.has_adsorbate:
+                ads = (
+                    adsorbate_definition.get("adsorbate_symbols", [])
+                    if adsorbate_definition
+                    else []
+                )
+                deposit_composition = (
+                    [str(s) for s in ads] if isinstance(ads, list) else []
+                )
+            else:
+                deposit_composition = []
         slab_ref = surface_config.slab.copy()
         n_slab = len(slab_ref)
-        dummy_top = [[0.0, 0.0, 0.0] for _ in range(n_to_optimize)]
-        atoms_template = Atoms(
-            symbols=list(slab_ref.get_chemical_symbols()) + list(composition),
-            positions=np.vstack([slab_ref.get_positions(), np.asarray(dummy_top)]),
-            cell=slab_ref.get_cell(),
-            pbc=slab_ref.get_pbc(),
-        )
+        if not policy.slab_is_search_target:
+            n_fixed = n_slab
+            search_composition = list(composition)
+            deposit_composition = list(composition)
+        n_to_optimize = len(search_composition)
+        if n_to_optimize < 1:
+            raise SCGOValidationError(
+                f"system_type={system_type!r} has no search-mobile atoms."
+            )
+        if policy.slab_is_search_target and not policy.has_adsorbate:
+            atoms_template = slab_ref.copy()
+        elif policy.slab_is_search_target:
+            ads_syms = list(search_composition[n_mobile_slab:])
+            if ads_syms:
+                dummy_top = [[0.0, 0.0, 0.0] for _ in range(len(ads_syms))]
+                atoms_template = Atoms(
+                    symbols=list(slab_ref.get_chemical_symbols()) + ads_syms,
+                    positions=np.vstack(
+                        [slab_ref.get_positions(), np.asarray(dummy_top)]
+                    ),
+                    cell=slab_ref.get_cell(),
+                    pbc=slab_ref.get_pbc(),
+                )
+            else:
+                atoms_template = slab_ref.copy()
+        else:
+            dummy_top = [[0.0, 0.0, 0.0] for _ in range(n_to_optimize)]
+            atoms_template = Atoms(
+                symbols=list(slab_ref.get_chemical_symbols()) + list(composition),
+                positions=np.vstack(
+                    [slab_ref.get_positions(), np.asarray(dummy_top)]
+                ),
+                cell=slab_ref.get_cell(),
+                pbc=slab_ref.get_pbc(),
+            )
     else:
         n_slab = 0
         slab_ref = None
+        n_to_optimize = len(composition)
+        search_composition = list(composition)
         cell_side = compute_cell_side(composition, vacuum=vacuum)
         atoms_template = Atoms(
             symbols=composition,
@@ -874,7 +936,7 @@ def ga_go(
         )
 
     pop_for_probe = population_size if population_size is not None else 32
-    expected_max_atoms = (len(composition) + n_slab) * pop_for_probe
+    expected_max_atoms = (n_to_optimize + n_fixed) * pop_for_probe
 
     if relaxer is None:
         if is_ml_calculator(calculator):
@@ -987,10 +1049,13 @@ def ga_go(
         atoms_template.calc = calculator
 
     # Diversity scorer needs surface-aware mic; set up after operators / comp_mic.
-    slab_for_pairing = slab_ref if surface_mode else None
+    if surface_mode and slab_ref is not None:
+        slab_for_pairing = slab_ref[:n_fixed].copy() if n_fixed > 0 else slab_ref.copy()
+    else:
+        slab_for_pairing = None
 
     adaptive_config = get_adaptive_mutation_config(
-        composition=composition,
+        composition=search_composition,
         current_generation=0,
         total_generations=niter,
         use_adaptive=use_adaptive_mutations,
@@ -1003,20 +1068,22 @@ def ga_go(
     )
 
     idx_top = (
-        range(n_slab, n_slab + n_to_optimize) if surface_mode else range(n_to_optimize)
+        range(n_fixed, n_fixed + n_to_optimize)
+        if surface_mode
+        else range(n_to_optimize)
     )
     top_z = list({int(atoms_template[i].number) for i in idx_top})
     all_atom_types = get_all_atom_types(atoms_template, top_z)
     blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
 
     operators_list, name_map = create_mutation_operators(
-        composition=composition,
+        composition=search_composition,
         n_to_optimize=n_to_optimize,
         blmin=blmin,
         rng=rng,
         use_adaptive=use_adaptive_mutations,
         system_type=system_type,
-        n_slab=n_slab,
+        n_slab=n_fixed if policy.slab_is_search_target else n_slab,
         surface_normal_axis=(surface_config.surface_normal_axis if surface_mode else 2),
         adsorbate_definition=adsorbate_definition,
         freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
@@ -1041,7 +1108,7 @@ def ga_go(
     diversity_scorer = setup_diversity_scorer(
         fitness_strategy=fitness_strategy,
         diversity_reference_db=diversity_reference_db,
-        composition=composition,
+        composition=search_composition,
         n_to_optimize=n_to_optimize,
         diversity_max_references=diversity_max_references,
         logger=logger,
@@ -1053,21 +1120,31 @@ def ga_go(
     t0_batch_build = perf_counter()
     if surface_mode:
         assert slab_ref is not None
-        start_generator = SurfaceClusterStartGenerator(
-            composition,
-            slab_ref,
-            surface_config,
-            blmin,
-            rng=rng,
-            calculator=None,
-            population_size=population_size,
-            previous_search_glob=previous_search_glob,
-            n_jobs=n_jobs_population_init,
-            adsorbate_definition=adsorbate_definition,
-            adsorbate_fragment_template=adsorbate_fragment_template,
-            cluster_adsorbate_config=cluster_adsorbate_config,
-            verbosity=verbosity,
-        )
+        if policy.slab_is_search_target and not policy.has_adsorbate:
+            start_generator = SurfaceSlabStartGenerator(
+                slab_ref,
+                n_fixed=n_fixed,
+                rng=rng,
+                calculator=None,
+                population_size=population_size,
+                verbosity=verbosity,
+            )
+        else:
+            start_generator = SurfaceClusterStartGenerator(
+                deposit_composition,
+                slab_ref,
+                surface_config,
+                blmin,
+                rng=rng,
+                calculator=None,
+                population_size=population_size,
+                previous_search_glob=previous_search_glob,
+                n_jobs=n_jobs_population_init,
+                adsorbate_definition=adsorbate_definition,
+                adsorbate_fragment_template=adsorbate_fragment_template,
+                cluster_adsorbate_config=cluster_adsorbate_config,
+                verbosity=verbosity,
+            )
     else:
         start_generator = ClusterStartGenerator(
             composition,
@@ -1384,12 +1461,12 @@ def ga_go(
 
         for generation in tqdm(
             range(niter),
-            desc=f"  GA generations for {len(composition)} atoms",
+            desc=f"  GA generations for {n_to_optimize} mobile atoms",
             disable=not should_show_progress(verbosity),
         ):
             if use_adaptive_mutations:
                 adaptive_config = get_adaptive_mutation_config(
-                    composition=composition,
+                    composition=search_composition,
                     current_generation=generation,
                     total_generations=niter,
                     use_adaptive=True,
