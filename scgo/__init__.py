@@ -81,7 +81,9 @@ from scgo.runner_api import (
 from scgo.surface import (
     SurfaceSystemConfig,
     adsorption_energy,
+    make_defected_graphite_surface_config,
     make_graphite_surface_config,
+    make_n_doped_graphite_surface_config,
     make_surface_config,
 )
 
@@ -134,6 +136,8 @@ __all__ = [
     "SurfaceSystemConfig",
     "adsorption_energy",
     "make_graphite_surface_config",
+    "make_defected_graphite_surface_config",
+    "make_n_doped_graphite_surface_config",
     "make_surface_config",
     # Cluster + adsorbate
     "ClusterAdsorbateConfig",

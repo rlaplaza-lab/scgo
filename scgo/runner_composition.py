@@ -116,13 +116,15 @@ def parse_composition_arg(comp_str: str) -> list[str]:
     return composition
 
 
-def _as_composition(composition: CompositionInput) -> list[str]:
+def _as_composition(
+    composition: CompositionInput, *, allow_empty: bool = False
+) -> list[str]:
     if isinstance(composition, Atoms):
         return list(composition.get_chemical_symbols())
     elif isinstance(composition, str):
         return parse_composition_arg(composition)
     elif isinstance(composition, list):
-        if not composition:
+        if not composition and not allow_empty:
             raise SCGOValidationError("composition list must not be empty")
         return [str(s) for s in composition]
     else:

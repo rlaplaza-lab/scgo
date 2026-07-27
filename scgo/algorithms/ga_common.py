@@ -110,6 +110,12 @@ def slab_ga_metadata_extras(
         metadata["slab_chemical_symbols_json"] = json.dumps(
             list(surface_config.slab.get_chemical_symbols())
         )
+        if get_system_policy(system_type).slab_is_search_target:
+            from scgo.surface.partition import resolve_slab_search_partition
+
+            part = resolve_slab_search_partition(surface_config)
+            metadata["n_fixed_slab_atoms"] = part.n_fixed
+            metadata["n_mobile_slab_atoms"] = part.n_mobile_slab
     return metadata
 
 
@@ -350,7 +356,10 @@ def maybe_apply_mobile_core_ads_tags(
     system_type: SystemType,
 ) -> None:
     part = core_adsorbate_partition_details(
-        system_type, composition, adsorbate_definition
+        system_type,
+        composition,
+        adsorbate_definition,
+        allow_empty_core=get_system_policy(system_type).has_adsorbate,
     )
     if part is None:
         return
@@ -727,6 +736,65 @@ class SurfaceClusterStartGenerator(StartGenerator):
         return atoms
 
 
+class SurfaceSlabStartGenerator(StartGenerator):
+    """StartGenerator for bare slab search: rattle top-layer atoms of a fixed slab."""
+
+    def __init__(
+        self,
+        slab: Atoms,
+        *,
+        n_fixed: int,
+        rattle_strength: float = 0.35,
+        rng: np.random.Generator | None = None,
+        calculator: Calculator | None = None,
+        population_size: int | None = None,
+        verbosity: int = 1,
+    ) -> None:
+        self.rng: Generator = ensure_rng_or_create(
+            rng if rng is not None else np.random.default_rng()
+        )
+        self.slab = slab.copy()
+        self.n_fixed = int(n_fixed)
+        self.rattle_strength = float(rattle_strength)
+        self.calculator = calculator
+        self._candidate_count = 0
+        self._candidate_batch: list[Atoms] = []
+        if self.n_fixed < 0 or self.n_fixed >= len(self.slab):
+            raise SCGOValidationError(
+                f"SurfaceSlabStartGenerator: n_fixed={self.n_fixed} invalid for "
+                f"len(slab)={len(self.slab)}"
+            )
+        n_pop = int(population_size) if population_size is not None else 1
+        if verbosity >= 1:
+            log_phase_header(
+                logger,
+                "Population initialization",
+                verbosity=verbosity,
+            )
+        for _ in range(max(n_pop, 1)):
+            self._candidate_batch.append(self._make_candidate())
+
+    def _make_candidate(self) -> Atoms:
+        atoms = self.slab.copy()
+        pos = atoms.get_positions()
+        noise = self.rng.normal(
+            0.0, self.rattle_strength, size=pos[self.n_fixed :].shape
+        )
+        pos[self.n_fixed :] += noise
+        atoms.set_positions(pos)
+        return atoms
+
+    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+        if self._candidate_count < len(self._candidate_batch):
+            atoms = self._candidate_batch[self._candidate_count]
+            self._candidate_count += 1
+        else:
+            atoms = self._make_candidate()
+        if self.calculator is not None:
+            atoms.calc = self.calculator
+        return atoms
+
+
 def create_ga_pairing(
     atoms_template: Atoms,
     n_to_optimize: int,
@@ -765,7 +833,7 @@ def create_ga_pairing(
     if not uses_surface(system_type) and slab_atoms is not None and len(slab_atoms) > 0:
         raise SCGOValidationError(
             f"Received non-empty slab_atoms with non-surface system_type={system_type!r}. "
-            "Use surface_cluster or surface_cluster_adsorbate."
+            "Use a surface_* system type."
         )
     n_template = len(atoms_template)
     if uses_surface(system_type):
@@ -805,7 +873,10 @@ def create_ga_pairing(
     if composition is not None:
         use_partition_tags = (
             core_adsorbate_partition_counts(
-                system_type, composition, adsorbate_definition
+                system_type,
+                composition,
+                adsorbate_definition,
+                allow_empty_core=get_system_policy(system_type).has_adsorbate,
             )
             is not None
         )
@@ -975,7 +1046,7 @@ def create_mutation_operators(
     if not uses_surface(system_type) and n_slab > 0:
         raise SCGOValidationError(
             f"Received n_slab > 0 with non-surface system_type={system_type!r}. "
-            "Use surface_cluster or surface_cluster_adsorbate."
+            "Use a surface_* system type."
         )
     operators = []
     name_map = {}
@@ -983,8 +1054,17 @@ def create_mutation_operators(
     move_scale = (
         policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
     )
+    partition_composition = list(composition)
+    if policy.slab_is_search_target and policy.has_adsorbate and adsorbate_definition:
+        ads = adsorbate_definition.get("adsorbate_symbols", [])
+        core = adsorbate_definition.get("core_symbols", [])
+        if isinstance(ads, list) and isinstance(core, list):
+            partition_composition = [str(s) for s in core] + [str(s) for s in ads]
     part = core_adsorbate_partition_details(
-        system_type, composition, adsorbate_definition
+        system_type,
+        partition_composition,
+        adsorbate_definition,
+        allow_empty_core=policy.has_adsorbate,
     )
     use_partition_tags = part is not None
     ads_tags: list[int] = []
@@ -996,6 +1076,8 @@ def create_mutation_operators(
     include_overlap_relief = not (
         freeze_adsorbate_internal_geometry and use_partition_tags
     )
+    # Crystalline slab search: skip cluster-shape operators.
+    include_cluster_shape_ops = not policy.slab_is_search_target
 
     # Estimate a physically meaningful max displacement for in-plane slide
     # based on the expected cluster size. Use 3 * estimated cluster radius,
@@ -1040,17 +1122,18 @@ def create_mutation_operators(
         operators.append(permutation)
         name_map["permutation"] = len(operators) - 1
 
-        shell_swap: ShellSwapMutation = ShellSwapMutation(
-            n_to_optimize,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-            blmin=blmin,
-            test_dist_to_slab=uses_surface(system_type),
-            system_type=system_type,
-        )
-        operators.append(shell_swap)
-        name_map["shell_swap"] = len(operators) - 1
+        if include_cluster_shape_ops:
+            shell_swap: ShellSwapMutation = ShellSwapMutation(
+                n_to_optimize,
+                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+                blmin=blmin,
+                test_dist_to_slab=uses_surface(system_type),
+                system_type=system_type,
+            )
+            operators.append(shell_swap)
+            name_map["shell_swap"] = len(operators) - 1
 
-    if use_adaptive:
+    if use_adaptive and include_cluster_shape_ops:
         if not use_partition_tags:
             flattening: FlatteningMutation = FlatteningMutation(
                 blmin,
@@ -1169,69 +1252,73 @@ def create_mutation_operators(
                 operators.append(breathing_ads)
                 name_map["breathing_ads"] = len(operators) - 1
 
-        if uses_surface(system_type) and n_slab > 0:
-            if not use_partition_tags:
-                slide: InPlaneSlideMutation = InPlaneSlideMutation(
-                    blmin,
-                    n_to_optimize,
-                    surface_normal_axis=surface_normal_axis,
-                    system_type=system_type,
-                    rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                    max_inner_attempts=in_plane_slide_max_inner_attempts,
-                    max_displacement=max(
-                        in_plane_slide_max_displacement, default_max_displacement
-                    ),
-                )
-                operators.append(slide)
-                name_map["in_plane_slide"] = len(operators) - 1
-            if use_partition_tags:
-                # For adsorbate systems, create core-only and adsorbate-only variants
-                # Core-only in-plane slide (target core tag=0)
-                slide_core: InPlaneSlideMutation = InPlaneSlideMutation(
-                    blmin,
-                    n_to_optimize,
-                    surface_normal_axis=surface_normal_axis,
-                    system_type=system_type,
-                    rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                    max_inner_attempts=in_plane_slide_max_inner_attempts,
-                    max_displacement=max(
-                        in_plane_slide_max_displacement, default_max_displacement
-                    ),
-                    target_tags=[0],
-                )
-                operators.append(slide_core)
-                name_map["in_plane_slide_core"] = len(operators) - 1
-                # Adsorbate-only in-plane slide (target adsorbate tag=1)
-                if ads_tags:
-                    slide_ads: InPlaneSlideMutation = InPlaneSlideMutation(
-                        blmin,
-                        n_to_optimize,
-                        surface_normal_axis=surface_normal_axis,
-                        system_type=system_type,
-                        rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                        max_inner_attempts=in_plane_slide_max_inner_attempts,
-                        max_displacement=max(
-                            in_plane_slide_max_displacement, default_max_displacement
-                        ),
-                        target_tags=ads_tags,
-                    )
-                    operators.append(slide_ads)
-                    name_map["in_plane_slide_ads"] = len(operators) - 1
-
-        if use_partition_tags and adsorbate_definition is not None:
-            from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
-
-            reposition = FragmentRepositionMutation(
+    if use_adaptive and uses_surface(system_type) and n_slab > 0:
+        if not use_partition_tags:
+            slide: InPlaneSlideMutation = InPlaneSlideMutation(
                 blmin,
                 n_to_optimize,
+                surface_normal_axis=surface_normal_axis,
                 system_type=system_type,
-                adsorbate_definition=adsorbate_definition,
-                fragment_templates=adsorbate_fragment_template,
-                cluster_adsorbate_config=cluster_adsorbate_config,
                 rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+                max_inner_attempts=in_plane_slide_max_inner_attempts,
+                max_displacement=max(
+                    in_plane_slide_max_displacement, default_max_displacement
+                ),
             )
-            operators.append(reposition)
-            name_map["fragment_reposition"] = len(operators) - 1
+            operators.append(slide)
+            name_map["in_plane_slide"] = len(operators) - 1
+        if use_partition_tags:
+            # For adsorbate systems, create core-only and adsorbate-only variants
+            # Core-only in-plane slide (target core tag=0)
+            slide_core: InPlaneSlideMutation = InPlaneSlideMutation(
+                blmin,
+                n_to_optimize,
+                surface_normal_axis=surface_normal_axis,
+                system_type=system_type,
+                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+                max_inner_attempts=in_plane_slide_max_inner_attempts,
+                max_displacement=max(
+                    in_plane_slide_max_displacement, default_max_displacement
+                ),
+                target_tags=[0],
+            )
+            operators.append(slide_core)
+            name_map["in_plane_slide_core"] = len(operators) - 1
+            # Adsorbate-only in-plane slide (target adsorbate tag=1)
+            if ads_tags:
+                slide_ads: InPlaneSlideMutation = InPlaneSlideMutation(
+                    blmin,
+                    n_to_optimize,
+                    surface_normal_axis=surface_normal_axis,
+                    system_type=system_type,
+                    rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+                    max_inner_attempts=in_plane_slide_max_inner_attempts,
+                    max_displacement=max(
+                        in_plane_slide_max_displacement, default_max_displacement
+                    ),
+                    target_tags=ads_tags,
+                )
+                operators.append(slide_ads)
+                name_map["in_plane_slide_ads"] = len(operators) - 1
+
+    if (
+        include_cluster_shape_ops
+        and use_partition_tags
+        and adsorbate_definition is not None
+    ):
+        from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
+
+        reposition = FragmentRepositionMutation(
+            blmin,
+            n_to_optimize,
+            system_type=system_type,
+            adsorbate_definition=adsorbate_definition,
+            fragment_templates=adsorbate_fragment_template,
+            cluster_adsorbate_config=cluster_adsorbate_config,
+            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+        )
+        operators.append(reposition)
+        name_map["fragment_reposition"] = len(operators) - 1
     return operators, name_map
 
 

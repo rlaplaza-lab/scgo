@@ -76,7 +76,14 @@ from scgo.utils.validation import validate_composition
 # Default required calculator methods
 _DEFAULT_REQUIRED_METHODS = ["get_potential_energy", "get_forces"]
 
-_SURFACE_SYSTEM_TYPES = frozenset({"surface_cluster", "surface_cluster_adsorbate"})
+_SURFACE_SYSTEM_TYPES = frozenset(
+    {
+        "surface_cluster",
+        "surface_cluster_adsorbate",
+        "surface",
+        "surface_adsorbate",
+    }
+)
 
 _VALIDATION_CALCULATOR: Calculator | None = None
 _MIN_PARALLEL_VALIDATION_CANDIDATES = 4
@@ -112,12 +119,42 @@ def _create_surface_initialized_atoms(
     adsorbate_definition: Any = None,
     adsorbate_fragment_template: Atoms | None = None,
     cluster_adsorbate_config: Any = None,
+    system_type: str | None = None,
 ) -> Atoms:
-    slab = surface_config.slab
+    from scgo.system_types import get_system_policy
+    from scgo.surface.partition import prepare_slab_search_surface_config
+
+    working_config = surface_config
+    policy = get_system_policy(system_type) if system_type is not None else None
+    n_fixed = 0
+    if policy is not None and policy.slab_is_search_target:
+        working_config, partition = prepare_slab_search_surface_config(surface_config)
+        n_fixed = partition.n_fixed
+        if not policy.has_adsorbate:
+            atoms = working_config.slab.copy()
+            pos = atoms.get_positions()
+            pos[n_fixed:] += rng.normal(0.0, 0.35, size=pos[n_fixed:].shape)
+            atoms.set_positions(pos)
+            return atoms
+        # Adsorbate-only deposit onto the reordered slab.
+        ads = (
+            adsorbate_definition.get("adsorbate_symbols", [])
+            if isinstance(adsorbate_definition, dict)
+            else []
+        )
+        deposit_composition = [str(s) for s in ads] if isinstance(ads, list) else []
+    else:
+        deposit_composition = list(composition)
+
+    slab = working_config.slab
     n_slab = len(slab)
-    n_top = len(composition)
+    n_top = len(deposit_composition)
+    if n_top == 0 and policy is not None and policy.slab_is_search_target:
+        raise SCGORuntimeError(
+            "surface_adsorbate initialization requires adsorbate symbols."
+        )
     template = Atoms(
-        symbols=list(slab.get_chemical_symbols()) + composition,
+        symbols=list(slab.get_chemical_symbols()) + deposit_composition,
         positions=np.vstack([slab.get_positions(), np.zeros((n_top, 3))]),
         cell=slab.cell,
         pbc=slab.pbc,
@@ -128,17 +165,21 @@ def _create_surface_initialized_atoms(
         ratio=BLMIN_RATIO_DEFAULT,
     )
     deposited = create_deposited_cluster(
-        composition=composition,
+        composition=deposit_composition,
         slab=slab,
         blmin=blmin,
         rng=rng,
-        config=surface_config,
+        config=working_config,
         adsorbate_definition=adsorbate_definition,
         adsorbate_fragment_template=adsorbate_fragment_template,
         cluster_adsorbate_config=cluster_adsorbate_config,
     )
     if deposited is None:
         raise SCGORuntimeError("Failed to create initial surface-supported structure.")
+    if policy is not None and policy.slab_is_search_target and n_fixed > 0:
+        pos = deposited.get_positions()
+        pos[n_fixed:n_slab] += rng.normal(0.0, 0.25, size=pos[n_fixed:n_slab].shape)
+        deposited.set_positions(pos)
     return deposited
 
 
@@ -370,7 +411,15 @@ def _validate_common_run_inputs(
     require_system_type: bool = False,
 ) -> None:
     """Validate arguments shared by :func:`scgo` and :func:`run_trials`."""
-    validate_composition(composition, allow_empty=False, allow_tuple=False)
+    system_type = global_optimizer_kwargs.get("system_type")
+    allow_empty = False
+    if isinstance(system_type, str):
+        try:
+            policy = get_system_policy(system_type)
+            allow_empty = policy.slab_is_search_target and not policy.has_adsorbate
+        except KeyError:
+            allow_empty = False
+    validate_composition(composition, allow_empty=allow_empty, allow_tuple=False)
 
     if not isinstance(global_optimizer, str):
         raise SCGOValidationError("global_optimizer must be a string")
@@ -577,8 +626,16 @@ def scgo(
                 cluster_adsorbate_config=optimizer_kwargs.get(
                     "cluster_adsorbate_config"
                 ),
+                system_type=system_type,
             )
-            optimizer_kwargs.setdefault("n_slab", len(surface_config.slab))
+            if policy.slab_is_search_target:
+                from scgo.surface.partition import prepare_slab_search_surface_config
+
+                prepared, _part = prepare_slab_search_surface_config(surface_config)
+                optimizer_kwargs["surface_config"] = prepared
+                optimizer_kwargs.setdefault("n_slab", len(prepared.slab))
+            else:
+                optimizer_kwargs.setdefault("n_slab", len(surface_config.slab))
         elif policy.has_adsorbate:
             ads_def = optimizer_kwargs.get("adsorbate_definition")
             if not isinstance(ads_def, dict):

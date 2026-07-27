@@ -192,8 +192,7 @@ class CutAndSplicePairing(OffspringCreator):
         if len(self.slab) > 0 and not uses_surface(system_type):
             raise SCGOValidationError(
                 "CutAndSplicePairing received slab atoms with non-surface "
-                f"system_type={system_type!r}. Set system_type to "
-                "'surface_cluster' or 'surface_cluster_adsorbate'."
+                f"system_type={system_type!r}. Set system_type to a surface_* type."
             )
         self.system_type = system_type
         if max_pairing_attempts is None:

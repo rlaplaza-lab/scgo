@@ -158,6 +158,8 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "gas_cluster_adsorbate": dict(_GAS_ADSORBATE_TS_NEB_DEFAULTS),
     "surface_cluster": dict(_SURFACE_TS_NEB_DEFAULTS),
     "surface_cluster_adsorbate": dict(_SURFACE_ADSORBATE_TS_NEB_DEFAULTS),
+    "surface": dict(_SURFACE_TS_NEB_DEFAULTS),
+    "surface_adsorbate": dict(_SURFACE_ADSORBATE_TS_NEB_DEFAULTS),
 }
 
 

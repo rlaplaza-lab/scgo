@@ -29,6 +29,8 @@ SystemType = Literal[
     "surface_cluster",
     "gas_cluster_adsorbate",
     "surface_cluster_adsorbate",
+    "surface",
+    "surface_adsorbate",
 ]
 
 
@@ -194,6 +196,7 @@ class SystemPolicy:
     system_type: SystemType
     uses_surface: bool
     has_adsorbate: bool
+    slab_is_search_target: bool
     requires_slab_prefix_validation: bool
     needs_supported_deposit_validation: bool
     neb_force_mic: bool
@@ -210,6 +213,7 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         system_type="gas_cluster",
         uses_surface=False,
         has_adsorbate=False,
+        slab_is_search_target=False,
         requires_slab_prefix_validation=False,
         needs_supported_deposit_validation=False,
         neb_force_mic=False,
@@ -224,6 +228,7 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         system_type="surface_cluster",
         uses_surface=True,
         has_adsorbate=False,
+        slab_is_search_target=False,
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
         neb_force_mic=True,
@@ -238,6 +243,7 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         system_type="gas_cluster_adsorbate",
         uses_surface=False,
         has_adsorbate=True,
+        slab_is_search_target=False,
         requires_slab_prefix_validation=False,
         needs_supported_deposit_validation=False,
         neb_force_mic=False,
@@ -252,6 +258,7 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         system_type="surface_cluster_adsorbate",
         uses_surface=True,
         has_adsorbate=True,
+        slab_is_search_target=False,
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
         neb_force_mic=True,
@@ -259,6 +266,36 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         neb_surface_cell_remap=True,
         # Continuous in-plane Kabsch breaks adsorbate–slab registry (multi-eV
         # endpoint energy jumps). Keep cell remap / MIC; skip free rotation.
+        neb_surface_lattice_rotation=False,
+        constrain_adsorbate_moves=True,
+        adsorbate_move_scale=0.6,
+        allow_composition_permutations=False,
+    ),
+    "surface": SystemPolicy(
+        system_type="surface",
+        uses_surface=True,
+        has_adsorbate=False,
+        slab_is_search_target=True,
+        requires_slab_prefix_validation=True,
+        needs_supported_deposit_validation=False,
+        neb_force_mic=True,
+        neb_disable_alignment=False,
+        neb_surface_cell_remap=True,
+        neb_surface_lattice_rotation=True,
+        constrain_adsorbate_moves=False,
+        adsorbate_move_scale=1.0,
+        allow_composition_permutations=True,
+    ),
+    "surface_adsorbate": SystemPolicy(
+        system_type="surface_adsorbate",
+        uses_surface=True,
+        has_adsorbate=True,
+        slab_is_search_target=True,
+        requires_slab_prefix_validation=True,
+        needs_supported_deposit_validation=True,
+        neb_force_mic=True,
+        neb_disable_alignment=False,
+        neb_surface_cell_remap=True,
         neb_surface_lattice_rotation=False,
         constrain_adsorbate_moves=True,
         adsorbate_move_scale=0.6,
@@ -329,12 +366,61 @@ def validate_system_type_settings(
     if not surface_type and surface_config is not None:
         raise SCGOValidationError(
             f"system_type={system_type!r} does not allow surface_config. "
-            "Use surface_cluster or surface_cluster_adsorbate."
+            "Use a surface_* system type."
         )
+    if get_system_policy(system_type).slab_is_search_target:
+        if surface_config is None:
+            raise SCGOValidationError(
+                f"system_type={system_type!r} requires surface_config."
+            )
+        from scgo.surface.partition import validate_slab_search_config
+
+        validate_slab_search_config(surface_config)
 
 
 def uses_surface(system_type: SystemType) -> bool:
     return get_system_policy(system_type).uses_surface
+
+
+def slab_is_search_target(system_type: SystemType) -> bool:
+    """Return True when GA/BH search top slab layers (not only deposited mobile)."""
+    return get_system_policy(system_type).slab_is_search_target
+
+
+def resolve_search_mobile_composition(
+    *,
+    system_type: SystemType,
+    composition: list[str],
+    surface_config: SurfaceSystemConfig | None = None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+) -> list[str]:
+    """Return the GA/BH search-mobile symbol list for algorithm sizing and operators.
+
+    For cluster modes this is ``composition`` (adsorbate-reconciled). For
+    slab-as-target modes it is top-layer slab symbols plus any adsorbate symbols.
+    """
+    policy = get_system_policy(system_type)
+    if not policy.slab_is_search_target:
+        return list(composition)
+
+    if surface_config is None:
+        raise SCGOValidationError(
+            f"system_type={system_type!r} requires surface_config to resolve "
+            "search-mobile composition."
+        )
+    from scgo.surface.partition import resolve_slab_search_partition
+
+    part = resolve_slab_search_partition(surface_config)
+    mobile = list(part.mobile_slab_symbols)
+    if policy.has_adsorbate:
+        if adsorbate_definition is not None:
+            ads = adsorbate_definition.get("adsorbate_symbols", [])
+            if isinstance(ads, list):
+                mobile.extend(str(s) for s in ads)
+        elif composition:
+            # Adsorbate-only composition input (no core).
+            mobile.extend(str(s) for s in composition)
+    return mobile
 
 
 def validate_mobile_symbols_match_adsorbate_definition(

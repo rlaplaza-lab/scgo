@@ -68,12 +68,14 @@ def validate_stored_slab_adsorbate_metadata(atoms: Atoms) -> None:
     if get_metadata(atoms, "system_type") not in {
         "surface_cluster",
         "surface_cluster_adsorbate",
+        "surface",
+        "surface_adsorbate",
     }:
         return
     n_meta = int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
     if n_meta <= 0:
         raise SCGOValidationError(
-            "surface_cluster structures require n_slab_atoms > 0 in metadata"
+            "surface_* structures require n_slab_atoms > 0 in metadata"
         )
     if len(atoms) < n_meta:
         raise SCGOValidationError(
@@ -99,7 +101,11 @@ def validate_stored_mobile_partition_metadata(atoms: Atoms) -> None:
     For ``gas_cluster_adsorbate``, the full structure is mobile.
     """
     st = get_metadata(atoms, "system_type")
-    if st not in {"gas_cluster_adsorbate", "surface_cluster_adsorbate"}:
+    if st not in {
+        "gas_cluster_adsorbate",
+        "surface_cluster_adsorbate",
+        "surface_adsorbate",
+    }:
         return
     n_core = int(get_metadata(atoms, "n_core_atoms", 0) or 0)
     n_ads = int(get_metadata(atoms, "n_adsorbate_fragment_atoms", 0) or 0)
@@ -107,7 +113,7 @@ def validate_stored_mobile_partition_metadata(atoms: Atoms) -> None:
         return
     n_slab = (
         int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
-        if st == "surface_cluster_adsorbate"
+        if st in {"surface_cluster_adsorbate", "surface_adsorbate"}
         else 0
     )
     mobile = atoms.get_chemical_symbols()[n_slab:]

@@ -19,6 +19,8 @@ _EXPECTED_OUTPUT_STEMS = {
     "example_pt5_graphite.py": "pt5_graphite",
     "example_pt5_oh_gas.py": "pt5_oh_gas",
     "example_pt5_2oh_graphite.py": "pt5_2oh_graphite",
+    "example_defected_graphite.py": "defected_graphite",
+    "example_n_doped_graphite.py": "n_doped_graphite_oh",
 }
 
 
@@ -65,16 +67,24 @@ def test_example_main_calls_run_go_ts_with_current_api(
     def _fake_surface_config(**_kwargs):
         from ase.build import graphene
 
-        return SurfaceSystemConfig(slab=graphene(size=(2, 2, 1), vacuum=8.0))
+        return SurfaceSystemConfig(
+            slab=graphene(size=(2, 2, 1), vacuum=8.0),
+            fix_all_slab_atoms=False,
+            n_relax_top_slab_layers=1,
+            name="fake_surface",
+        )
 
     module = _load_example_module(script_path)
     monkeypatch.setattr(module, "get_torchsim_ga_params", _fake_go_params)
     monkeypatch.setattr(module, "get_ts_search_params", _fake_ts_params)
     monkeypatch.setattr(module, "run_go_ts", _fake_run_go_ts)
-    if hasattr(module, "make_graphite_surface_config"):
-        monkeypatch.setattr(
-            module, "make_graphite_surface_config", _fake_surface_config
-        )
+    for maker in (
+        "make_graphite_surface_config",
+        "make_defected_graphite_surface_config",
+        "make_n_doped_graphite_surface_config",
+    ):
+        if hasattr(module, maker):
+            monkeypatch.setattr(module, maker, _fake_surface_config)
     monkeypatch.setattr(
         module, "DEFAULT_OUTPUT_ROOT", tmp_path / "results", raising=False
     )

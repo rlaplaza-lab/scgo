@@ -11,13 +11,18 @@ System type definitions and validation.
 Available System Types
 ----------------------
 
-SCGO supports four explicit system types (``SystemType`` is a ``Literal`` alias):
+SCGO supports six explicit system types (``SystemType`` is a ``Literal`` alias):
 
 1. **gas_cluster**: Gas-phase cluster (no slab, no adsorbates)
 2. **surface_cluster**: Cluster supported on a slab (``surface_config`` required)
 3. **gas_cluster_adsorbate**: Gas-phase cluster with adsorbates
 4. **surface_cluster_adsorbate**: Supported cluster with adsorbates
    (``surface_config`` required)
+5. **surface**: Bare slab as the GA/BH search target (top layers mobile;
+   ``surface_config`` with ``fix_all_slab_atoms=False`` and a top/bottom layer
+   policy required)
+6. **surface_adsorbate**: Top slab layers plus adsorbate fragments as the search
+   target (no cluster core; ``surface_config`` + ``adsorbates`` required)
 
 See :class:`~scgo.system_types.SystemPolicy` and
 :class:`~scgo.system_types.AdsorbateDefinition` in the module reference above.

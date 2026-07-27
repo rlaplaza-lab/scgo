@@ -194,7 +194,9 @@ def _prepare_run_context(
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     if params is not None:
         _reject_system_keys(params, context=context, kind="go")
-    comp = _as_composition(composition)
+    policy = get_system_policy(st)
+    allow_empty = policy.slab_is_search_target
+    comp = _as_composition(composition, allow_empty=allow_empty)
     preset_ads = (
         extract_adsorbate_definition_from_params(params)
         if adsorbates is None and params is not None
@@ -234,7 +236,17 @@ def _validate_go_ts_surface_config(
             f"system_type={system_type!r} requires the run surface_config argument "
             "to be a SurfaceSystemConfig."
         )
-    chosen = select_scgo_minima_algorithm(len(adsorbate_composition), system_type)
+    from scgo.system_types import resolve_search_mobile_composition
+
+    search_comp = resolve_search_mobile_composition(
+        system_type=system_type,
+        composition=list(adsorbate_composition),
+        surface_config=surface_config,
+        adsorbate_definition=go_prepared.get("adsorbate_definition")
+        if isinstance(go_prepared.get("adsorbate_definition"), dict)
+        else None,
+    )
+    chosen = select_scgo_minima_algorithm(len(search_comp), system_type)
     op = go_prepared.get("optimizer_params") or {}
     go_slot = op.get(chosen)
     if not isinstance(go_slot, dict):
