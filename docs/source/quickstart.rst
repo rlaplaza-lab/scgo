@@ -397,7 +397,7 @@ for multi-element atom ordering and placement behaviour.
        system_type="gas_cluster",
    )
 
-**TS from existing minima** (each formula needs a prior ``{formula}_searches/`` tree):
+**TS from existing minima** (each composition needs a prior ``{path_key}_searches/`` tree):
 
 .. code-block:: python
 
@@ -451,36 +451,44 @@ Output directories
      - ``output_dir`` is
      - Default when omitted
    * - ``run_go``
-     - The ``{formula}_searches/`` directory itself
-     - ``{formula}_searches/`` in the current working directory
+     - The ``{path_key}_searches/`` directory itself
+     - ``{path_key}_searches/`` in the current working directory
    * - ``run_go_campaign``
-     - Campaign parent; each composition → ``{parent}/{formula}_searches/``
-     - Each composition → ``{formula}_searches/`` in CWD (no shared parent)
+     - Campaign parent; each composition → ``{parent}/{path_key}_searches/``
+     - Each composition → ``{path_key}_searches/`` in CWD (no shared parent)
    * - ``run_go_ts``
-     - Campaign root → ``{root}/{formula}_searches/`` and ``{root}/{formula}_ts_results/``
-     - ``scgo_runs/{formula}_{calculator_slug}/`` (see ``output_root`` / ``output_stem`` below)
+     - Campaign root → ``{root}/{path_key}_searches/`` and ``{root}/{path_key}_ts_results/``
+     - ``scgo_runs/{path_key}_{calculator_slug}/`` (see ``output_root`` / ``output_stem`` below)
    * - ``run_go_ts_campaign``
-     - Campaign parent; each composition → ``{parent}/{formula}_campaign/…``
+     - Campaign parent; each composition → ``{parent}/{path_key}_campaign/…``
      - ``scgo_runs/go_ts_campaign_{calc}/``
    * - ``run_ts_search``
      - Campaign root (or an existing ``*_searches/`` path — parent is inferred)
-     - CWD; minima from ``{formula}_searches/``, TS to ``{formula}_ts_results/``
+     - CWD; minima from ``{path_key}_searches/``, TS to ``{path_key}_ts_results/``
    * - ``run_ts_campaign``
      - Shared campaign root for all compositions
      - CWD per composition
 
 ``output_root`` and ``output_stem`` (``run_go_ts`` / ``run_go_ts_campaign`` only):
 when ``output_dir`` is omitted, the default root is
-``{output_root or ./scgo_runs}/{output_stem or formula}_{calculator_slug}/``
+``{output_root or ./scgo_runs}/{output_stem or path_key}_{calculator_slug}/``
 (for example ``examples/results/pt5_gas_mace/``).
+
+The on-disk ``path_key`` (also used for ``{path_key}_searches/`` and
+``{path_key}_ts_results/``) is built from nanoparticle formula, each adsorbate
+fragment (order-preserving, e.g. ``OH``), and ``surface_config.name`` when a
+surface is used — for example ``Pt5``, ``Pt5_OH_OH``, or
+``Pt5_OH_OH_graphite``. Chemical composition matching still uses the ASE-style
+formula (``H2O2Pt5``). Default ``surface_config.name`` is ``"slab"``;
+``make_graphite_surface_config`` sets ``name="graphite"``.
 
 ``searches_dir`` (``run_ts_search`` only): explicit path to a GO searches
 directory; the campaign root becomes ``searches_dir.parent``.
 
 **Example — ``run_go_ts`` with ``output_root`` / ``output_stem``:**
 
-GO and TS use the same campaign layout: ``{formula}_searches/`` and
-``{formula}_ts_results/`` are siblings; each holds ``run_*`` directories,
+GO and TS use the same campaign layout: ``{path_key}_searches/`` and
+``{path_key}_ts_results/`` are siblings; each holds ``run_*`` directories,
 campaign-level summaries, and deduplicated exports. GO databases and TS pair
 artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs).
 
@@ -506,6 +514,22 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
        └── final_unique_ts/
            └── final_unique_ts_summary.json
 
+**Example — surface adsorbate campaign** (``Pt5`` + 2×``OH`` on graphite):
+
+.. code-block:: text
+
+   results/pt5_2oh_graphite_mace/
+   ├── Pt5_OH_OH_graphite_searches/
+   │   ├── run_*/
+   │   ├── results_summary.json
+   │   └── final_unique_minima/
+   │       └── Pt5_OH_OH_graphite_minimum_01_<run_id>.xyz
+   └── Pt5_OH_OH_graphite_ts_results/
+       ├── run_*/
+       ├── results_summary.json
+       └── final_unique_ts/
+           └── Pt5_OH_OH_graphite_ts_01.xyz
+
 **Example — ``run_go_campaign`` with ``output_dir="benchmark/results"``:**
 
 .. code-block:: text
@@ -530,7 +554,7 @@ On-disk layout
 
 .. _output-files:
 
-GO and TS write sibling ``{formula}_searches/`` and ``{formula}_ts_results/``
+GO and TS write sibling ``{path_key}_searches/`` and ``{path_key}_ts_results/``
 trees (see *Output directories* for path resolution). Each tree contains
 datetime-tagged ``run_*`` work directories, campaign summaries, and deduplicated
 exports.
@@ -548,11 +572,11 @@ UTC-based):
    * - Runner
      - ``run_id`` behaviour
    * - ``run_go``
-     - One new ``run_*`` per call under ``{formula}_searches/``
+     - One new ``run_*`` per call under ``{path_key}_searches/``
    * - ``run_go_campaign``
      - One shared ``run_id`` for all compositions (override with ``run_id=``)
    * - ``run_ts_search`` / ``run_go_ts``
-     - TS mints a fresh ``run_*`` under ``{formula}_ts_results/`` (independent of GO)
+     - TS mints a fresh ``run_*`` under ``{path_key}_ts_results/`` (independent of GO)
 
 Repeat ``run_go`` to add sibling ``run_*`` directories; SCGO merges prior minima
 via database discovery and deduplication. :func:`~scgo.utils.run_tracking.get_run_directories`

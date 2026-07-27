@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- On-disk path keys for searches, TS results, XYZ prefixes, and default
+  campaign stems are component-aware: nanoparticle, each adsorbate fragment,
+  then surface name (e.g. ``Pt5_OH_OH_graphite``). Chemical composition
+  matching still uses ASE-style formulas (``H2O2Pt5``).
+- ``SurfaceSystemConfig.name`` (default ``"slab"``) supplies the surface
+  path-key segment; ``make_graphite_surface_config`` sets ``name="graphite"``.
+
 ## 0.6.3
 
 ### Fixed

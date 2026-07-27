@@ -47,7 +47,7 @@ results = run_go(
 
 `system_type` is always a run argument: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, or `surface_cluster_adsorbate`. Surfaces need `surface_config=`; adsorbates need `adsorbates=`.
 
-Output: `run_go` writes `{formula}_searches/`; GO+TS/TS use a campaign root with sibling `{formula}_searches/` and `{formula}_ts_results/`. See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
+Output: `run_go` writes `{path_key}_searches/`; GO+TS/TS use a campaign root with sibling `{path_key}_searches/` and `{path_key}_ts_results/` (e.g. `Pt5_OH_OH_graphite_searches`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
 ## Examples
 

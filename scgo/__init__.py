@@ -88,6 +88,8 @@ from scgo.surface import (
 # Utilities
 from scgo.utils.helpers import (
     get_cluster_formula,
+    get_ordered_formula,
+    get_system_path_key,
     is_true_minimum,
     perform_local_relaxation,
 )
@@ -169,6 +171,8 @@ __all__ = [
     # Utilities
     "get_child_rng_or_none",
     "get_cluster_formula",
+    "get_ordered_formula",
+    "get_system_path_key",
     "is_true_minimum",
     "perform_local_relaxation",
 ]

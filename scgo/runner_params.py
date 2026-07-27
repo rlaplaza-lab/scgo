@@ -35,7 +35,7 @@ from scgo.system_types import (
     resolve_adsorbate_run_composition,
     validate_system_type_settings,
 )
-from scgo.utils.helpers import get_cluster_formula
+from scgo.utils.helpers import get_system_path_key
 from scgo.utils.logging import get_logger
 from scgo.utils.output_paths import resolve_go_searches_dir
 from scgo.utils.run_helpers import initialize_params, initialize_ts_params
@@ -50,6 +50,46 @@ _DEFAULT_GO_PARAMS: dict[str, Any] | None = None
 def _log_validation_error(exc: SCGOValidationError) -> None:
     """Emit user-facing ERROR for validation failures at the runner API boundary."""
     _VALIDATION_LOGGER.error("Validation error: %s", exc)
+
+
+def _surface_name_for_path(
+    system_type: SystemType | None,
+    surface_config: SurfaceSystemConfig | None,
+) -> str | None:
+    """Return surface path-key segment when the system uses a surface."""
+    if system_type is None or surface_config is None:
+        return None
+    if not get_system_policy(system_type).uses_surface:
+        return None
+    return surface_config.name
+
+
+def resolve_run_path_key(
+    composition: list[str],
+    *,
+    system_type: SystemType | None = None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    surface_config: SurfaceSystemConfig | None = None,
+    params: dict[str, Any] | None = None,
+) -> str:
+    """Resolve component-aware path key for searches / TS / campaign dirs."""
+    ads_def = adsorbate_definition
+    if ads_def is None and params is not None:
+        ads_def = extract_adsorbate_definition_from_params(params)
+        if ads_def is None:
+            raw = params.get("adsorbate_definition")
+            if isinstance(raw, dict):
+                ads_def = raw  # type: ignore[assignment]
+    sc = surface_config
+    if sc is None and params is not None:
+        raw_sc = params.get("surface_config")
+        if isinstance(raw_sc, SurfaceSystemConfig):
+            sc = raw_sc
+    return get_system_path_key(
+        composition,
+        adsorbate_definition=ads_def,  # type: ignore[arg-type]
+        surface_name=_surface_name_for_path(system_type, sc),
+    )
 
 
 @dataclass(frozen=True)
@@ -410,10 +450,19 @@ def _default_go_ts_output_path(
     go_params: dict[str, Any],
     output_stem: str | None,
     output_root: str | Path | None,
+    system_type: SystemType | None = None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    surface_config: SurfaceSystemConfig | None = None,
 ) -> Path:
     root = output_root if output_root is not None else Path.cwd() / "scgo_runs"
     p = Path(root).expanduser().resolve()
-    stem = output_stem or get_cluster_formula(composition)
+    stem = output_stem or resolve_run_path_key(
+        composition,
+        system_type=system_type,
+        adsorbate_definition=adsorbate_definition,
+        surface_config=surface_config,
+        params=go_params,
+    )
     path = (p / f"{stem}_{_calculator_slug_from_go_params(go_params)}").resolve()
     if output_root is None:
         _LOGGER.info("No output_dir provided; using default campaign root %s", path)
@@ -587,7 +636,14 @@ def _prepare_run_go_context(
         adsorbate_fragment_template=ads_temp,
     )
     out_path = _resolved_path(output_dir)
-    searches_dir = str(resolve_go_searches_dir(output_dir, get_cluster_formula(comp)))
+    path_key = resolve_run_path_key(
+        comp,
+        system_type=st,
+        adsorbate_definition=ads_def,
+        surface_config=surface_config,
+        params=eff_params,
+    )
+    searches_dir = str(resolve_go_searches_dir(output_dir, path_key))
     return RunGOContext(
         composition=comp,
         system_type=st,
@@ -660,7 +716,14 @@ def _prepare_run_go_campaign_context(
         if out_path is not None
         else str(
             resolve_go_searches_dir(
-                None, get_cluster_formula(full_compositions[0])
+                None,
+                resolve_run_path_key(
+                    full_compositions[0],
+                    system_type=st,
+                    adsorbate_definition=ads_def,
+                    surface_config=surface_config,
+                    params=eff_params,
+                ),
             ).parent
         )
     )
@@ -739,7 +802,13 @@ def _prepare_run_go_ts_context(
         ts_mat, fn_name=context_name, system_type=st, surface_config=surface_config
     )
     out_path = _resolved_path(output_dir) or _default_go_ts_output_path(
-        comp, go_params=go_mat, output_stem=output_stem, output_root=output_root
+        comp,
+        go_params=go_mat,
+        output_stem=output_stem,
+        output_root=output_root,
+        system_type=st,
+        adsorbate_definition=ads_def,
+        surface_config=surface_config,
     )
     return RunGOTSContext(
         composition=comp,

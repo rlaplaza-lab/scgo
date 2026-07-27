@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,21 @@ from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_positive
 
 logger = get_logger(__name__)
+
+_SURFACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+DEFAULT_SURFACE_NAME = "slab"
+
+
+def validate_surface_name(name: str) -> str:
+    """Return a filesystem-safe surface path-key segment."""
+    cleaned = str(name).strip()
+    if not cleaned:
+        raise SCGOValidationError("surface name must be a non-empty string")
+    if not _SURFACE_NAME_RE.fullmatch(cleaned):
+        raise SCGOValidationError(
+            f"surface name must be alphanumeric with optional '_' / '-' (got {name!r})"
+        )
+    return cleaned
 
 
 @dataclass(frozen=True, init=False)
@@ -58,6 +74,7 @@ class SurfaceSystemConfig:
     """
 
     slab: Atoms
+    name: str
     adsorption_height_min: float
     adsorption_height_max: float
     surface_normal_axis: int
@@ -74,6 +91,7 @@ class SurfaceSystemConfig:
         self,
         slab: Atoms,
         *,
+        name: str = DEFAULT_SURFACE_NAME,
         adsorption_height_min: Any = _UNSET,
         adsorption_height_max: Any = _UNSET,
         height_min: Any = _UNSET,
@@ -89,6 +107,7 @@ class SurfaceSystemConfig:
         structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
     ) -> None:
         object.__setattr__(self, "slab", slab)
+        object.__setattr__(self, "name", validate_surface_name(name))
         object.__setattr__(
             self,
             "adsorption_height_min",
@@ -198,6 +217,7 @@ class SurfaceSystemConfig:
 def make_surface_config(
     slab: Atoms,
     *,
+    name: str = DEFAULT_SURFACE_NAME,
     adsorption_height_min: float = 2.0,
     adsorption_height_max: float = 3.5,
     fix_all_slab_atoms: bool = True,
@@ -207,6 +227,7 @@ def make_surface_config(
     """Build a :class:`SurfaceSystemConfig` from an arbitrary ASE slab."""
     return SurfaceSystemConfig(
         slab=slab.copy(),
+        name=name,
         adsorption_height_min=adsorption_height_min,
         adsorption_height_max=adsorption_height_max,
         fix_all_slab_atoms=fix_all_slab_atoms,
@@ -218,7 +239,7 @@ def make_surface_config(
 def describe_surface_config(cfg: SurfaceSystemConfig) -> str:
     """Summarize key surface/deposition fields for logging and provenance."""
     return (
-        f"SurfaceSystemConfig(n_slab={len(cfg.slab)}, "
+        f"SurfaceSystemConfig(name={cfg.name!r}, n_slab={len(cfg.slab)}, "
         f"adsorption_height=({cfg.adsorption_height_min}, {cfg.adsorption_height_max}), "
         f"surface_normal_axis={cfg.surface_normal_axis}, "
         f"fix_all_slab_atoms={cfg.fix_all_slab_atoms}, "

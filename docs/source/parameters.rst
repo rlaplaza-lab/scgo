@@ -410,6 +410,10 @@ Surface Config
    * - ``slab``
      - Required
      - ASE Atoms object
+   * - ``name``
+     - ``"slab"``
+     - Path-key surface segment (filesystem-safe). Graphite preset uses
+       ``"graphite"`` (e.g. ``Pt5_OH_OH_graphite_searches``).
    * - ``adsorption_height_min``
      - ``1.2`` (class) / ``2.0`` (``make_surface_config``)
      - Minimum height above slab (\ :math:`\AA`). Alias: ``height_min``.

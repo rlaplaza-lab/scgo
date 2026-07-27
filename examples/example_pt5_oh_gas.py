@@ -18,8 +18,8 @@ TS: adsorbate presets supply climb, spring ``0.5``, shared ``neb_fmax=0.20``,
 ``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
 interior maxima). This example only tightens ``max_pairs``.
 
-Output: ``results/pt5_oh_gas_mace/`` with ``HOPt5_searches/``,
-``HOPt5_ts_results/``, and optional ``go_ts_timing.json`` (see docs quickstart,
+Output: ``results/pt5_oh_gas_mace/`` with ``Pt5_OH_searches/``,
+``Pt5_OH_ts_results/``, and optional ``go_ts_timing.json`` (see docs quickstart,
 *On-disk layout*).
 """
 

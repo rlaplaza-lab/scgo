@@ -444,6 +444,80 @@ def get_cluster_formula(composition: list[str]) -> str:
     )
 
 
+def get_ordered_formula(symbols: list[str]) -> str:
+    """Generate a formula string preserving first-seen element order.
+
+    Unlike :func:`get_cluster_formula`, this does not sort alphabetically, so
+    ``["O", "H"]`` yields ``OH`` rather than ``HO``.
+    """
+    counts: dict[str, int] = {}
+    order: list[str] = []
+    for symbol in symbols:
+        key = str(symbol)
+        if key not in counts:
+            order.append(key)
+            counts[key] = 0
+        counts[key] += 1
+    return "".join(
+        f"{elem}{counts[elem] if counts[elem] > 1 else ''}" for elem in order
+    )
+
+
+def get_system_path_key(
+    composition: list[str],
+    *,
+    adsorbate_definition: dict[str, Any] | None = None,
+    surface_name: str | None = None,
+) -> str:
+    """Build an underscore-separated path key for campaign / formula directories.
+
+    Parts (when present): nanoparticle formula, each adsorbate fragment formula
+    (order-preserving), then surface name. Examples:
+    ``Pt5``, ``Pt5_OH_OH``, ``Pt5_OH_OH_graphite``, ``Pt5_slab``.
+
+    Chemical composition matching still uses :func:`get_cluster_formula`.
+    """
+    parts: list[str] = []
+    if adsorbate_definition is not None:
+        core_raw = adsorbate_definition.get("core_symbols", [])
+        ads_raw = adsorbate_definition.get("adsorbate_symbols", [])
+        core = [str(s) for s in core_raw] if isinstance(core_raw, list) else []
+        ads = [str(s) for s in ads_raw] if isinstance(ads_raw, list) else []
+        if core:
+            parts.append(get_cluster_formula(core))
+        lengths_raw = adsorbate_definition.get("adsorbate_fragment_lengths")
+        if ads:
+            if isinstance(lengths_raw, list) and lengths_raw:
+                lengths = [int(x) for x in lengths_raw]
+                if sum(lengths) != len(ads):
+                    raise SCGOValidationError(
+                        "adsorbate_fragment_lengths must sum to "
+                        f"len(adsorbate_symbols) ({len(ads)}), got {lengths}."
+                    )
+                offset = 0
+                for length in lengths:
+                    frag = ads[offset : offset + length]
+                    if frag:
+                        parts.append(get_ordered_formula(frag))
+                    offset += length
+            else:
+                parts.append(get_ordered_formula(ads))
+        elif not core:
+            formula = get_cluster_formula([str(s) for s in composition])
+            if formula:
+                parts.append(formula)
+    else:
+        formula = get_cluster_formula([str(s) for s in composition])
+        if formula:
+            parts.append(formula)
+
+    if surface_name is not None:
+        name = str(surface_name).strip()
+        if name:
+            parts.append(name)
+    return "_".join(parts)
+
+
 def is_true_minimum(
     atoms: Atoms,
     calculator: Calculator,

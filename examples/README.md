@@ -26,7 +26,9 @@ python examples/example_pt5_2oh_graphite.py
 ```
 
 Each run creates a new datetime `run_*` under `examples/results/{stem}_mace/`
-(`*_searches/` and `*_ts_results/`; timing JSON enabled). Reusing the same
+(`{path_key}_searches/` and `{path_key}_ts_results/`; timing JSON enabled).
+Path keys are component-aware, e.g. `Pt5`, `Pt5_OH`, `Pt5_graphite`,
+`Pt5_OH_OH_graphite`. Reusing the same
 `output_stem` can seed GO from prior DBs in that tree — use a fresh stem (or
 delete the old tree) for a clean end-to-end check. Override the stem without
 editing the script via `SCGO_EXAMPLE_OUTPUT_STEM=my_fresh_stem`. See the docs
