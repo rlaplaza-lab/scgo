@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.6.3
+
+### Fixed
+
+- UPET/UMA TS preset tests expect ``use_parallel_neb=True``, matching the
+  0.6.2 default (fixes GitHub Actions UPET CI jobs).
+
 ## 0.6.2
 
 ### Changed
