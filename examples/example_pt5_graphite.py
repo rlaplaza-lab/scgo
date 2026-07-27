@@ -12,8 +12,9 @@ TS: bare surface presets keep no-climb NEB, shared ``neb_fmax=0.20``, spring
 ``0.1``, 5 images, MIC + cell remap + lattice rotation, and parallel NEB.
 This example only sets ``max_pairs`` and ``connectivity_factor``.
 
-Output: ``results/pt5_graphite_mace/`` with ``Pt5_searches/``, ``Pt5_ts_results/``,
-and optional ``go_ts_timing.json`` (see docs quickstart, *On-disk layout*).
+Output: ``results/pt5_graphite_mace/`` with ``Pt5_graphite_searches/``,
+``Pt5_graphite_ts_results/``, and optional ``go_ts_timing.json`` (see docs
+quickstart, *On-disk layout*).
 """
 
 from __future__ import annotations

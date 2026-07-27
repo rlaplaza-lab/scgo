@@ -30,7 +30,7 @@ from scgo.surface import (
     DEFAULT_GRAPHITE_SLAB_REPEAT_XY,
     make_graphite_surface_config,
 )
-from scgo.utils.helpers import get_cluster_formula
+from scgo.utils.helpers import get_system_path_key
 from scgo.utils.logging import get_logger
 
 DEFAULT_OUTPUT_ROOT = PT_SURFACE_GRAPHITE_RESULTS_DIR.resolve()
@@ -89,7 +89,9 @@ def main() -> None:
     total_minima = 0
     for formula in clusters:
         n_atoms = parse_atom_count(formula)
-        formula = get_cluster_formula(["Pt"] * n_atoms)
+        path_key = get_system_path_key(
+            ["Pt"] * n_atoms, surface_name=surface_config.name
+        )
         results = run_go_campaign(
             [["Pt"] * n_atoms],
             params=params,
@@ -98,15 +100,15 @@ def main() -> None:
             surface_config=surface_config,
             system_type="surface_cluster",
         )
-        minima = results.get(formula, [])
+        minima = results.get(path_key, [])
         n_found = len(minima)
         total_minima += n_found
         if n_found == 0:
-            logger.info("  %s: 0 minima", formula)
+            logger.info("  %s: 0 minima", path_key)
             continue
         best_energy = minima[0][0]
-        logger.info("  %s: %d minima, best E=%.6f eV", formula, n_found, best_energy)
-        profile = load_latest_ga_profile(output_root, formula)
+        logger.info("  %s: %d minima, best E=%.6f eV", path_key, n_found, best_energy)
+        profile = load_latest_ga_profile(output_root, path_key)
         if profile:
             for line in format_ga_profile_lines(profile, detailed=True, max_entries=8):
                 logger.info("    %s", line)

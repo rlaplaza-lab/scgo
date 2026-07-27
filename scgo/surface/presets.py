@@ -85,6 +85,7 @@ def make_graphite_surface_config(
     )
     return SurfaceSystemConfig(
         slab=slab,
+        name="graphite",
         adsorption_height_min=0.5,
         adsorption_height_max=1.0,
         fix_all_slab_atoms=False,

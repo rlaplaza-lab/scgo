@@ -16,8 +16,8 @@ TS: surface-adsorbate presets supply climb, spring ``0.5``, shared
 IDPP-profile pair ranking (prefer robust interior maxima). This example only
 tightens ``max_pairs``.
 
-Output: ``results/pt5_2oh_graphite_mace/`` with ``H2O2Pt5_searches/``,
-``H2O2Pt5_ts_results/``, and optional ``go_ts_timing.json`` (see docs
+Output: ``results/pt5_2oh_graphite_mace/`` with ``Pt5_OH_OH_graphite_searches/``,
+``Pt5_OH_OH_graphite_ts_results/``, and optional ``go_ts_timing.json`` (see docs
 quickstart, *On-disk layout*).
 """
 

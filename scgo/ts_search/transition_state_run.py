@@ -41,6 +41,7 @@ from scgo.utils.helpers import (
     copy_atoms,
     filter_unique_minima,
     get_cluster_formula,
+    get_system_path_key,
     validate_pair_id,
 )
 from scgo.utils.logging import configure_logging, get_logger
@@ -625,10 +626,16 @@ def run_transition_state_search(
     if use_parallel_neb is True and not use_torchsim:
         raise SCGOValidationError("use_parallel_neb requires use_torchsim=True")
 
-    path_key_formula = (
-        get_cluster_formula(adsorbate_composition)
-        if system_policy.uses_surface
-        else get_cluster_formula(composition)
+    path_key_formula = get_system_path_key(
+        adsorbate_composition if system_policy.uses_surface else composition,
+        adsorbate_definition=(
+            adsorbate_definition if isinstance(adsorbate_definition, dict) else None
+        ),
+        surface_name=(
+            surface_config.name
+            if system_policy.uses_surface and surface_config is not None
+            else None
+        ),
     )
     formula = get_cluster_formula(composition)
     campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
@@ -967,6 +974,7 @@ def run_transition_state_search(
             run_context=run_context,
             surface_aware=system_policy.uses_surface,
             n_slab=neb_n_slab if neb_n_slab > 0 else None,
+            path_key=path_key_formula,
         )
 
         if tag_ts_in_db and unique_ts:

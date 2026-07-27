@@ -114,20 +114,50 @@ def _load_db_candidates(db_file: str) -> tuple[float, list[CandidateEntry]]:
     return canonical_mtime, candidates
 
 
+def _symbols_from_formula_segment(segment: str) -> list[str] | None:
+    """Parse one chemical-formula segment, or None if not a pure formula token."""
+    if not segment or not segment[0].isupper():
+        return None
+    pattern = r"([A-Z][a-z]?)(\d*)"
+    matches = list(re.finditer(pattern, segment))
+    if not matches:
+        return None
+    covered = "".join(m.group(0) for m in matches)
+    if covered != segment:
+        return None
+    composition: list[str] = []
+    for match in matches:
+        symbol = match.group(1)
+        count_str = match.group(2)
+        count = int(count_str) if count_str else 1
+        composition.extend([symbol] * count)
+    return composition
+
+
 def _parse_composition_from_path(path: str) -> list[str] | None:
-    """Parse chemical composition from a directory path (e.g., 'Pt3Au2_searches')."""
+    """Parse mobile composition from a ``*_searches`` directory path.
+
+    Supports both legacy ASE formulas (``H2O2Pt5_searches``) and component
+    path keys (``Pt5_OH_OH_graphite_searches``). Non-formula tokens such as
+    surface names (``graphite``, ``slab``) are skipped.
+    """
     parts = path.split(os.sep)
     for part in parts:
-        if "_searches" in part:
-            comp_str = part.replace("_searches", "")
-            pattern = r"([A-Z][a-z]?)(\d*)"
-            matches = re.findall(pattern, comp_str)
-            if matches:
-                composition = []
-                for symbol, count_str in matches:
-                    count = int(count_str) if count_str else 1
-                    composition.extend([symbol] * count)
-                return composition
+        if not part.endswith("_searches"):
+            continue
+        comp_str = part[: -len("_searches")]
+        if not comp_str:
+            continue
+        composition: list[str] = []
+        parsed_any = False
+        for segment in comp_str.split("_"):
+            symbols = _symbols_from_formula_segment(segment)
+            if symbols is None:
+                continue
+            composition.extend(symbols)
+            parsed_any = True
+        if parsed_any:
+            return composition
     return None
 
 

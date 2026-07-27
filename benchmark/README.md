@@ -23,7 +23,7 @@ Per [`benchmark_common.py`](benchmark_common.py), campaign outputs go under `ben
   └── final_unique_minima/
   ```
 
-- **Surface Pt-on-graphite** — flat root `benchmark/results/pt_surface_graphite/` ([`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py)), same `{Formula}_searches/` layout as above.
+- **Surface Pt-on-graphite** — flat root `benchmark/results/pt_surface_graphite/` ([`benchmark_Pt_surface_graphite.py`](benchmark_Pt_surface_graphite.py)), same `{path_key}_searches/` layout (e.g. `Pt5_graphite_searches/`).
 
 TS runs add sibling `{Formula}_ts_results/` trees with the same run-oriented layout (`run_*/`, `results_summary.json`, deduplicated export); pair artifacts use `pair_*` subdirectories. See [`docs/source/quickstart.rst`](../docs/source/quickstart.rst) (*On-disk layout*).
 

@@ -44,6 +44,7 @@ from scgo.runner_params import (
     _validate_go_ts_surface_config,
     _with_surface_in_optimizers,
     _with_system_type_in_optimizer_params,
+    resolve_run_path_key,
     resolve_workflow_seed,
 )
 from scgo.surface.config import SurfaceSystemConfig
@@ -106,18 +107,36 @@ def _run_go_ts_pipeline(
     validate_composition(composition, allow_empty=False, allow_tuple=False)
 
     formula = get_cluster_formula(composition)
+    path_key = resolve_run_path_key(
+        composition,
+        system_type=system_type,
+        adsorbate_definition=extract_adsorbate_definition_from_params(go_params),
+        surface_config=(
+            go_params.get("surface_config")
+            if isinstance(go_params.get("surface_config"), SurfaceSystemConfig)
+            else None
+        ),
+        params=go_params,
+    )
     output_path = (
         Path(output_dir).expanduser().resolve()
         if output_dir is not None
         else _default_go_ts_output_path(
             composition,
             go_params=go_params,
-            output_stem=formula,
+            output_stem=path_key,
             output_root=None,
+            system_type=system_type,
+            adsorbate_definition=extract_adsorbate_definition_from_params(go_params),
+            surface_config=(
+                go_params.get("surface_config")
+                if isinstance(go_params.get("surface_config"), SurfaceSystemConfig)
+                else None
+            ),
         )
     )
     output_path.mkdir(parents=True, exist_ok=True)
-    searches_dir, ts_results_dir = resolve_go_ts_pipeline_paths(output_path, formula)
+    searches_dir, ts_results_dir = resolve_go_ts_pipeline_paths(output_path, path_key)
 
     pipeline_t0 = perf_counter()
     merged_ga = go_params
@@ -417,11 +436,20 @@ def run_go_ts_campaign(
         go_params=go_mat,
         output_stem=output_stem or "go_ts_campaign",
         output_root=output_root,
+        system_type=st,
+        adsorbate_definition=ads_def,
+        surface_config=surface_config,
     )
     out: dict[str, dict[str, Any]] = {}
     t0 = perf_counter()
     for comp in full_compositions:
-        formula = get_cluster_formula(comp)
+        path_key = resolve_run_path_key(
+            comp,
+            system_type=st,
+            adsorbate_definition=ads_def,
+            surface_config=surface_config,
+            params=go_local,
+        )
         context = RunGOTSContext(
             composition=comp,
             system_type=st,
@@ -429,10 +457,10 @@ def run_go_ts_campaign(
             ts_kwargs=ts_kwargs,
             seed=eff_seed,
             verbosity=verbosity,
-            output_dir=parent / f"{formula}_campaign",
+            output_dir=parent / f"{path_key}_campaign",
             adsorbate_definition=ads_def,
         )
-        out[formula] = _execute_run_go_ts(context)
+        out[path_key] = _execute_run_go_ts(context)
     if log_summary:
         total = sum(int(s.get("ts_total_count") or 0) for s in out.values())
         ok = sum(int(s.get("ts_success_count") or 0) for s in out.values())

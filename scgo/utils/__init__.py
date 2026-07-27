@@ -21,6 +21,8 @@ from .helpers import (
     auto_population_size,
     get_cluster_formula,
     get_composition_counts,
+    get_ordered_formula,
+    get_system_path_key,
     is_true_minimum,
     perform_local_relaxation,
 )
@@ -50,6 +52,8 @@ __all__ = [
     "auto_population_size",
     "get_cluster_formula",
     "get_composition_counts",
+    "get_ordered_formula",
+    "get_system_path_key",
     "is_true_minimum",
     "perform_local_relaxation",
     # logging

@@ -471,16 +471,24 @@ Output directories
 
 ``output_root`` and ``output_stem`` (``run_go_ts`` / ``run_go_ts_campaign`` only):
 when ``output_dir`` is omitted, the default root is
-``{output_root or ./scgo_runs}/{output_stem or formula}_{calculator_slug}/``
+``{output_root or ./scgo_runs}/{output_stem or path_key}_{calculator_slug}/``
 (for example ``examples/results/pt5_gas_mace/``).
+
+The on-disk ``path_key`` (also used for ``{path_key}_searches/`` and
+``{path_key}_ts_results/``) is built from nanoparticle formula, each adsorbate
+fragment (order-preserving, e.g. ``OH``), and ``surface_config.name`` when a
+surface is used — for example ``Pt5``, ``Pt5_OH_OH``, or
+``Pt5_OH_OH_graphite``. Chemical composition matching still uses the ASE-style
+formula (``H2O2Pt5``). Default ``surface_config.name`` is ``"slab"``;
+``make_graphite_surface_config`` sets ``name="graphite"``.
 
 ``searches_dir`` (``run_ts_search`` only): explicit path to a GO searches
 directory; the campaign root becomes ``searches_dir.parent``.
 
 **Example — ``run_go_ts`` with ``output_root`` / ``output_stem``:**
 
-GO and TS use the same campaign layout: ``{formula}_searches/`` and
-``{formula}_ts_results/`` are siblings; each holds ``run_*`` directories,
+GO and TS use the same campaign layout: ``{path_key}_searches/`` and
+``{path_key}_ts_results/`` are siblings; each holds ``run_*`` directories,
 campaign-level summaries, and deduplicated exports. GO databases and TS pair
 artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs).
 

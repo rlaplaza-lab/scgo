@@ -27,8 +27,12 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator
 
 from scgo.exceptions import SCGOValidationError
-from scgo.system_types import SystemType, get_system_policy
-from scgo.utils.helpers import get_cluster_formula
+from scgo.system_types import (
+    SystemType,
+    extract_adsorbate_definition_from_params,
+    get_system_policy,
+)
+from scgo.utils.helpers import get_cluster_formula, get_system_path_key
 from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
@@ -46,6 +50,27 @@ from scgo.utils.run_tracking import ensure_run_id
 from scgo.utils.validation import validate_composition
 
 ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
+
+
+def _go_path_key(
+    composition: list[str],
+    system_type: SystemType,
+    params: dict,
+) -> str:
+    """Component-aware path key for GO searches directories."""
+    ads_def = params.get("adsorbate_definition")
+    if not isinstance(ads_def, dict):
+        ads_def = extract_adsorbate_definition_from_params(params)
+    surface_name = None
+    if get_system_policy(system_type).uses_surface:
+        sc = params.get("surface_config")
+        if sc is not None and getattr(sc, "name", None):
+            surface_name = sc.name
+    return get_system_path_key(
+        composition,
+        adsorbate_definition=ads_def if isinstance(ads_def, dict) else None,
+        surface_name=surface_name,
+    )
 
 
 def select_scgo_minima_algorithm(
@@ -117,7 +142,8 @@ def _run_go_trials(
 
     n_atoms = len(composition)
     cluster_formula = get_cluster_formula(composition)
-    main_output_dir = str(resolve_go_searches_dir(output_dir, cluster_formula))
+    path_key = _go_path_key(composition, system_type, params)
+    main_output_dir = str(resolve_go_searches_dir(output_dir, path_key))
 
     # Algorithm selection: Use simple optimization for 1-2 atoms, BH for 3, GA for larger
     chosen_go = select_scgo_minima_algorithm(n_atoms, system_type)
@@ -287,18 +313,19 @@ def _run_go_campaign_compositions(
 
     for i, composition in enumerate(compositions_list):
         formula_str = get_cluster_formula(composition)
+        path_key = _go_path_key(composition, system_type, params)
         if verbosity >= 1:
             logger.info("\n%s", "=" * 60)
             logger.info(
                 "Running minima search for %s (%d/%d)",
-                formula_str,
+                path_key,
                 i + 1,
                 num_compositions,
             )
             logger.info("%s", "=" * 60)
 
         comp_seed = int(rng.integers(0, 2**63 - 1))
-        trial_output_dir = resolve_go_campaign_searches_dir(output_dir, formula_str)
+        trial_output_dir = resolve_go_campaign_searches_dir(output_dir, path_key)
         trial_output_dir_str = (
             str(trial_output_dir) if trial_output_dir is not None else None
         )
@@ -319,13 +346,13 @@ def _run_go_campaign_compositions(
             # Always add results (possibly empty) so the API returns a key for each
             # requested composition; this makes the function predictable for
             # downstream consumers and tests.
-            all_results[formula_str] = results
+            all_results[path_key] = results
             if not results and verbosity >= 1:
-                logger.warning("No minima found for %s (results empty)", formula_str)
+                logger.warning("No minima found for %s (results empty)", path_key)
             if verbosity >= 1:
-                logger.info("Finished processing %s.", formula_str)
+                logger.info("Finished processing %s.", path_key)
                 logger.info(
-                    "  Returned %d final minima for %s", len(results), formula_str
+                    "  Returned %d final minima for %s", len(results), path_key
                 )
         except (
             RuntimeError,
@@ -336,7 +363,7 @@ def _run_go_campaign_compositions(
         ) as e:
             # Enhanced error logging for HPC debugging
             error_details = [
-                f"Failed to process {formula_str}: {e}",
+                f"Failed to process {path_key} ({formula_str}): {e}",
                 f"Working directory: {os.getcwd()}",
             ]
             if trial_output_dir:

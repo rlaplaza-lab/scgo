@@ -37,7 +37,7 @@ All scripts write under ``benchmark/results/``.
 
    benchmark/results/
    └── pt_surface_graphite/        # flat campaign root
-       └── Pt5_searches/
+       └── Pt5_graphite_searches/
            ├── run_<timestamp>_<microseconds>/
            │   ├── metadata.json
            │   ├── timing.json

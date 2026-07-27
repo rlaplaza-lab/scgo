@@ -55,9 +55,10 @@ def resolve_ts_campaign_paths(
 ) -> tuple[Path, Path, Path]:
     """Return ``(campaign_root, minima_dir, ts_results_root)`` for TS search.
 
-    ``path_key_formula`` is the cluster/mobile formula used for sibling
-    ``{formula}_searches`` and ``{formula}_ts_results`` directory names
-    (without slab symbols for surface runs).
+    ``path_key_formula`` is the component-aware path key used for sibling
+    ``{key}_searches`` and ``{key}_ts_results`` directory names
+    (nanoparticle, adsorbate fragments, and surface name; slab chemical
+    symbols are never included).
     """
     explicit_searches = (
         Path(searches_dir).expanduser().resolve() if searches_dir is not None else None

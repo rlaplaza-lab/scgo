@@ -59,6 +59,7 @@ from scgo.utils.helpers import (
     filter_unique_minima,
     get_cluster_formula,
     get_provenance,
+    get_system_path_key,
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
@@ -702,8 +703,22 @@ def run_trials(
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")
     ensure_directory_exists(final_xyz_dir)
 
-    # Cache cluster formula (used multiple times)
+    # Cache cluster formula (used multiple times) and path key for filenames
     composition_str = get_cluster_formula(composition)
+    ads_def = global_optimizer_kwargs.get("adsorbate_definition")
+    if not isinstance(ads_def, dict):
+        ads_def = None
+    surface_name = None
+    system_type_for_path = global_optimizer_kwargs.get("system_type")
+    if system_type_for_path in _SURFACE_SYSTEM_TYPES:
+        sc = global_optimizer_kwargs.get("surface_config")
+        if sc is not None and getattr(sc, "name", None):
+            surface_name = sc.name
+    path_key = get_system_path_key(
+        composition,
+        adsorbate_definition=ads_def,
+        surface_name=surface_name,
+    )
 
     # Save run metadata (include formula and run parameters for traceability)
     gok_for_metadata = _sanitize_global_optimizer_kwargs_for_metadata(
@@ -949,7 +964,7 @@ def run_trials(
         provenance = get_provenance(atoms)
         atoms_run_id = provenance.get("run_id", run_id)
 
-        filename = f"{composition_str}_minimum_{i + 1:02d}_{atoms_run_id}.xyz"
+        filename = f"{path_key}_minimum_{i + 1:02d}_{atoms_run_id}.xyz"
         filepath = os.path.join(final_xyz_dir, filename)
 
         # Match DB rows by pre-alignment geometry (same frame as relaxed candidates).
@@ -1022,7 +1037,7 @@ def run_trials(
         )
 
     # Drop superseded XYZ files so the folder mirrors the deduplicated final set.
-    for stale in Path(final_xyz_dir).glob(f"{composition_str}_minimum_*.xyz"):
+    for stale in Path(final_xyz_dir).glob(f"{path_key}_minimum_*.xyz"):
         if stale not in written_xyz:
             stale.unlink(missing_ok=True)
 

@@ -598,6 +598,7 @@ def write_final_unique_ts(
     run_context: dict[str, Any] | None = None,
     surface_aware: bool = False,
     n_slab: int | None = None,
+    path_key: str | None = None,
 ) -> list[dict[str, Any]]:
     """Deduplicate successful TS geometries globally and write unique `.xyz` files.
 
@@ -617,7 +618,7 @@ def write_final_unique_ts(
     logger = get_logger(__name__)
 
     os.makedirs(output_dir, exist_ok=True)
-    formula = get_cluster_formula(composition)
+    formula = path_key or get_cluster_formula(composition)
 
     # Collect successful TS candidates
     candidates: list[tuple[float, Atoms, str, tuple[int, int], dict[str, Any]]] = []

@@ -21,7 +21,9 @@ from scgo.utils.helpers import (
     ensure_float64_forces,
     filter_unique_minima,
     get_cluster_formula,
+    get_ordered_formula,
     get_provenance,
+    get_system_path_key,
     perform_local_relaxation,
 )
 
@@ -346,6 +348,51 @@ class TestGetClusterFormula:
         # Should complete quickly
         result = get_cluster_formula(composition)
         assert result == "Pt50"
+
+
+class TestGetSystemPathKey:
+    """Tests for component-aware path keys."""
+
+    def test_ordered_formula_preserves_input_order(self):
+        assert get_ordered_formula(["O", "H"]) == "OH"
+        assert get_ordered_formula(["H", "O", "H"]) == "H2O"
+
+    def test_gas_cluster_only(self):
+        assert get_system_path_key(["Pt"] * 5) == "Pt5"
+
+    def test_gas_with_adsorbates(self):
+        ads_def = {
+            "core_symbols": ["Pt"] * 5,
+            "adsorbate_symbols": ["O", "H", "O", "H"],
+            "adsorbate_fragment_lengths": [2, 2],
+        }
+        assert (
+            get_system_path_key(
+                ["Pt"] * 5 + ["O", "H", "O", "H"],
+                adsorbate_definition=ads_def,
+            )
+            == "Pt5_OH_OH"
+        )
+
+    def test_surface_with_adsorbates(self):
+        ads_def = {
+            "core_symbols": ["Pt"] * 5,
+            "adsorbate_symbols": ["O", "H", "O", "H"],
+            "adsorbate_fragment_lengths": [2, 2],
+        }
+        assert (
+            get_system_path_key(
+                ["Pt"] * 5 + ["O", "H", "O", "H"],
+                adsorbate_definition=ads_def,
+                surface_name="graphite",
+            )
+            == "Pt5_OH_OH_graphite"
+        )
+
+    def test_surface_default_slab_name(self):
+        assert (
+            get_system_path_key(["Pt"] * 5, surface_name="slab") == "Pt5_slab"
+        )
 
 
 class TestEnsureFloat64Forces:
