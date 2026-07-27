@@ -46,7 +46,7 @@ def test_get_ts_search_params_upet_default_torchsim_flags():
     )
     assert ts["calculator"] == "UPET"
     assert ts["use_torchsim"] is True
-    assert ts["use_parallel_neb"] is False
+    assert ts["use_parallel_neb"] is True
 
 
 def test_multiple_mlip_stacks_raises_when_more_than_one_importable():

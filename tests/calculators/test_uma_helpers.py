@@ -51,7 +51,7 @@ def test_get_ts_search_params_uma_default_torchsim_flags():
     )
     assert ts["calculator"] == "UMA"
     assert ts["use_torchsim"] is True
-    assert ts["use_parallel_neb"] is False
+    assert ts["use_parallel_neb"] is True
 
 
 def test_both_mlip_stacks_raises_when_both_importable():
