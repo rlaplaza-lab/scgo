@@ -82,7 +82,7 @@ class SurfaceSystemConfig:
         fix_all_slab_atoms: bool = True,
         n_fix_bottom_slab_layers: int | None = None,
         n_relax_top_slab_layers: int | None = None,
-        comparator_use_mic: bool = False,
+        comparator_use_mic: bool = True,
         cluster_init_vacuum: float = 8.0,
         init_mode: str = "smart",
         max_placement_attempts: int = 200,

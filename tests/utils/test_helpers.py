@@ -22,6 +22,7 @@ from scgo.utils.helpers import (
     filter_unique_minima,
     get_cluster_formula,
     get_provenance,
+    perform_local_relaxation,
 )
 
 
@@ -536,3 +537,36 @@ class TestCanonicalizeSlabAdsorbateFrame:
         positions = atoms.get_positions()
         assert np.all(positions >= -1e-8)
         assert np.all(positions <= 10.0 + 1e-8)
+
+
+def test_perform_local_relaxation_surface_mode_skips_com_center():
+    """Surface-mode post-relax canonicalize leaves slab COM unshifted."""
+    from ase.build import fcc111
+    from ase.calculators.emt import EMT
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max() + 1.5)
+    atoms = slab.copy() + Atoms("Pt", positions=[[1.0, 1.0, z0]])
+    slab_com_before = atoms.get_positions()[:n_slab].mean(axis=0).copy()
+
+    class _NoOpOpt:
+        def __init__(self, atoms, **kwargs):
+            self.atoms = atoms
+
+        def run(self, fmax=0.05, steps=1):
+            return True
+
+    perform_local_relaxation(
+        atoms,
+        EMT(),
+        _NoOpOpt,
+        fmax=1.0,
+        steps=1,
+        center_after_relax=False,
+        surface_mode=True,
+        n_slab=n_slab,
+    )
+    slab_com_after = atoms.get_positions()[:n_slab].mean(axis=0)
+    np.testing.assert_allclose(slab_com_after, slab_com_before, atol=1e-8)

@@ -272,6 +272,79 @@ def test_run_transition_state_search_forwards_alignment_kwargs(monkeypatch, tmp_
     assert captured["neb_surface_max_lattice_shift"] == 3
 
 
+def test_run_transition_state_search_empty_core_sets_block_dims(
+    monkeypatch, tmp_path
+) -> None:
+    """Empty-core adsorbate still enables blockwise dims (n_core=0, n_ads>0)."""
+    from scgo.surface.config import SurfaceSystemConfig
+    from scgo.ts_search import transition_state_run as ts_run_mod
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = slab.get_positions()[:, 2].max() + 1.5
+    react = slab.copy() + Atoms("OH", positions=[[0.1, 0.1, z0], [0.1, 0.1, z0 + 1.0]])
+    prod = slab.copy() + Atoms(
+        "OH", positions=[[slab.cell[0, 0] - 0.1, 0.1, z0], [0.2, 0.1, z0 + 1.0]]
+    )
+    cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+    ads_def = {
+        "core_symbols": [],
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    captured: dict[str, object] = {}
+    pair_kwargs: dict[str, object] = {}
+
+    def _fake_find_transition_state(reactant, product, calculator, **kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "failed",
+            "pair_id": kwargs.get("pair_id", "stub"),
+            "error": "stub",
+            "neb_converged": False,
+        }
+
+    def _fake_select_pairs(minima, **kwargs):
+        pair_kwargs.update(kwargs)
+        return [(0, 1)]
+
+    monkeypatch.setattr(
+        ts_run_mod, "find_transition_state", _fake_find_transition_state
+    )
+    monkeypatch.setattr(ts_run_mod, "save_neb_result", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        ts_run_mod, "save_transition_state_results", lambda *args, **kwargs: None
+    )
+    full_comp = full_adsorbate_slab_composition(["O", "H"], cfg)
+    formula = get_cluster_formula(full_comp)
+    monkeypatch.setattr(
+        ts_run_mod,
+        "load_minima_by_composition",
+        lambda *_a, **_k: {formula: [(0.0, react), (0.1, prod)]},
+    )
+    monkeypatch.setattr(ts_run_mod, "select_structure_pairs", _fake_select_pairs)
+    monkeypatch.setattr(ts_run_mod, "get_calculator_class", lambda _n: object)
+    monkeypatch.setattr(ts_run_mod, "auto_niter_ts", lambda _c: 10)
+
+    ts_run_mod.run_transition_state_search(
+        composition=["O", "H"],
+        system_type="surface_cluster_adsorbate",
+        output_dir=str(tmp_path),
+        params={"calculator": "EMT", "calculator_kwargs": {}},
+        surface_config=cfg,
+        adsorbate_definition=ads_def,
+        verbosity=0,
+    )
+    assert pair_kwargs["surface_aware"] is True
+    assert pair_kwargs["use_mic"] is True
+    assert pair_kwargs["adsorbate_aware"] is True
+    assert pair_kwargs["n_core_mobile"] == 0
+    assert captured["n_slab"] == n_slab
+    assert captured["n_core_mobile"] == 0
+    assert captured["n_adsorbate_mobile"] == 2
+
+
 def test_get_ts_search_params_surface_keeps_alignment_defaults():
     from scgo.param_presets import get_ts_search_params
     from scgo.surface.config import SurfaceSystemConfig

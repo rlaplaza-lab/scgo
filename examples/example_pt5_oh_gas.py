@@ -13,8 +13,8 @@ splices the core only. Optional tuning in ``go_params``:
 - ``freeze_adsorbate_internal_geometry=True`` — strict Kabsch restore (this example
   enables it; default is ``False`` and still keeps fragments rigid as units)
 
-TS: adsorbate presets supply climb, spring ``0.5``, ``neb_fmax=0.20``, 7 images,
-``neb_steps=4000``, parallel NEB, ``max_endpoint_mismatch=1.25`` Å,
+TS: adsorbate presets supply climb, spring ``0.5``, shared ``neb_fmax=0.20``,
+7 images, ``neb_steps=4000``, parallel NEB, ``max_endpoint_mismatch=1.25`` Å,
 ``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
 interior maxima). This example only tightens ``max_pairs``.
 

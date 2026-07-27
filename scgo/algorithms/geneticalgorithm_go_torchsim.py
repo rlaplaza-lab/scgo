@@ -80,6 +80,7 @@ from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
+    resolve_structure_mic,
     uses_surface,
     validate_structure_for_system_type,
     validate_system_type_settings,
@@ -1036,7 +1037,7 @@ def ga_go(
         else adaptive_config["mutation_probability"]
     )
 
-    comp_mic = bool(surface_config.comparator_use_mic) if surface_mode else False
+    comp_mic = resolve_structure_mic(system_type, surface_config)
     diversity_scorer = setup_diversity_scorer(
         fitness_strategy=fitness_strategy,
         diversity_reference_db=diversity_reference_db,

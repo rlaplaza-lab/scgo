@@ -10,10 +10,11 @@ combined cluster on graphite with surface-biased orientation, then run tag-aware
 GA (core crossover, ``fragment_reposition`` for adsorbate diversity). See
 ``docs/source/api/system_types.rst`` for operator details.
 
-TS: surface-adsorbate presets supply climb, spring ``0.5``, ``neb_fmax=0.25``,
-7 images, ``neb_steps=4000``, serial NEB, ``max_endpoint_mismatch=1.5`` Å,
-``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
-interior maxima). This example only tightens ``max_pairs``.
+TS: surface-adsorbate presets supply climb, spring ``0.5``, shared
+``neb_fmax=0.20``, 7 images, ``neb_steps=4000``, parallel NEB,
+``max_endpoint_mismatch=1.5`` Å, ``energy_gap_threshold=0.75``, and
+IDPP-profile pair ranking (prefer robust interior maxima). This example only
+tightens ``max_pairs``.
 
 Output: ``results/pt5_2oh_graphite_mace/`` with ``H2O2Pt5_searches/``,
 ``H2O2Pt5_ts_results/``, and optional ``go_ts_timing.json`` (see docs

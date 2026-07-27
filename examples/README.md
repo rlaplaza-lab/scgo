@@ -12,10 +12,10 @@ Full NEB defaults: `docs/source/parameters.rst`.
 
 | Script | System type | `max_pairs` | TS preset highlights |
 |--------|-------------|-------------|----------------------|
-| `example_pt5_gas.py` | `gas_cluster` | 15 | no climb, `neb_fmax=0.05`, 5 images, serial |
-| `example_pt5_oh_gas.py` | `gas_cluster_adsorbate` | 12 | climb, `neb_fmax=0.20`, 7 images, parallel NEB, `max_endpoint_mismatch=1.25` Å |
-| `example_pt5_graphite.py` | `surface_cluster` | 10 | no climb, `neb_fmax=0.1`, MIC + lattice rotation |
-| `example_pt5_2oh_graphite.py` | `surface_cluster_adsorbate` | 6 | climb, `neb_fmax=0.25`, serial, no lattice rotation, `max_endpoint_mismatch=1.5` Å |
+| `example_pt5_gas.py` | `gas_cluster` | 15 | no climb, shared `neb_fmax=0.20`, 5 images, parallel NEB |
+| `example_pt5_oh_gas.py` | `gas_cluster_adsorbate` | 12 | climb, shared `neb_fmax=0.20`, 7 images, parallel NEB, `max_endpoint_mismatch=1.25` Å |
+| `example_pt5_graphite.py` | `surface_cluster` | 10 | no climb, shared `neb_fmax=0.20`, MIC + lattice rotation, parallel NEB |
+| `example_pt5_2oh_graphite.py` | `surface_cluster_adsorbate` | 6 | climb, shared `neb_fmax=0.20`, parallel NEB, no lattice rotation, `max_endpoint_mismatch=1.5` Å |
 
 ```bash
 pip install -e ".[mace]"

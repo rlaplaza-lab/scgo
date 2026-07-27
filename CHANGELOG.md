@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+## 0.6.2
+
+### Changed
+
+- NEB plumbing: serial and parallel runners share ``NebRunConfig`` and
+  ``prepare_neb_endpoints`` (copy / FixAtoms / validate). Public
+  ``run_transition_state_search`` kwargs are unchanged.
+- BH surface post-relax framing is owned by ``perform_local_relaxation``
+  (``surface_mode`` / ``n_slab``); diversity scoring uses mobile composition.
+  GA soft-fail storage validation wraps shared
+  ``canonicalize_and_validate_for_storage``.
+- Structure MIC reads go through ``resolve_structure_mic`` /
+  ``resolve_neb_mic``. Pair selection takes explicit ``use_mic`` (scoring
+  regime stays ``surface_aware``). Empty-core adsorbate NEB dims use shared
+  ``resolve_neb_mobile_dims``.
+- TS presets: ``neb_fmax`` / ``torchsim_fmax`` are shared at ``0.20`` for
+  every system type; ``use_parallel_neb=True`` is the default everywhere
+  (including the low-level ``run_transition_state_search`` signature).
+  Surface types set ``parallel_neb_max_bands=1`` so large slab cells do not
+  GPU-OOM; the parallel runner is still used, with bands chunked
+  one-at-a-time (and CUDA cache cleared between chunks). Bare surface NEB
+  step budget rises to ``2000``. Supersedes the 0.6.1 surface-adsorbate
+  ``neb_fmax=0.25`` / serial-NEB defaults. Removed unused
+  ``torchsim_batch_size`` from TS presets (OOM safety is band concurrency).
+- Adsorbate TS pair oversample is ``min(max_pairs * 10, max(max_pairs, 50))``;
+  pair selection reuses one structure comparator and avoids full Atoms
+  slices for core-RMS.
+
+### Fixed
+
+- Parallel NEB refuses FIRE steps when band fmax is non-finite (e.g. ASE
+  ``improvedtangent`` on a flat energy profile), marking the band failed
+  instead of propagating NaN geometries.
+- Unify structure MIC / surface-awareness across GO, GA, BH, and TS: Pure
+  comparator honors ``mic`` literally under PBC; ``SurfaceSystemConfig``
+  defaults ``comparator_use_mic=True`` (GO/GA/BH via ``resolve_structure_mic``).
+  TS pair scoring uses ``uses_surface`` for the scoring regime and
+  ``resolve_neb_mic`` (``neb_force_mic``) for geometry / minima dedupe — not
+  the comparator knob. BH uses mobile ``n_top`` and skips COM recenter on
+  surfaces; empty-core adsorbate enables blockwise NEB dims; core-RMS pair
+  gate is permutation-invariant; GO final XYZ alignment forwards
+  ``n_core_mobile``.
+
 ## 0.6.1
 
 ### Fixed

@@ -276,6 +276,65 @@ def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_databas
         )
 
 
+def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
+    """``use_parallel_neb=True`` always dispatches to the parallel runner.
+
+    Surface presets pass ``parallel_neb_max_bands=1`` so the runner chunks
+    bands one-at-a-time; that must not fall back to the serial path.
+    """
+    from ase import Atoms
+
+    from scgo.ts_search import transition_state_run as ts_run_mod
+    from scgo.utils.helpers import get_cluster_formula
+
+    atoms_a = Atoms("Cu2", positions=[[0, 0, 0], [2.2, 0, 0]], cell=[12, 12, 12])
+    atoms_b = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0.3, 0]], cell=[12, 12, 12])
+    formula = get_cluster_formula(["Cu", "Cu"])
+    serial_calls: list[dict] = []
+    parallel_calls: list[dict] = []
+
+    def _fake_serial(*_a, **kwargs):
+        serial_calls.append(kwargs)
+        return []
+
+    def _fake_parallel(*_a, **kwargs):
+        parallel_calls.append(kwargs)
+        return [], {}
+
+    monkeypatch.setattr(
+        ts_run_mod,
+        "load_minima_by_composition",
+        lambda *_a, **_k: {formula: [(0.0, atoms_a), (0.1, atoms_b)]},
+    )
+    monkeypatch.setattr(
+        ts_run_mod, "select_structure_pairs", lambda *_a, **_k: [(0, 1)]
+    )
+    monkeypatch.setattr(ts_run_mod, "get_calculator_class", lambda _n: object)
+    monkeypatch.setattr(ts_run_mod, "_run_serial_neb_search", _fake_serial)
+    monkeypatch.setattr(ts_run_mod, "run_parallel_neb_search", _fake_parallel)
+    monkeypatch.setattr(
+        ts_run_mod, "resolve_ts_torchsim_flags", lambda *_a, **_k: (True, True)
+    )
+
+    for max_bands, out in ((1, tmp_path / "a"), (2, tmp_path / "b")):
+        serial_calls.clear()
+        parallel_calls.clear()
+        ts_run_mod.run_transition_state_search(
+            composition=["Cu", "Cu"],
+            system_type="gas_cluster",
+            output_dir=str(out),
+            params={"calculator": "EMT", "calculator_kwargs": {}},
+            verbosity=0,
+            use_torchsim=True,
+            use_parallel_neb=True,
+            parallel_neb_max_bands=max_bands,
+            neb_steps=2,
+        )
+        assert serial_calls == []
+        assert len(parallel_calls) == 1
+        assert parallel_calls[0].get("parallel_neb_max_bands") == max_bands
+
+
 @pytest.mark.slow
 @pytest.mark.requires_mace
 def test_run_transition_state_search_parallel_neb_executes(

@@ -101,6 +101,8 @@ def resolve_ts_torchsim_flags(
 
     If TorchSim is **not** requested, returns ``(False, False)``.
     If TorchSim is requested but unavailable/misconfigured, raises ImportError/ValueError.
+    When TorchSim is on and ``use_parallel_neb`` is ``None``, parallel NEB defaults
+    to ``True`` (matches presets).
     """
     if not bool(use_torchsim):
         return False, False
@@ -117,4 +119,5 @@ def resolve_ts_torchsim_flags(
     else:
         _require_torchsim()
 
-    return True, bool(use_parallel_neb)
+    # None → parallel on (preset default); explicit False stays off.
+    return True, True if use_parallel_neb is None else bool(use_parallel_neb)

@@ -70,11 +70,18 @@ __all__ = [
 ]
 
 
+# Shared NEB force tolerance for every system type. Pairing / climb / springs /
+# step budgets may differ by type; force convergence must not.
+# 0.20 eV/Å is the attainable MACE CI-NEB floor for soft adsorbate MEPs; tighter
+# values often collapse interior saddles to endpoints before forces reach 0.05.
+_TS_NEB_FMAX: float = 0.20
+
 # Per-system-type NEB defaults consumed by `get_ts_search_params` and
 # `coerce_ts_params_to_runner_kwargs`. Keep `neb_align_endpoints` and
 # `neb_interpolation_mic` coherent with `SystemPolicy.neb_disable_alignment` /
 # `neb_force_mic` (an import-time assertion below guards against drift). Other
-# knobs (n_images, fmax, steps, ...) are independent and benchmarked per type.
+# knobs (n_images, steps, climb, pairing gates, ...) are independent per type.
+# ``neb_fmax`` / ``torchsim_fmax`` are always ``_TS_NEB_FMAX`` (asserted below).
 _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_align_endpoints": True,
     "neb_interpolation_mic": False,
@@ -83,15 +90,17 @@ _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_surface_max_lattice_shift": 1,
     "neb_n_images": 5,
     "neb_spring_constant": 0.1,
-    "neb_fmax": 0.05,
+    "neb_fmax": _TS_NEB_FMAX,
     "neb_steps": "auto",
     "neb_climb": False,
     "neb_perturb_sigma": 0.0,
     "neb_interpolation_method": "idpp",
     "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
-    "torchsim_fmax": 0.05,
+    "torchsim_fmax": _TS_NEB_FMAX,
     "torchsim_max_steps": "auto",
     "max_endpoint_mismatch": None,
+    # None = all selected bands in one ParallelNEBBatch.
+    "parallel_neb_max_bands": None,
 }
 
 _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -102,31 +111,31 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_surface_max_lattice_shift": 1,
     "neb_n_images": 5,
     "neb_spring_constant": 0.1,
-    "neb_fmax": 0.1,
-    "neb_steps": 500,
+    "neb_fmax": _TS_NEB_FMAX,
+    # Shared fmax with MIC/remap paths: keep a larger step budget than gas auto.
+    "neb_steps": 2000,
     "neb_climb": False,
     "neb_perturb_sigma": 0.0,
     "neb_interpolation_method": "idpp",
     "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
-    "torchsim_fmax": 0.1,
-    "torchsim_max_steps": 500,
+    "torchsim_fmax": _TS_NEB_FMAX,
+    "torchsim_max_steps": 2000,
     "max_endpoint_mismatch": None,
+    # Large slab cells OOM when many bands×images share one force batch.
+    "parallel_neb_max_bands": 1,
 }
 
 # Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),
-# and a larger step budget. Keep neb_fmax and torchsim_fmax equal so ASE and
-# TorchSim force tolerances stay synced. Gas adsorbates also enable parallel
-# multi-band NEB via get_ts_search_params; surface adsorbates stay serial.
+# and a larger step budget. Keep neb_fmax and torchsim_fmax equal to the shared
+# tolerance so ASE and TorchSim stay synced. Parallel multi-band NEB is on for
+# every system type via get_ts_search_params.
 _GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_GAS_TS_NEB_DEFAULTS,
     "neb_n_images": 7,
     "neb_spring_constant": 0.5,
-    # Soft adsorbate MEPs often stall near 0.15–0.25 for MACE CI-NEB.
-    "neb_fmax": 0.20,
     # Two-stage climb needs a larger budget than bare-cluster NEBs.
     "neb_steps": 4000,
     "neb_climb": True,
-    "torchsim_fmax": 0.20,
     "torchsim_max_steps": 4000,
     "max_endpoint_mismatch": 1.25,  # Å; also enables pre-NEB path gates
 }
@@ -135,11 +144,8 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_SURFACE_TS_NEB_DEFAULTS,
     "neb_n_images": 7,
     "neb_spring_constant": 0.5,
-    # Large-slab MLIP NEBs often stall near 0.2–0.3 at the bare-surface 0.1.
-    "neb_fmax": 0.25,
     "neb_steps": 4000,
     "neb_climb": True,
-    "torchsim_fmax": 0.25,
     "torchsim_max_steps": 4000,
     "max_endpoint_mismatch": 1.5,  # Å; also enables pre-NEB path gates
     # Inherited surface defaults enable free in-plane Kabsch; that shifts
@@ -186,6 +192,19 @@ def _assert_ts_defaults_match_system_policies() -> None:
                     f"{defaults.get(key)!r} disagrees with "
                     f"SystemPolicy.{key}={getattr(policy, key)!r}."
                 )
+        for key in ("neb_fmax", "torchsim_fmax"):
+            if float(defaults[key]) != float(_TS_NEB_FMAX):
+                raise SCGORuntimeError(
+                    f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}][{key!r}]="
+                    f"{defaults[key]!r} must equal shared _TS_NEB_FMAX="
+                    f"{_TS_NEB_FMAX!r} (force convergence is not per-type)."
+                )
+        if float(defaults["neb_fmax"]) != float(defaults["torchsim_fmax"]):
+            raise SCGORuntimeError(
+                f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}] neb_fmax="
+                f"{defaults['neb_fmax']!r} != torchsim_fmax="
+                f"{defaults['torchsim_fmax']!r}."
+            )
 
 
 _assert_ts_defaults_match_system_policies()
@@ -742,10 +761,9 @@ def get_ts_search_params(
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,
         "similarity_pair_cor_max": 0.1,
         "use_torchsim": True,
-        "torchsim_batch_size": 5,
-        # Gas adsorbate NEBs fit multi-band GPU batches; surface/slab cells
-        # (e.g. graphite) OOMs when all pairs×images are batched together.
-        "use_parallel_neb": bool(policy.has_adsorbate and not policy.uses_surface),
+        # Surface OOM safety is ``parallel_neb_max_bands=1`` (chunked parallel
+        # NEB + CUDA cleanup between chunks), not a separate batch-size knob.
+        "use_parallel_neb": True,
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }

@@ -161,7 +161,7 @@ class TSParams(TypedDict, total=False):
     max_pairs: int | None
     use_torchsim: bool
     use_parallel_neb: bool
-    torchsim_batch_size: int
+    parallel_neb_max_bands: int | None
     connectivity_factor: float
     similarity_tolerance: float
     similarity_pair_cor_max: float
@@ -270,6 +270,32 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
 def get_system_policy(system_type: SystemType) -> SystemPolicy:
     """Return centralized behavior policy for one explicit system type."""
     return SYSTEM_TYPE_POLICIES[system_type]
+
+
+def resolve_structure_mic(
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+) -> bool:
+    """Resolve MIC for GO/GA/BH structure comparators and population dedupe.
+
+    Gas types always return ``False``. Surface types require ``surface_config``
+    and return ``surface_config.comparator_use_mic``.
+
+    TS pre-pair minima dedupe and NEB MIC use :func:`resolve_neb_mic` instead.
+    """
+    if not get_system_policy(system_type).uses_surface:
+        return False
+    if surface_config is None:
+        raise SCGOValidationError(
+            f"system_type={system_type!r} requires surface_config to resolve "
+            "structure MIC."
+        )
+    return bool(surface_config.comparator_use_mic)
+
+
+def resolve_neb_mic(system_type: SystemType) -> bool:
+    """Resolve MIC for NEB interpolation, pair scoring geometry, and TS dedupe."""
+    return bool(get_system_policy(system_type).neb_force_mic)
 
 
 def resolve_connectivity_factor(
@@ -437,7 +463,7 @@ def validate_structure_for_system_type(
                 atoms,
                 n_slab_eff,
                 surface_normal_axis=surface_config.surface_normal_axis,
-                use_mic=bool(surface_config.comparator_use_mic),
+                use_mic=resolve_structure_mic(system_type, surface_config),
                 connectivity_factor=cf,
                 n_core_mobile=_n_core_mobile_from_adsorbate_definition(
                     adsorbate_definition

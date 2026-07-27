@@ -104,3 +104,26 @@ def test_validate_structure_for_ga_storage_uses_canonical_frame() -> None:
             raw_pass_storage_fail += 1
 
     assert raw_pass_storage_fail >= 1
+
+
+def test_core_adsorbate_partition_allow_empty_core() -> None:
+    from scgo.algorithms.ga_common import (
+        core_adsorbate_partition_counts,
+        core_adsorbate_partition_details,
+    )
+
+    ads_def = {
+        "core_symbols": [],
+        "adsorbate_symbols": ["O", "H"],
+        "adsorbate_fragment_lengths": [2],
+    }
+    assert (
+        core_adsorbate_partition_counts("gas_cluster_adsorbate", ["O", "H"], ads_def)
+        is None
+    )
+    assert core_adsorbate_partition_counts(
+        "gas_cluster_adsorbate", ["O", "H"], ads_def, allow_empty_core=True
+    ) == (0, 2)
+    assert core_adsorbate_partition_details(
+        "gas_cluster_adsorbate", ["O", "H"], ads_def, allow_empty_core=True
+    ) == (0, [2])

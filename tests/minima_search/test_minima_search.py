@@ -602,6 +602,48 @@ class TestRunTrialsSurfaceAlignment:
         assert kwargs["enable_lattice_rotation"] is True
         assert kwargs["max_lattice_shift"] == 3
 
+    def test_resolve_n_core_mobile_from_metadata_and_definition(self):
+        atoms = Atoms("Pt2OH", positions=[[0, 0, 0], [2, 0, 0], [1, 0, 1], [1, 0, 2]])
+        add_metadata(atoms, n_core_atoms=2)
+        assert main_mod._resolve_n_core_mobile_for_alignment(atoms, {}) == 2
+        bare = Atoms("Pt2OH", positions=[[0, 0, 0], [2, 0, 0], [1, 0, 1], [1, 0, 2]])
+        assert (
+            main_mod._resolve_n_core_mobile_for_alignment(
+                bare,
+                {
+                    "adsorbate_definition": {
+                        "core_symbols": ["Pt", "Pt"],
+                        "adsorbate_symbols": ["O", "H"],
+                    }
+                },
+            )
+            == 2
+        )
+
+    def test_align_slab_forwards_n_core_mobile(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def _fake_pbc(reactant, product_positions, **kwargs):
+            captured.update(kwargs)
+            return product_positions
+
+        monkeypatch.setattr(
+            "scgo.ts_search.transition_state._align_product_surface_pbc",
+            _fake_pbc,
+        )
+        ref = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]], cell=[5, 5, 10], pbc=True)
+        cand = ref.copy()
+        main_mod._align_slab_minimum_to_reference(
+            ref,
+            cand,
+            n_slab=1,
+            enable_cell_remap=True,
+            enable_lattice_rotation=False,
+            max_lattice_shift=1,
+            n_core_mobile=1,
+        )
+        assert captured.get("n_core_mobile") == 1
+
     def test_run_trials_aligns_slab_final_minima_to_best(
         self, tmp_path, rng, monkeypatch
     ):
@@ -857,7 +899,7 @@ def test_sanitize_global_optimizer_kwargs_for_metadata_surface_config():
     assert clean["surface_config"]["n_relax_top_slab_layers"] is None
     assert clean["surface_config"]["adsorption_height_min"] == 1.0
     assert clean["surface_config"]["adsorption_height_max"] == 2.0
-    assert clean["surface_config"]["comparator_use_mic"] is False
+    assert clean["surface_config"]["comparator_use_mic"] is True
     assert clean["surface_config"]["cluster_init_vacuum"] == 8.0
     assert clean["surface_config"]["init_mode"] == "smart"
     assert clean["surface_config"]["max_placement_attempts"] == 200

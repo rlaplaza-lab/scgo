@@ -41,7 +41,9 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
     numbers = atoms.numbers
     unique_types = set(numbers)
     pair_cor: dict[int, np.ndarray] = {}
-    use_mic_path = bool(mic) or bool(np.any(atoms.get_pbc()))
+    # Honor ``mic`` literally so GA (ASE comparator) and Pure stay coherent when
+    # callers pass mic=False on periodic cells (e.g. comparator_use_mic=False).
+    use_mic_path = bool(mic)
 
     all_d: np.ndarray | None = None
     if use_mic_path:
@@ -185,8 +187,10 @@ class PureInteratomicDistanceComparator:
         dE: A placeholder for API consistency with other ASE comparators; it is
             not used in this implementation. Defaults to `DEFAULT_ENERGY_TOLERANCE`.
         mic: Whether to use the minimum image convention when calculating
-            distances. Defaults to False. Set True for adsorbates on periodic
-            slabs when using :func:`scgo.algorithms.ga_common.create_structure_comparator`.
+            distances. Defaults to False. Honored literally even when the cell
+            has PBC (does not auto-enable MIC from ``atoms.pbc``). Set True for
+            adsorbates on periodic slabs via
+            :func:`scgo.system_types.resolve_structure_mic`.
     """
 
     def __init__(
