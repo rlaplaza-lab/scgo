@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from ase import Atoms
 
 from scgo.param_presets import get_testing_params, get_ts_search_params
 from scgo.runner_api import run_go, run_go_ts
+from scgo.surface.presets import (
+    make_defected_graphite_surface_config,
+    make_n_doped_graphite_surface_config,
+)
 from tests.constants import PT4_EMT_BARRIER_EV
 from tests.test_utils import (
     assert_db_final_row,
@@ -157,3 +162,73 @@ def test_run_go_surface_cluster_remains_chemisorbed(
     _energy, best = minima[0]
     assert len(best) == n_slab + 4
     assert_supported_cluster_binding(best, surface_config_pt111)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_run_go_surface_empty_composition_emt(tmp_path) -> None:
+    """Bare ``surface`` accepts empty composition and searches top slab layers."""
+    surface_config = make_defected_graphite_surface_config(
+        slab_layers=2, slab_repeat_xy=1, n_vacancies=1, seed=0
+    )
+    params = get_testing_params()
+    params["connectivity_factor"] = 1.8
+    params["optimizer_params"]["ga"].update(
+        niter=1, population_size=4, niter_local_relaxation=5
+    )
+    minima = run_go(
+        [],
+        params=params,
+        seed=0,
+        verbosity=0,
+        system_type="surface",
+        surface_config=surface_config,
+        output_dir=tmp_path / "surface_empty",
+    )
+    assert len(minima) >= 1
+    assert len(minima[0][1]) == len(surface_config.slab)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_run_go_ts_surface_adsorbate_empty_core_emt(tmp_path) -> None:
+    """``surface_adsorbate`` deposits OH on N-doped graphite with empty core."""
+    surface_config = make_n_doped_graphite_surface_config(
+        slab_layers=3, slab_repeat_xy=2, n_dopants=1, seed=0
+    )
+    oh = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.97]])
+    go_params = get_testing_params()
+    go_params["connectivity_factor"] = 1.8
+    go_params["optimizer_params"]["ga"].update(
+        niter=1, population_size=4, niter_local_relaxation=5
+    )
+    ts_params = get_ts_search_params(
+        system_type="surface_adsorbate",
+        surface_config=surface_config,
+        calculator="EMT",
+        seed=0,
+    )
+    ts_params.update(
+        max_pairs=1,
+        neb_steps=15,
+        use_torchsim=False,
+        use_parallel_neb=False,
+        write_timing_json=False,
+        connectivity_factor=1.8,
+    )
+    summary = run_go_ts(
+        [],
+        go_params=go_params,
+        ts_params=ts_params,
+        seed=0,
+        verbosity=0,
+        system_type="surface_adsorbate",
+        surface_config=surface_config,
+        adsorbates=oh,
+        output_dir=tmp_path / "surface_ads_empty",
+        log_summary=False,
+    )
+    assert summary["formula"] == "HO"
+    minima = summary["minima_by_formula"]["HO"]
+    assert len(minima) >= 1
+    assert len(minima[0][1]) == len(surface_config.slab) + 2

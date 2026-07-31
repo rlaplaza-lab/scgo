@@ -114,3 +114,60 @@ def compute_surface_site_candidates(
             SurfaceSiteCandidate(site_type="facet", anchor=centroid, normal=normal)
         )
     return out
+
+
+def planar_layer_site_candidates(
+    layer: Atoms,
+    *,
+    surface_normal_axis: int = 2,
+) -> dict[SiteType, list[SurfaceSiteCandidate]]:
+    """Build atom- and bond-midpoint sites for a flat slab layer (no 3D hull).
+
+    Graphene/graphite top layers are planar, so :func:`try_convex_hull` fails.
+    Use each atom as a vertex site and nearest-neighbor midpoints as edge sites,
+    with the outward surface normal along ``surface_normal_axis``.
+    """
+    out: dict[SiteType, list[SurfaceSiteCandidate]] = {
+        "vertex": [],
+        "edge": [],
+        "facet": [],
+    }
+    if len(layer) == 0:
+        return out
+    axis = int(surface_normal_axis)
+    if axis not in (0, 1, 2):
+        raise ValueError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
+    normal = np.zeros(3, dtype=float)
+    normal[axis] = 1.0
+    pos = np.asarray(layer.get_positions(), dtype=float)
+    for anchor in pos:
+        out["vertex"].append(
+            SurfaceSiteCandidate(
+                site_type="vertex", anchor=anchor.copy(), normal=normal.copy()
+            )
+        )
+    if len(pos) < 2:
+        return out
+    # In-plane nearest-neighbor midpoints as bridge sites.
+    in_plane = [i for i in (0, 1, 2) if i != axis]
+    for i, pi in enumerate(pos):
+        deltas = pos - pi
+        d2 = deltas[:, in_plane[0]] ** 2 + deltas[:, in_plane[1]] ** 2
+        d2[i] = np.inf
+        j = int(np.argmin(d2))
+        if j <= i:
+            continue
+        midpoint = 0.5 * (pi + pos[j])
+        out["edge"].append(
+            SurfaceSiteCandidate(
+                site_type="edge", anchor=midpoint, normal=normal.copy()
+            )
+        )
+    return out
+
+
+def count_site_candidates(
+    sites: dict[SiteType, list[SurfaceSiteCandidate]],
+) -> int:
+    """Return total number of vertex/edge/facet candidates."""
+    return sum(len(entries) for entries in sites.values())

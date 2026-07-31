@@ -393,8 +393,9 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
 
 - ``neb_interpolation_mic=True`` (forced)
 - ``neb_surface_cell_remap=True``
-- ``neb_surface_lattice_rotation=True`` for bare ``surface_cluster``;
-  ``False`` for ``surface_cluster_adsorbate`` (registry-safe)
+- ``neb_surface_lattice_rotation=True`` for bare ``surface_cluster`` /
+  ``surface``; ``False`` for ``surface_cluster_adsorbate`` /
+  ``surface_adsorbate`` (registry-safe)
 - ``neb_surface_max_lattice_shift=1``
 - ``parallel_neb_max_bands=1`` (parallel NEB path stays on; bands are
   chunked one-at-a-time for OOM safety on large slab cells)

@@ -43,9 +43,9 @@ Each system type sets defaults consumed by
   ``neb_align_endpoints`` stays on in presets.
 - ``neb_surface_cell_remap`` — enabled for surface types (lattice-image
   selection / MIC snap before NEB interpolation).
-- ``neb_surface_lattice_rotation`` — enabled for bare ``surface_cluster``;
-  disabled for ``surface_cluster_adsorbate`` (free in-plane Kabsch breaks
-  adsorbate–slab registry).
+- ``neb_surface_lattice_rotation`` — enabled for bare ``surface_cluster`` and
+  ``surface``; disabled for ``surface_cluster_adsorbate`` and
+  ``surface_adsorbate`` (free in-plane Kabsch breaks adsorbate–slab registry).
 - The remap search span is controlled at runtime by
   ``neb_surface_max_lattice_shift`` in TS presets (default ``1`` cell in each
   in-plane direction).

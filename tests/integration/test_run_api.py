@@ -82,6 +82,17 @@ def _surface_cfg() -> SurfaceSystemConfig:
     return SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
 
 
+def _slab_search_cfg() -> SurfaceSystemConfig:
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, True]
+    return SurfaceSystemConfig(
+        slab=slab,
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+        name="pt_slab",
+    )
+
+
 def test_parse_composition_arg_formats():
     assert parse_composition_arg("Pt,Pt,Au") == ["Pt", "Pt", "Au"]
     assert parse_composition_arg("Pt3Au") == ["Pt", "Pt", "Pt", "Au"]
@@ -391,6 +402,8 @@ def test_run_go_timing_from_params(monkeypatch):
         "surface_cluster",
         "gas_cluster_adsorbate",
         "surface_cluster_adsorbate",
+        "surface",
+        "surface_adsorbate",
     ],
 )
 def test_run_go_system_type_matrix(monkeypatch, system_type):
@@ -398,13 +411,23 @@ def test_run_go_system_type_matrix(monkeypatch, system_type):
 
     def _fake_trials(composition, *args, **kwargs):
         captured["params"] = kwargs["params"]
+        captured["composition"] = composition
         return []
 
     monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
-    composition = ["Pt", "Pt", "Pt"] if "adsorbate" in system_type else "Pt3"
+    policy = get_system_policy(system_type)
+    if policy.slab_is_search_target:
+        composition: str | list[str] = []
+        surface = _slab_search_cfg()
+    elif "adsorbate" in system_type:
+        composition = ["Pt", "Pt", "Pt"]
+        surface = _surface_cfg() if "surface" in system_type else None
+    else:
+        composition = "Pt3"
+        surface = _surface_cfg() if "surface" in system_type else None
     kwargs = {}
-    if "surface" in system_type:
-        kwargs["surface_config"] = _surface_cfg()
+    if surface is not None:
+        kwargs["surface_config"] = surface
     run_go(
         composition,
         params={"optimizer_params": {"simple": {}, "ga": {}, "bh": {}}},
@@ -417,12 +440,16 @@ def test_run_go_system_type_matrix(monkeypatch, system_type):
     assert params["optimizer_params"]["simple"]["system_type"] == system_type
     assert params["optimizer_params"]["ga"]["system_type"] == system_type
     assert params["optimizer_params"]["bh"]["system_type"] == system_type
+    if policy.slab_is_search_target and not policy.has_adsorbate:
+        assert captured["composition"] == []
 
 
 def test_system_policy_surface_neb_defaults():
     gas = get_system_policy("gas_cluster")
     bare = get_system_policy("surface_cluster")
     ads = get_system_policy("surface_cluster_adsorbate")
+    slab = get_system_policy("surface")
+    slab_ads = get_system_policy("surface_adsorbate")
     assert gas.neb_force_mic is False
     assert gas.neb_disable_alignment is False
     assert gas.neb_surface_cell_remap is False
@@ -434,6 +461,13 @@ def test_system_policy_surface_neb_defaults():
     assert ads.neb_disable_alignment is False
     assert ads.neb_surface_cell_remap is True
     assert ads.neb_surface_lattice_rotation is False
+    assert slab.slab_is_search_target is True
+    assert slab.neb_force_mic is True
+    assert slab.neb_surface_lattice_rotation is True
+    assert slab_ads.slab_is_search_target is True
+    assert slab_ads.has_adsorbate is True
+    assert slab_ads.neb_surface_lattice_rotation is False
+    assert slab_ads.needs_supported_deposit_validation is True
 
 
 def test_run_go_requires_system_type():

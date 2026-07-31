@@ -1,6 +1,6 @@
 """GPU integration tests mirroring examples/ at reduced GA/TS scale for Kaggle CI.
 
-Per-case knobs are derived from the matching ``examples/example_pt5_*.py`` scripts
+Per-case knobs are derived from the matching ``examples/example_*.py`` scripts
 (~20–25% of their niter / population_size / max_pairs, with heavier surface NEB
 budgets preserved). Targets ~30 min for the full ``requires_cuda and requires_mace``
 Kaggle suite (vs ~10 min with the prior minimal settings).
@@ -19,18 +19,23 @@ from scgo import (
     get_cluster_formula,
     get_torchsim_ga_params,
     get_ts_search_params,
+    make_defected_graphite_surface_config,
     make_graphite_surface_config,
+    make_n_doped_graphite_surface_config,
     parse_composition_arg,
     run_go_ts,
 )
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.system_types import SystemType, build_adsorbate_definition_from_inputs
+from scgo.system_types import (
+    SystemType,
+    build_adsorbate_definition_from_inputs,
+    get_system_policy,
+)
 from tests.test_utils import assert_supported_cluster_binding
 
 SEED = 42
-COMPOSITION = "Pt5"
 
-# Shared GA/TS base; per-case overrides mirror example_pt5_*.py ratios.
+# Shared GA/TS base; per-case overrides mirror example_*.py ratios.
 CI_EXAMPLE_GA_BASE = {
     "offspring_fraction": 0.5,
     "niter_local_relaxation": 70,
@@ -47,6 +52,8 @@ CI_EXAMPLE_TS_BASE = {
 
 CONNECTIVITY = 1.8
 SLAB_LAYERS = 3
+# Smaller than examples (repeat_xy=3) to keep Kaggle wall time bounded.
+SLAB_REPEAT_XY_CI = 2
 
 
 def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
@@ -65,6 +72,7 @@ def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
 @dataclass(frozen=True)
 class GpuExampleCase:
     system_type: SystemType
+    composition: str | list[str] = "Pt5"
     surface_config: SurfaceSystemConfig | None = None
     adsorbates: list[Atoms] | None = None
     connectivity_factor: float | None = None
@@ -73,11 +81,31 @@ class GpuExampleCase:
     ts_overrides: dict = field(default_factory=dict)
     extra_ts: dict = field(default_factory=dict)
     expected_mobile_atoms: int = 5
+    n_core_mobile: int = 5
     adsorbate_fragment_lengths: list[int] | None = None
+    check_supported_binding: bool = True
 
 
 def _graphite_config() -> SurfaceSystemConfig:
     return make_graphite_surface_config(slab_layers=SLAB_LAYERS)
+
+
+def _defected_graphite_config() -> SurfaceSystemConfig:
+    return make_defected_graphite_surface_config(
+        slab_layers=SLAB_LAYERS,
+        slab_repeat_xy=SLAB_REPEAT_XY_CI,
+        n_vacancies=1,
+        seed=SEED,
+    )
+
+
+def _n_doped_graphite_config() -> SurfaceSystemConfig:
+    return make_n_doped_graphite_surface_config(
+        slab_layers=SLAB_LAYERS,
+        slab_repeat_xy=SLAB_REPEAT_XY_CI,
+        n_dopants=2,
+        seed=SEED,
+    )
 
 
 GPU_EXAMPLE_CASES = [
@@ -119,6 +147,32 @@ GPU_EXAMPLE_CASES = [
         expected_mobile_atoms=9,
         adsorbate_fragment_lengths=[2, 2],
     ),
+    # example_defected_graphite.py: NITER=4, POP=16, MAX_PAIRS=4
+    GpuExampleCase(
+        system_type="surface",
+        composition=[],
+        surface_config=_defected_graphite_config(),
+        connectivity_factor=CONNECTIVITY,
+        ga_overrides={"niter": 1, "population_size": 4},
+        ts_overrides={"max_pairs": 1, "neb_steps": 90},
+        expected_mobile_atoms=0,
+        n_core_mobile=0,
+        check_supported_binding=False,
+    ),
+    # example_n_doped_graphite.py: NITER=4, POP=16, MAX_PAIRS=4
+    GpuExampleCase(
+        system_type="surface_adsorbate",
+        composition=[],
+        surface_config=_n_doped_graphite_config(),
+        adsorbates=_adsorbates_oh(n=1),
+        connectivity_factor=CONNECTIVITY,
+        freeze_adsorbate_internal_geometry=True,
+        ga_overrides={"niter": 1, "population_size": 4},
+        ts_overrides={"max_pairs": 1, "neb_steps": 120},
+        expected_mobile_atoms=2,
+        n_core_mobile=0,
+        adsorbate_fragment_lengths=[2],
+    ),
 ]
 
 
@@ -140,9 +194,16 @@ def _build_go_params(case: GpuExampleCase) -> dict:
 
 def _expected_formula(case: GpuExampleCase) -> str:
     """Match run_go_ts: core composition plus adsorbate symbols when present."""
-    core = parse_composition_arg(COMPOSITION)
+    if isinstance(case.composition, str):
+        core = parse_composition_arg(case.composition)
+    else:
+        core = list(case.composition)
     if case.adsorbates is None:
-        return get_cluster_formula(core)
+        if core:
+            return get_cluster_formula(core)
+        if case.surface_config is not None:
+            return case.surface_config.name or "surface"
+        return ""
     _ads_def, _fragments, full_mobile = build_adsorbate_definition_from_inputs(
         system_type=case.system_type,
         composition=core,
@@ -176,7 +237,7 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
     output_dir = tmp_path / f"gpu_{case.system_type}"
     go_params = _build_go_params(case)
     summary = run_go_ts(
-        COMPOSITION,
+        case.composition,
         go_params=go_params,
         ts_params=_build_ts_params(case),
         seed=SEED,
@@ -211,11 +272,15 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
     n_slab = len(case.surface_config.slab) if case.surface_config is not None else 0
     assert len(best) == n_slab + case.expected_mobile_atoms
 
-    if case.surface_config is not None:
+    if (
+        case.surface_config is not None
+        and case.check_supported_binding
+        and get_system_policy(case.system_type).needs_supported_deposit_validation
+    ):
         assert_supported_cluster_binding(
             best,
             case.surface_config,
-            n_core_mobile=5,
+            n_core_mobile=case.n_core_mobile,
             adsorbate_fragment_lengths=case.adsorbate_fragment_lengths,
             connectivity_factor=go_params["connectivity_factor"],
         )

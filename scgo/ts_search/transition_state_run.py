@@ -382,7 +382,7 @@ def _warn_on_surface_mobile_indices(
             aj = minima[j][1]
             try:
                 shared = get_shared_mobile_atom_indices(ai, aj, n_slab=slab_n)
-            except ValueError:
+            except (ValueError, SCGOValidationError):
                 logger.warning(
                     "Surface TS pair (%d,%d) has no shared mobile atoms for comparison; "
                     "pair similarity may be skipped.",
@@ -585,12 +585,16 @@ def run_transition_state_search(
         connectivity_factor, surface_config=surface_config
     )
 
-    validate_composition(composition, allow_empty=False)
+    system_policy = get_system_policy(system_type)
+    validate_composition(
+        composition,
+        allow_empty=system_policy.slab_is_search_target
+        and not system_policy.has_adsorbate,
+    )
     validate_system_type_settings(
         system_type=system_type,
         surface_config=surface_config,
     )
-    system_policy = get_system_policy(system_type)
     adsorbate_composition = list(composition)
     if system_policy.uses_surface:
         composition = full_adsorbate_slab_composition(
@@ -615,6 +619,17 @@ def run_transition_state_search(
         if surface_config is not None and system_policy.uses_surface
         else 0
     )
+    if (
+        system_policy.slab_is_search_target
+        and surface_config is not None
+        and system_policy.uses_surface
+    ):
+        from scgo.surface.partition import prepare_slab_search_surface_config
+
+        surface_config, partition = prepare_slab_search_surface_config(surface_config)
+        # Match GA: fixed bottom layers are the NEB ``n_slab`` prefix; top
+        # layers (+ adsorbates) remain mobile.
+        neb_n_slab = int(partition.n_fixed)
     neb_n_core_m, neb_n_ads_m, neb_ads_frag_lengths = resolve_neb_mobile_dims(
         system_type,
         adsorbate_composition,

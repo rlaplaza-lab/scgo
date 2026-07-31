@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- Bare ``surface`` / ``surface_adsorbate`` empty-core composition is accepted by
+  ``run_go`` / ``run_go_ts`` / GA / TS (examples with ``COMPOSITION=[]``).
+- Slab-search TS uses fixed-bottom ``n_slab`` (not full slab length) so mobile
+  top layers remain comparable.
+- Adsorbate-only deposition on planar graphite: planar site fallback when the
+  3D convex hull is empty, and skip whole-slab connectivity checks that reject
+  van der Waals stacked layers.
+
 ## 0.6.4
 
 ### Added
