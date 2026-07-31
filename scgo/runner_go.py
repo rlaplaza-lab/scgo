@@ -151,7 +151,9 @@ def _run_go_trials(
     search_comp = resolve_search_mobile_composition(
         system_type=system_type,
         composition=list(composition),
-        surface_config=surface_cfg if isinstance(surface_cfg, SurfaceSystemConfig) else None,
+        surface_config=surface_cfg
+        if isinstance(surface_cfg, SurfaceSystemConfig)
+        else None,
         adsorbate_definition=ads_def,
     )
     n_atoms = len(search_comp)

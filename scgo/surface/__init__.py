@@ -21,6 +21,11 @@ from scgo.surface.deposition import (
 )
 from scgo.surface.fragment_templates import build_default_fragment_template
 from scgo.surface.objectives import adsorption_energy
+from scgo.surface.partition import (
+    SlabSearchPartition,
+    prepare_slab_search_surface_config,
+    resolve_slab_search_partition,
+)
 from scgo.surface.pbc import normalize_slab_pbc
 from scgo.surface.presets import (
     DEFAULT_GRAPHITE_SLAB_LAYERS,
@@ -32,11 +37,6 @@ from scgo.surface.presets import (
     make_defected_graphite_surface_config,
     make_graphite_surface_config,
     make_n_doped_graphite_surface_config,
-)
-from scgo.surface.partition import (
-    SlabSearchPartition,
-    prepare_slab_search_surface_config,
-    resolve_slab_search_partition,
 )
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,

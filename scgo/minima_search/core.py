@@ -36,6 +36,7 @@ from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
+from scgo.surface.partition import prepare_slab_search_surface_config
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
     validate_stored_slab_adsorbate_metadata,
@@ -121,9 +122,6 @@ def _create_surface_initialized_atoms(
     cluster_adsorbate_config: Any = None,
     system_type: str | None = None,
 ) -> Atoms:
-    from scgo.system_types import get_system_policy
-    from scgo.surface.partition import prepare_slab_search_surface_config
-
     working_config = surface_config
     policy = get_system_policy(system_type) if system_type is not None else None
     n_fixed = 0
@@ -629,8 +627,6 @@ def scgo(
                 system_type=system_type,
             )
             if policy.slab_is_search_target:
-                from scgo.surface.partition import prepare_slab_search_surface_config
-
                 prepared, _part = prepare_slab_search_surface_config(surface_config)
                 optimizer_kwargs["surface_config"] = prepared
                 optimizer_kwargs.setdefault("n_slab", len(prepared.slab))

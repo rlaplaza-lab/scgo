@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.4
+
+### Added
+
+- ``surface`` and ``surface_adsorbate`` system types: GA/BH search mobile
+  top slab layers (bottom layers fixed), with optional adsorbates and no
+  cluster core. Includes slab search partition helpers, defected/N-doped
+  graphite presets, and examples.
+
 ### Changed
 
 - On-disk path keys for searches, TS results, XYZ prefixes, and default
@@ -10,6 +19,11 @@
   matching still uses ASE-style formulas (``H2O2Pt5``).
 - ``SurfaceSystemConfig.name`` (default ``"slab"``) supplies the surface
   path-key segment; ``make_graphite_surface_config`` sets ``name="graphite"``.
+
+### Fixed
+
+- Ruff import sorting / formatting leftovers from the surface-search merge
+  so the GitHub Actions lint job passes on main.
 
 ## 0.6.3
 
