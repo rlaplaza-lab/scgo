@@ -65,9 +65,7 @@ def test_prepare_slab_search_surface_config_contiguous_prefix() -> None:
     )
     new_cfg, part = prepare_slab_search_surface_config(cfg)
     assert list(part.fixed_indices) == list(range(part.n_fixed))
-    assert list(part.mobile_slab_indices) == list(
-        range(part.n_fixed, part.n_slab)
-    )
+    assert list(part.mobile_slab_indices) == list(range(part.n_fixed, part.n_slab))
     z = new_cfg.slab.get_positions()[:, 2]
     assert z[: part.n_fixed].max() < z[part.n_fixed :].min()
 

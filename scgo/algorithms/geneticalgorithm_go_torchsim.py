@@ -916,9 +916,7 @@ def ga_go(
             dummy_top = [[0.0, 0.0, 0.0] for _ in range(n_to_optimize)]
             atoms_template = Atoms(
                 symbols=list(slab_ref.get_chemical_symbols()) + list(composition),
-                positions=np.vstack(
-                    [slab_ref.get_positions(), np.asarray(dummy_top)]
-                ),
+                positions=np.vstack([slab_ref.get_positions(), np.asarray(dummy_top)]),
                 cell=slab_ref.get_cell(),
                 pbc=slab_ref.get_pbc(),
             )

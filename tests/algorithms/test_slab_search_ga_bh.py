@@ -11,9 +11,11 @@ from scgo.algorithms.ga_common import (
     create_mutation_operators,
 )
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.partition import prepare_slab_search_surface_config
+from scgo.surface.partition import (
+    prepare_slab_search_surface_config,
+    resolve_slab_search_partition,
+)
 from scgo.system_types import get_system_policy
-from scgo.surface.partition import resolve_slab_search_partition
 
 
 def _layered_slab(n_per_layer: int = 2, n_layers: int = 3) -> Atoms:
