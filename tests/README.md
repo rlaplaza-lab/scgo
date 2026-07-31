@@ -82,7 +82,7 @@ GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 
 The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. Kaggle may mount that dataset as either `scgo-src.tar.gz` or an extracted tree under `/kaggle/input/scgocisrc/`. **Pip installs (MACE/UPET/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI. The kernel requests a **Tesla T4** GPU (`machine_shape: NvidiaTeslaT4`). Kaggle may assign a P100 otherwise; its sm_60 architecture is incompatible with the cu124 PyTorch wheels used here.
 
-Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all four `system_type` values from `examples/`).
+Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all six `system_type` values from `examples/`).
 
 UPET GPU smoke coverage: `tests/integration/test_gpu_upet_smoke.py`.
 

@@ -268,6 +268,59 @@ Combine surface and adsorbates.
        adsorbates=oh,
    )
 
+-----------------------
+Slab as search target
+-----------------------
+
+Use ``surface`` / ``surface_adsorbate`` when GA/BH should move the **top slab
+layers** (bottom layers fixed) rather than a deposited nanoparticle. Pass an
+empty composition ``[]`` for the nanoparticle core. Presets such as
+:func:`~scgo.make_defected_graphite_surface_config` and
+:func:`~scgo.make_n_doped_graphite_surface_config` set
+``fix_all_slab_atoms=False``, ``n_relax_top_slab_layers=1``, and a
+filesystem ``name`` for path keys.
+
+**Bare defected graphite:**
+
+.. code-block:: python
+
+   from scgo import run_go, make_defected_graphite_surface_config
+   from scgo.param_presets import get_default_params
+
+   surface_config = make_defected_graphite_surface_config(
+       slab_layers=3, slab_repeat_xy=3, n_vacancies=1, seed=42
+   )
+
+   results = run_go(
+       [],
+       params=get_default_params(),
+       seed=42,
+       surface_config=surface_config,
+       system_type="surface",
+   )
+
+**OH on N-doped graphite:**
+
+.. code-block:: python
+
+   from ase import Atoms
+   from scgo import run_go, make_n_doped_graphite_surface_config
+   from scgo.param_presets import get_default_params
+
+   surface_config = make_n_doped_graphite_surface_config(
+       slab_layers=3, slab_repeat_xy=3, n_dopants=2, seed=42
+   )
+   oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.97]])
+
+   results = run_go(
+       [],
+       params=get_default_params(),
+       seed=42,
+       surface_config=surface_config,
+       system_type="surface_adsorbate",
+       adsorbates=oh,
+   )
+
 ------------------
 Transition States
 ------------------
@@ -487,7 +540,9 @@ fragment (order-preserving, e.g. ``OH``), and ``surface_config.name`` when a
 surface is used — for example ``Pt5``, ``Pt5_OH_OH``, or
 ``Pt5_OH_OH_graphite``. Chemical composition matching still uses the ASE-style
 formula (``H2O2Pt5``). Default ``surface_config.name`` is ``"slab"``;
-``make_graphite_surface_config`` sets ``name="graphite"``.
+``make_graphite_surface_config`` sets ``name="graphite"``. Empty-core slab
+modes use the surface name alone or adsorbate+surface
+(``defected_graphite``, ``OH_n_doped_graphite``).
 
 ``searches_dir`` (``run_ts_search`` only): explicit path to a GO searches
 directory; the campaign root becomes ``searches_dir.parent``.
@@ -695,6 +750,8 @@ Working examples in the repository (see also ``examples/README.md``):
 - ``examples/example_pt5_graphite.py``: Pt5 on graphite
 - ``examples/example_pt5_oh_gas.py``: Pt5 + OH in gas phase
 - ``examples/example_pt5_2oh_graphite.py``: Pt5 + 2OH on graphite
+- ``examples/example_defected_graphite.py``: top-layer search on vacancy-defected graphite (``surface``)
+- ``examples/example_n_doped_graphite.py``: OH on N-doped graphite (``surface_adsorbate``)
 
 Each example enables ``write_timing_json`` in both ``go_params`` and ``ts_params``
 so per-run ``timing.json`` and campaign ``go_ts_timing.json`` are written. See

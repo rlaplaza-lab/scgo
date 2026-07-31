@@ -53,6 +53,7 @@ from scgo.system_types import (
     AdsorbatesInput,
     SystemType,
     extract_adsorbate_definition_from_params,
+    get_system_policy,
     resolve_adsorbate_run_composition,
     resolve_connectivity_factor,
     validate_system_type_settings,
@@ -104,18 +105,25 @@ def _run_go_ts_pipeline(
     configure_logging(verbosity)
     logger = get_logger(__name__)
 
-    validate_composition(composition, allow_empty=False, allow_tuple=False)
+    policy = get_system_policy(system_type)
+    allow_empty_comp = policy.slab_is_search_target and not policy.has_adsorbate
+    validate_composition(composition, allow_empty=allow_empty_comp, allow_tuple=False)
 
-    formula = get_cluster_formula(composition)
+    surface_cfg = (
+        go_params.get("surface_config")
+        if isinstance(go_params.get("surface_config"), SurfaceSystemConfig)
+        else None
+    )
+    formula = (
+        get_cluster_formula(composition)
+        if composition
+        else (getattr(surface_cfg, "name", None) or "surface")
+    )
     path_key = resolve_run_path_key(
         composition,
         system_type=system_type,
         adsorbate_definition=extract_adsorbate_definition_from_params(go_params),
-        surface_config=(
-            go_params.get("surface_config")
-            if isinstance(go_params.get("surface_config"), SurfaceSystemConfig)
-            else None
-        ),
+        surface_config=surface_cfg,
         params=go_params,
     )
     output_path = (
@@ -128,11 +136,7 @@ def _run_go_ts_pipeline(
             output_root=None,
             system_type=system_type,
             adsorbate_definition=extract_adsorbate_definition_from_params(go_params),
-            surface_config=(
-                go_params.get("surface_config")
-                if isinstance(go_params.get("surface_config"), SurfaceSystemConfig)
-                else None
-            ),
+            surface_config=surface_cfg,
         )
     )
     output_path.mkdir(parents=True, exist_ok=True)

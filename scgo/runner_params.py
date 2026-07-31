@@ -781,7 +781,8 @@ def _prepare_run_go_ts_context(
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
     go_prep = _with_surface_in_optimizers(go_mat, surface_config=surface_config)
-    core_comp = _as_composition(composition)
+    policy = get_system_policy(st)
+    core_comp = _as_composition(composition, allow_empty=policy.slab_is_search_target)
     preset_ads = (
         extract_adsorbate_definition_from_params(go_mat) if adsorbates is None else None
     )

@@ -23,7 +23,11 @@ from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
-from scgo.cluster_adsorbate.sites import get_or_compute_surface_site_candidates
+from scgo.cluster_adsorbate.sites import (
+    count_site_candidates,
+    get_or_compute_surface_site_candidates,
+    planar_layer_site_candidates,
+)
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -100,8 +104,28 @@ def _build_adsorbate_fragments_on_slab(
         return None
 
     ca = resolve_cluster_adsorbate_config(cluster_adsorbate_config)
+    # Multi-layer slabs (graphite) are not covalently connected through the
+    # stack; whole-structure connectivity would reject every adsorbate trial.
+    ca = ClusterAdsorbateConfig(
+        height_min=ca.height_min,
+        height_max=ca.height_max,
+        max_placement_attempts=ca.max_placement_attempts,
+        blmin_ratio=ca.blmin_ratio,
+        cell_margin=ca.cell_margin,
+        random_spin_about_normal=ca.random_spin_about_normal,
+        validate_combined_structure=ca.validate_combined_structure,
+        structure_min_distance_factor=ca.structure_min_distance_factor,
+        structure_connectivity_factor=ca.structure_connectivity_factor,
+        structure_check_clashes=ca.structure_check_clashes,
+        structure_check_connectivity=False,
+    )
     site_core = _slab_surface_layer(slab, axis)
     precomputed_sites = get_or_compute_surface_site_candidates(site_core)
+    if count_site_candidates(precomputed_sites) == 0:
+        # Planar top layers (graphene/graphite) have no 3D convex hull.
+        precomputed_sites = planar_layer_site_candidates(
+            site_core, surface_normal_axis=axis
+        )
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
 

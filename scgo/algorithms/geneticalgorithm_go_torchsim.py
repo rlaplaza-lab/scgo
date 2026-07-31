@@ -818,7 +818,14 @@ def ga_go(
         cluster_adsorbate_config=cluster_adsorbate_config,
         surface_config=surface_config,
     )
-    validate_composition(composition, allow_empty=False, allow_tuple=False)
+    policy = get_system_policy(system_type)
+    # Bare ``surface`` uses an empty cluster composition; search-mobile symbols
+    # come from the top slab layers via ``resolve_search_mobile_composition``.
+    validate_composition(
+        composition,
+        allow_empty=policy.slab_is_search_target and not policy.has_adsorbate,
+        allow_tuple=False,
+    )
     validate_system_type_settings(
         system_type=system_type, surface_config=surface_config
     )
@@ -847,8 +854,6 @@ def ga_go(
 
     # Normalize RNG early and enforce Generator-only policy
     rng = ensure_rng_or_create(rng)
-
-    policy = get_system_policy(system_type)
     surface_mode = uses_surface(system_type)
     n_fixed = 0
     search_composition = list(composition)

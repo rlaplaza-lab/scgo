@@ -60,6 +60,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
+    go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 
 

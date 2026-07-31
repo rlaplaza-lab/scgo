@@ -13,6 +13,8 @@ from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig, describe_surface_config
 from scgo.surface.deposition import create_deposited_cluster
 from scgo.surface.fragment_templates import build_default_fragment_template
+from scgo.surface.partition import prepare_slab_search_surface_config
+from scgo.surface.presets import make_n_doped_graphite_surface_config
 from scgo.system_types import validate_adsorbate_definition
 from tests.test_utils import assert_supported_cluster_binding
 
@@ -178,6 +180,45 @@ def test_surface_deposition_accepts_empty_core_symbols():
     sym = out.get_chemical_symbols()
     assert sym[:n_slab] == list(slab.get_chemical_symbols())
     assert sym[n_slab:] == mobile
+
+
+def test_surface_deposition_empty_core_on_graphite():
+    """Planar graphite top layers need planar site fallback (no 3D hull)."""
+    cfg = make_n_doped_graphite_surface_config(
+        slab_layers=3, slab_repeat_xy=2, n_dopants=1, seed=7
+    )
+    cfg, _part = prepare_slab_search_surface_config(cfg)
+    cfg = SurfaceSystemConfig(
+        slab=cfg.slab,
+        name=cfg.name,
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+        max_placement_attempts=40,
+    )
+    ads_def = {
+        "adsorbate_symbols": ["O", "H"],
+        "core_symbols": [],
+        "adsorbate_fragment_lengths": [2],
+    }
+    rng = np.random.default_rng(11)
+    blmin = closest_distances_generator(
+        list({int(z) for z in cfg.slab.numbers} | {8, 1}),
+        ratio_of_covalent_radii=0.7,
+    )
+    oh = build_default_fragment_template(["O", "H"])
+    assert oh is not None
+    out = create_deposited_cluster(
+        ["O", "H"],
+        cfg.slab,
+        blmin,
+        rng,
+        cfg,
+        adsorbate_definition=ads_def,
+        adsorbate_fragment_template=[oh],
+    )
+    assert out is not None
+    assert len(out) == len(cfg.slab) + 2
+    assert out.get_chemical_symbols()[-2:] == ["O", "H"]
 
 
 def test_gas_hierarchical_core_fragment_smoke():

@@ -21,7 +21,9 @@ structures for ``surface_cluster`` and ``surface_cluster_adsorbate``:
 For ``surface`` / ``surface_adsorbate``, GA/BH search the top slab layers
 (see :mod:`scgo.surface.partition`). Bare ``surface`` seeds rattle top-layer
 atoms; ``surface_adsorbate`` deposits adsorbate fragments onto the slab and
-searches top layers plus adsorbates.
+searches top layers plus adsorbates. Planar graphite/graphene top layers use
+:func:`~scgo.cluster_adsorbate.sites.planar_layer_site_candidates` when the
+3D convex hull has no sites.
 
 .. autoclass:: scgo.surface.config.SurfaceSystemConfig
    :members:
