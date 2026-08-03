@@ -37,7 +37,7 @@ from scgo.database.schema import (
     stamp_scgo_database,
 )
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
-from scgo.database.sync import PRESET_AGGRESSIVE, database_retry, retry_with_backoff
+from scgo.database.sync import PRESET_AGGRESSIVE, database_retry
 from scgo.exceptions import SCGORuntimeError
 from scgo.utils.helpers import (
     ensure_directory_exists,
@@ -182,7 +182,7 @@ def setup_database(
             os.remove(db_file)
 
         try:
-            retry_with_backoff(
+            database_retry(
                 _remove_db,
                 max_retries=5,
                 initial_delay=0.1,

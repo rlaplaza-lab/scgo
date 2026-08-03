@@ -101,6 +101,8 @@ def _assign_penalty_energy(atoms: Atoms) -> float:
         potential_energy=PENALTY_ENERGY,
         raw_score=-PENALTY_ENERGY,
     )
+    zero_forces = np.zeros((len(atoms), 3), dtype=np.float64)
+    atoms.calc = SinglePointCalculator(atoms, energy=PENALTY_ENERGY, forces=zero_forces)
     return PENALTY_ENERGY
 
 

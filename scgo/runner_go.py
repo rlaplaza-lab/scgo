@@ -30,16 +30,16 @@ from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     SystemType,
-    extract_adsorbate_definition_from_params,
     get_system_policy,
     resolve_search_mobile_composition,
 )
-from scgo.utils.helpers import get_cluster_formula, get_system_path_key
+from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
 )
+from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
@@ -52,27 +52,6 @@ from scgo.utils.run_tracking import ensure_run_id
 from scgo.utils.validation import validate_composition
 
 ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
-
-
-def _go_path_key(
-    composition: list[str],
-    system_type: SystemType,
-    params: dict,
-) -> str:
-    """Component-aware path key for GO searches directories."""
-    ads_def = params.get("adsorbate_definition")
-    if not isinstance(ads_def, dict):
-        ads_def = extract_adsorbate_definition_from_params(params)
-    surface_name = None
-    if get_system_policy(system_type).uses_surface:
-        sc = params.get("surface_config")
-        if sc is not None and getattr(sc, "name", None):
-            surface_name = sc.name
-    return get_system_path_key(
-        composition,
-        adsorbate_definition=ads_def if isinstance(ads_def, dict) else None,
-        surface_name=surface_name,
-    )
 
 
 def select_scgo_minima_algorithm(
@@ -162,7 +141,7 @@ def _run_go_trials(
         if composition
         else (getattr(surface_cfg, "name", None) or "surface")
     )
-    path_key = _go_path_key(composition, system_type, params)
+    path_key = resolve_run_path_key(composition, system_type=system_type, params=params)
     main_output_dir = str(resolve_go_searches_dir(output_dir, path_key))
 
     # Algorithm selection: Use simple optimization for 1-2 atoms, BH for 3, GA for larger
@@ -333,7 +312,9 @@ def _run_go_campaign_compositions(
 
     for i, composition in enumerate(compositions_list):
         formula_str = get_cluster_formula(composition)
-        path_key = _go_path_key(composition, system_type, params)
+        path_key = resolve_run_path_key(
+            composition, system_type=system_type, params=params
+        )
         if verbosity >= 1:
             logger.info("\n%s", "=" * 60)
             logger.info(
@@ -398,10 +379,10 @@ def _run_go_campaign_compositions(
                     error_details.append("Output directory does not exist")
 
             logger.error(" | ".join(error_details), exc_info=(verbosity >= 2))
-            all_results[formula_str] = []
+            all_results[path_key] = []
             if verbosity >= 1:
                 logger.warning(
-                    f"Skipping {formula_str} and continuing campaign "
+                    f"Skipping {path_key} ({formula_str}) and continuing campaign "
                     f"({i + 1}/{num_compositions})"
                 )
             continue

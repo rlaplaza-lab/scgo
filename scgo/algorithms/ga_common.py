@@ -990,6 +990,34 @@ def _effective_operator_weight(
     return allocated * (fraction / active_fraction)
 
 
+def _append_partitioned_mutation(
+    operators: list,
+    name_map: dict[str, int],
+    *,
+    base_name: str,
+    mutation_cls: type,
+    use_partition_tags: bool,
+    ads_tags: list[int],
+    include_ads_variant: bool,
+    kwargs_for: typing.Callable[[str], dict[str, typing.Any]],
+) -> None:
+    """Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
+
+    ``kwargs_for`` receives ``\"plain\"``, ``\"core\"``, or ``\"ads\"`` and must
+    return constructor kwargs for that variant (including ``target_tags`` when
+    partitioned).
+    """
+    if not use_partition_tags:
+        operators.append(mutation_cls(**kwargs_for("plain")))
+        name_map[base_name] = len(operators) - 1
+        return
+    operators.append(mutation_cls(**kwargs_for("core")))
+    name_map[f"{base_name}_core"] = len(operators) - 1
+    if include_ads_variant and ads_tags:
+        operators.append(mutation_cls(**kwargs_for("ads")))
+        name_map[f"{base_name}_ads"] = len(operators) - 1
+
+
 def create_mutation_operators(
     composition: list[str],
     n_to_optimize: int,
@@ -1051,9 +1079,6 @@ def create_mutation_operators(
     operators = []
     name_map = {}
     policy = get_system_policy(system_type)
-    move_scale = (
-        policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
-    )
     partition_composition = list(composition)
     if policy.slab_is_search_target and policy.has_adsorbate and adsorbate_definition:
         ads = adsorbate_definition.get("adsorbate_symbols", [])
@@ -1071,6 +1096,15 @@ def create_mutation_operators(
     if part is not None:
         _n_core, ads_fragment_lengths = part
         ads_tags = list(range(1, len(ads_fragment_lengths) + 1))
+
+    # Adsorbate scale only throttles ads-targeted ops when core/ads are partitioned;
+    # shared and core ops keep full strength. Non-partitioned constrained systems
+    # (ads-only) keep the global scale.
+    ads_move_scale = (
+        policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
+    )
+    shared_move_scale = 1.0 if use_partition_tags else ads_move_scale
+    core_move_scale = 1.0 if use_partition_tags else ads_move_scale
 
     core_only_tags = [0] if use_partition_tags else None
     include_overlap_relief = not (
@@ -1091,8 +1125,8 @@ def create_mutation_operators(
     rattle: RattleMutation = RattleMutation(
         blmin,
         n_to_optimize,
-        rattle_strength=0.8 * move_scale,
-        rattle_prop=min(0.4, 0.4 * move_scale),
+        rattle_strength=0.8 * shared_move_scale,
+        rattle_prop=min(0.4, 0.4 * shared_move_scale),
         use_tags=use_partition_tags,
         system_type=system_type,
         rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
@@ -1134,44 +1168,32 @@ def create_mutation_operators(
             name_map["shell_swap"] = len(operators) - 1
 
     if use_adaptive and include_cluster_shape_ops:
-        if not use_partition_tags:
-            flattening: FlatteningMutation = FlatteningMutation(
-                blmin,
-                n_to_optimize,
-                thickness_factor=flattening_thickness_factor,
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                max_inner_attempts=flattening_max_inner_attempts,
-                system_type=system_type,
-            )
-            operators.append(flattening)
-            name_map["flattening"] = len(operators) - 1
-        else:
-            # For adsorbate systems, create core-only and adsorbate-only variants
-            # Core-only flattening (target core tag=0)
-            flattening_core: FlatteningMutation = FlatteningMutation(
-                blmin,
-                n_to_optimize,
-                thickness_factor=flattening_thickness_factor,
-                target_tags=[0],
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                max_inner_attempts=flattening_max_inner_attempts,
-                system_type=system_type,
-            )
-            operators.append(flattening_core)
-            name_map["flattening_core"] = len(operators) - 1
-            # Adsorbate-only flattening (target adsorbate tag=1)
-            if not freeze_adsorbate_internal_geometry and ads_tags:
-                flattening_ads: FlatteningMutation = FlatteningMutation(
-                    blmin,
-                    n_to_optimize,
-                    thickness_factor=flattening_thickness_factor,
-                    target_tags=ads_tags,
-                    rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                    max_inner_attempts=flattening_max_inner_attempts,
-                    system_type=system_type,
-                )
-                operators.append(flattening_ads)
-                name_map["flattening_ads"] = len(operators) - 1
+
+        def _flattening_kwargs(variant: str) -> dict[str, typing.Any]:
+            kw: dict[str, typing.Any] = {
+                "blmin": blmin,
+                "n_top": n_to_optimize,
+                "thickness_factor": flattening_thickness_factor,
+                "rng": get_child_rng_or_none(rng),
+                "max_inner_attempts": flattening_max_inner_attempts,
+                "system_type": system_type,
+            }
+            if variant == "core":
+                kw["target_tags"] = [0]
+            elif variant == "ads":
+                kw["target_tags"] = ads_tags
+            return kw
+
+        _append_partitioned_mutation(
+            operators,
+            name_map,
+            base_name="flattening",
+            mutation_cls=FlatteningMutation,
+            use_partition_tags=use_partition_tags,
+            ads_tags=ads_tags,
+            include_ads_variant=not freeze_adsorbate_internal_geometry,
+            kwargs_for=_flattening_kwargs,
+        )
 
         rotational: RotationalMutation = RotationalMutation(
             blmin,
@@ -1200,9 +1222,9 @@ def create_mutation_operators(
         anisotropic: AnisotropicRattleMutation = AnisotropicRattleMutation(
             blmin,
             n_to_optimize,
-            in_plane_strength=1.0 * move_scale,
-            normal_strength=0.2 * move_scale,
-            rattle_prop=min(0.5, 0.5 * move_scale),
+            in_plane_strength=1.0 * shared_move_scale,
+            normal_strength=0.2 * shared_move_scale,
+            rattle_prop=min(0.5, 0.5 * shared_move_scale),
             use_tags=use_partition_tags,
             system_type=system_type,
             rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
@@ -1210,96 +1232,68 @@ def create_mutation_operators(
         operators.append(anisotropic)
         name_map["anisotropic_rattle"] = len(operators) - 1
 
-        if not use_partition_tags:
-            breathing: BreathingMutation = BreathingMutation(
-                blmin,
-                n_to_optimize,
-                scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
-                system_type=system_type,
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                max_inner_attempts=breathing_max_inner_attempts,
-            )
-            operators.append(breathing)
-            name_map["breathing"] = len(operators) - 1
-        else:
-            # For adsorbate systems, create core-only and adsorbate-only variants
-            # Core-only breathing (target core tag=0)
-            breathing_core: BreathingMutation = BreathingMutation(
-                blmin,
-                n_to_optimize,
-                scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
-                target_tags=[0],
-                system_type=system_type,
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                max_inner_attempts=breathing_max_inner_attempts,
-            )
-            operators.append(breathing_core)
-            name_map["breathing_core"] = len(operators) - 1
-            # Adsorbate-only breathing (target adsorbate tag=1)
-            if not freeze_adsorbate_internal_geometry and ads_tags:
-                breathing_ads: BreathingMutation = BreathingMutation(
-                    blmin,
-                    n_to_optimize,
-                    scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                    scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
-                    target_tags=ads_tags,
-                    system_type=system_type,
-                    rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                    max_inner_attempts=breathing_max_inner_attempts,
-                )
-                operators.append(breathing_ads)
-                name_map["breathing_ads"] = len(operators) - 1
+        def _breathing_kwargs(variant: str) -> dict[str, typing.Any]:
+            if variant == "ads":
+                scale = ads_move_scale
+            elif variant == "core":
+                scale = core_move_scale
+            else:
+                scale = shared_move_scale
+            kw: dict[str, typing.Any] = {
+                "blmin": blmin,
+                "n_top": n_to_optimize,
+                "scale_min": 1.0 - (1.0 - breathing_scale_min) * scale,
+                "scale_max": 1.0 + (breathing_scale_max - 1.0) * scale,
+                "system_type": system_type,
+                "rng": get_child_rng_or_none(rng),
+                "max_inner_attempts": breathing_max_inner_attempts,
+            }
+            if variant == "core":
+                kw["target_tags"] = [0]
+            elif variant == "ads":
+                kw["target_tags"] = ads_tags
+            return kw
+
+        _append_partitioned_mutation(
+            operators,
+            name_map,
+            base_name="breathing",
+            mutation_cls=BreathingMutation,
+            use_partition_tags=use_partition_tags,
+            ads_tags=ads_tags,
+            include_ads_variant=not freeze_adsorbate_internal_geometry,
+            kwargs_for=_breathing_kwargs,
+        )
 
     if use_adaptive and uses_surface(system_type) and n_slab > 0:
-        if not use_partition_tags:
-            slide: InPlaneSlideMutation = InPlaneSlideMutation(
-                blmin,
-                n_to_optimize,
-                surface_normal_axis=surface_normal_axis,
-                system_type=system_type,
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                max_inner_attempts=in_plane_slide_max_inner_attempts,
-                max_displacement=max(
-                    in_plane_slide_max_displacement, default_max_displacement
-                ),
-            )
-            operators.append(slide)
-            name_map["in_plane_slide"] = len(operators) - 1
-        if use_partition_tags:
-            # For adsorbate systems, create core-only and adsorbate-only variants
-            # Core-only in-plane slide (target core tag=0)
-            slide_core: InPlaneSlideMutation = InPlaneSlideMutation(
-                blmin,
-                n_to_optimize,
-                surface_normal_axis=surface_normal_axis,
-                system_type=system_type,
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                max_inner_attempts=in_plane_slide_max_inner_attempts,
-                max_displacement=max(
-                    in_plane_slide_max_displacement, default_max_displacement
-                ),
-                target_tags=[0],
-            )
-            operators.append(slide_core)
-            name_map["in_plane_slide_core"] = len(operators) - 1
-            # Adsorbate-only in-plane slide (target adsorbate tag=1)
-            if ads_tags:
-                slide_ads: InPlaneSlideMutation = InPlaneSlideMutation(
-                    blmin,
-                    n_to_optimize,
-                    surface_normal_axis=surface_normal_axis,
-                    system_type=system_type,
-                    rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-                    max_inner_attempts=in_plane_slide_max_inner_attempts,
-                    max_displacement=max(
-                        in_plane_slide_max_displacement, default_max_displacement
-                    ),
-                    target_tags=ads_tags,
-                )
-                operators.append(slide_ads)
-                name_map["in_plane_slide_ads"] = len(operators) - 1
+        slide_max_disp = max(in_plane_slide_max_displacement, default_max_displacement)
+
+        def _slide_kwargs(variant: str) -> dict[str, typing.Any]:
+            kw: dict[str, typing.Any] = {
+                "blmin": blmin,
+                "n_top": n_to_optimize,
+                "surface_normal_axis": surface_normal_axis,
+                "system_type": system_type,
+                "rng": get_child_rng_or_none(rng),
+                "max_inner_attempts": in_plane_slide_max_inner_attempts,
+                "max_displacement": slide_max_disp,
+            }
+            if variant == "core":
+                kw["target_tags"] = [0]
+            elif variant == "ads":
+                kw["target_tags"] = ads_tags
+            return kw
+
+        _append_partitioned_mutation(
+            operators,
+            name_map,
+            base_name="in_plane_slide",
+            mutation_cls=InPlaneSlideMutation,
+            use_partition_tags=use_partition_tags,
+            ads_tags=ads_tags,
+            include_ads_variant=True,
+            kwargs_for=_slide_kwargs,
+        )
 
     if (
         include_cluster_shape_ops

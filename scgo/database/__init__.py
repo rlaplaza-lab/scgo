@@ -46,7 +46,6 @@ from scgo.database.sync import (
     RetryConfig,
     database_retry,
     retry_transaction,
-    retry_with_backoff,
 )
 from scgo.database.transactions import database_transaction
 
@@ -76,7 +75,6 @@ __all__ = [
     "RetryConfig",
     "database_retry",
     "retry_transaction",
-    "retry_with_backoff",
     "get_registry",
     "clear_registry_cache",
 ]

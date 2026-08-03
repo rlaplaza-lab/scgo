@@ -60,11 +60,11 @@ from scgo.utils.helpers import (
     filter_unique_minima,
     get_cluster_formula,
     get_provenance,
-    get_system_path_key,
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.run_tracking import (
     RunMetadataJSONEncoder,
@@ -758,19 +758,11 @@ def run_trials(
 
     # Cache cluster formula (used multiple times) and path key for filenames
     composition_str = get_cluster_formula(composition)
-    ads_def = global_optimizer_kwargs.get("adsorbate_definition")
-    if not isinstance(ads_def, dict):
-        ads_def = None
-    surface_name = None
     system_type_for_path = global_optimizer_kwargs.get("system_type")
-    if system_type_for_path in _SURFACE_SYSTEM_TYPES:
-        sc = global_optimizer_kwargs.get("surface_config")
-        if sc is not None and getattr(sc, "name", None):
-            surface_name = sc.name
-    path_key = get_system_path_key(
+    path_key = resolve_run_path_key(
         composition,
-        adsorbate_definition=ads_def,
-        surface_name=surface_name,
+        system_type=system_type_for_path,
+        params=global_optimizer_kwargs,
     )
 
     # Save run metadata (include formula and run parameters for traceability)

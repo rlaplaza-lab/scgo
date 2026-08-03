@@ -68,3 +68,11 @@ Output path helpers
    :members:
    :undoc-members:
    :show-inheritance:
+
+Path keys
+---------
+
+.. automodule:: scgo.utils.path_keys
+   :members:
+   :undoc-members:
+   :show-inheritance:

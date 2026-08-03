@@ -62,7 +62,7 @@ def database_retry(
 
     When ``exception_types`` is set (e.g. :data:`HPC_DATABASE_EXCEPTIONS`), those
     exception types are retried without the SQLite message filter — matching the
-    historical :func:`retry_with_backoff` behavior used by BH/simple.
+    historical behavior when callers pass ``exception_types`` explicitly (e.g. BH/simple).
 
     Optional ``max_retries`` / ``initial_delay`` / ``backoff_factor`` override
     fields on ``config`` (or :data:`PRESET_DEFAULT`) for call-site compatibility.
@@ -225,24 +225,3 @@ def retry_transaction(
                 )
                 raise
     raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
-
-
-def retry_with_backoff(
-    operation: Callable[[], Any],
-    max_retries: int = 3,
-    initial_delay: float = 0.1,
-    backoff_factor: float = 2.0,
-    exception_types: tuple[type[BaseException], ...] = (OSError,),
-    operation_name: str = "operation",
-    log_level: str = "debug",
-) -> Any:
-    """Thin wrapper around :func:`database_retry` for backward compatibility."""
-    return database_retry(
-        operation,
-        operation_name=operation_name,
-        log_level=log_level,
-        exception_types=exception_types,
-        max_retries=max_retries,
-        initial_delay=initial_delay,
-        backoff_factor=backoff_factor,
-    )

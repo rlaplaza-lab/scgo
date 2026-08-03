@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.6.5
+
+### Added
+
+- ``build_torchsim_relaxer`` factory for shared UMA → UPET → MACE TorchSim
+  relaxer construction from a live calculator (GA). Presets still construct
+  ``TorchSimBatchRelaxer`` directly when ``model_kind`` is already known.
+- ``validate_and_resolve_run_context`` shared BH/GA preamble
+  (policy, connectivity factor, fitness strategy).
+
+### Changed
+
+- Path-key resolution consolidated in ``scgo.utils.path_keys.resolve_run_path_key``
+  (importable from ``runner_params``); GO/TS/minima search use the same helper.
+- ``run_go_campaign`` result dict keys are always ``path_key`` (including failed
+  compositions); gas-cluster keys still match the formula.
+- GA ``create_mutation_operators`` uses a shared partitioned-mutation helper for
+  flattening / breathing / in-plane slide core/_ads variants (names/weights unchanged).
+- Drop unused aliases: ``retry_with_backoff`` (use ``database_retry``),
+  ``assert_adsorption_height_in_bounds``, Kaggle ``_install_scgo_mace``, and
+  streaming ``_relaxed_rows_where_clause``.
 
 ### Fixed
 
@@ -11,6 +31,21 @@
 - Adsorbate-only deposition on planar graphite: planar site fallback when the
   3D convex hull is empty, and skip whole-slab connectivity checks that reject
   van der Waals stacked layers.
+- Penalty-energy path attaches a ``SinglePointCalculator`` so later energy/force
+  reads do not hit a broken calculator.
+- BH ``_move_atoms``: single tag groups displace rigidly; empty movable sets log
+  ``Moved_atoms: none``; adsorbate-scaled moves no longer throttle core; single-
+  atom descriptions are bracketed for ASE DB compatibility.
+- ``iter_databases_minima(max_structures=0)`` yields nothing (``0`` is not treated
+  as unlimited).
+
+### Maintainer notes
+
+- Upstream shims still required (Phase 5 — do not remove until triggers fire):
+  TorchSim constraint device patch; ``HAS_NVALCHEMIOPS = False``; Kaggle
+  ``vesin`` force-install; ``max_steps=0`` warning filters; ``standardmutations``
+  re-export; ``pytest.ini`` filters. Timing ``"trials"`` guard is intentional
+  API protection, not an upstream shim.
 
 ## 0.6.4
 
