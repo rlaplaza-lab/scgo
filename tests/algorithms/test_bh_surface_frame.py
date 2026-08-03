@@ -117,7 +117,7 @@ def test_move_atoms_single_movable_atom_displaces() -> None:
     assert np.linalg.norm(moved.get_positions()[1] - before[1]) > 1e-6
     np.testing.assert_allclose(moved.get_positions()[0], before[0])
     np.testing.assert_allclose(moved.get_positions()[2], before[2])
-    assert desc == "Moved_atoms: 2"
+    assert desc == "Moved_atoms: [2]"
 
 
 def test_move_atoms_adsorbate_scale_does_not_throttle_core() -> None:

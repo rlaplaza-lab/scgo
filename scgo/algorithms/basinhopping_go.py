@@ -241,8 +241,10 @@ def _move_atoms(
     if recenter_com:
         atoms_new.translate(cm - atoms_new.get_center_of_mass())
 
-    moved_indices_str = " ".join(str(i + 1) for i in sorted(indices_to_move))
-    return atoms_new, f"Moved_atoms: {moved_indices_str}"
+    moved_indices_str = ",".join(str(i + 1) for i in sorted(indices_to_move))
+    # Bracket the index list so ASE DB does not reject a bare numeric
+    # ``description`` value (e.g. single-atom ``Moved_atoms: 1``).
+    return atoms_new, f"Moved_atoms: [{moved_indices_str}]"
 
 
 def bh_go(
