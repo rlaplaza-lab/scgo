@@ -396,14 +396,7 @@ def extract_minima_from_database(
 
 
 def get_composition_counts(composition: list[str]) -> Counter[str]:
-    """Get element counts for a composition.
-
-    Args:
-        composition: A list of atomic symbols, e.g., ["Au", "Pt", "Au"].
-
-    Returns:
-        A Counter mapping element symbols to their counts.
-    """
+    """Return element counts for a composition."""
     return Counter(composition)
 
 
@@ -862,15 +855,7 @@ def auto_niter_ts(
 
 
 def filter_dict_keys(d: dict[str, Any], exclude: set[str]) -> dict[str, Any]:
-    """Filter dictionary to exclude specified keys.
-
-    Args:
-        d: Dictionary to filter.
-        exclude: Set of keys to exclude.
-
-    Returns:
-        New dictionary with excluded keys removed.
-    """
+    """Return ``d`` without keys in ``exclude``."""
     return {k: v for k, v in d.items() if k not in exclude}
 
 
@@ -899,14 +884,7 @@ def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 
 
 def ensure_directory_exists(path: str | Path) -> None:
-    """Ensure a directory exists, creating it if necessary.
-
-    This helper consolidates the common pattern of creating directories
-    with exist_ok=True to avoid code duplication.
-
-    Args:
-        path: Directory path to ensure exists. Can be a string or Path object.
-    """
+    """Ensure a directory exists, creating it if necessary."""
     os.makedirs(path, exist_ok=True)
 
 

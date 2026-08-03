@@ -744,24 +744,7 @@ class TorchSimBatchRelaxer:
                 )
                 use_autobatcher = False
         if use_autobatcher and "autobatcher" not in self._runner_kwargs:
-            # Cap the autobatcher's probe at the actual workload so small GPUs
-            # don't get pushed toward the 500k-atom default. Prefer the explicit
-            # knob, then expected_max_atoms; leave unset to inherit torch-sim's
-            # default when the caller can't give us a bound.
-            probe_cap = self.max_atoms_to_try
-            if probe_cap is None and self.expected_max_atoms is not None:
-                probe_cap = int(self.expected_max_atoms)
-            autobatcher_kwargs: dict = {
-                "model": self.model,
-                "memory_scales_with": self.memory_scales_with,
-                "max_memory_scaler": self.max_memory_scaler,
-                "max_memory_padding": self.max_memory_padding,
-            }
-            if probe_cap is not None:
-                autobatcher_kwargs["max_atoms_to_try"] = probe_cap
-            self._runner_kwargs["autobatcher"] = self._ts.InFlightAutoBatcher(
-                **autobatcher_kwargs
-            )
+            self._runner_kwargs["autobatcher"] = self._build_autobatcher()
 
         if self.init_kwargs and "init_kwargs" not in self._runner_kwargs:
             self._runner_kwargs["init_kwargs"] = dict(self.init_kwargs)
@@ -806,9 +789,11 @@ class TorchSimBatchRelaxer:
     def _invalidate_memory_scaler_cache(self, n_atoms: int) -> None:
         _GLOBAL_MEMORY_SCALER_CACHE.delete(**self._memory_scaler_cache_key(n_atoms))
 
-    def _recreate_autobatcher(self) -> None:
-        if "autobatcher" not in self._runner_kwargs:
-            return
+    def _build_autobatcher(self) -> object:
+        # Cap the autobatcher's probe at the actual workload so small GPUs
+        # don't get pushed toward the 500k-atom default. Prefer the explicit
+        # knob, then expected_max_atoms; leave unset to inherit torch-sim's
+        # default when the caller can't give us a bound.
         probe_cap = self.max_atoms_to_try
         if probe_cap is None and self.expected_max_atoms is not None:
             probe_cap = int(self.expected_max_atoms)
@@ -820,9 +805,12 @@ class TorchSimBatchRelaxer:
         }
         if probe_cap is not None:
             autobatcher_kwargs["max_atoms_to_try"] = probe_cap
-        self._runner_kwargs["autobatcher"] = self._ts.InFlightAutoBatcher(
-            **autobatcher_kwargs
-        )
+        return self._ts.InFlightAutoBatcher(**autobatcher_kwargs)
+
+    def _recreate_autobatcher(self) -> None:
+        if "autobatcher" not in self._runner_kwargs:
+            return
+        self._runner_kwargs["autobatcher"] = self._build_autobatcher()
 
     def _reset_autobatcher_memory_scaler(self) -> None:
         self.max_memory_scaler = None

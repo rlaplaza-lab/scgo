@@ -39,12 +39,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _neb_endpoint_energy(minimum: tuple[float, Atoms]) -> float:
-    """Return the canonical minima-list energy (ignore mutable atoms metadata)."""
-    energy, _atoms = minimum
-    return float(energy)
-
-
 def _neb_image_dedup_key(atoms: Atoms) -> tuple:
     """Hashable key for deduplicating NEB images across bands."""
     return (
@@ -315,10 +309,30 @@ def run_parallel_neb_search(
             error=error,
         )
 
+    def _record_skipped_pair(
+        pair_ord: int,
+        pair_id: str,
+        i: int,
+        j: int,
+        react_e: float,
+        prod_e: float,
+        error: str,
+    ) -> None:
+        skipped = _make_pair_ts_result(
+            pair_id, react_e=react_e, prod_e=prod_e, error=error
+        )
+        skipped["status"] = "skipped"
+        skipped["system_type"] = system_type
+        attach_minima_traceability(skipped, minima, i, j)
+        pair_dir = run_dir / f"pair_{pair_id}"
+        pair_dir.mkdir(parents=True, exist_ok=True)
+        save_neb_result(skipped, str(pair_dir), pair_id)
+        pair_results[pair_ord] = skipped
+
     for pair_ord, (i, j) in enumerate(pairs):
         pair_id = f"{i}_{j}"
-        react_e = _neb_endpoint_energy(minima[i])
-        prod_e = _neb_endpoint_energy(minima[j])
+        react_e = float(minima[i][0])
+        prod_e = float(minima[j][0])
         try:
             react_ep, prod_ep = prepare_neb_endpoints(
                 minima[i][1],
@@ -329,16 +343,7 @@ def run_parallel_neb_search(
             logger.warning(
                 "Skipping pair %s due to structure validation error: %s", pair_id, e
             )
-            skipped = _make_pair_ts_result(
-                pair_id, react_e=react_e, prod_e=prod_e, error=str(e)
-            )
-            skipped["status"] = "skipped"
-            skipped["system_type"] = system_type
-            attach_minima_traceability(skipped, minima, i, j)
-            pair_dir = run_dir / f"pair_{pair_id}"
-            pair_dir.mkdir(parents=True, exist_ok=True)
-            save_neb_result(skipped, str(pair_dir), pair_id)
-            pair_results[pair_ord] = skipped
+            _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
             continue
 
         images = interpolate_path(
@@ -376,16 +381,7 @@ def run_parallel_neb_search(
                 )
         except SCGOValidationError as e:
             logger.warning("Skipping pair %s: %s", pair_id, e)
-            skipped = _make_pair_ts_result(
-                pair_id, react_e=react_e, prod_e=prod_e, error=str(e)
-            )
-            skipped["status"] = "skipped"
-            skipped["system_type"] = system_type
-            attach_minima_traceability(skipped, minima, i, j)
-            pair_dir = run_dir / f"pair_{pair_id}"
-            pair_dir.mkdir(parents=True, exist_ok=True)
-            save_neb_result(skipped, str(pair_dir), pair_id)
-            pair_results[pair_ord] = skipped
+            _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
             continue
         pair_two_stage = neb_uses_two_stage_climb(
             neb_cfg.neb_climb, neb_steps_i, initial_energies=band_energies

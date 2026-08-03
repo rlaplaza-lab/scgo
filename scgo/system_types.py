@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from ase import Atoms
-from ase.calculators.calculator import Calculator
 
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.geometry_helpers import (
@@ -59,11 +58,6 @@ class AdsorbateDefinition(TypedDict, total=False):
     adsorbate_fragment_lengths: list[int]
     fragment_anchor_index: NotRequired[int]
     fragment_bond_axis: NotRequired[list[int]]
-
-
-# Type aliases for calculator types
-CalculatorType = type[Calculator]
-CalculatorInstance = Calculator | None
 
 
 class CalculatorKwargs(TypedDict, total=False):

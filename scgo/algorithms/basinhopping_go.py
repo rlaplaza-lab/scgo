@@ -366,17 +366,12 @@ def bh_go(
         system_type,
     )
 
-    def _run_metadata_extras(a: Atoms) -> dict[str, int | str]:
-        mobile = (
-            list(a.get_chemical_symbols()[n_slab:])
-            if surface_mode and n_slab > 0
-            else list(a.get_chemical_symbols())
-        )
+    def _run_metadata_extras() -> dict[str, int | str]:
         return ga_run_metadata_extras(
             surface_config,
             n_slab,
             system_type,
-            mobile,
+            mobile_composition,
             adsorbate_definition=adsorbate_definition,
         )
 
@@ -554,10 +549,10 @@ def bh_go(
         )
         add_metadata(
             a_current,
-            **_run_metadata_extras(a_current),
+            **_run_metadata_extras(),
         )
 
-        if run_id is not None and a_current is not None:
+        if run_id is not None:
             persist_provenance(a_current, run_id=run_id)
 
         t_db0 = perf_counter()
@@ -667,7 +662,7 @@ def bh_go(
             )
             add_metadata(
                 a_trial,
-                **_run_metadata_extras(a_trial),
+                **_run_metadata_extras(),
             )
             if run_id is not None:
                 persist_provenance(a_trial, run_id=run_id)

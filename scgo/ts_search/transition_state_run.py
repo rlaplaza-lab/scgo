@@ -228,16 +228,6 @@ def _run_serial_neb_search(
 
         if verbosity >= 1:
             logger.info("[%d/%d] Finding TS for pair %s", idx, len(pairs), pair_id)
-            logger.info(
-                "  Structure %d: %s eV",
-                i,
-                f"{energy_i:.6f}" if energy_i is not None else "None",
-            )
-            logger.info(
-                "  Structure %d: %s eV",
-                j,
-                f"{energy_j:.6f}" if energy_j is not None else "None",
-            )
 
         try:
             react_ep, prod_ep = prepare_neb_endpoints(atoms_i, atoms_j, neb_cfg)
@@ -347,9 +337,6 @@ def _run_serial_neb_search(
 
         if not use_torchsim and calculator is not None:
             del calculator
-
-        if not use_torchsim:
-            cleanup_torch_cuda(logger=logger)
 
     if use_torchsim:
         cleanup_torch_cuda(logger=logger)

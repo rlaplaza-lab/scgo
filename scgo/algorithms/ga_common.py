@@ -881,13 +881,15 @@ def create_ga_pairing(
             is not None
         )
 
-    if exploratory_crossover_probability <= 0.0:
+    def _cut_and_splice(
+        minfrac: float, *, pairing_rng: Generator | None
+    ) -> CutAndSplicePairing:
         return CutAndSplicePairing(  # type: ignore[arg-type]
             slab,
             n_to_optimize,
             blmin,
-            minfrac=min_parent_fraction,
-            rng=child_rng_primary,
+            minfrac=minfrac,
+            rng=pairing_rng,
             system_type=system_type,
             use_tags=use_partition_tags,
             target_tags=[0] if use_partition_tags else None,
@@ -898,38 +900,13 @@ def create_ga_pairing(
         if exploratory_minfrac is not None
         else max(0.1, min_parent_fraction - 0.15)
     )
-    if math.isclose(expl_minfrac, min_parent_fraction):
-        return CutAndSplicePairing(  # type: ignore[arg-type]
-            slab,
-            n_to_optimize,
-            blmin,
-            minfrac=min_parent_fraction,
-            rng=child_rng_primary,
-            system_type=system_type,
-            use_tags=use_partition_tags,
-            target_tags=[0] if use_partition_tags else None,
-        )
+    if exploratory_crossover_probability <= 0.0 or math.isclose(
+        expl_minfrac, min_parent_fraction
+    ):
+        return _cut_and_splice(min_parent_fraction, pairing_rng=child_rng_primary)
 
-    primary = CutAndSplicePairing(  # type: ignore[arg-type]
-        slab,
-        n_to_optimize,
-        blmin,
-        minfrac=min_parent_fraction,
-        rng=child_rng_primary,
-        system_type=system_type,
-        use_tags=use_partition_tags,
-        target_tags=[0] if use_partition_tags else None,
-    )
-    exploratory = CutAndSplicePairing(  # type: ignore[arg-type]
-        slab,
-        n_to_optimize,
-        blmin,
-        minfrac=expl_minfrac,
-        rng=get_child_rng_or_none(rng),
-        system_type=system_type,
-        use_tags=use_partition_tags,
-        target_tags=[0] if use_partition_tags else None,
-    )
+    primary = _cut_and_splice(min_parent_fraction, pairing_rng=child_rng_primary)
+    exploratory = _cut_and_splice(expl_minfrac, pairing_rng=get_child_rng_or_none(rng))
     return DualCutAndSplicePairing(
         primary,
         exploratory,
@@ -1414,48 +1391,12 @@ def create_structure_comparator(
     )
 
 
-def update_early_stopping_state(
-    population: Population,
-    best_energy: float | None,
-    generations_without_improvement: int,
-    early_stopping_niter: int,
-) -> tuple[float | None, int, bool]:
-    """Update early stopping state and determine if stopping should occur.
-
-    This helper function centralizes the early stopping logic used by both
-    standard and TorchSim GA implementations to track the best energy found
-    and count consecutive generations without improvement.
-
-    Args:
-         population: The GA Population object containing current candidates.
-         best_energy: Current best energy found (None if not yet set).
-         generations_without_improvement: Current count of generations without
-             improvement.
-        early_stopping_niter: Number of consecutive generations without improvement
-                             required to trigger early stopping.
-
-    Returns:
-        Tuple of (updated_best_energy, updated_generations_without_improvement,
-                  should_stop).
-        should_stop is True if early stopping should be triggered.
-    """
-    if len(population.pop) == 0:
-        return best_energy, generations_without_improvement, False
-
-    current_best_energy = -float(
-        get_metadata(population.pop[0], "raw_score", default=0.0)
+def _as_fitness_strategy(fitness_strategy: str | FitnessStrategy) -> FitnessStrategy:
+    return (
+        FitnessStrategy(fitness_strategy)
+        if isinstance(fitness_strategy, str)
+        else fitness_strategy
     )
-
-    if best_energy is None:
-        return current_best_energy, 0, False
-
-    if current_best_energy < best_energy:
-        return current_best_energy, 0, False
-
-    updated_generations: int = generations_without_improvement + 1
-    should_stop: bool = updated_generations >= early_stopping_niter
-
-    return best_energy, updated_generations, should_stop
 
 
 def update_early_stopping_state_unified(
@@ -1465,33 +1406,10 @@ def update_early_stopping_state_unified(
     generations_without_improvement: int,
     early_stopping_niter: int,
 ) -> tuple[float | None, int, bool]:
-    """Update early stopping state for both energy-based and fitness-based strategies.
-
-    This unified helper function centralizes early stopping logic used by both
-    standard and TorchSim GA implementations. It handles both energy-based stopping
-    (for low_energy strategy) and fitness-based stopping (for high_energy and diversity
-    strategies).
-
-    Args:
-        population: The GA Population object containing current candidates.
-        fitness_strategy: Fitness strategy name ("low_energy", "high_energy", "diversity").
-        best_value: Current best value found (None if not yet set). For low_energy
-            this is energy, for others it's fitness.
-        generations_without_improvement: Current count of generations without
-            improvement.
-        early_stopping_niter: Number of consecutive generations without improvement
-            required to trigger early stopping.
-
-    Returns:
-        Tuple of (updated_best_value, updated_generations_without_improvement,
-                  should_stop).
-        should_stop is True if early stopping should be triggered.
-    """
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    """Update early stopping for energy-based and fitness-based strategies."""
+    fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
-        # Fitness-based early stopping
         if len(population.pop) == 0:
             return best_value, generations_without_improvement, False
 
@@ -1508,14 +1426,20 @@ def update_early_stopping_state_unified(
         updated_generations: int = generations_without_improvement + 1
         should_stop: bool = updated_generations >= early_stopping_niter
         return best_value, updated_generations, should_stop
-    else:
-        # Energy-based early stopping (delegate to existing function)
-        return update_early_stopping_state(
-            population=population,
-            best_energy=best_value,
-            generations_without_improvement=generations_without_improvement,
-            early_stopping_niter=early_stopping_niter,
-        )
+
+    if len(population.pop) == 0:
+        return best_value, generations_without_improvement, False
+
+    current_best_energy = -float(
+        get_metadata(population.pop[0], "raw_score", default=0.0)
+    )
+
+    if best_value is None or current_best_energy < best_value:
+        return current_best_energy, 0, False
+
+    updated_generations = generations_without_improvement + 1
+    should_stop = updated_generations >= early_stopping_niter
+    return best_value, updated_generations, should_stop
 
 
 def setup_diversity_scorer(
@@ -1547,8 +1471,7 @@ def setup_diversity_scorer(
     Raises:
         ValueError: If diversity_reference_db is None when fitness_strategy is "diversity".
     """
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.DIVERSITY:
         return None
@@ -1602,8 +1525,7 @@ def select_population_class(
     Returns:
         Tuple of (PopulationClass, population_kwargs).
     """
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
         PopulationClass = FitnessStrategyPopulation
@@ -1641,8 +1563,7 @@ def log_early_stopping_info(
     if verbosity < 1:
         return
 
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if logger.isEnabledFor(logging.INFO):
         logger.info("Starting GA evolution with %d generations...", niter)
@@ -1672,8 +1593,7 @@ def sort_minima_by_fitness(
         fitness_strategy: Fitness strategy name.
         logger: Logger instance.
     """
-    if isinstance(fitness_strategy, str):
-        fitness_strategy = FitnessStrategy(fitness_strategy)
+    fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
         all_minima.sort(

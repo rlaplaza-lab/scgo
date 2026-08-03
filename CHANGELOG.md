@@ -21,6 +21,9 @@
 - Drop unused aliases: ``retry_with_backoff`` (use ``database_retry``),
   ``assert_adsorption_height_in_bounds``, Kaggle ``_install_scgo_mace``, and
   streaming ``_relaxed_rows_where_clause``.
+- QC polish: remove dead NEB helpers, deduplicate skip/endpoint/autobatcher paths,
+  simplify GA early-stopping and CutAndSplice construction, trim trivial helper
+  docstrings, document UPET model list in API docs.
 
 ### Fixed
 

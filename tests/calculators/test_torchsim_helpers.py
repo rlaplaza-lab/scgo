@@ -145,67 +145,6 @@ def test_geneticalgorithm_go_torchsim_import():
     assert ga_go is not None
 
 
-def test_force_dtype_conversion():
-    """Test that forces are converted to float64 in all storage locations."""
-    import numpy as np
-    from ase import Atoms
-    from ase.calculators.calculator import Calculator
-
-    # Create a mock calculator that stores float32 forces (like MACE with dtype=float32)
-    class MockMACECalculator(Calculator):
-        implemented_properties = ["energy", "forces"]
-
-        def calculate(self, atoms=None, properties=None, system_changes=None):
-            super().calculate(atoms, properties, system_changes)
-            # Simulate MACE with dtype=float32 - stores float32 forces
-            self.results["energy"] = -1.0
-            self.results["forces"] = np.array(
-                [[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]],
-                dtype=np.float32,
-            )
-
-    # Create atoms with float32 forces from MACE
-    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
-    forces_f32 = np.array([[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]], dtype=np.float32)
-    atoms.arrays["forces"] = forces_f32.copy()
-
-    # Attach mock MACE calculator with float32 forces in results
-    atoms.calc = MockMACECalculator()
-    atoms.calc.results = {
-        "energy": -1.0,
-        "forces": forces_f32.copy(),
-    }
-
-    # Verify forces are float32 in both locations
-    assert atoms.arrays["forces"].dtype == np.float32
-    assert atoms.calc.results["forces"].dtype == np.float32
-
-    # Now simulate what our fixed code does - convert in both locations
-    if "forces" in atoms.arrays:
-        atoms.arrays["forces"] = np.asarray(atoms.arrays["forces"], dtype=np.float64)
-
-    if (
-        hasattr(atoms, "calc")
-        and atoms.calc is not None
-        and hasattr(atoms.calc, "results")
-        and "forces" in atoms.calc.results
-    ):
-        atoms.calc.results["forces"] = np.asarray(
-            atoms.calc.results["forces"],
-            dtype=np.float64,
-        )
-
-    # Verify forces are now float64 in both locations
-    assert atoms.arrays["forces"].dtype == np.float64
-    assert atoms.calc.results["forces"].dtype == np.float64
-
-    # Verify values are preserved in both locations
-    assert np.allclose(atoms.arrays["forces"][0], [0.1, 0.2, 0.3])
-    assert np.allclose(atoms.arrays["forces"][1], [-0.1, -0.2, -0.3])
-    assert np.allclose(atoms.calc.results["forces"][0], [0.1, 0.2, 0.3])
-    assert np.allclose(atoms.calc.results["forces"][1], [-0.1, -0.2, -0.3])
-
-
 @pytest.mark.requires_mace
 def test_torchsim_basic_initialization():
     """Test basic TorchSimBatchRelaxer initialization."""

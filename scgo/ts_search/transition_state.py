@@ -65,8 +65,7 @@ def _detach_calc(atoms: Atoms | None) -> None:
     """Remove calculator from structure when present."""
     if atoms is None:
         return
-    with contextlib.suppress(AttributeError, TypeError):
-        atoms.calc = None
+    atoms.calc = None
 
 
 def neb_max_atom_force(neb_forces: np.ndarray | list[float]) -> float:
@@ -339,21 +338,6 @@ def _match_atoms_by_fingerprint(
     return mapping
 
 
-def _reorder_block_positions_to_match(
-    a1_block: Atoms,
-    a2_block: Atoms,
-    *,
-    mic_cell: np.ndarray | None = None,
-    mic_pbc: np.ndarray | list[bool] | None = None,
-) -> np.ndarray:
-    """Return positions (N,3) for a2_block reordered to match a1_block ordering."""
-    m = _match_atoms_by_fingerprint(
-        a1_block, a2_block, mic_cell=mic_cell, mic_pbc=mic_pbc
-    )
-    pos2 = a2_block.get_positions()
-    return pos2[m]
-
-
 def _permute_atoms_block_to_match(
     a1_block: Atoms,
     a2_block: Atoms,
@@ -452,16 +436,12 @@ def _match_adsorbate_fragments_by_com(
     r_num = a1_ads.numbers
     p_num = a2_ads.numbers
 
-    r_slices: list[slice] = []
-    p_slices: list[slice] = []
+    frag_slices: list[slice] = []
     off = 0
     for fl in fragment_lengths:
-        r_slices.append(slice(off, off + int(fl)))
+        frag_slices.append(slice(off, off + int(fl)))
         off += int(fl)
-    off = 0
-    for fl in fragment_lengths:
-        p_slices.append(slice(off, off + int(fl)))
-        off += int(fl)
+    r_slices = p_slices = frag_slices
 
     r_coms = [r_pos[s].mean(axis=0) for s in r_slices]
 
@@ -713,18 +693,6 @@ def _lattice_translation_candidates(
     return candidates
 
 
-def _mic_displacements(
-    ref_pos: np.ndarray,
-    prod_pos: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray | list[bool],
-) -> np.ndarray:
-    """Minimum-image displacements from reactant to product positions."""
-    disp = prod_pos - ref_pos
-    disp_mic, _ = find_mic(disp, cell=cell, pbc=pbc)
-    return disp_mic
-
-
 def _snap_to_reactant_mic_frame(
     ref_pos: np.ndarray,
     pos: np.ndarray,
@@ -733,7 +701,7 @@ def _snap_to_reactant_mic_frame(
     anchor_mask: np.ndarray,
 ) -> np.ndarray:
     """Express ``pos`` in the reactant periodic image (Cartesian, MIC-short)."""
-    disp_mic = _mic_displacements(ref_pos, pos, cell, pbc)
+    disp_mic, _ = find_mic(pos - ref_pos, cell=cell, pbc=pbc)
     if np.any(anchor_mask):
         disp_mic = disp_mic - np.mean(disp_mic[anchor_mask], axis=0)
     snapped = ref_pos + disp_mic
@@ -752,7 +720,7 @@ def _score_mobile_endpoint_displacement(
     """Return (max, rms) mobile-atom displacement norms in the reactant MIC frame."""
     if not np.any(mobile_mask):
         return 0.0, 0.0
-    disp_mic = _mic_displacements(ref_pos, prod_pos, cell, pbc)
+    disp_mic, _ = find_mic(prod_pos - ref_pos, cell=cell, pbc=pbc)
     norms = np.linalg.norm(disp_mic[mobile_mask], axis=1)
     return float(np.max(norms)), float(np.sqrt(np.mean(norms**2)))
 
@@ -1208,7 +1176,7 @@ def interpolate_path(
     neb.interpolate(method=method, mic=mic, apply_constraint=False)
     images = neb.images
 
-    if perturb_sigma and perturb_sigma > 0.0:
+    if perturb_sigma > 0.0:
         if rng is None:
             rng = np.random.default_rng()
         for img in images[1:-1]:
@@ -1441,13 +1409,6 @@ def idpp_band_optimization_priority(
     return (2, prominence, barrier)
 
 
-def _coerce_neb_steps(neb_steps: int | str | None) -> int | str | None:
-    """Coerce numpy integer step counts to plain int (JSON-friendly)."""
-    if isinstance(neb_steps, (int, np.integer)):
-        return int(neb_steps)
-    return neb_steps
-
-
 def make_ts_result(
     *,
     pair_id: str,
@@ -1488,7 +1449,9 @@ def make_ts_result(
         "use_torchsim": bool(use_torchsim),
         "use_parallel_neb": bool(use_parallel_neb),
         "fmax": float(fmax),
-        "neb_steps": _coerce_neb_steps(neb_steps),
+        "neb_steps": int(neb_steps)
+        if isinstance(neb_steps, (int, np.integer))
+        else neb_steps,
         "interpolation_method": interpolation_method,
         "climb": bool(climb),
         "align_endpoints": bool(align_endpoints),
