@@ -34,7 +34,6 @@ from scgo.database import (
     filter_by_metadata,
     get_connection,
     get_metadata,
-    retry_with_backoff,
     setup_database,
     update_metadata,
 )
@@ -682,7 +681,7 @@ class TestFilesystemSync:
         assert result == "ok"
         assert attempts["n"] == 3
 
-    def test_retry_with_backoff(self):
+    def test_database_retry_oserror_exception_types(self):
         attempts = []
 
         def flaky_operation():
@@ -691,7 +690,12 @@ class TestFilesystemSync:
                 raise OSError("Transient error")
             return "success"
 
-        result = retry_with_backoff(flaky_operation, max_retries=5, initial_delay=0.01)
+        result = database_retry(
+            flaky_operation,
+            max_retries=5,
+            initial_delay=0.01,
+            exception_types=(OSError,),
+        )
         assert result == "success"
         assert len(attempts) == 3
 
@@ -1097,6 +1101,24 @@ class TestDatabaseStreaming:
             count += 1
 
         assert count > len(db_files)
+
+    def test_iter_databases_minima_max_structures_zero(self, tmp_path, rng):
+        """max_structures=0 must yield an empty iterator (not treat 0 as unlimited)."""
+        db_file = tmp_path / "test_zero.db"
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        da = setup_database(
+            tmp_path, "test_zero.db", atoms, initial_candidate=atoms
+        )
+        a = atoms.copy()
+        from scgo.database.metadata import add_metadata
+
+        add_metadata(a, raw_score=-10.0)
+        a.info["data"] = {"tag": "test"}
+        da.add_relaxed_step(a)
+        close_data_connection(da)
+
+        items = list(iter_databases_minima([str(db_file)], max_structures=0))
+        assert items == []
 
     def test_count_database_structures(self, tmp_path, rng):
         """Test counting structures."""

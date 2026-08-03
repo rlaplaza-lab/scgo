@@ -88,14 +88,18 @@ def _move_atoms(
     *,
     move_by_tag_groups: bool = False,
     recenter_com: bool = True,
+    adsorbate_movable_indices: list[int] | None = None,
+    adsorbate_dr: float | None = None,
+    adsorbate_move_fraction: float | None = None,
 ) -> tuple[Atoms, str]:
     """Apply a random displacement to a subset of atoms.
 
     Args:
         atoms: The ASE Atoms object to apply displacement to.
         dr: The maximum displacement distance for each atom during the random
-            move step (in Angstrom).
+            move step (in Angstrom). Used for core / non-adsorbate atoms.
         move_fraction: The fraction of atoms to move during each perturbation step.
+            Used for core / non-adsorbate atoms.
         move_strategy: The strategy for selecting atoms to move ('random',
             'highest_force', 'lowest_force').
         rng: Optional numpy random number generator for reproducibility.
@@ -104,15 +108,66 @@ def _move_atoms(
         recenter_com: If True (default), restore the pre-move center of mass
             after the displacement. Set False for surface systems so the slab
             registry is preserved.
+        adsorbate_movable_indices: Subset of movable indices treated as adsorbate
+            (receive ``adsorbate_dr`` / ``adsorbate_move_fraction`` when set).
+        adsorbate_dr: Displacement scale for adsorbate atoms/groups. When None,
+            all movable atoms use ``dr``.
+        adsorbate_move_fraction: Move fraction for adsorbate atoms/groups. When
+            None, all movable atoms use ``move_fraction``.
 
     Returns:
         A tuple (Atoms, description) where description lists moved atoms
         in 1-indexed form.
     """
     atoms_new = atoms.copy()
+    if rng is None:
+        rng = np.random.default_rng()
 
     if movable_indices is None:
         movable_indices = list(range(len(atoms_new)))
+
+    if not movable_indices:
+        return atoms_new, "Moved_atoms: none"
+
+    ads_set = (
+        {int(i) for i in adsorbate_movable_indices}
+        if adsorbate_movable_indices is not None
+        else set()
+    )
+    use_split = (
+        adsorbate_dr is not None
+        and adsorbate_move_fraction is not None
+        and bool(ads_set)
+    )
+    core_indices = [i for i in movable_indices if int(i) not in ads_set]
+    ads_indices = [i for i in movable_indices if int(i) in ads_set]
+
+    def _select_atom_indices(
+        pool: list[int],
+        fraction: float,
+    ) -> list[int]:
+        n_atoms = len(pool)
+        if n_atoms == 0:
+            return []
+        min_to_move = 1 if n_atoms == 1 else 2
+        n_to_move_calculated = int(n_atoms * fraction)
+        n_to_move = min(n_atoms, max(min_to_move, n_to_move_calculated))
+        if move_strategy == "random":
+            return list(rng.choice(pool, size=n_to_move, replace=False))
+        if move_strategy in ["highest_force", "lowest_force"]:
+            forces = atoms.get_forces()
+            force_magnitudes = np.linalg.norm(forces[pool], axis=1)
+            sorted_local = np.argsort(force_magnitudes)
+            sorted_indices = np.asarray(pool, dtype=int)[sorted_local]
+            if move_strategy == "highest_force":
+                return list(sorted_indices[-n_to_move:])
+            return list(sorted_indices[:n_to_move])
+        raise SCGOValidationError(f"Unknown move_strategy: {move_strategy}")
+
+    positions = atoms_new.get_positions()
+    cm = atoms_new.get_center_of_mass()
+    disp = np.zeros_like(positions)
+    indices_to_move: list[int] = []
 
     if move_by_tag_groups:
         tags = atoms_new.get_tags()
@@ -120,58 +175,67 @@ def _move_atoms(
         for idx in movable_indices:
             groups.setdefault(int(tags[idx]), []).append(int(idx))
         group_ids = sorted(groups)
-        n_groups = len(group_ids)
-        if n_groups <= 1:
-            moved = movable_indices[0] if movable_indices else 0
-            return atoms_new, f"Moved_atoms: {moved + 1} {moved + 1}"
-        n_to_move_groups = min(
-            n_groups,
-            max(1, int(n_groups * move_fraction)),
-        )
-        chosen_groups = list(
-            rng.choice(group_ids, size=n_to_move_groups, replace=False),
-        )
-        indices_to_move = [
-            idx for group_id in chosen_groups for idx in groups[group_id]
-        ]
-    else:
-        n_atoms = len(movable_indices)
+        if not group_ids:
+            return atoms_new, "Moved_atoms: none"
 
-        if n_atoms <= 1:
-            moved = movable_indices[0] if movable_indices else 0
-            return atoms_new, f"Moved_atoms: {moved + 1} {moved + 1}"
+        def _is_ads_group(group_id: int) -> bool:
+            return use_split and any(int(i) in ads_set for i in groups[group_id])
 
-        n_to_move_calculated = int(n_atoms * move_fraction)
-        n_to_move = min(n_atoms, max(2, n_to_move_calculated))
+        core_group_ids = [g for g in group_ids if not _is_ads_group(g)]
+        ads_group_ids = [g for g in group_ids if _is_ads_group(g)]
 
-        if move_strategy == "random":
-            indices_to_move = list(
-                rng.choice(movable_indices, size=n_to_move, replace=False),
-            )
-        elif move_strategy in ["highest_force", "lowest_force"]:
-            forces = atoms.get_forces()
-            force_magnitudes = np.linalg.norm(forces[movable_indices], axis=1)
-            sorted_local = np.argsort(force_magnitudes)
-            sorted_indices = np.asarray(movable_indices, dtype=int)[sorted_local]
-            if move_strategy == "highest_force":
-                indices_to_move = sorted_indices[-n_to_move:]
-            else:  # lowest_force
-                indices_to_move = sorted_indices[:n_to_move]
+        def _choose_groups(pool: list[int], fraction: float) -> list[int]:
+            n_groups = len(pool)
+            if n_groups == 0:
+                return []
+            n_to_move_groups = min(n_groups, max(1, int(n_groups * fraction)))
+            return list(rng.choice(pool, size=n_to_move_groups, replace=False))
+
+        if use_split and (core_group_ids or ads_group_ids):
+            chosen_core = _choose_groups(core_group_ids, move_fraction)
+            chosen_ads = _choose_groups(ads_group_ids, adsorbate_move_fraction)
+            for group_id in chosen_core:
+                group_indices = groups[group_id]
+                displacement = dr * rng.uniform(-1.0, 1.0, 3)
+                disp[group_indices, :] = displacement
+                indices_to_move.extend(group_indices)
+            assert adsorbate_dr is not None
+            for group_id in chosen_ads:
+                group_indices = groups[group_id]
+                displacement = adsorbate_dr * rng.uniform(-1.0, 1.0, 3)
+                disp[group_indices, :] = displacement
+                indices_to_move.extend(group_indices)
         else:
-            raise SCGOValidationError(f"Unknown move_strategy: {move_strategy}")
-
-    positions = atoms_new.get_positions()
-    cm = atoms_new.get_center_of_mass()
-    disp = np.zeros_like(positions)
-
-    if move_by_tag_groups:
-        for group_id in chosen_groups:
-            group_indices = groups[group_id]
-            displacement = dr * rng.uniform(-1.0, 1.0, 3)
-            disp[group_indices, :] = displacement
+            n_groups = len(group_ids)
+            n_to_move_groups = min(n_groups, max(1, int(n_groups * move_fraction)))
+            chosen_groups = list(
+                rng.choice(group_ids, size=n_to_move_groups, replace=False),
+            )
+            for group_id in chosen_groups:
+                group_indices = groups[group_id]
+                displacement = dr * rng.uniform(-1.0, 1.0, 3)
+                disp[group_indices, :] = displacement
+                indices_to_move.extend(group_indices)
+    elif use_split and (core_indices or ads_indices):
+        chosen_core = _select_atom_indices(core_indices, move_fraction)
+        chosen_ads = _select_atom_indices(ads_indices, adsorbate_move_fraction)
+        indices_to_move = chosen_core + chosen_ads
+        if chosen_core:
+            disp[chosen_core, :] = rng.uniform(-1.0, 1.0, (len(chosen_core), 3)) * dr
+        if chosen_ads:
+            assert adsorbate_dr is not None
+            disp[chosen_ads, :] = (
+                rng.uniform(-1.0, 1.0, (len(chosen_ads), 3)) * adsorbate_dr
+            )
     else:
-        disp[indices_to_move, :] = rng.uniform(-1.0, 1.0, (len(indices_to_move), 3))
+        indices_to_move = _select_atom_indices(list(movable_indices), move_fraction)
+        disp[indices_to_move, :] = rng.uniform(
+            -1.0, 1.0, (len(indices_to_move), 3)
+        )
         disp *= dr
+
+    if not indices_to_move:
+        return atoms_new, "Moved_atoms: none"
 
     atoms_new.set_positions(positions + disp)
     if recenter_com:
@@ -320,13 +384,6 @@ def bh_go(
             adsorbate_definition=adsorbate_definition,
         )
 
-    effective_dr = dr * (
-        policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
-    )
-    effective_move_fraction = (
-        min(move_fraction, 0.25) if policy.constrain_adsorbate_moves else move_fraction
-    )
-
     logger = get_logger(__name__)
 
     # Validate and setup fitness strategy
@@ -357,6 +414,32 @@ def bh_go(
             raise SCGOValidationError(
                 "Surface system has no movable atoms for basin hopping."
             )
+
+    # Scale adsorbate moves only; keep full dr/fraction for core when mixed.
+    tags = atoms.get_tags()
+    ads_movable = [i for i in movable_indices if int(tags[i]) > 0]
+    core_movable = [i for i in movable_indices if int(tags[i]) == 0]
+    mixed_core_ads = (
+        policy.constrain_adsorbate_moves and bool(ads_movable) and bool(core_movable)
+    )
+    if mixed_core_ads:
+        move_dr = dr
+        move_frac = move_fraction
+        ads_dr: float | None = dr * policy.adsorbate_move_scale
+        ads_frac: float | None = min(move_fraction, 0.25)
+        ads_indices_arg: list[int] | None = ads_movable
+    elif policy.constrain_adsorbate_moves and ads_movable:
+        move_dr = dr * policy.adsorbate_move_scale
+        move_frac = min(move_fraction, 0.25)
+        ads_dr = None
+        ads_frac = None
+        ads_indices_arg = None
+    else:
+        move_dr = dr
+        move_frac = move_fraction
+        ads_dr = None
+        ads_frac = None
+        ads_indices_arg = None
 
     # Match GA/GO: mobile-only n_top and comparator_use_mic (not surface_mode alone).
     effective_n_top = (
@@ -522,13 +605,16 @@ def bh_go(
         for iteration in iteration_iterator:
             a_trial, desc = _move_atoms(
                 a_current,
-                effective_dr,
-                effective_move_fraction,
+                move_dr,
+                move_frac,
                 move_strategy=move_strategy,
                 rng=rng,
                 movable_indices=movable_indices,
                 move_by_tag_groups=freeze_adsorbate_internal_geometry,
                 recenter_com=not surface_mode,
+                adsorbate_movable_indices=ads_indices_arg,
+                adsorbate_dr=ads_dr,
+                adsorbate_move_fraction=ads_frac,
             )
             if surface_mode and surface_config is not None:
                 attach_slab_constraints_from_surface_config(a_trial, surface_config)

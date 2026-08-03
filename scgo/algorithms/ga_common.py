@@ -1051,9 +1051,6 @@ def create_mutation_operators(
     operators = []
     name_map = {}
     policy = get_system_policy(system_type)
-    move_scale = (
-        policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
-    )
     partition_composition = list(composition)
     if policy.slab_is_search_target and policy.has_adsorbate and adsorbate_definition:
         ads = adsorbate_definition.get("adsorbate_symbols", [])
@@ -1071,6 +1068,15 @@ def create_mutation_operators(
     if part is not None:
         _n_core, ads_fragment_lengths = part
         ads_tags = list(range(1, len(ads_fragment_lengths) + 1))
+
+    # Adsorbate scale only throttles ads-targeted ops when core/ads are partitioned;
+    # shared and core ops keep full strength. Non-partitioned constrained systems
+    # (ads-only) keep the global scale.
+    ads_move_scale = (
+        policy.adsorbate_move_scale if policy.constrain_adsorbate_moves else 1.0
+    )
+    shared_move_scale = 1.0 if use_partition_tags else ads_move_scale
+    core_move_scale = 1.0 if use_partition_tags else ads_move_scale
 
     core_only_tags = [0] if use_partition_tags else None
     include_overlap_relief = not (
@@ -1091,8 +1097,8 @@ def create_mutation_operators(
     rattle: RattleMutation = RattleMutation(
         blmin,
         n_to_optimize,
-        rattle_strength=0.8 * move_scale,
-        rattle_prop=min(0.4, 0.4 * move_scale),
+        rattle_strength=0.8 * shared_move_scale,
+        rattle_prop=min(0.4, 0.4 * shared_move_scale),
         use_tags=use_partition_tags,
         system_type=system_type,
         rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
@@ -1200,9 +1206,9 @@ def create_mutation_operators(
         anisotropic: AnisotropicRattleMutation = AnisotropicRattleMutation(
             blmin,
             n_to_optimize,
-            in_plane_strength=1.0 * move_scale,
-            normal_strength=0.2 * move_scale,
-            rattle_prop=min(0.5, 0.5 * move_scale),
+            in_plane_strength=1.0 * shared_move_scale,
+            normal_strength=0.2 * shared_move_scale,
+            rattle_prop=min(0.5, 0.5 * shared_move_scale),
             use_tags=use_partition_tags,
             system_type=system_type,
             rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
@@ -1214,8 +1220,8 @@ def create_mutation_operators(
             breathing: BreathingMutation = BreathingMutation(
                 blmin,
                 n_to_optimize,
-                scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
+                scale_min=1.0 - (1.0 - breathing_scale_min) * shared_move_scale,
+                scale_max=1.0 + (breathing_scale_max - 1.0) * shared_move_scale,
                 system_type=system_type,
                 rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
                 max_inner_attempts=breathing_max_inner_attempts,
@@ -1228,8 +1234,8 @@ def create_mutation_operators(
             breathing_core: BreathingMutation = BreathingMutation(
                 blmin,
                 n_to_optimize,
-                scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
+                scale_min=1.0 - (1.0 - breathing_scale_min) * core_move_scale,
+                scale_max=1.0 + (breathing_scale_max - 1.0) * core_move_scale,
                 target_tags=[0],
                 system_type=system_type,
                 rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
@@ -1242,8 +1248,8 @@ def create_mutation_operators(
                 breathing_ads: BreathingMutation = BreathingMutation(
                     blmin,
                     n_to_optimize,
-                    scale_min=1.0 - (1.0 - breathing_scale_min) * move_scale,
-                    scale_max=1.0 + (breathing_scale_max - 1.0) * move_scale,
+                    scale_min=1.0 - (1.0 - breathing_scale_min) * ads_move_scale,
+                    scale_max=1.0 + (breathing_scale_max - 1.0) * ads_move_scale,
                     target_tags=ads_tags,
                     system_type=system_type,
                     rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]

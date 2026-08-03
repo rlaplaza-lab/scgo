@@ -621,6 +621,44 @@ def test_run_go_campaign_skips_failed_composition(monkeypatch, tmp_path):
     assert "Au2" in results
 
 
+def test_run_go_campaign_skips_failed_composition_uses_path_key(
+    monkeypatch, tmp_path
+):
+    """Failed compositions must be keyed by path_key (not bare formula)."""
+    from unittest.mock import MagicMock
+
+    called: list[list[str]] = []
+
+    def fake_trials(composition, system_type, params, **kwargs):
+        called.append(list(composition))
+        if composition == ["Pt", "Pt"]:
+            raise ValueError("init failed")
+        return [(0.0, Atoms("Au2"))]
+
+    monkeypatch.setattr("scgo.runner_api._run_go_trials", fake_trials)
+    monkeypatch.setattr(
+        "scgo.runner_api.get_calculator_class",
+        lambda name: lambda **kwargs: MagicMock(),
+    )
+
+    cfg = _slab_search_cfg()  # name="pt_slab" → path_key Pt2_pt_slab
+    results = run_go_campaign(
+        [["Pt", "Pt"], ["Au", "Au"]],
+        params=get_testing_params(),
+        seed=0,
+        verbosity=0,
+        system_type="surface_cluster",
+        surface_config=cfg,
+        output_dir=tmp_path,
+        clean=True,
+    )
+    assert called == [["Pt", "Pt"], ["Au", "Au"]]
+    assert "Pt2" not in results
+    assert results["Pt2_pt_slab"] == []
+    assert "Au2_pt_slab" in results
+    assert results["Au2_pt_slab"]  # successful non-empty
+
+
 def test_run_ts_search_normalizes_composition(monkeypatch):
     captured: dict[str, list] = {}
 

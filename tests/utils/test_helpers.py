@@ -8,8 +8,10 @@ import pytest
 from ase import Atoms
 from ase.constraints import FixAtoms
 
+from scgo.constants import PENALTY_ENERGY
 from scgo.exceptions import SCGORuntimeError
 from scgo.utils.helpers import (
+    _assign_penalty_energy,
     auto_niter,
     auto_niter_local_relaxation,
     auto_niter_ts,
@@ -640,3 +642,26 @@ def test_perform_local_relaxation_surface_mode_skips_com_center():
     )
     slab_com_after = atoms.get_positions()[:n_slab].mean(axis=0)
     np.testing.assert_allclose(slab_com_after, slab_com_before, atol=1e-8)
+
+
+def test_assign_penalty_energy_attaches_single_point_calculator():
+    """Penalty path must serve energy/forces via SPC without the old calc."""
+
+    class _RaisingCalc:
+        def get_potential_energy(self, atoms=None, force_consistent=False):
+            raise RuntimeError("broken calculator")
+
+        def get_forces(self, atoms=None):
+            raise RuntimeError("broken calculator")
+
+    atoms = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    atoms.calc = _RaisingCalc()
+    with pytest.raises(RuntimeError, match="broken calculator"):
+        atoms.get_potential_energy()
+
+    energy = _assign_penalty_energy(atoms)
+    assert energy == PENALTY_ENERGY
+    assert atoms.get_potential_energy() == PENALTY_ENERGY
+    forces = atoms.get_forces()
+    assert forces.shape == (2, 3)
+    np.testing.assert_allclose(forces, 0.0)

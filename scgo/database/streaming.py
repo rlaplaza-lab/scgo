@@ -109,10 +109,6 @@ def relaxed_rows_where_clause(
     return " AND ".join(clauses)
 
 
-# Backward-compatible alias for internal callers during transition.
-_relaxed_rows_where_clause = relaxed_rows_where_clause
-
-
 def iter_relaxed_structures(
     da,
     db_path: Path,
@@ -230,7 +226,7 @@ def iter_databases_minima(
     count = 0
 
     for db_path in db_paths:
-        if max_structures and count >= max_structures:
+        if max_structures is not None and count >= max_structures:
             logger.debug("Reached max_structures limit (%s)", max_structures)
             break
 
@@ -238,7 +234,7 @@ def iter_databases_minima(
             yield (energy, atoms)
             count += 1
 
-            if max_structures and count >= max_structures:
+            if max_structures is not None and count >= max_structures:
                 break
 
     logger.debug("Streamed %s total structures from %s databases", count, len(db_paths))

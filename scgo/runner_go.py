@@ -398,10 +398,10 @@ def _run_go_campaign_compositions(
                     error_details.append("Output directory does not exist")
 
             logger.error(" | ".join(error_details), exc_info=(verbosity >= 2))
-            all_results[formula_str] = []
+            all_results[path_key] = []
             if verbosity >= 1:
                 logger.warning(
-                    f"Skipping {formula_str} and continuing campaign "
+                    f"Skipping {path_key} ({formula_str}) and continuing campaign "
                     f"({i + 1}/{num_compositions})"
                 )
             continue
