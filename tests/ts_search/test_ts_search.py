@@ -1161,8 +1161,7 @@ class TestTorchSimNEB:
         assert result["n_images"] == 5
         assert result["use_torchsim"] is True
         # Note: Full convergence is not guaranteed in tests, but we verify the run was attempted
-        assert "barrier_forward" in result or result.get("error") is not None
-        assert "barrier_reverse" in result or result.get("error") is not None
+        assert "barrier_height" in result or result.get("error") is not None
 
 
 def test_find_ts_allows_missing_endpoint_energies_when_use_torchsim(

@@ -89,6 +89,8 @@ Available Models
 
 **UMA models:** ``"uma-s-1p2"``, ``"uma-s-1p1"``, ``"uma-m-1p1"``
 
+**UPET models:** ``"pet-mad-s"``, ``"pet-mad-xs"``, ``"pet-oam-xl"``, ``"pet-omat-s"``, ``"pet-spice-s"``
+
 --------------
 Usage Examples
 --------------

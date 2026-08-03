@@ -56,13 +56,7 @@ def validate_and_resolve_run_context(
         surface_config=surface_config,
     )
     policy = get_system_policy(system_type)
-    strategy_arg: str | None
-    if fitness_strategy is None:
-        strategy_arg = None
-    elif isinstance(fitness_strategy, FitnessStrategy):
-        strategy_arg = str(fitness_strategy)
-    else:
-        strategy_arg = fitness_strategy
+    strategy_arg = str(fitness_strategy) if fitness_strategy is not None else None
     resolved_fitness = FitnessStrategy(ensure_fitness_strategy_resolved(strategy_arg))
     return ResolvedRunContext(
         system_type=system_type,

@@ -43,14 +43,6 @@ def adsorbate_pair_select_cap(max_pairs: int) -> int:
     return min(mp * 10, max(mp, _ADSORBATE_PAIR_OVERSAMPLE_CAP))
 
 
-def _relative_db_path(db_file: str, base_dir: str) -> str:
-    """Return DB path relative to base dir, or basename when unavailable."""
-    try:
-        return os.path.relpath(db_file, base_dir)
-    except (OSError, ValueError):
-        return os.path.basename(db_file)
-
-
 def load_minima_by_composition(
     base_dir: str,
     composition: list[str] | None = None,
@@ -97,7 +89,10 @@ def load_minima_by_composition(
 
     for db_file, run_id in db_files_with_run:
         try:
-            db_relpath = _relative_db_path(db_file, base_dir)
+            try:
+                db_relpath = os.path.relpath(db_file, base_dir)
+            except (OSError, ValueError):
+                db_relpath = os.path.basename(db_file)
             # When prefer_final_unique=True, require_final=True so we only load
             # GO's canonical final unique minima (DB rows tagged final_unique_minimum).
             minima = extract_minima_from_database_file(
