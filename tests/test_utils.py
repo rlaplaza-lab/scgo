@@ -811,10 +811,6 @@ def assert_supported_cluster_binding(
     assert ok, msg
 
 
-# Backward-compatible alias; prefer assert_deposition_height_in_bounds.
-assert_adsorption_height_in_bounds = assert_deposition_height_in_bounds
-
-
 def assert_pt_o_distance_reasonable(
     atoms: Atoms,
     pt_idx: int,

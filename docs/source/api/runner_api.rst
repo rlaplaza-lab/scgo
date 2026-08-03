@@ -27,8 +27,9 @@ Main Functions
    :header-rows: 1
 
    * - ``run_go_campaign(...)`` → ``dict[str, list[tuple[float, Atoms]]]``
-     - Optimize multiple compositions; failed compositions are logged and
-       skipped (empty list for that formula). See :doc:`/api/initialization`.
+     - Optimize multiple compositions; keys are on-disk ``path_key`` values
+       (formula for bare gas clusters). Failed compositions are logged and
+       skipped (empty list for that key). See :doc:`/api/initialization`.
    * - ``run_ts_campaign(...)`` → ``dict[str, list[dict[str, Any]]]``
      - Find TS for multiple compositions
    * - ``run_go_ts_campaign(...)`` → ``dict[str, dict[str, Any]]``

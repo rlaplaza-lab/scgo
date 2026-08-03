@@ -41,11 +41,11 @@ from scgo.utils.helpers import (
     copy_atoms,
     filter_unique_minima,
     get_cluster_formula,
-    get_system_path_key,
     validate_pair_id,
 )
 from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import resolve_ts_campaign_paths
+from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import cleanup_torch_cuda, get_calculator_class
 from scgo.utils.run_tracking import ensure_run_id, save_run_metadata
@@ -641,16 +641,13 @@ def run_transition_state_search(
     if use_parallel_neb is True and not use_torchsim:
         raise SCGOValidationError("use_parallel_neb requires use_torchsim=True")
 
-    path_key_formula = get_system_path_key(
+    path_key_formula = resolve_run_path_key(
         adsorbate_composition if system_policy.uses_surface else composition,
+        system_type=system_type,
         adsorbate_definition=(
             adsorbate_definition if isinstance(adsorbate_definition, dict) else None
         ),
-        surface_name=(
-            surface_config.name
-            if system_policy.uses_surface and surface_config is not None
-            else None
-        ),
+        surface_config=surface_config if system_policy.uses_surface else None,
     )
     formula = get_cluster_formula(composition)
     campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
@@ -1121,15 +1118,13 @@ def run_transition_state_campaign(
     surface_cfg = ts_kwargs.get("surface_config")
     if not isinstance(surface_cfg, SurfaceSystemConfig):
         surface_cfg = None
-    system_policy = get_system_policy(system_type)
 
     for composition in compositions:
-        path_key = get_system_path_key(
+        path_key = resolve_run_path_key(
             composition,
+            system_type=system_type,
             adsorbate_definition=ads_def,
-            surface_name=(
-                surface_cfg.name if system_policy.uses_surface and surface_cfg else None
-            ),
+            surface_config=surface_cfg,
         )
         campaign_root = (
             str(Path(output_dir).expanduser().resolve())

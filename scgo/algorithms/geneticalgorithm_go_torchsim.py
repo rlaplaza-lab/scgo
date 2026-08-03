@@ -45,13 +45,17 @@ from scgo.algorithms.ga_common import (
     validate_ga_common_params,
     validate_structure_for_ga_storage,
 )
+from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
 )
 from scgo.ase_ga_patches.population import Population
 from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
-from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+from scgo.calculators.torchsim_helpers import (
+    TorchSimBatchRelaxer,
+    build_torchsim_relaxer,
+)
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import (
     attach_adsorbate_internal_geometry_constraints,
@@ -81,16 +85,13 @@ from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
-    get_system_policy,
     resolve_search_mobile_composition,
     resolve_structure_mic,
     uses_surface,
     validate_structure_for_system_type,
-    validate_system_type_settings,
 )
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
-    ensure_fitness_strategy_resolved,
 )
 from scgo.utils.helpers import (
     extract_minima_from_database,
@@ -116,8 +117,6 @@ from scgo.utils.timing_report import (
 )
 from scgo.utils.torchsim_policy import (
     is_ml_calculator,
-    is_uma_like_calculator,
-    is_upet_like_calculator,
 )
 from scgo.utils.validation import validate_composition
 
@@ -811,23 +810,22 @@ def ga_go(
     profile_retry_failures: dict[str, int] = {}
     per_generation: list[dict[str, Any]] | None = [] if detailed_timing else None
 
-    from scgo.system_types import resolve_connectivity_factor
-
-    connectivity_factor = resolve_connectivity_factor(
-        connectivity_factor,
-        cluster_adsorbate_config=cluster_adsorbate_config,
+    run_ctx = validate_and_resolve_run_context(
+        system_type=system_type,
         surface_config=surface_config,
+        connectivity_factor=connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        fitness_strategy=fitness_strategy,
     )
-    policy = get_system_policy(system_type)
+    connectivity_factor = run_ctx.connectivity_factor
+    policy = run_ctx.policy
+    fitness_strategy = run_ctx.fitness_strategy
     # Bare ``surface`` uses an empty cluster composition; search-mobile symbols
     # come from the top slab layers via ``resolve_search_mobile_composition``.
     validate_composition(
         composition,
         allow_empty=policy.slab_is_search_target and not policy.has_adsorbate,
         allow_tuple=False,
-    )
-    validate_system_type_settings(
-        system_type=system_type, surface_config=surface_config
     )
     validate_ga_common_params(
         niter=niter,
@@ -843,11 +841,6 @@ def ga_go(
         raise SCGOValidationError(
             f"n_jobs_offspring must be -1, -2, or >= 1, got {n_jobs_offspring}"
         )
-
-    # Validate and normalize fitness strategy (coerce to Enum)
-    fitness_strategy = FitnessStrategy(
-        ensure_fitness_strategy_resolved(fitness_strategy)
-    )
 
     if batch_size is not None and batch_size <= 0:
         batch_size = None
@@ -943,97 +936,12 @@ def ga_go(
 
     if relaxer is None:
         if is_ml_calculator(calculator):
-            if is_uma_like_calculator(calculator):
-                from scgo.calculators.uma_helpers import (
-                    try_extract_torchsim_model_from_uma_calculator,
-                )
-
-                model_name = getattr(calculator, "model_name", None)
-                if model_name is None and calculator.name.startswith("UMA-"):
-                    model_name = calculator.name.removeprefix("UMA-")
-                if not model_name:
-                    raise SCGOValidationError(
-                        "Cannot infer UMA model_name from calculator for TorchSim relaxer."
-                    )
-                shared_model = try_extract_torchsim_model_from_uma_calculator(
-                    calculator
-                )
-                if shared_model is None:
-                    logger.warning(
-                        "Could not extract live FairChem predictor from UMA "
-                        "calculator; TorchSim will reload the checkpoint."
-                    )
-                relaxer = TorchSimBatchRelaxer(
-                    model_kind="fairchem",
-                    fairchem_model_name=str(model_name),
-                    fairchem_task_name=getattr(calculator, "task_name", None),
-                    force_tol=fmax,
-                    max_steps=niter_local_relaxation,
-                    expected_max_atoms=expected_max_atoms,
-                    max_atoms_to_try=expected_max_atoms,
-                    model=shared_model,
-                )
-                if shared_model is not None and hasattr(calculator, "_inner"):
-                    calculator._inner = None
-            elif is_upet_like_calculator(calculator):
-                from scgo.calculators.upet_helpers import (
-                    try_extract_torchsim_model_from_upet_calculator,
-                )
-
-                model_name = getattr(calculator, "model_name", None)
-                if model_name is None and calculator.name.startswith("UPET-"):
-                    model_name = calculator.name.removeprefix("UPET-").split("-v")[0]
-                if not model_name and not getattr(calculator, "checkpoint_path", None):
-                    raise SCGOValidationError(
-                        "Cannot infer UPET model_name from calculator for TorchSim relaxer."
-                    )
-                shared_model = try_extract_torchsim_model_from_upet_calculator(
-                    calculator
-                )
-                if shared_model is None:
-                    logger.warning(
-                        "Could not extract live AtomisticModel from UPET "
-                        "calculator; TorchSim will reload the checkpoint."
-                    )
-                relaxer = TorchSimBatchRelaxer(
-                    model_kind="upet",
-                    upet_model_name=str(model_name) if model_name else None,
-                    upet_version=getattr(calculator, "version", None),
-                    upet_checkpoint_path=getattr(calculator, "checkpoint_path", None),
-                    upet_non_conservative=getattr(
-                        calculator, "non_conservative", False
-                    ),
-                    force_tol=fmax,
-                    max_steps=niter_local_relaxation,
-                    # device/autobatcher: CUDA + InFlightAutoBatcher by default
-                    expected_max_atoms=expected_max_atoms,
-                    max_atoms_to_try=expected_max_atoms,
-                    model=shared_model,
-                )
-                if shared_model is not None and hasattr(calculator, "_inner"):
-                    calculator._inner = None
-            else:
-                from scgo.calculators.mace_helpers import (
-                    infer_mace_model_name_from_calculator,
-                    try_extract_torchsim_model_from_mace_calculator,
-                )
-
-                mace_model_name = infer_mace_model_name_from_calculator(calculator)
-                if not mace_model_name:
-                    raise SCGOValidationError(
-                        "Cannot infer MACE model_name from calculator for TorchSim relaxer."
-                    )
-                shared_model = try_extract_torchsim_model_from_mace_calculator(
-                    calculator
-                )
-                relaxer = TorchSimBatchRelaxer(
-                    force_tol=fmax,
-                    mace_model_name=str(mace_model_name),
-                    max_steps=niter_local_relaxation,
-                    expected_max_atoms=expected_max_atoms,
-                    max_atoms_to_try=expected_max_atoms,
-                    model=shared_model,
-                )
+            relaxer = build_torchsim_relaxer(
+                calculator,
+                fmax=fmax,
+                max_steps=niter_local_relaxation,
+                expected_max_atoms=expected_max_atoms,
+            )
         else:
             relaxer = AseBatchRelaxer(
                 calculator,

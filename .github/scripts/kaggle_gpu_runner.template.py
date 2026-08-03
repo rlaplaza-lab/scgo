@@ -315,11 +315,6 @@ def _install_scgo_mlip(py: list[str], pip: list[str], *, mlip_extra: str) -> Non
         )
 
 
-def _install_scgo_mace(py: list[str], pip: list[str]) -> None:
-    """Backward-compatible alias for :func:`_install_scgo_mlip` with MACE."""
-    _install_scgo_mlip(py, pip, mlip_extra="mace")
-
-
 def _assert_numpy_version(py: list[str]) -> None:
     spec = _numpy_requirement()
     run(

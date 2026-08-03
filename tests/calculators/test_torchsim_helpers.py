@@ -656,3 +656,57 @@ def test_static_autobatcher_disabled_by_default():
     relaxer.autobatcher = True
     assert relaxer._static_autobatcher_arg(n_structures=10, max_atoms=7) is False
     assert relaxer._static_autobatcher_arg(n_structures=50, max_atoms=10) is True
+
+
+def test_build_torchsim_relaxer_uma_like_sets_fairchem_kind():
+    """Factory cascade: UMA-like calc → fairchem model_kind with shared model."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.calculators.torchsim_helpers import build_torchsim_relaxer
+
+    shared_model = object()
+
+    class FakeUMA:
+        name = "UMA-uma-s-1p2"
+        model_name = "uma-s-1p2"
+        task_name = "oc25"
+
+        def __init__(self) -> None:
+            self._inner: object | None = object()
+
+    calc = FakeUMA()
+    captured: dict = {}
+
+    def _fake_relaxer(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(**kwargs)
+
+    with (
+        patch(
+            "scgo.utils.torchsim_policy.is_uma_like_calculator",
+            return_value=True,
+        ),
+        patch(
+            "scgo.calculators.uma_helpers.try_extract_torchsim_model_from_uma_calculator",
+            return_value=shared_model,
+        ),
+        patch(
+            "scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer",
+            side_effect=_fake_relaxer,
+        ),
+    ):
+        relaxer = build_torchsim_relaxer(
+            calc,
+            fmax=0.05,
+            max_steps=50,
+            expected_max_atoms=100,
+        )
+
+    assert relaxer is not None
+    assert captured["model_kind"] == "fairchem"
+    assert captured["fairchem_model_name"] == "uma-s-1p2"
+    assert captured["fairchem_task_name"] == "oc25"
+    assert captured["model"] is shared_model
+    assert captured["force_tol"] == 0.05
+    assert captured["max_steps"] == 50
+    assert calc._inner is None

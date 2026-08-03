@@ -432,11 +432,12 @@ Run multiple compositions in one call. Composition builders
        seed=42,
        system_type="gas_cluster",
    )
-   # results is dict[formula, list[(energy, Atoms)]]
+   # results is dict[path_key, list[(energy, Atoms)]]
+   # (for gas_cluster, path_key matches the formula, e.g. "Pt5")
 
 Failed compositions (e.g. initialization ``SCGOValidationError`` on extreme
-stoichiometries) are logged, recorded as empty lists in the returned dict, and
-skipped so the rest of the campaign continues. See :doc:`/api/initialization`
+stoichiometries) are logged, recorded as empty lists under their ``path_key``,
+and skipped so the rest of the campaign continues. See :doc:`/api/initialization`
 for multi-element atom ordering and placement behaviour.
 
 **Binary compositions:**

@@ -45,6 +45,7 @@ __all__ = [
     "MemoryScalerCache",
     "TorchSimBatchRelaxer",
     "build_torchsim_fixatoms_from_ase_batch",
+    "build_torchsim_relaxer",
     "collect_ase_fixatoms_indices",
     "get_global_memory_scaler_cache",
 ]
@@ -167,6 +168,9 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
     while a GPU-backed ``FixAtoms`` keeps its indices on CUDA, triggering a
     ``RuntimeError`` inside ``torch.isin`` (device mismatch). The fix aligns
     ``atom_idx`` with ``self.atom_idx`` before the ``isin`` call.
+
+    Phase 5: remove once TorchSim fixes CPU/CUDA ``atom_idx`` handling in
+    constraints (see CHANGELOG maintainer notes for related leave-alone shims).
     """
     from torch_sim.constraints import AtomConstraint  # type: ignore
 
@@ -432,6 +436,119 @@ def _steps_taken_from_optimize_state(state: Any) -> int | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def build_torchsim_relaxer(
+    calculator: Any,
+    *,
+    fmax: float,
+    max_steps: int,
+    expected_max_atoms: int,
+    torchsim_params: dict[str, Any] | None = None,
+) -> TorchSimBatchRelaxer:
+    """Build a TorchSim relaxer from a live MLIP ASE calculator.
+
+    Cascades UMA/FairChem → UPET → MACE: classify the calculator, extract a
+    shared TorchSim model when possible (clearing ``calculator._inner`` so the
+    ASE wrapper does not hold a duplicate), then construct
+    :class:`TorchSimBatchRelaxer`. Optional ``torchsim_params`` override any
+    constructed kwargs. Preset builders that already know ``model_kind`` /
+    model names construct :class:`TorchSimBatchRelaxer` directly.
+    """
+    from scgo.utils.torchsim_policy import (
+        is_uma_like_calculator,
+        is_upet_like_calculator,
+    )
+
+    base: dict[str, Any] = {
+        "force_tol": fmax,
+        "max_steps": max_steps,
+        "expected_max_atoms": expected_max_atoms,
+        "max_atoms_to_try": expected_max_atoms,
+    }
+
+    if is_uma_like_calculator(calculator):
+        from scgo.calculators.uma_helpers import (
+            try_extract_torchsim_model_from_uma_calculator,
+        )
+
+        model_name = getattr(calculator, "model_name", None)
+        calc_name = getattr(calculator, "name", "") or ""
+        if model_name is None and calc_name.startswith("UMA-"):
+            model_name = calc_name.removeprefix("UMA-")
+        if not model_name:
+            raise SCGOValidationError(
+                "Cannot infer UMA model_name from calculator for TorchSim relaxer."
+            )
+        shared_model = try_extract_torchsim_model_from_uma_calculator(calculator)
+        if shared_model is None:
+            logger.warning(
+                "Could not extract live FairChem predictor from UMA "
+                "calculator; TorchSim will reload the checkpoint."
+            )
+        base.update(
+            {
+                "model_kind": "fairchem",
+                "fairchem_model_name": str(model_name),
+                "fairchem_task_name": getattr(calculator, "task_name", None),
+                "model": shared_model,
+            }
+        )
+        if shared_model is not None and hasattr(calculator, "_inner"):
+            calculator._inner = None
+    elif is_upet_like_calculator(calculator):
+        from scgo.calculators.upet_helpers import (
+            try_extract_torchsim_model_from_upet_calculator,
+        )
+
+        model_name = getattr(calculator, "model_name", None)
+        calc_name = getattr(calculator, "name", "") or ""
+        if model_name is None and calc_name.startswith("UPET-"):
+            model_name = calc_name.removeprefix("UPET-").split("-v")[0]
+        if not model_name and not getattr(calculator, "checkpoint_path", None):
+            raise SCGOValidationError(
+                "Cannot infer UPET model_name from calculator for TorchSim relaxer."
+            )
+        shared_model = try_extract_torchsim_model_from_upet_calculator(calculator)
+        if shared_model is None:
+            logger.warning(
+                "Could not extract live AtomisticModel from UPET "
+                "calculator; TorchSim will reload the checkpoint."
+            )
+        base.update(
+            {
+                "model_kind": "upet",
+                "upet_model_name": str(model_name) if model_name else None,
+                "upet_version": getattr(calculator, "version", None),
+                "upet_checkpoint_path": getattr(calculator, "checkpoint_path", None),
+                "upet_non_conservative": getattr(calculator, "non_conservative", False),
+                "model": shared_model,
+            }
+        )
+        if shared_model is not None and hasattr(calculator, "_inner"):
+            calculator._inner = None
+    else:
+        from scgo.calculators.mace_helpers import (
+            infer_mace_model_name_from_calculator,
+            try_extract_torchsim_model_from_mace_calculator,
+        )
+
+        mace_model_name = infer_mace_model_name_from_calculator(calculator)
+        if not mace_model_name:
+            raise SCGOValidationError(
+                "Cannot infer MACE model_name from calculator for TorchSim relaxer."
+            )
+        shared_model = try_extract_torchsim_model_from_mace_calculator(calculator)
+        base.update(
+            {
+                "mace_model_name": str(mace_model_name),
+                "model": shared_model,
+            }
+        )
+
+    if torchsim_params:
+        base.update(torchsim_params)
+    return TorchSimBatchRelaxer(**base)
 
 
 @dataclass(eq=False)
