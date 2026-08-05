@@ -15,39 +15,10 @@ Dependencies
 Output layout
 -------------
 
-All scripts write under ``benchmark/results/``.
-
-**Gas-phase Pt sweeps** (``benchmark_Pt.py``):
-
-.. code-block:: text
-
-   benchmark/results/
-   └── pt5_mace_mace_matpes_0/     # {formula}_{backend}_{model}
-       └── Pt5_searches/
-           ├── run_<timestamp>_<microseconds>/
-           │   ├── metadata.json
-           │   ├── timing.json      # when write_timing_json=True (benchmark default)
-           │   └── ga_go.db
-           ├── results_summary.json
-           └── final_unique_minima/
-
-**Surface Pt-on-graphite** (``benchmark_Pt_surface_graphite.py``):
-
-.. code-block:: text
-
-   benchmark/results/
-   └── pt_surface_graphite/        # flat campaign root
-       └── Pt5_graphite_searches/
-           ├── run_<timestamp>_<microseconds>/
-           │   ├── metadata.json
-           │   ├── timing.json
-           │   └── ga_go.db
-           ├── results_summary.json
-           └── final_unique_minima/
-
-TS runs add sibling ``{path_key}_ts_results/`` trees with the same run-oriented layout
-(``run_*/``, summaries, deduplicated exports); pair work lives under ``pair_*`` subdirs.
-See :doc:`/quickstart` (*On-disk layout*).
+All scripts write under ``benchmark/results/``. See :doc:`/output_layout` for the
+complete directory structure. TS runs add sibling ``{path_key}_ts_results/`` trees
+with the same run-oriented layout (``run_*/``, summaries, deduplicated exports); pair
+work lives under ``pair_*`` subdirs.
 
 Benchmark GA presets enable ``write_timing_json`` and ``detailed_timing`` so CLI
 profiling lines match ``{run_dir}/timing.json`` on disk.

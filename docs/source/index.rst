@@ -24,6 +24,7 @@ Contents
 
    installation
    quickstart
+   output_layout
    parameters
    benchmarks
 

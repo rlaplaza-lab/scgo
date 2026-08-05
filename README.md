@@ -4,7 +4,7 @@
 
 ![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
-Global optimization of atomic clusters with ASE: Basin Hopping, Genetic Algorithms, NEB transition-state search, and MLIPs (MACE, UMA, UPET) via TorchSim. Covers gas-phase, surface, and adsorbate workflows.
+Global optimization of atomic clusters with ASE: Basin Hopping, Genetic Algorithms, NEB transition-state search, and MLIPs (MACE, UMA, UPET) via TorchSim. Supports six system types: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, `surface_cluster_adsorbate`, `surface`, and `surface_adsorbate`.
 
 **Documentation:** [Read the Docs](https://scgo.readthedocs.io/)
 
@@ -14,7 +14,11 @@ Exactly one MLIP extra per environment:
 
 ```bash
 pip install "scgo[mace]"   # or [uma] / [upet]
-# UPET only: pip install 'vesin==0.6.0' --force-reinstall --no-deps
+```
+
+**UPET note:** After `pip install "scgo[upet]"`, manually install `vesin==0.6.0`:
+```bash
+pip install 'vesin==0.6.0' --force-reinstall --no-deps
 ```
 
 Python 3.12+, SQLite JSON1. Details: [installation guide](https://scgo.readthedocs.io/en/latest/installation.html).
@@ -33,7 +37,13 @@ results = run_go(
 )
 ```
 
-`results` is a list of `(energy, Atoms)` unique minima (energy-sorted). Use `run_go_campaign` for multi-composition runs.
+`results` is a list of `(energy, Atoms)` unique minima (energy-sorted).
+
+**Algorithms:** SCGO auto-selects based on system size:
+- ≤2 mobile atoms: Simple relaxation
+- 3 atoms, no adsorbate: Basin Hopping
+- 3+ atoms with adsorbate: Genetic Algorithm  
+- ≥4 atoms: Genetic Algorithm
 
 ## Workflows
 
@@ -45,16 +55,13 @@ results = run_go(
 | GO then TS | `run_go_ts` |
 | Multi-composition TS / GO+TS | `run_ts_campaign` / `run_go_ts_campaign` |
 
-`system_type` is always a run argument: `gas_cluster`, `surface_cluster`,
-`gas_cluster_adsorbate`, `surface_cluster_adsorbate`, `surface`, or
-`surface_adsorbate`. Surfaces need `surface_config=`; adsorbates need
-`adsorbates=`.
+`system_type` is always a run argument. Surfaces need `surface_config=`, adsorbates need `adsorbates=`.
 
-Output: `run_go` writes `{path_key}_searches/`; GO+TS/TS use a campaign root with sibling `{path_key}_searches/` and `{path_key}_ts_results/` (e.g. `Pt5_OH_OH_graphite_searches`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
+**Output:** `run_go` writes `{path_key}_searches/` with datetime-tagged `run_*/` subdirectories. GO+TS creates sibling `{path_key}_ts_results/`. The `path_key` combines nanoparticle formula, adsorbate fragments, and surface name (e.g., `Pt5`, `Pt5_OH_OH_graphite`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
 ## Examples
 
-[`examples/`](examples/) — MACE + TorchSim smoke scripts for the supported system types (`example_pt5_*.py`, `example_defected_graphite.py`, `example_n_doped_graphite.py`).
+[`examples/`](examples/) — MACE + TorchSim smoke scripts for all six system types. See [`examples/README.md`](examples/README.md) for details.
 
 ## Development
 

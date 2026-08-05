@@ -56,9 +56,9 @@ uma = [
 upet = [
     "upet>=0.2.6",
     "metatomic-torchsim>=0.1.3",
-    # vesin 0.6.0 is required at runtime for NeighborList(skin=...); install it
-    # after the extra with: pip install 'vesin==0.6.0' --force-reinstall --no-deps
-    # (metatomic-torchsim still declares vesin<0.6).
+    # vesin 0.6.0 required at runtime for NeighborList(skin=...).
+    # Install after this extra: pip install 'vesin==0.6.0' --force-reinstall --no-deps
+    # See docs/source/installation.rst for details.
     "torch-sim-atomistic==0.6.0",
 ]
 dev = [

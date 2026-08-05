@@ -55,34 +55,8 @@ See :doc:`/parameters` for merge rules.
 Output directories
 ------------------
 
-``output_dir`` semantics differ by runner. Full table and directory-tree examples:
-:doc:`/quickstart` (*Output directories*).
-
-.. list-table::
-   :widths: 22 28 50
-   :header-rows: 1
-
-   * - Runner
-     - ``output_dir`` is
-     - Also accepts
-   * - ``run_go``
-     - ``{path_key}_searches/`` directory itself
-     - —
-   * - ``run_go_campaign``
-     - Campaign parent → ``{parent}/{path_key}_searches/``
-     - —
-   * - ``run_go_ts``
-     - Campaign root → ``{root}/{path_key}_searches/`` + ``{root}/{path_key}_ts_results/``
-     - ``output_root``, ``output_stem``
-   * - ``run_go_ts_campaign``
-     - Campaign parent → ``{parent}/{path_key}_campaign/…``
-     - ``output_root``, ``output_stem``
-   * - ``run_ts_search``
-     - Campaign root (or existing ``*_searches/`` — parent inferred)
-     - ``searches_dir``
-   * - ``run_ts_campaign``
-     - Shared campaign root for all compositions
-     - —
+``output_dir`` semantics differ by runner. See :doc:`/output_layout` for the
+full table and directory-tree examples.
 
 -----------------
 Complete Examples

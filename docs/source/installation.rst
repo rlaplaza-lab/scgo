@@ -17,8 +17,13 @@ PyPI
 .. code-block:: bash
 
    pip install "scgo[mace]"    # or [uma] / [upet]
-   # UPET only:
-   # pip install 'vesin==0.6.0' --force-reinstall --no-deps
+
+For **UPET**, after installing ``scgo[upet]``, manually install the required
+``vesin`` version:
+
+.. code-block:: bash
+
+   pip install 'vesin==0.6.0' --force-reinstall --no-deps
 
 For MACE/TorchSim pip installs, ensure ``nvalchemi-toolkit-ops`` is available
 and avoid ``vesin`` / ``vesin-torch`` unless you are on the UPET extra.
