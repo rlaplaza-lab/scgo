@@ -178,13 +178,13 @@ def _assert_ts_defaults_match_system_policies() -> None:
         if defaults["neb_align_endpoints"] is not expected_align:
             raise SCGORuntimeError(
                 f'TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]["neb_align_endpoints"]='
-                f'{defaults["neb_align_endpoints"]!r} disagrees with '
+                f"{defaults['neb_align_endpoints']!r} disagrees with "
                 f"SystemPolicy.neb_disable_alignment={policy.neb_disable_alignment!r}."
             )
         if defaults["neb_interpolation_mic"] != policy.neb_force_mic:
             raise SCGORuntimeError(
                 f'TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]["neb_interpolation_mic"]='
-                f'{defaults["neb_interpolation_mic"]!r} disagrees with '
+                f"{defaults['neb_interpolation_mic']!r} disagrees with "
                 f"SystemPolicy.neb_force_mic={policy.neb_force_mic!r}."
             )
         for key in ("neb_surface_cell_remap", "neb_surface_lattice_rotation"):
@@ -204,8 +204,8 @@ def _assert_ts_defaults_match_system_policies() -> None:
         if float(defaults["neb_fmax"]) != float(defaults["torchsim_fmax"]):
             raise SCGORuntimeError(
                 f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}] neb_fmax="
-                f'{defaults["neb_fmax"]!r} != torchsim_fmax='
-                f'{defaults["torchsim_fmax"]!r}.'
+                f"{defaults['neb_fmax']!r} != torchsim_fmax="
+                f"{defaults['torchsim_fmax']!r}."
             )
 
 
