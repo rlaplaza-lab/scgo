@@ -116,7 +116,7 @@ def _run_go_trials(
                 f'Use the "seed" parameter instead.'
             )
 
-    # Prefer explicit function seed arg; fall back to params['seed'] if provided
+    # Prefer explicit function seed arg; fall back to params["seed"] if provided
     if seed is None:
         seed = params.get("seed", None)
 
@@ -272,7 +272,7 @@ def _run_go_campaign_compositions(
         params = initialize_params(params)
     configure_logging(verbosity)
 
-    # Validate params structure early: 'rng' must not be present inside
+    # Validate params structure early: "rng" must not be present inside
     # optimizer-specific params. Raise ValueError so callers get immediate
     # feedback instead of having the error swallowed during campaign
     # iteration.
@@ -288,7 +288,7 @@ def _run_go_campaign_compositions(
     # Generate run_id once at campaign start if not provided
     run_id = ensure_run_id(run_id, verbosity=verbosity, logger=logger)
 
-    # Prefer explicit function seed arg; fall back to params['seed'] if provided
+    # Prefer explicit function seed arg; fall back to params["seed"] if provided
     if seed is None:
         seed = params.get("seed", None)
 

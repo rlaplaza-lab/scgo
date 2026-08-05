@@ -2,7 +2,7 @@
 
 ``go_params`` = global-optimization params; ``ts_params`` = flat TS preset
 (:func:`scgo.param_presets.get_ts_search_params`). The run ``seed`` and
-``go_params['seed']`` / ``ts_params['seed']`` must agree when more than one is set
+``go_params["seed"]`` / ``ts_params["seed"]`` must agree when more than one is set
 (:func:`resolve_workflow_seed`). System mode is set only by the run function
 ``system_type=...`` argument together with explicit ``surface_config=...`` and,
 for ``*_adsorbate`` modes, core-only ``composition`` plus ``adsorbates=...``
@@ -16,7 +16,7 @@ belongs in ``go_params`` only—not as separate ``run_*`` keywords. For
 allowed and validated against the run argument.
 
 GA/BH timing JSON is configured in ``params``/``go_params`` under
-``optimizer_params['ga']`` (or ``bh``): ``write_timing_json`` and ``detailed_timing``.
+``optimizer_params["ga"]`` (or ``bh``): ``write_timing_json`` and ``detailed_timing``.
 TS uses ``write_timing_json`` in ``ts_params``. ``run_go_ts`` may also write
 ``go_ts_timing.json`` at the campaign root. See :mod:`scgo.utils.timing_report`.
 
@@ -238,7 +238,7 @@ def run_go_campaign(
     """Run global optimization for multiple compositions.
 
     Each composition gets a reproducible sub-seed derived from ``seed`` /
-    ``params['seed']``. If a composition fails (``ValueError``, ``RuntimeError``,
+    ``params["seed"]``. If a composition fails (``ValueError``, ``RuntimeError``,
     ``SCGOValidationError``, I/O, or database errors), the error is logged, that
     formula maps to an empty list, and remaining compositions continue.
     """
