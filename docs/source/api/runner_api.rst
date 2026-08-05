@@ -11,7 +11,6 @@ Main Functions
 
 .. list-table::
    :widths: 40 60
-   :header-rows: 1
 
    * - ``run_go(...)`` → ``list[tuple[float, Atoms]]``
      - Optimize one composition, return list of (energy, Atoms) tuples
@@ -24,7 +23,6 @@ Main Functions
 
 .. list-table::
    :widths: 40 60
-   :header-rows: 1
 
    * - ``run_go_campaign(...)`` → ``dict[str, list[tuple[float, Atoms]]]``
      - Optimize multiple compositions; keys are on-disk ``path_key`` values
@@ -82,7 +80,6 @@ Utility Functions
 
 .. list-table::
    :widths: 40 60
-   :header-rows: 1
 
    * - ``build_one_element_compositions(element, min_atoms, max_atoms)``
      - Symbol lists for mono-element size scans (e.g. ``[["Pt", "Pt"], ["Pt", "Pt", "Pt"]]``)

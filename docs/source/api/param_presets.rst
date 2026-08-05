@@ -12,7 +12,6 @@ Preset Functions
 
 .. list-table:: GO Presets
    :widths: 35 65
-   :header-rows: 1
 
    * - ``get_testing_params()``
      - Fast EMT-based parameters for testing (small populations, few iterations)
@@ -39,7 +38,6 @@ Preset Functions
 
 .. list-table:: TS Presets
    :widths: 35 65
-   :header-rows: 1
 
    * - ``get_ts_search_params(calculator, calculator_kwargs, *, system_type, surface_config, seed)``
      - TS-only settings (NEB, calculator, pairing). Requires ``system_type``. For surfaces, also requires ``surface_config``. Default calculator is ``"MACE"``.

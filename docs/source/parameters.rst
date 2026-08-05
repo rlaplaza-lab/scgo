@@ -93,7 +93,6 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
 .. list-table::
    :widths: 25 10 65
-   :header-rows: 1
 
    * - ``calculator``
      - ``"MACE"``
@@ -157,7 +156,6 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
 .. list-table::
    :widths: 25 10 65
-   :header-rows: 1
 
    * - ``optimizer``
      - ``"FIRE"``
@@ -176,7 +174,6 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
 .. list-table::
    :widths: 25 10 65
-   :header-rows: 1
 
    * - ``population_size``
      - ``"auto"``
@@ -240,7 +237,6 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
 .. list-table::
    :widths: 25 10 65
-   :header-rows: 1
 
    * - ``temperature``
      - 500K
@@ -286,7 +282,6 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
 
 .. list-table::
    :widths: 25 10 60
-   :header-rows: 1
 
    * - ``calculator``
      - ``"MACE"``
@@ -326,7 +321,6 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
 
 .. list-table::
    :widths: 25 15 50
-   :header-rows: 1
 
    * - ``neb_n_images``
      - ``5`` / ``7`` (adsorbate)
@@ -406,7 +400,6 @@ Surface Config
 
 .. list-table::
    :widths: 25 10 65
-   :header-rows: 1
 
    * - ``slab``
      - Required
@@ -462,7 +455,6 @@ Adsorbate Config
 
 .. list-table::
    :widths: 25 10 65
-   :header-rows: 1
 
    * - ``height_min``
      - ``0.9``
