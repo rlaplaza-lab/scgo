@@ -105,7 +105,7 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
        └── final_unique_ts/
            └── Pt5_OH_OH_graphite_ts_01.xyz
 
-**Example — ``run_go_campaign`` with ``output_dir='benchmark/results'``:**
+**Example — ``run_go_campaign`` with** ``output_dir="benchmark/results"``:
 
 .. code-block:: text
 

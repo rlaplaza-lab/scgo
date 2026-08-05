@@ -153,7 +153,7 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``50.0``
      - Imaginary frequency cutoff (cm\ :sup:`-1`)
 
-**Simple (``optimizer_params['simple']``)** — used for 1–2 atom gas clusters only:
+**Simple** (``optimizer_params["simple"]``) — used for 1–2 atom gas clusters only:
 
 .. list-table::
    :widths: 25 10 65
@@ -172,7 +172,7 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``"auto"``
      - Local relaxation budget
 
-**GA (``optimizer_params['ga']``):**
+**GA** (``optimizer_params["ga"]``):
 
 .. list-table::
    :widths: 25 10 65
@@ -236,7 +236,7 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``None``
      - Optional TorchSim relaxer instance
 
-**BH (``optimizer_params['bh']``):**
+**BH** (``optimizer_params["bh"]``):
 
 .. list-table::
    :widths: 25 10 65
