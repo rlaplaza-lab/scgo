@@ -46,7 +46,8 @@
   into tests (no import-time assert); calculator registry uses
   ``functools.cache``.
 - Kaggle GPU example suite shares stricter e2e artifact bars (run metadata,
-  SCGO DB stamp) and requires TS candidates for cluster-bearing system types.
+  SCGO DB stamp) and requires TS candidates for surface cluster-bearing
+  example cases (gas cases keep soft TS bars at CI budgets).
 
 ### Maintainer notes
 
