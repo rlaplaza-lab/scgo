@@ -2,16 +2,6 @@
 
 Implements the GO->TS pipeline plumbing and the public ``run_go_ts`` /
 ``run_go_ts_campaign`` / ``run_ts_search`` / ``run_ts_campaign`` API.
-
-Note on the local ``scgo.runner_api`` imports scattered through this module:
-``scgo.runner_api`` re-exports ``_run_go_trials``, ``get_calculator_class``,
-``_ts_search``, and ``_ts_campaign`` as its own module attributes specifically
-so tests can do e.g. ``monkeypatch.setattr("scgo.runner_api._ts_search", ...)``.
-Since ``scgo.runner_api`` imports from this module at top level, importing it
-back here at module load time would be circular; calls to those names are
-therefore routed through a function-local import of ``scgo.runner_api`` so a
-patched attribute on ``scgo.runner_api`` is honored regardless of where the
-call originates.
 """
 
 from __future__ import annotations
@@ -24,7 +14,9 @@ from typing import Any
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.run_dir import get_run_directories, get_run_id_from_dir
 from scgo.runner_composition import CompositionInput, _as_composition_list
+from scgo.runner_go import _run_go_trials
 from scgo.runner_params import (
     RunGOTSContext,
     _coerce_ts_for_runner,
@@ -58,15 +50,21 @@ from scgo.system_types import (
     resolve_connectivity_factor,
     validate_system_type_settings,
 )
+from scgo.ts_search.transition_state_run import (
+    run_transition_state_campaign as _ts_campaign,
+)
+from scgo.ts_search.transition_state_run import (
+    run_transition_state_search as _ts_search,
+)
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
 from scgo.utils.output_paths import resolve_go_ts_pipeline_paths
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
+    get_calculator_class,
     initialize_ts_params,
     log_ts_configuration,
 )
-from scgo.utils.run_tracking import get_run_directories, get_run_id_from_dir
 from scgo.utils.timing_report import (
     GO_TS_TIMING_JSON_FILENAME,
     build_timing_payload,
@@ -100,8 +98,6 @@ def _run_go_ts_pipeline(
     alignment can use explicit core/adsorbate block sizes.
     For high-level entry points see :mod:`scgo.runner_api`.
     """
-    from scgo import runner_api as _runner_api
-
     configure_logging(verbosity)
     logger = get_logger(__name__)
 
@@ -146,15 +142,13 @@ def _run_go_ts_pipeline(
     merged_ga = go_params
     calculator_name = merged_ga["calculator"]
     calculator_kwargs = merged_ga.get("calculator_kwargs", {})
-    _ = _runner_api.get_calculator_class(calculator_name)
-    calculator_for_global_optimization = _runner_api.get_calculator_class(
-        calculator_name
-    )(
+    _ = get_calculator_class(calculator_name)
+    calculator_for_global_optimization = get_calculator_class(calculator_name)(
         **calculator_kwargs,
     )
     try:
         go_t0 = perf_counter()
-        minima_list = _runner_api._run_go_trials(
+        minima_list = _run_go_trials(
             composition,
             system_type,
             params=merged_ga,
@@ -162,7 +156,6 @@ def _run_go_ts_pipeline(
             verbosity=verbosity,
             output_dir=str(searches_dir),
             calculator_for_global_optimization=calculator_for_global_optimization,
-            params_already_merged=True,
         )
     finally:
         go_wall_s = perf_counter() - go_t0
@@ -196,7 +189,7 @@ def _run_go_ts_pipeline(
         surface_config=surface_cfg,
     )
 
-    ts_results = _runner_api._ts_search(
+    ts_results = _ts_search(
         composition,
         output_dir=output_path,
         seed=seed,
@@ -307,9 +300,7 @@ def _run_one_element_go_ts_pipeline(
 
 
 def _execute_run_go_ts(context: RunGOTSContext) -> dict[str, Any]:
-    from scgo import runner_api as _runner_api
-
-    return _runner_api._run_go_ts_pipeline(
+    return _run_go_ts_pipeline(
         context.composition,
         context.system_type,
         go_params=context.go_params,
@@ -497,8 +488,6 @@ def run_ts_search(
     ``run_*/pair_*/`` subdirectories. If ``output_dir`` points at an existing
     ``*_searches`` directory, its parent is treated as the campaign root.
     """
-    from scgo import runner_api as _runner_api
-
     try:
         context = _prepare_run_ts_search_context(
             composition,
@@ -523,7 +512,7 @@ def run_ts_search(
         base=context.ts_base,
     )
     t0 = perf_counter()
-    results = _runner_api._ts_search(
+    results = _ts_search(
         context.composition,
         output_dir=context.output_dir,
         searches_dir=context.searches_dir,
@@ -555,8 +544,6 @@ def run_ts_campaign(
     adsorbates: AdsorbatesInput | None = None,
     log_summary: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
-    from scgo import runner_api as _runner_api
-
     try:
         st = _require_system_type(system_type, "run_ts_campaign")
         validate_system_type_settings(system_type=st, surface_config=surface_config)
@@ -601,7 +588,7 @@ def run_ts_campaign(
     t0 = perf_counter()
     if ads_def:
         ts_kwargs["adsorbate_definition"] = ads_def
-    campaign = _runner_api._ts_campaign(
+    campaign = _ts_campaign(
         full_compositions,
         st,
         output_dir=out_path,

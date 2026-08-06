@@ -4,8 +4,8 @@ import sqlite3
 from ase import Atoms
 from ase.db import connect
 
-from scgo.database.metadata import mark_final_minima_in_db
-from scgo.database.schema import stamp_scgo_database
+from scgo.metadata.db_stamp import stamp_db
+from scgo.metadata.persist import mark_final_minima_in_db
 from tests.test_utils import assert_db_final_row
 
 
@@ -36,10 +36,10 @@ def test_mark_final_minima_prefers_final_id(tmp_path):
             },
         )
 
-    stamp_scgo_database(dbpath)
+    stamp_db(dbpath)
 
     atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
-    atoms.info["provenance"] = {"run_id": run_id}
+    atoms.info.setdefault("key_value_pairs", {})["run_id"] = run_id
     final_info = [
         {
             "atoms": atoms,
@@ -75,7 +75,7 @@ def test_mark_final_minima_prefers_relaxed_row_when_final_id_duplicated(tmp_path
             relaxed=True,
             key_value_pairs={"final_id": "dup-fid", "relaxed": True, "raw_score": -2.0},
         )
-    stamp_scgo_database(dbpath)
+    stamp_db(dbpath)
 
     atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
     final_info = [
@@ -109,10 +109,10 @@ def test_mark_final_minima_skips_entries_without_final_id(tmp_path):
             relaxed=True,
             key_value_pairs={"run_id": "r1", "raw_score": -0.1},
         )
-    stamp_scgo_database(dbpath)
+    stamp_db(dbpath)
 
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
-    atoms.info["provenance"] = {"run_id": "r1"}
+    atoms.info.setdefault("key_value_pairs", {})["run_id"] = "r1"
     summary = mark_final_minima_in_db(
         [{"atoms": atoms, "energy": -0.1, "rank": 1, "final_written": "foo.xyz"}],
         base_dir=str(tmp_path),
@@ -121,3 +121,43 @@ def test_mark_final_minima_skips_entries_without_final_id(tmp_path):
 
     assert summary["rows_updated"] == 0
     assert all(not kv.get("final_unique_minimum") for kv in _iter_system_kvps(dbpath))
+
+
+def test_mark_final_minima_fallback_scans_all_db(tmp_path):
+    """Find DB rows outside the usual run_*/ layout via registry + base_dir scan."""
+    from scgo.database.registry import get_registry
+
+    run_id = "run_test_fallback"
+    dbdir = tmp_path / "dbs"
+    dbdir.mkdir()
+    dbpath = dbdir / "other.db"
+    final_id = "fallback-fid"
+    pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    with connect(str(dbpath)) as db:
+        db.write(
+            pt2,
+            relaxed=True,
+            key_value_pairs={
+                "run_id": run_id,
+                "raw_score": -3.4,
+                "final_id": final_id,
+            },
+        )
+    stamp_db(dbpath)
+    get_registry(tmp_path).register_database(dbpath, run_id=run_id)
+
+    atoms = pt2.copy()
+    atoms.info.setdefault("key_value_pairs", {})["run_id"] = run_id
+    mark_final_minima_in_db(
+        [
+            {
+                "atoms": atoms,
+                "energy": None,
+                "rank": 1,
+                "final_written": "foo.xyz",
+                "final_id": final_id,
+            }
+        ],
+        base_dir=str(tmp_path),
+    )
+    assert_db_final_row(str(dbpath), run_id, expect_final_id=True)

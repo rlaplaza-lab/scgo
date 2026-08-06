@@ -2,8 +2,8 @@ import pytest
 from ase import Atoms
 
 from scgo.ase_ga_patches.population import Population
-from scgo.database.metadata import add_metadata
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from tests.test_utils import create_paired_rngs
 
 
@@ -24,7 +24,7 @@ def _make_candidate(symbols, raw_score, confid, relax_id):
     a.set_cell([10.0, 10.0, 10.0])
     a.set_pbc(False)
     # Add metadata used by get_raw_score
-    add_metadata(a, raw_score=raw_score)
+    set_tags(a, raw_score=raw_score)
     a.info["confid"] = confid
     a.info["relax_id"] = relax_id
     return a

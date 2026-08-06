@@ -220,6 +220,6 @@ def test_torchsim_prepare_relaxed_copy_attaches_fixatoms() -> None:
         fix_all_slab_atoms=False,
         n_relax_top_slab_layers=1,
     )
-    out = _torchsim_prepare_relaxed_copy(cand, cfg, len(slab))
+    out = _torchsim_prepare_relaxed_copy(cand, cfg, len(slab), surface_mode=True)
     assert out is not cand
     assert _fix_indices(out) == [0, 1, 2, 3]

@@ -13,14 +13,6 @@ Parameter resolution
    :undoc-members:
    :show-inheritance:
 
-Config aliases
---------------
-
-.. automodule:: scgo.utils.config_aliases
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Combine atoms
 -------------
 
@@ -41,14 +33,6 @@ Phase logging
 -------------
 
 .. automodule:: scgo.utils.phase_logging
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Run directories and metadata
-----------------------------
-
-.. automodule:: scgo.utils.run_tracking
    :members:
    :undoc-members:
    :show-inheritance:

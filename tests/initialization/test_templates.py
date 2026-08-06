@@ -12,14 +12,14 @@ from scgo.initialization import templates as templates_module
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.initialization.templates import (
     _find_valid_template_types,
+    _generate_cuboctahedron,
+    _generate_decahedron,
+    _generate_icosahedron,
+    _generate_octahedron,
     _generate_template_with_atom_adjustment,
-    generate_cuboctahedron,
-    generate_decahedron,
-    generate_icosahedron,
-    generate_octahedron,
+    _generate_truncated_octahedron,
     generate_template_matches,
     generate_template_structure,
-    generate_truncated_octahedron,
     get_nearest_magic_number,
     is_near_magic_number,
 )
@@ -81,7 +81,7 @@ class TestIcosahedronGeneration:
     @pytest.mark.parametrize("n_atoms", [13, 55, 147])
     def test_generate_icosahedron_magic_numbers(self, n_atoms, rng):
         """Test generation of magic number icosahedra."""
-        atoms = generate_icosahedron(["Pt"], n_atoms, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], n_atoms, rng=rng)
         assert atoms is not None
         assert len(atoms) == n_atoms
         assert isinstance(atoms, Atoms)
@@ -89,18 +89,18 @@ class TestIcosahedronGeneration:
     def test_generate_icosahedron_near_magic(self, rng):
         """Test generation near magic numbers."""
         # Test adding atoms
-        atoms = generate_icosahedron(["Pt"], 20, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], 20, rng=rng)
         assert atoms is not None
         assert len(atoms) == 20
 
         # Test removing atoms
-        atoms = generate_icosahedron(["Pt"], 50, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], 50, rng=rng)
         assert atoms is not None
         assert len(atoms) == 50
 
     def test_generate_icosahedron_multi_element(self, rng):
         """Test generation with multiple elements."""
-        atoms = generate_icosahedron(["Pt", "Au"], 13, rng=rng)
+        atoms = _generate_icosahedron(["Pt", "Au"], 13, rng=rng)
         assert atoms is not None
         assert len(atoms) == 13
         symbols = atoms.get_chemical_symbols()
@@ -109,20 +109,20 @@ class TestIcosahedronGeneration:
     def test_generate_icosahedron_empty_composition(self, rng):
         """Test that empty composition returns None (error is caught and logged)."""
         # Empty composition causes ValueError which is caught and returns None
-        result = generate_icosahedron([], 13, rng=rng)
+        result = _generate_icosahedron([], 13, rng=rng)
         assert result is None
 
     def test_generate_icosahedron_zero_atoms(self, rng):
         """Test generation with zero atoms."""
-        atoms = generate_icosahedron(["Pt"], 0, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], 0, rng=rng)
         assert atoms is None
 
     def test_generate_icosahedron_reproducible(self):
         """Test that generation is reproducible with same seed."""
         rng1, rng2 = create_paired_rngs(42)
 
-        atoms1 = generate_icosahedron(["Pt"], 20, rng=rng1)
-        atoms2 = generate_icosahedron(["Pt"], 20, rng=rng2)
+        atoms1 = _generate_icosahedron(["Pt"], 20, rng=rng1)
+        atoms2 = _generate_icosahedron(["Pt"], 20, rng=rng2)
 
         assert atoms1 is not None
         assert atoms2 is not None
@@ -135,7 +135,7 @@ class TestHcpElementTemplates:
 
     @pytest.mark.parametrize(
         "generator",
-        [generate_icosahedron, generate_decahedron, generate_octahedron],
+        [_generate_icosahedron, _generate_decahedron, _generate_octahedron],
     )
     def test_ase_templates_work_for_hcp_element(self, generator, rng):
         atoms = generator(["Mg"], 13, rng=rng)
@@ -150,20 +150,20 @@ class TestDecahedronGeneration:
     @pytest.mark.parametrize("n_atoms", [7, 13, 23, 39, 55])
     def test_generate_decahedron_common_sizes(self, n_atoms, rng):
         """Test generation of common decahedral sizes."""
-        atoms = generate_decahedron(["Pt"], n_atoms, rng=rng)
+        atoms = _generate_decahedron(["Pt"], n_atoms, rng=rng)
         assert atoms is not None
         assert len(atoms) == n_atoms
         assert isinstance(atoms, Atoms)
 
     def test_generate_decahedron_near_sizes(self, rng):
         """Test generation near common sizes."""
-        atoms = generate_decahedron(["Pt"], 25, rng=rng)
+        atoms = _generate_decahedron(["Pt"], 25, rng=rng)
         assert atoms is not None
         assert len(atoms) == 25
 
     def test_generate_decahedron_multi_element(self, rng):
         """Test generation with multiple elements."""
-        atoms = generate_decahedron(["Pt", "Au"], 23, rng=rng)
+        atoms = _generate_decahedron(["Pt", "Au"], 23, rng=rng)
         assert atoms is not None
         assert len(atoms) == 23
 
@@ -174,14 +174,14 @@ class TestOctahedronGeneration:
     @pytest.mark.parametrize("n_atoms", [6, 19, 44])
     def test_generate_octahedron_common_sizes(self, n_atoms, rng):
         """Test generation of common octahedral sizes."""
-        atoms = generate_octahedron(["Pt"], n_atoms, rng=rng)
+        atoms = _generate_octahedron(["Pt"], n_atoms, rng=rng)
         assert atoms is not None
         assert len(atoms) == n_atoms
         assert isinstance(atoms, Atoms)
 
     def test_generate_octahedron_near_sizes(self, rng):
         """Test generation near common sizes."""
-        atoms = generate_octahedron(["Pt"], 20, rng=rng)
+        atoms = _generate_octahedron(["Pt"], 20, rng=rng)
         assert atoms is not None
         assert len(atoms) == 20
 
@@ -240,7 +240,7 @@ class TestTemplateStructureProperties:
         """Test that template has correct composition."""
         composition = ["Pt", "Au", "Pt", "Au"]
         n_atoms = 13
-        atoms = generate_icosahedron(composition, n_atoms, rng=rng)
+        atoms = _generate_icosahedron(composition, n_atoms, rng=rng)
         assert atoms is not None
         assert len(atoms) == n_atoms
         # Should cycle through composition
@@ -252,7 +252,7 @@ class TestTemplateStructureProperties:
         """Test that template atoms form a connected structure."""
         from scgo.initialization import is_cluster_connected
 
-        atoms = generate_icosahedron(["Pt"], n_atoms, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], n_atoms, rng=rng)
         assert atoms is not None
         # For small clusters, check connectivity
         if n_atoms > 1:
@@ -266,7 +266,7 @@ class TestTemplateStructureProperties:
         """Test that template has no atomic clashes."""
         from ase.data import atomic_numbers, covalent_radii
 
-        atoms = generate_icosahedron(["Pt"], 13, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], 13, rng=rng)
         assert atoms is not None
 
         positions = atoms.get_positions()
@@ -310,14 +310,14 @@ class TestTemplateEdgeCases:
     def test_many_atoms_to_add(self, rng):
         """Test adding many atoms to base structure."""
         # Start with 13-atom icosahedron, add 20 atoms
-        atoms = generate_icosahedron(["Pt"], 33, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], 33, rng=rng)
         assert atoms is not None
         assert len(atoms) == 33
 
     def test_many_atoms_to_remove(self, rng):
         """Test removing many atoms from base structure."""
         # Start with 55-atom icosahedron, remove 20 atoms
-        atoms = generate_icosahedron(["Pt"], 35, rng=rng)
+        atoms = _generate_icosahedron(["Pt"], 35, rng=rng)
         assert atoms is not None
         assert len(atoms) == 35
 
@@ -397,7 +397,7 @@ class TestTemplateConnectivity:
     @pytest.mark.parametrize("n_atoms", [12, 13])
     def test_cuboctahedron_connected(self, n_atoms, rng):
         """Cuboctahedron for 12 or 13 atoms is connected within connectivity threshold."""
-        atoms = generate_cuboctahedron(
+        atoms = _generate_cuboctahedron(
             ["Pt"] * n_atoms, n_atoms, rng=rng, connectivity_factor=CONNECTIVITY_FACTOR
         )
         assert atoms is not None
@@ -408,7 +408,7 @@ class TestTemplateConnectivity:
 
     def test_truncated_octahedron_connected(self, rng):
         """Truncated octahedron for 24 atoms is connected within connectivity threshold."""
-        atoms = generate_truncated_octahedron(
+        atoms = _generate_truncated_octahedron(
             ["Pt"] * 24, 24, rng=rng, connectivity_factor=CONNECTIVITY_FACTOR
         )
         assert atoms is not None
@@ -420,10 +420,10 @@ class TestTemplateConnectivity:
     @pytest.mark.parametrize(
         "gen_func,n_atoms",
         [
-            (generate_icosahedron, 13),
-            (generate_icosahedron, 19),
-            (generate_decahedron, 23),
-            (generate_octahedron, 19),
+            (_generate_icosahedron, 13),
+            (_generate_icosahedron, 19),
+            (_generate_decahedron, 23),
+            (_generate_octahedron, 19),
         ],
     )
     def test_ase_templates_connected(self, gen_func, n_atoms, rng):

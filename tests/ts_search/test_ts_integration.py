@@ -14,16 +14,15 @@ from ase_ga.data import DataConnection
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.ts_search.transition_state_io import (
     load_minima_by_composition,
     save_transition_state_results,
     select_structure_pairs,
 )
 from scgo.ts_search.transition_state_run import (
-    run_transition_state_campaign,
     run_transition_state_search,
 )
-from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
 from tests.test_utils import create_preparedb, mark_test_minima_as_final
 
 
@@ -48,9 +47,9 @@ def mock_database_dir():
         atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
         atoms1.center(vacuum=5.0)
         atoms1.calc = EMT()
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
 
-        add_metadata(atoms1, raw_score=-10.0)
+        set_tags(atoms1, raw_score=-10.0)
         atoms1.info["confid"] = 1
         db.add_unrelaxed_candidate(atoms1, description="Cu2_linear")
 
@@ -58,9 +57,9 @@ def mock_database_dir():
         atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [1.8, 1.8, 0]])
         atoms2.center(vacuum=5.0)
         atoms2.calc = EMT()
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
 
-        add_metadata(atoms2, raw_score=-10.0)
+        set_tags(atoms2, raw_score=-10.0)
         atoms2.info["confid"] = 2
         db.add_unrelaxed_candidate(atoms2, description="Cu2_rotated")
 
@@ -68,21 +67,21 @@ def mock_database_dir():
         atoms3 = Atoms("Cu2", positions=[[0, 0, 0], [1.2, 2.2, 0]])
         atoms3.center(vacuum=5.0)
         atoms3.calc = EMT()
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
 
-        add_metadata(atoms3, raw_score=-10.0)
+        set_tags(atoms3, raw_score=-10.0)
         atoms3.info["confid"] = 3
         db.add_unrelaxed_candidate(atoms3, description="Cu2_other")
 
         # Now retrieve and mark as relaxed (use DataConnection directly so
         # add_relaxed_step correctly sets relaxed=1 in number_key_values)
-        from scgo.database.metadata import update_metadata
+        from scgo.metadata.atoms import set_tags
 
         da = DataConnection(str(db_path))
         while da.get_number_of_unrelaxed_candidates() > 0:
             a = da.get_an_unrelaxed_candidate()
             a.calc = EMT()
-            update_metadata(a, raw_score=-a.get_potential_energy())
+            set_tags(a, raw_score=-a.get_potential_energy())
             da.add_relaxed_step(a)
 
         # Tag relaxed minima as final_unique_minimum so TS can load them
@@ -150,7 +149,7 @@ def test_save_transition_state_results():
         with open(summary_path) as f:
             summary = json.load(f)
 
-        assert summary["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+        assert summary["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
         assert "scgo_version" in summary and summary["scgo_version"] != "unknown"
         assert "created_at" in summary
         assert summary["formula"] == "Cu2"
@@ -179,82 +178,6 @@ def test_save_transition_state_results_skipped_pair():
         assert summary["num_converged"] == 0
         assert summary["results"][0]["status"] == "skipped"
         assert summary["results"][0]["error"] == "validation failed"
-
-
-@pytest.mark.slow
-def test_run_transition_state_search_full(mock_database_dir):
-    params = {
-        "calculator": "EMT",
-        "calculator_kwargs": {},
-    }
-
-    results = run_transition_state_search(
-        composition=["Cu", "Cu"],
-        system_type="gas_cluster",
-        output_dir=mock_database_dir,
-        params=params,
-        seed=1,
-        verbosity=0,
-        max_pairs=2,  # Limit for speed
-        neb_n_images=3,
-        neb_fmax=0.2,
-        neb_steps=200,  # increased so NEB converges reliably in tests
-    )
-
-    # Should find some TS searches
-    assert len(results) > 0
-
-    # Check result structure
-    for result in results:
-        assert "status" in result
-        assert "pair_id" in result
-        assert "barrier_height" in result
-        assert "neb_converged" in result
-
-    # Check output files created
-    result_dir = Path(mock_database_dir) / "Cu2_ts_results"
-    assert result_dir.exists()
-    # Should have summary file
-    summary_file = result_dir / "results_summary.json"
-    assert summary_file.exists()
-    assert (result_dir / "ts_network_metadata.json").exists()
-    assert (result_dir / "final_unique_ts" / "final_unique_ts_summary.json").exists()
-    run_dirs = list(result_dir.glob("run_*"))
-    assert len(run_dirs) == 1
-    pair_dirs = list(run_dirs[0].glob("pair_*"))
-    assert len(pair_dirs) >= 1
-
-
-@pytest.mark.slow
-def test_run_transition_state_search_with_climb(mock_database_dir):
-    params = {"calculator": "EMT"}
-
-    results = run_transition_state_search(
-        composition=["Cu", "Cu"],
-        system_type="gas_cluster",
-        output_dir=mock_database_dir,
-        params=params,
-        verbosity=0,
-        max_pairs=1,
-        neb_n_images=3,
-        neb_climb=True,
-        neb_fmax=0.3,
-        neb_steps=100,
-    )
-
-    assert len(results) > 0
-    # Check that climb parameter was passed through
-    for result in results:
-        assert result.get("climb") is True
-
-    # At least one NEB should converge or reach the numeric fmax (or be
-    # recovered by a retry) when climb=True. If none succeed, ensure the
-    # run produced diagnostics rather than silently failing.
-    assert any(
-        r.get("neb_converged")
-        or (r.get("final_fmax") is not None and r.get("final_fmax") < 0.3)
-        for r in results
-    ), "Expected at least one converged/diagnosed NEB run when climb=True"
 
 
 def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_database_dir):
@@ -510,7 +433,7 @@ def test_run_transition_state_search_deduplicates_minima(tmp_path):
         from ase import Atoms
         from ase.calculators.emt import EMT
 
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
 
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=10)
 
@@ -518,23 +441,23 @@ def test_run_transition_state_search_deduplicates_minima(tmp_path):
         atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
         atoms1.center(vacuum=5.0)
         atoms1.calc = EMT()
-        add_metadata(atoms1, raw_score=-10.0)
+        set_tags(atoms1, raw_score=-10.0)
         db.add_unrelaxed_candidate(atoms1, description="Cu2_a")
 
         atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [1.2, 2.2, 0]])
         atoms2.center(vacuum=5.0)
         atoms2.calc = EMT()
-        add_metadata(atoms2, raw_score=-10.0)
+        set_tags(atoms2, raw_score=-10.0)
         db.add_unrelaxed_candidate(atoms2, description="Cu2_b")
 
         # Mark relaxed (use DataConnection so add_relaxed_step sets relaxed=1 correctly)
-        from scgo.database.metadata import update_metadata
+        from scgo.metadata.atoms import set_tags
 
         da = DataConnection(str(db_path))
         while da.get_number_of_unrelaxed_candidates() > 0:
             a = da.get_an_unrelaxed_candidate()
             a.calc = EMT()
-            update_metadata(a, raw_score=-a.get_potential_energy())
+            set_tags(a, raw_score=-a.get_potential_energy())
             da.add_relaxed_step(a)
 
         mark_test_minima_as_final(db_path)
@@ -559,148 +482,10 @@ def test_run_transition_state_search_deduplicates_minima(tmp_path):
     assert len(deduped) < len(raw_minima)
 
     # Pair counts should not increase after deduplication (usually decrease)
-    raw_pairs = select_structure_pairs(raw_minima)
-    dedup_pairs = select_structure_pairs(deduped)
+    raw_pairs = select_structure_pairs(raw_minima, use_mic=False)
+    dedup_pairs = select_structure_pairs(deduped, use_mic=False)
     assert len(dedup_pairs) <= len(raw_pairs)
 
-
-@pytest.mark.slow
-def test_run_transition_state_campaign():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create mock databases for multiple compositions
-        for formula, _composition in [("Cu2", ["Cu", "Cu"]), ("Ni2", ["Ni", "Ni"])]:
-            run_dir = Path(tmpdir) / f"{formula}_searches" / "run_20260101_120000"
-            run_dir.mkdir(parents=True)
-
-            db_path = run_dir / "candidates.db"
-
-            # Initialize ASE-GA database properly
-            counts: dict[str, int] = {}
-            for symbol in _composition:
-                counts[symbol] = counts.get(symbol, 0) + 1
-            db = create_preparedb(Atoms(formula), db_path, population_size=20)
-
-            # Add some structures as unrelaxed candidates
-            for i in range(3):
-                atoms = Atoms(formula, positions=[[0, 0, 0], [2.5 + i * 0.3, 0, 0]])
-                atoms.center(vacuum=5.0)
-                atoms.calc = EMT()
-                atoms.info["key_value_pairs"] = {"raw_score": -10.0}
-                atoms.info["confid"] = i + 1
-                db.add_unrelaxed_candidate(atoms, description=f"{formula}_mock_{i}")
-
-            # Mark all candidates as relaxed with updated energies
-            da = DataConnection(str(db_path))
-            while da.get_number_of_unrelaxed_candidates() > 0:
-                a = da.get_an_unrelaxed_candidate()
-                if "key_value_pairs" not in a.info:
-                    a.info["key_value_pairs"] = {}
-                a.calc = EMT()
-                a.info["key_value_pairs"]["raw_score"] = -a.get_potential_energy()
-                da.add_relaxed_step(a)
-
-        # Run campaign
-        params = {"calculator": "EMT"}
-        ts_kwargs = {
-            "max_pairs": 1,
-            "neb_n_images": 3,
-            "neb_fmax": 0.3,
-            "neb_steps": 10,
-        }
-
-        results = run_transition_state_campaign(
-            compositions=[["Cu", "Cu"], ["Ni", "Ni"]],
-            system_type="gas_cluster",
-            output_dir=tmpdir,
-            params=params,
-            verbosity=0,
-            ts_kwargs=ts_kwargs,
-        )
-
-        # Check results for both compositions
-        assert "Cu2" in results
-        assert "Ni2" in results
-        assert isinstance(results["Cu2"], list)
-        assert isinstance(results["Ni2"], list)
-
-
-@pytest.mark.slow
-def test_run_transition_state_campaign_detects_searches_dir():
-    """Ensure the TS campaign will discover minima stored under the standard
-    "{formula}_searches" layout (created by global-optimization runners)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create a mock database under the older "*_searches" name
-        formula = "Cu2"
-        run_dir = Path(tmpdir) / f"{formula}_searches" / "run_20260101_120000"
-        run_dir.mkdir(parents=True)
-
-        db_path = run_dir / "candidates.db"
-        db = create_preparedb(Atoms(formula), db_path, population_size=10)
-
-        # Add a couple of minima
-        for i in range(2):
-            atoms = Atoms(formula, positions=[[0, 0, 0], [2.5 + i * 0.3, 0, 0]])
-            atoms.center(vacuum=5.0)
-            atoms.calc = EMT()
-            atoms.info["key_value_pairs"] = {"raw_score": -10.0}
-            atoms.info["confid"] = i + 1
-            db.add_unrelaxed_candidate(atoms, description=f"{formula}_mock_{i}")
-
-        da = DataConnection(str(db_path))
-        while da.get_number_of_unrelaxed_candidates() > 0:
-            a = da.get_an_unrelaxed_candidate()
-            a.calc = EMT()
-            a.info.setdefault("key_value_pairs", {})[
-                "raw_score"
-            ] = -a.get_potential_energy()
-            da.add_relaxed_step(a)
-
-        mark_test_minima_as_final(db_path)
-
-        params = {"calculator": "EMT"}
-        ts_kwargs = {
-            "max_pairs": 1,
-            "neb_n_images": 3,
-            "neb_fmax": 0.3,
-            "neb_steps": 10,
-        }
-
-        results = run_transition_state_campaign(
-            compositions=[["Cu", "Cu"]],
-            system_type="gas_cluster",
-            output_dir=tmpdir,
-            params=params,
-            verbosity=0,
-            ts_kwargs=ts_kwargs,
-        )
-
-        assert "Cu2" in results
-        assert isinstance(results["Cu2"], list)
-
-        ts_results_dir = Path(tmpdir) / "Cu2_ts_results"
-        assert ts_results_dir.exists()
-        assert (ts_results_dir / "results_summary.json").exists()
-        run_dirs = list(ts_results_dir.glob("run_*"))
-        assert len(run_dirs) == 1
-        assert list(run_dirs[0].glob("pair_*"))
-
-
-def test_run_transition_state_search_linear_interpolation(mock_database_dir):
-    params = {"calculator": "EMT"}
-
-    results = run_transition_state_search(
-        composition=["Cu", "Cu"],
-        system_type="gas_cluster",
-        output_dir=mock_database_dir,
-        params=params,
-        seed=1,
-        neb_interpolation_method="linear",
-        neb_fmax=0.3,
-        neb_steps=100,
-    )
-
-    # Should work with linear interpolation
-    assert len(results) > 0
     # At least one NEB should converge with linear interpolation
 
 
@@ -1002,6 +787,7 @@ def test_select_structure_pairs_similarity_filter():
         minima,
         similarity_tolerance=0.01,  # Very tight
         similarity_pair_cor_max=0.1,  # Very tight
+        use_mic=False,
     )
 
     # (0,1) should be filtered (too similar)

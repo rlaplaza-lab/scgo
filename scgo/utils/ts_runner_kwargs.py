@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_NEB_TANGENT_METHOD
+from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.exceptions import (
     SCGOValidationError,
 )
@@ -57,67 +57,6 @@ class NebRunConfig:
     system_type: SystemType
     surface_config: SurfaceSystemConfig | None
     torchsim_params: dict[str, Any] | None
-
-    @classmethod
-    def from_kwargs(
-        cls,
-        *,
-        system_type: SystemType,
-        surface_config: SurfaceSystemConfig | None = None,
-        torchsim_params: dict[str, Any] | None = None,
-        neb_n_images: int = 3,
-        neb_spring_constant: float = 0.1,
-        neb_fmax: float = 0.20,
-        neb_steps: int | str = 2,
-        neb_climb: bool = False,
-        neb_interpolation_method: str = "idpp",
-        neb_align_endpoints: bool = True,
-        neb_perturb_sigma: float = 0.0,
-        neb_interpolation_mic: bool = False,
-        neb_tangent_method: str = DEFAULT_NEB_TANGENT_METHOD,
-        neb_surface_cell_remap: bool = True,
-        neb_surface_lattice_rotation: bool = True,
-        neb_surface_max_lattice_shift: int = 1,
-        n_slab: int = 0,
-        n_core_mobile: int | None = None,
-        n_adsorbate_mobile: int | None = None,
-        adsorbate_fragment_lengths: list[int] | None = None,
-        max_endpoint_mismatch: float | None = None,
-        adsorbate_definition: Any | None = None,
-        connectivity_factor: float | None = None,
-        allow_cluster_fragmentation: bool = False,
-        allow_adsorbate_surface_detachment: bool = False,
-        enforce_adsorbate_subgraph_integrity: bool = True,
-    ) -> NebRunConfig:
-        """Build a config from flat keyword arguments (tests / dispatch)."""
-        return cls(
-            neb_n_images=neb_n_images,
-            neb_spring_constant=neb_spring_constant,
-            neb_fmax=neb_fmax,
-            neb_steps=neb_steps,
-            neb_climb=neb_climb,
-            neb_interpolation_method=neb_interpolation_method,
-            neb_align_endpoints=neb_align_endpoints,
-            neb_perturb_sigma=neb_perturb_sigma,
-            neb_interpolation_mic=neb_interpolation_mic,
-            neb_tangent_method=neb_tangent_method,
-            neb_surface_cell_remap=neb_surface_cell_remap,
-            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
-            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
-            n_slab=n_slab,
-            n_core_mobile=n_core_mobile,
-            n_adsorbate_mobile=n_adsorbate_mobile,
-            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
-            max_endpoint_mismatch=max_endpoint_mismatch,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            system_type=system_type,
-            surface_config=surface_config,
-            torchsim_params=torchsim_params,
-        )
 
 
 def coerce_ts_params_to_runner_kwargs(

@@ -8,10 +8,10 @@ from ase.constraints import FixAtoms
 from ase.io import read as ase_read
 
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.ts_search.transition_state_io import write_final_unique_ts
 from scgo.ts_search.transition_state_run import integrate_ts_to_database
-from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
 from tests.test_utils import create_preparedb, mark_test_minima_as_final
 
 
@@ -250,7 +250,7 @@ def test_add_ts_to_database_persists_marker(tmp_path):
     can be reliably detected by tests and downstream tooling.
     """
     from scgo.database import get_connection
-    from scgo.database.metadata import get_metadata
+    from scgo.metadata.atoms import get_tag
     from scgo.ts_search.ts_network import add_ts_to_database
 
     db_file = tmp_path / "minima.db"
@@ -279,7 +279,7 @@ def test_add_ts_to_database_persists_marker(tmp_path):
 
     # Add TS to DB (include run provenance so DB row should persist it)
     ts = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-    ts.info.setdefault("provenance", {})["run_id"] = "run_ts_001"
+    ts.info.setdefault("key_value_pairs", {})["run_id"] = "run_ts_001"
 
     ep = [
         {"run_id": "run_A", "systems_row_id": 3},
@@ -302,44 +302,22 @@ def test_add_ts_to_database_persists_marker(tmp_path):
     with get_connection(str(db_file)) as da_read:
         rows = da_read.get_all_relaxed_candidates()
 
-    # Check both key_value_pairs and get_metadata for robustness across ASE versions
-    ts_rows = [
-        r
-        for r in rows
-        if r.info.get("key_value_pairs", {}).get("is_transition_state")
-        or get_metadata(r, "is_transition_state")
-    ]
+    # Prefer get_tag for decoded structure tags
+    ts_rows = [r for r in rows if get_tag(r, "is_transition_state")]
 
     assert len(ts_rows) == 1
 
     ts_row = ts_rows[0]
-    kv = ts_row.info.get("key_value_pairs", {})
-    assert kv.get("is_transition_state") is True
-    assert kv.get("ts_neb_converged") is True
-    assert kv.get("final_unique_ts") is not True
-    assert abs(kv.get("raw_score", 0.0) + 0.5) < 1e-6
+    assert get_tag(ts_row, "is_transition_state") is True
+    assert get_tag(ts_row, "ts_neb_converged") is True
+    assert get_tag(ts_row, "final_unique_ts") is not True
+    assert abs(float(get_tag(ts_row, "raw_score", 0.0)) + 0.5) < 1e-6
+    assert get_tag(ts_row, "run_id") == "run_ts_001"
+    assert get_tag(ts_row, "ts_pair_id") == "0_1" or get_tag(ts_row, "pair_id") == "0_1"
 
-    # Verify run_id persisted into DB row (metadata or key_value_pairs).
-    assert (
-        ts_row.info.get("metadata", {}).get("run_id") == "run_ts_001"
-        or ts_row.info.get("provenance", {}).get("run_id") == "run_ts_001"
-        or kv.get("run_id") == "run_ts_001"
-    )
-
-    # pair id may be stored in `metadata`/`provenance` but some DB adapters
-    # do not preserve these fields; accept the persistent key_value_pairs marker
-    # as proof the TS was written.
-    assert (
-        ts_row.info.get("metadata", {}).get("ts_pair_id") == "0_1"
-        or ts_row.info.get("provenance", {}).get("pair_id") == "0_1"
-        or kv.get("is_transition_state") is True
-    )
-
-    prov_json = ts_row.info.get("key_value_pairs", {}).get(
-        "ts_endpoint_provenance_json"
-    )
-    assert prov_json is not None
-    assert json.loads(prov_json) == ep
+    prov = get_tag(ts_row, "ts_endpoint_provenance_json")
+    assert prov is not None
+    assert prov == ep
 
 
 def test_integrate_ts_to_database_forwards_endpoint_provenance(monkeypatch, tmp_path):
@@ -460,7 +438,7 @@ def test_run_transition_state_search_skips_tagging_when_no_db(
         ts_output_dir, composition, prefer_final_unique: bool = False
     ):
         a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
-        a.info.setdefault("provenance", {})["source_db"] = "missing.db"
+        a.info.setdefault("key_value_pairs", {})["source_db"] = "missing.db"
         return {"Pt2": [(0.0, a.copy()), (0.1, a.copy())]}
 
     monkeypatch.setattr(
@@ -541,19 +519,20 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
     """
     from ase import Atoms
 
+    from scgo.metadata.atoms import get_tag
     from scgo.ts_search.transition_state_run import run_transition_state_search
 
     # Fake minima loader: two minima with provenance referencing a DB basename
     a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
-    a.info.setdefault("provenance", {})["source_db"] = "candidates.db"
-    a.info.setdefault("provenance", {})["confid"] = 11
-    a.info.setdefault("provenance", {})["unique_id"] = "min_11"
+    a.info.setdefault("key_value_pairs", {})["source_db"] = "candidates.db"
+    a.info.setdefault("key_value_pairs", {})["confid"] = 11
+    a.info.setdefault("key_value_pairs", {})["unique_id"] = "min_11"
 
     # Create a *separate* Atoms instance so provenance dicts are independent
     b = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
-    b.info.setdefault("provenance", {})["source_db"] = "candidates.db"
-    b.info.setdefault("provenance", {})["confid"] = 22
-    b.info.setdefault("provenance", {})["unique_id"] = "min_22"
+    b.info.setdefault("key_value_pairs", {})["source_db"] = "candidates.db"
+    b.info.setdefault("key_value_pairs", {})["confid"] = 22
+    b.info.setdefault("key_value_pairs", {})["unique_id"] = "min_22"
 
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
@@ -628,15 +607,17 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
     assert called, "add_ts_to_database was not called"
 
     ts_atoms = called[0]["ts_structure"]
-    prov = ts_atoms.info.get("provenance", {})
 
-    # The provenance enrichment should be present and reference the minima
-    assert prov.get("minima_source_db") == ["candidates.db", "candidates.db"]
-    assert prov.get("minima_confids") == [11, 22]
-    assert prov.get("minima_unique_ids") == ["min_11", "min_22"]
+    # Tag enrichment should reference the minima endpoints (decoded via get_tag)
+    assert get_tag(ts_atoms, "minima_source_db") == [
+        "candidates.db",
+        "candidates.db",
+    ]
+    assert get_tag(ts_atoms, "minima_confids") == [11, 22]
+    assert get_tag(ts_atoms, "minima_unique_ids") == ["min_11", "min_22"]
 
-    # Also ensure canonical metadata has the pair id for discovery
-    assert ts_atoms.info.get("metadata", {}).get("ts_connects_minima") == "0_1"
+    # Also ensure tags have the pair id for discovery
+    assert get_tag(ts_atoms, "ts_connects_minima") == "0_1"
 
 
 def test_run_transition_state_search_resolves_neb_steps_auto(monkeypatch):
@@ -896,11 +877,11 @@ def test_final_unique_ts_and_network_statistics_consistent(tmp_path):
     with open(final_summary_path) as f:
         final_summary = json.load(f)
 
-    assert final_summary["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+    assert final_summary["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
     assert "created_at" in final_summary
 
     for doc in (summary, net):
-        assert doc["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+        assert doc["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
         assert "scgo_version" in doc
         assert "created_at" in doc
     assert "statistics" in summary and isinstance(summary["statistics"], dict)

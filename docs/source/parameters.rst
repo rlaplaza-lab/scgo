@@ -410,10 +410,10 @@ Surface Config
        ``"graphite"`` (e.g. ``Pt5_OH_OH_graphite_searches``).
    * - ``adsorption_height_min``
      - ``1.2`` (class) / ``2.0`` (``make_surface_config``)
-     - Minimum height above slab (\ :math:`\AA`). Alias: ``height_min``.
+     - Minimum height above slab (\ :math:`\AA`).
    * - ``adsorption_height_max``
      - ``3.0`` (class) / ``3.5`` (``make_surface_config``)
-     - Maximum height above slab (\ :math:`\AA`). Alias: ``height_max``.
+     - Maximum height above slab (\ :math:`\AA`).
    * - ``surface_normal_axis``
      - ``2``
      - Normal axis (0=x, 1=y, 2=z)
@@ -445,9 +445,6 @@ Surface Config
 
 .. note::
    Use only one of the layer options, not both. See :doc:`/api/surface`.
-   Surface heights: ``adsorption_height_*`` (canonical) or ``height_*`` alias.
-   Adsorbate heights: ``height_*`` (canonical) or ``adsorption_height_*`` alias.
-   Conflicting values raise ``SCGOValidationError``.
 
 ----------------
 Adsorbate Config
@@ -458,10 +455,10 @@ Adsorbate Config
 
    * - ``height_min``
      - ``0.9``
-     - Minimum placement height (\ :math:`\AA`). Alias: ``adsorption_height_min``.
+     - Minimum placement height (\ :math:`\AA`).
    * - ``height_max``
      - ``2.2``
-     - Maximum placement height (\ :math:`\AA`). Alias: ``adsorption_height_max``.
+     - Maximum placement height (\ :math:`\AA`).
    * - ``max_placement_attempts``
      - ``80``
      - Maximum placement tries

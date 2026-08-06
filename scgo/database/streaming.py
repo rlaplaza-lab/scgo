@@ -17,11 +17,11 @@ from ase.db.row import AtomsRow
 
 from scgo.database.connection import get_connection
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
-from scgo.database.metadata import add_metadata
-from scgo.database.schema import is_scgo_database
 from scgo.database.sync import database_retry
 from scgo.exceptions import SCGOValidationError
-from scgo.utils.helpers import extract_energy_from_atoms
+from scgo.metadata.atoms import set_tags
+from scgo.metadata.db_stamp import is_scgo_db
+from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 from scgo.utils.logging import TRACE, get_logger
 
 logger = get_logger(__name__)
@@ -173,11 +173,11 @@ def iter_relaxed_structures(
                     logger.log(TRACE, "Skipping candidate id=%s: no energy", row_id)
                     continue
 
-                out = candidate.copy()
+                out = copy_atoms(candidate)
                 try:
-                    add_metadata(out, systems_row_id=int(row_id))
+                    set_tags(out, systems_row_id=int(row_id))
                 except (TypeError, ValueError) as e:
-                    logger.debug("Failed to attach systems_row_id metadata: %s", e)
+                    logger.debug("Failed to attach systems_row_id tag: %s", e)
                 yield (energy, out)
 
 
@@ -197,7 +197,7 @@ def iter_database_minima(
         logger.warning("Database does not exist: %s", db_path)
         return
 
-    if not is_scgo_database(db_path):
+    if not is_scgo_db(db_path):
         logger.debug("Skipping non-SCGO database: %s", db_path)
         return
 
@@ -247,7 +247,7 @@ def count_database_structures(db_path: str | Path) -> int:
     if not db_path.exists():
         return 0
 
-    if not is_scgo_database(db_path):
+    if not is_scgo_db(db_path):
         logger.debug("Skipping count for non-SCGO database: %s", db_path)
         return 0
 

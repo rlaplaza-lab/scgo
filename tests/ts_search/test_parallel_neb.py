@@ -17,8 +17,7 @@ pytestmark = pytest.mark.requires_cuda
 
 def _gas_neb_cfg(**overrides) -> NebRunConfig:
     """Minimal gas-cluster NebRunConfig for parallel NEB unit tests."""
-    kwargs = {
-        "system_type": "gas_cluster",
+    kwargs: dict = {
         "neb_n_images": 3,
         "neb_spring_constant": 0.1,
         "neb_fmax": 0.05,
@@ -29,10 +28,25 @@ def _gas_neb_cfg(**overrides) -> NebRunConfig:
         "neb_perturb_sigma": 0.0,
         "neb_interpolation_mic": False,
         "neb_tangent_method": "aseneb",
+        "neb_surface_cell_remap": True,
+        "neb_surface_lattice_rotation": True,
+        "neb_surface_max_lattice_shift": 1,
+        "n_slab": 0,
+        "n_core_mobile": None,
+        "n_adsorbate_mobile": None,
+        "adsorbate_fragment_lengths": None,
+        "max_endpoint_mismatch": None,
+        "adsorbate_definition": None,
+        "connectivity_factor": None,
+        "allow_cluster_fragmentation": False,
+        "allow_adsorbate_surface_detachment": False,
+        "enforce_adsorbate_subgraph_integrity": True,
+        "system_type": "gas_cluster",
+        "surface_config": None,
         "torchsim_params": {},
     }
     kwargs.update(overrides)
-    return NebRunConfig.from_kwargs(**kwargs)
+    return NebRunConfig(**kwargs)
 
 
 def _unique_neb_image_count(*image_lists: list) -> int:
@@ -508,7 +522,7 @@ def test_prepare_neb_endpoints_attaches_slab_fixatoms():
         slab=slab,
         fix_all_slab_atoms=True,
     )
-    neb_cfg = NebRunConfig.from_kwargs(
+    neb_cfg = _gas_neb_cfg(
         system_type="surface_cluster",
         surface_config=cfg,
         n_slab=n_slab,

@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers as ase_atomic_numbers
-from ase.spacegroup import Spacegroup
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
@@ -37,6 +36,7 @@ from scgo.initialization.geometry_helpers import (
     _generate_rotation_matrix,
     get_covalent_radius,
 )
+from scgo.metadata.atoms import get_tag
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.utils.combine_atoms import (
     concatenate_inherit_cell_pbc,
@@ -56,28 +56,6 @@ if TYPE_CHECKING:
     from scgo.system_types import AdsorbateDefinition, AdsorbateFragmentInput
 
 logger = get_logger(__name__)
-_ASE_SPACEGROUP_WARMUP_LOCK = Lock()
-_ASE_SPACEGROUP_WARMED = False
-
-
-def _warmup_ase_spacegroup_cache() -> None:
-    """Best-effort one-time warmup to avoid concurrent cold-file opens."""
-    global _ASE_SPACEGROUP_WARMED
-    if _ASE_SPACEGROUP_WARMED:
-        return
-    with _ASE_SPACEGROUP_WARMUP_LOCK:
-        if _ASE_SPACEGROUP_WARMED:
-            return
-        try:
-            # 225 is used by FCC/octahedral template generation.
-            Spacegroup(225)
-            _ASE_SPACEGROUP_WARMED = True
-        except Exception:
-            # Keep broad by design: warmup is optional and must never block deposition.
-            logger.debug(
-                "Failed to pre-warm ASE Spacegroup cache; continuing without warmup.",
-                exc_info=True,
-            )
 
 
 def _slab_surface_layer(slab: Atoms, axis: int, thickness: float = 2.5) -> Atoms:
@@ -512,7 +490,7 @@ def create_deposited_cluster_batch(
         def _record_batch_site_type_sequential(structure: Atoms) -> None:
             if shared_site_counts is None:
                 return
-            site_type = structure.info.get("adsorbate_site_type")
+            site_type = get_tag(structure, "adsorbate_site_type")
             if not isinstance(site_type, str):
                 return
             if site_type in shared_site_counts:
@@ -556,7 +534,7 @@ def create_deposited_cluster_batch(
     def _record_batch_site_type(structure: Atoms) -> None:
         if shared_site_counts is None or site_counts_lock is None:
             return
-        site_type = structure.info.get("adsorbate_site_type")
+        site_type = get_tag(structure, "adsorbate_site_type")
         if not isinstance(site_type, str):
             return
         with site_counts_lock:
@@ -590,7 +568,6 @@ def create_deposited_cluster_batch(
         )
 
     workers = min(n_structures, resolve_n_jobs_to_workers(n_jobs))
-    _warmup_ase_spacegroup_cache()
     ordered_results: list[Atoms | None] = [None] * n_structures
     with ThreadPoolExecutor(
         max_workers=workers, thread_name_prefix="scgo_deposit"

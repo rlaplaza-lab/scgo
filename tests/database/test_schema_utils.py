@@ -2,8 +2,8 @@ import sqlite3
 from pathlib import Path
 
 from scgo.database.discovery import DatabaseDiscovery
-from scgo.database.schema import get_scgo_metadata, is_scgo_database
 from scgo.database.streaming import iter_database_minima
+from scgo.metadata.db_stamp import get_db_stamp, is_scgo_db
 
 
 def _create_dummy_db(db_path: Path) -> None:
@@ -16,25 +16,25 @@ def _create_dummy_db(db_path: Path) -> None:
         conn.commit()
 
 
-def test_get_scgo_metadata_returns_empty_for_non_scgo_db(tmp_path: Path):
+def test_get_db_stamp_returns_empty_for_non_scgo_db(tmp_path: Path):
     run_dir = tmp_path / "run_000"
     db_path = run_dir / "ga_go.db"
     _create_dummy_db(db_path)
 
-    assert get_scgo_metadata(db_path) == {}
-    assert not is_scgo_database(db_path)
+    assert get_db_stamp(db_path) == {}
+    assert not is_scgo_db(db_path)
 
 
-def test_stamp_scgo_database_invalidates_is_scgo_cache(tmp_path: Path):
-    from scgo.database.schema import stamp_scgo_database
+def test_stamp_db_invalidates_is_scgo_db_cache(tmp_path: Path):
+    from scgo.metadata.db_stamp import stamp_db
 
     run_dir = tmp_path / "run_000"
     db_path = run_dir / "ga_go.db"
     _create_dummy_db(db_path)
 
-    assert not is_scgo_database(db_path)  # caches False
-    stamp_scgo_database(db_path)
-    assert is_scgo_database(db_path)  # must not keep stale False
+    assert not is_scgo_db(db_path)  # caches False
+    stamp_db(db_path)
+    assert is_scgo_db(db_path)  # must not keep stale False
 
 
 def test_find_databases_skips_non_scgo_db(tmp_path: Path):
@@ -70,7 +70,7 @@ def test_setup_database_marks_scgo_db(tmp_path: Path):
     da = setup_database(run_dir, "ga_go.db", template, initial_candidate=template)
     try:
         db_path = run_dir / "ga_go.db"
-        meta = get_scgo_metadata(db_path)
+        meta = get_db_stamp(db_path)
         assert meta.get("created_by") == "scgo"
         assert "schema_version" in meta and int(meta["schema_version"]) >= 1
     finally:

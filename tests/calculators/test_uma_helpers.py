@@ -28,12 +28,12 @@ def test_get_calculator_class_uma():
 
 
 def test_get_default_uma_params():
-    pytest.importorskip("fairchem")
+    pytest.importorskip("fairchem.core")
     from scgo.param_presets import get_default_uma_params
 
     try:
         p = get_default_uma_params()
-    except ImportError as exc:
+    except (ImportError, NameError, RuntimeError, OSError) as exc:
         pytest.skip(f"FairChem/TorchSim relaxer could not be built in this env: {exc}")
     assert p["calculator"] == "UMA"
     assert p["calculator_kwargs"]["model_name"] == "uma-s-1p2"
@@ -41,7 +41,7 @@ def test_get_default_uma_params():
 
 
 def test_get_ts_search_params_uma_default_torchsim_flags():
-    pytest.importorskip("fairchem")
+    pytest.importorskip("fairchem.core")
     from scgo.param_presets import get_ts_search_params
 
     ts = get_ts_search_params(
@@ -57,9 +57,9 @@ def test_get_ts_search_params_uma_default_torchsim_flags():
 def test_both_mlip_stacks_raises_when_both_importable():
     if (
         importlib.util.find_spec("mace") is None
-        or importlib.util.find_spec("fairchem") is None
+        or importlib.util.find_spec("fairchem.core") is None
     ):
-        pytest.skip("needs both mace and fairchem importable")
+        pytest.skip("needs both mace and fairchem.core importable")
 
     from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from tests.test_utils import assert_e2e_minima_list
+
 pytest.importorskip("upet")
 pytest.importorskip("metatomic_torchsim")
 pytest.importorskip("torch_sim")
@@ -103,5 +105,8 @@ def test_upet_run_go_gpu_smoke(tmp_path: Path):
         output_dir=tmp_path / "upet_go",
         verbosity=0,
     )
-    assert results
-    assert all(isinstance(e, float) for e, _ in results)
+    assert_e2e_minima_list(
+        results,
+        expected_n_atoms=4,
+        output_dir=tmp_path / "upet_go",
+    )

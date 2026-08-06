@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -13,11 +11,11 @@ from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_ga_pairing
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from scgo.surface import deposition as deposition_module
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.surface.deposition import (
-    _warmup_ase_spacegroup_cache,
     create_deposited_cluster,
     create_deposited_cluster_batch,
     slab_surface_extreme,
@@ -179,26 +177,6 @@ def test_create_deposited_cluster_batch_threaded_is_seed_deterministic(
     assert marks1 == marks2
 
 
-def test_warmup_ase_spacegroup_cache_singleflight_is_threadsafe(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[int] = []
-
-    def _fake_spacegroup(_: int) -> object:
-        calls.append(1)
-        return object()
-
-    monkeypatch.setattr(deposition_module, "Spacegroup", _fake_spacegroup)
-    monkeypatch.setattr(deposition_module, "_ASE_SPACEGROUP_WARMED", False)
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        futures = [ex.submit(_warmup_ase_spacegroup_cache) for _ in range(20)]
-        for f in futures:
-            f.result()
-
-    assert len(calls) == 1
-
-
 def test_create_deposited_cluster_preserves_adsorbate_symbol_order_with_two_oh(
     pt_slab: Atoms,
 ) -> None:
@@ -338,7 +316,7 @@ def test_parallel_batch_updates_shared_site_counts(monkeypatch, pt_slab):
         assert kwargs.get("batch_site_counts") is site_counts
         mobile = Atoms("Pt", positions=[[0, 0, 3.0]])
         combined = pt_slab + mobile
-        combined.info["adsorbate_site_type"] = "vertex"
+        set_tags(combined, adsorbate_site_type="vertex")
         return combined
 
     monkeypatch.setattr(

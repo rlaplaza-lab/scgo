@@ -15,7 +15,7 @@ from ase.build import fcc111
 from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 
 from scgo.ase_ga_patches.cutandsplicepairing import CutAndSplicePairing
-from scgo.ase_ga_patches.standardmutations import (
+from scgo.ase_ga_patches.mutations import (
     AnisotropicRattleMutation,
     BreathingMutation,
     FlatteningMutation,

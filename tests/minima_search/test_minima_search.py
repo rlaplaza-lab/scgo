@@ -10,11 +10,11 @@ from ase.calculators.emt import EMT
 from ase.io import read
 
 import scgo.minima_search.core as main_mod
-from scgo.database.metadata import add_metadata
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.minima_search import run_trials, scgo
 from scgo.utils.helpers import ensure_directory_exists
-from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
 from tests.test_utils import create_test_atoms, setup_test_atoms
 
 
@@ -33,48 +33,6 @@ class TestRequireCalculator:
         provided_calc = EMT()
         calc = main_mod._require_calculator(provided_calc)
         assert calc is provided_calc
-
-
-class TestValidateCalculatorCompatibility:
-    """Tests for calculator interface validation."""
-
-    def test_valid_calculator(self):
-        """Test validation passes for valid calculator."""
-        calc = EMT()
-        is_valid, msg = main_mod._validate_calculator_compatibility(calc)
-        assert is_valid is True
-        assert "compatible" in msg.lower()
-
-    def test_calculator_missing_method(self):
-        """Test validation fails for calculator missing required methods."""
-
-        class BadCalculator:
-            """Calculator missing get_forces method."""
-
-            def get_potential_energy(self):
-                return 0.0
-
-        calc = BadCalculator()
-        is_valid, msg = main_mod._validate_calculator_compatibility(calc)
-        assert is_valid is False
-        assert "missing" in msg.lower()
-        assert "get_forces" in msg
-
-    def test_calculator_custom_required_methods(self):
-        """Test validation with custom required methods list."""
-        calc = EMT()
-
-        # Should pass with custom list that calculator has
-        is_valid, msg = main_mod._validate_calculator_compatibility(
-            calc, required_methods=["get_potential_energy"]
-        )
-        assert is_valid is True
-
-        # Should fail with method calculator doesn't have
-        is_valid, msg = main_mod._validate_calculator_compatibility(
-            calc, required_methods=["nonexistent_method"]
-        )
-        assert is_valid is False
 
 
 class TestScgoFunction:
@@ -287,26 +245,6 @@ class TestScgoFunction:
                 verbosity=0,
             )
 
-    def test_scgo_invalid_calculator(self, tmp_path, rng):
-        """Test scgo() validates calculator interface requirements."""
-
-        class BadCalculator:
-            """Calculator missing required methods."""
-
-        composition = ["Pt", "Pt"]
-        output_dir = str(tmp_path / "test_bad_calc")
-
-        with pytest.raises(SCGOValidationError, match="Calculator validation failed"):
-            scgo(
-                composition=composition,
-                global_optimizer="bh",
-                global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-                output_dir=output_dir,
-                rng=rng,
-                calculator_for_global_optimization=BadCalculator(),
-                verbosity=0,
-            )
-
     def test_scgo_creates_output_directory(self, tmp_path, rng):
         """Test scgo() creates output directory if it doesn't exist."""
         composition = ["Pt", "Pt"]
@@ -342,8 +280,9 @@ class TestScgoFunction:
         )
 
         for _, atoms in results:
-            assert "provenance" in atoms.info
-            assert atoms.info["provenance"]["run_id"] == run_id
+            from scgo.metadata.atoms import get_tag
+
+            assert get_tag(atoms, "run_id") == run_id
 
     def test_scgo_empty_composition(self, tmp_path, rng):
         """Test scgo() raises error for empty composition."""
@@ -558,7 +497,7 @@ def _slab_pt_adsorbate_pair(*, mobile_xy=(0.1, 0.1), wrap_x=False):
     wrapped = slab.copy() + Atoms("Pt", positions=[[x_mob, mobile_xy[1], z0]])
     for atoms in (ref, wrapped):
         atoms.pbc = slab.pbc
-        add_metadata(
+        set_tags(
             atoms,
             run_id="run_test",
             system_type="surface_cluster",
@@ -604,7 +543,7 @@ class TestRunTrialsSurfaceAlignment:
 
     def test_resolve_n_core_mobile_from_metadata_and_definition(self):
         atoms = Atoms("Pt2OH", positions=[[0, 0, 0], [2, 0, 0], [1, 0, 1], [1, 0, 2]])
-        add_metadata(atoms, n_core_atoms=2)
+        set_tags(atoms, n_core_atoms=2)
         assert main_mod._resolve_n_core_mobile_for_alignment(atoms, {}) == 2
         bare = Atoms("Pt2OH", positions=[[0, 0, 0], [2, 0, 0], [1, 0, 1], [1, 0, 2]])
         assert (
@@ -741,7 +680,7 @@ class TestRunTrialsSurfaceAlignment:
 
     def test_run_trials_gas_skips_slab_alignment(self, tmp_path, rng, monkeypatch):
         atoms = create_test_atoms(["Pt", "Pt"])
-        add_metadata(atoms, run_id="run_test", system_type="gas_cluster")
+        set_tags(atoms, run_id="run_test", system_type="gas_cluster")
         align_calls = 0
 
         def _fake_scgo(**_kwargs):
@@ -812,7 +751,7 @@ class TestWriteResultsSummary:
         assert summary["total_unique_minima"] == 2
         assert summary["params"] == sample_params
         assert summary["run_metadata_relpath"] == "test_run_123/metadata.json"
-        assert summary["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+        assert summary["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
         assert isinstance(summary.get("scgo_version"), str) and summary["scgo_version"]
         assert isinstance(summary.get("python_version"), str)
         assert isinstance(summary.get("created_at"), str)
@@ -839,7 +778,7 @@ class TestWriteResultsSummary:
         assert summary["total_unique_minima"] == 0
         assert summary["params"] is None
         assert summary["run_metadata_relpath"] == "test_run_empty/metadata.json"
-        assert summary["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+        assert summary["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
         assert isinstance(summary.get("scgo_version"), str) and summary["scgo_version"]
 
 

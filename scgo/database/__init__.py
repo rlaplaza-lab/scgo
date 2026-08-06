@@ -28,19 +28,10 @@ from scgo.database.helpers import (
     setup_database,
 )
 from scgo.database.manager import SCGODatabaseManager
-from scgo.database.metadata import (
-    add_metadata,
-    filter_by_metadata,
-    get_metadata,
-    mark_final_minima_in_db,
-    persist_provenance,
-    update_metadata,
-)
 from scgo.database.registry import (
     clear_registry_cache,
     get_registry,
 )
-from scgo.database.schema import stamp_scgo_database
 from scgo.database.sync import (
     HPC_DATABASE_EXCEPTIONS,
     RetryConfig,
@@ -48,6 +39,7 @@ from scgo.database.sync import (
     retry_transaction,
 )
 from scgo.database.transactions import database_transaction
+from scgo.metadata.persist import mark_final_minima_in_db
 
 __all__ = [
     "get_global_cache",
@@ -63,14 +55,8 @@ __all__ = [
     "load_reference_structures",
     "list_discovered_db_paths_with_run",
     "mark_final_minima_in_db",
-    "persist_provenance",
     "SCGODatabaseManager",
     "database_transaction",
-    "stamp_scgo_database",
-    "add_metadata",
-    "get_metadata",
-    "update_metadata",
-    "filter_by_metadata",
     "HPC_DATABASE_EXCEPTIONS",
     "RetryConfig",
     "database_retry",

@@ -152,7 +152,7 @@ UTC-based):
 
 Repeat ``run_go`` to add sibling ``run_*`` directories; SCGO merges prior minima
 via database discovery and deduplication.
-:func:`~scgo.utils.run_tracking.get_run_directories`
+:func:`~scgo.metadata.run_dir.get_run_directories`
 lists only datetime-pattern ``run_*`` dirs; custom IDs work at runtime but are
 omitted by that helper.
 
@@ -161,8 +161,10 @@ Per-run files
 
 Under each ``run_*`` directory:
 
-- ``metadata.json`` — composition, params snapshot, provenance header (``schema_version``,
-  ``scgo_version``, ``created_at`` UTC ISO-8601 with ``Z``, ``python_version``, ``timestamp``)
+- ``metadata.json`` — composition, params snapshot, and output-JSON provenance
+  header (``schema_version`` = 3, ``scgo_version``, ``created_at`` UTC ISO-8601
+  with ``Z``, ``python_version``, ``timestamp``). This ``schema_version`` is the
+  **output-JSON** header version, not the SQLite DB stamp version.
 - ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db`` — optimizer database (GO only)
 - ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``); includes
   ``run_id``, ``timing_schema_version``, and the same provenance header fields
@@ -195,7 +197,9 @@ TS results record endpoint lineage in ``minima_provenance`` (in
    * - Field
      - Meaning
    * - ``schema_version`` / ``scgo_version`` / ``created_at`` / ``python_version``
-     - Shared JSON provenance header on summaries, metadata, and timing files
+     - Shared **output-JSON** provenance header on summaries, metadata, and timing
+       files (``schema_version`` = 3). Distinct from the SQLite ``scgo_metadata``
+       table stamp (``schema_version`` = 2; see :mod:`scgo.metadata.db_stamp`).
    * - ``run_id``
      - GO run that produced the endpoint minimum
    * - ``source_db`` / ``source_db_relpath``

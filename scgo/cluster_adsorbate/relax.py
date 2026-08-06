@@ -22,11 +22,11 @@ from scgo.cluster_adsorbate.constraints import attach_fix_bond_lengths
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
-from scgo.utils.rng_helpers import ensure_rng_or_create
-from scgo.utils.ts_provenance import (
+from scgo.metadata.provenance import (
     CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION,
-    ts_output_provenance,
+    output_json_provenance,
 )
+from scgo.utils.rng_helpers import ensure_rng_or_create
 
 
 def _validate_combined(
@@ -157,7 +157,7 @@ def relax_metal_cluster_with_adsorbate(
         "bond_lengths": bond_lengths,
     }
     calc_obj = combined.calc
-    info["provenance"] = ts_output_provenance(
+    info["output_provenance"] = output_json_provenance(
         extra={
             "cluster_adsorbate_schema_version": CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION,
             "formula": combined.get_chemical_formula(),

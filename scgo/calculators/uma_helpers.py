@@ -75,6 +75,18 @@ class UMA(Calculator):
         self.results = self._inner.results
 
 
+def infer_uma_model_name_from_calculator(calculator: Calculator) -> str | None:
+    """Return the UMA/FairChem model name from an ASE calculator, if known."""
+    model_name = getattr(calculator, "model_name", None)
+    if isinstance(model_name, str) and model_name:
+        return model_name
+    name = getattr(calculator, "name", "") or ""
+    if name.startswith("UMA-"):
+        suffix = name.removeprefix("UMA-")
+        return suffix or None
+    return None
+
+
 def try_extract_torchsim_model_from_uma_calculator(
     calculator: Calculator,
 ) -> object | None:
@@ -92,10 +104,7 @@ def try_extract_torchsim_model_from_uma_calculator(
 
     inner = getattr(calculator, "_inner", None)
     if inner is None:
-        # Bare FAIRChemCalculator (no SCGO UMA wrapper).
-        if getattr(calculator, "predictor", None) is None:
-            return None
-        inner = calculator
+        return None
 
     predictor = getattr(inner, "predictor", None)
     if predictor is None:

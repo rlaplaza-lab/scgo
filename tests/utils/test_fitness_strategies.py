@@ -11,7 +11,6 @@ from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
-    ensure_fitness_strategy_resolved,
     get_fitness_from_atoms,
     resolve_fitness_strategy,
     set_fitness_in_atoms,
@@ -58,7 +57,7 @@ def test_resolve_fitness_strategy_inherits_from_top_level():
 def test_ensure_fitness_strategy_resolved_rejects_none():
     """Unresolved preset sentinels must fail at algorithm boundaries."""
     with pytest.raises(SCGOValidationError, match="cannot be None"):
-        ensure_fitness_strategy_resolved(None)
+        resolve_fitness_strategy(None, allow_none=False)
 
 
 def test_calculate_fitness_low_energy():
@@ -104,14 +103,13 @@ def test_calculate_fitness_diversity_no_references():
 
 
 def test_calculate_fitness_diversity_missing_scorer():
-    """Test diversity fitness returns 0 when scorer not provided (no references)."""
+    """Test diversity fitness raises when scorer is not provided."""
     atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     atoms.calc = EMT()
     energy = atoms.get_potential_energy()
 
-    # Should return neutral score (0.0) when no diversity_scorer is supplied
-    fitness = calculate_fitness(energy, atoms, "diversity")
-    assert fitness == pytest.approx(0.0, abs=1e-8)
+    with pytest.raises(SCGOValidationError, match="requires a diversity_scorer"):
+        calculate_fitness(energy, atoms, "diversity")
 
 
 def test_calculate_fitness_diversity_with_references():

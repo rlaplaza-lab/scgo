@@ -22,15 +22,15 @@ from scgo.database import (
     extract_minima_from_database_file,
     load_previous_run_results,
 )
-from scgo.minima_search import run_trials
-from scgo.utils.run_tracking import (
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
+from scgo.metadata.run_dir import (
     generate_run_id,
     get_run_directories,
     get_run_id_from_dir,
-    load_run_metadata,
-    save_run_metadata,
+    load_run_dir_record,
+    save_run_dir_record,
 )
-from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
+from scgo.minima_search import run_trials
 
 
 def test_run_id_generation():
@@ -71,14 +71,14 @@ def test_save_and_load_metadata(tmp_path):
     run_id = "run_20250124_143022_123456"
 
     metadata = {"composition": ["Pt", "Pt", "Pt"], "params": {"test": "value"}}
-    save_run_metadata(run_dir, run_id, metadata)
+    save_run_dir_record(run_dir, run_id, metadata)
 
     # Verify file exists
     metadata_file = Path(run_dir) / "metadata.json"
     assert metadata_file.exists()
 
     # Load and verify
-    loaded = load_run_metadata(run_dir)
+    loaded = load_run_dir_record(run_dir)
     assert loaded is not None
     assert loaded.run_id == run_id
     assert loaded.composition == ["Pt", "Pt", "Pt"]
@@ -86,7 +86,7 @@ def test_save_and_load_metadata(tmp_path):
 
     with open(metadata_file) as f:
         raw = json.load(f)
-    assert raw["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+    assert raw["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
     assert isinstance(raw.get("scgo_version"), str) and raw["scgo_version"]
     assert isinstance(raw.get("python_version"), str) and raw["python_version"]
     assert isinstance(raw.get("created_at"), str) and raw["created_at"]
@@ -114,7 +114,7 @@ def test_run_metadata_includes_run_params(tmp_path, rng):
         clean=False,
     )
 
-    loaded = load_run_metadata(str(Path(output_dir) / run_id))
+    loaded = load_run_dir_record(str(Path(output_dir) / run_id))
     assert loaded is not None
     assert isinstance(loaded.params, dict)
     assert loaded.params.get("global_optimizer") == "bh"
@@ -153,7 +153,7 @@ def test_extract_minima_from_database_file(tmp_path, pt3_atoms):
     # Full database testing is covered by integration tests
 
 
-def test_extract_minima_persist_provenance_writes_to_db(test_database):
+def test_extract_minima_persist_run_id_writes_to_db(test_database):
     """When persist=True, run_id should be written back into DB rows."""
     from scgo.database import extract_minima_from_database_file
 
@@ -493,17 +493,18 @@ def test_no_duplicates_across_runs(tmp_path):
 
 def test_campaign_run_id_consistency(tmp_path):
     """Test that campaign functions generate consistent run IDs."""
-    from scgo.runner_api import (
-        _run_go_campaign_compositions,
-        build_one_element_compositions,
-    )
+    from scgo.runner_api import build_one_element_compositions
+    from scgo.runner_go import _run_go_campaign_compositions
+    from scgo.utils.run_helpers import initialize_params
 
-    params = {
-        "calculator": "EMT",
-        "optimizer_params": {
-            "bh": {"niter": 1, "niter_local_relaxation": 2},
-        },
-    }
+    params = initialize_params(
+        {
+            "calculator": "EMT",
+            "optimizer_params": {
+                "bh": {"niter": 1, "niter_local_relaxation": 2},
+            },
+        }
+    )
 
     campaign_dir = tmp_path / "campaign"
     # Run campaign (clean=True to avoid conflicts with previous runs)

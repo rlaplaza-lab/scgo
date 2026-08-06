@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+from functools import cache
 from typing import Any
 
 import numpy as np
@@ -37,14 +38,10 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
 
-_CALCULATORS_CACHE: dict[str, Any] | None = None
 
-
+@cache
 def _get_calculators() -> dict[str, Any]:
     """ASE calculator registry; MLIP entries are None if extras are not installed."""
-    global _CALCULATORS_CACHE
-    if _CALCULATORS_CACHE is not None:
-        return _CALCULATORS_CACHE
     calcs: dict[str, Any] = {"EMT": EMT}
     try:
         from scgo.calculators.mace_helpers import MACE
@@ -64,7 +61,6 @@ def _get_calculators() -> dict[str, Any]:
         calcs["UPET"] = UPET
     except ImportError:
         calcs["UPET"] = None
-    _CALCULATORS_CACHE = calcs
     return calcs
 
 

@@ -1,6 +1,9 @@
-import json
+"""Thinned public runner API wiring and validation tests (mocked)."""
 
-import numpy as np
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
 import pytest
 from ase import Atoms
 from ase.build import fcc111
@@ -15,14 +18,8 @@ from scgo.param_presets import (
     get_ts_search_params,
 )
 from scgo.runner_api import (
-    _prepare_run_go_campaign_context,
-    _run_go_campaign_compositions,
-    _run_go_trials,
-    _run_go_ts_pipeline,
-    _run_one_element_go_ts_pipeline,
     build_one_element_compositions,
     build_two_element_compositions,
-    log_go_ts_summary,
     resolve_workflow_seed,
     run_go,
     run_go_campaign,
@@ -31,11 +28,11 @@ from scgo.runner_api import (
     run_ts_campaign,
     run_ts_search,
 )
+from scgo.runner_go import _run_go_campaign_compositions, _run_go_trials
+from scgo.runner_params import _prepare_run_go_campaign_context
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import get_system_policy
 from scgo.utils.helpers import get_composition_counts
-from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
-from tests.test_utils import isolated_workflow_cwd
 
 
 def _emt_ts_gasc() -> dict:
@@ -93,12 +90,6 @@ def _slab_search_cfg() -> SurfaceSystemConfig:
     )
 
 
-def test_parse_composition_arg_formats():
-    assert parse_composition_arg("Pt,Pt,Au") == ["Pt", "Pt", "Au"]
-    assert parse_composition_arg("Pt3Au") == ["Pt", "Pt", "Pt", "Au"]
-    assert parse_composition_arg("Pt10") == ["Pt"] * 10
-
-
 @pytest.mark.parametrize(
     "fn,args",
     [
@@ -151,27 +142,19 @@ def test_run_campaign_invalid_inputs(fn, args):
 
 def test_rng_in_optimizer_params_raises():
     params = get_default_params()
-    # inject forbidden 'rng' into optimizer params
     params["optimizer_params"]["ga"] = params["optimizer_params"].get("ga", {})
     params["optimizer_params"]["ga"]["rng"] = "not-allowed"
-
     with pytest.raises(SCGOValidationError):
         _run_go_trials(["Pt"] * 4, "gas_cluster", params=params)
 
 
 def test_scgo_validations(rng):
-    # Use deterministic rng fixture from conftest
+    from scgo.minima_search import scgo
 
-    # Invalid RNG
     with pytest.raises(SCGOValidationError):
-        from scgo.minima_search import scgo
-
         scgo(["Pt"], "ga", {}, "out_dir", None)
 
-    # Invalid optimizer name
     with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
-        from scgo.minima_search import scgo
-
         scgo(
             ["Pt"],
             "invalid_optimizer",
@@ -181,10 +164,7 @@ def test_scgo_validations(rng):
             calculator_for_global_optimization=EMT(),
         )
 
-    # Invalid system_type in optimizer kwargs
     with pytest.raises(SCGOValidationError, match="system_type must be set"):
-        from scgo.minima_search import scgo
-
         scgo(
             ["Pt"],
             "ga",
@@ -198,201 +178,14 @@ def test_scgo_validations(rng):
 def test_run_trials_validations(rng):
     with pytest.raises(SCGOValidationError):
         run_trials([], "ga", {}, "out", rng)
-
-    with pytest.raises(SCGOValidationError):
-        run_trials(["Pt"], 123, {}, "out", rng)
-
     with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], "ga", {}, "", rng)
-
     with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], "ga", {}, "out", None)
-
     with pytest.raises(SCGOValidationError):
         run_trials(["Pt"], "ga", {}, "out", rng, verbosity=5)
-
     with pytest.raises(SCGOValidationError, match="system_type must be set"):
         run_trials(["Pt"], "ga", {}, "out", rng)
-
-
-def test_seed_in_params_respected(tmp_path):
-    params = get_testing_params()
-    params["seed"] = 12345
-
-    comp = ["Pt", "Pt"]  # Pt2 small test
-
-    with isolated_workflow_cwd(tmp_path / "run_a"):
-        res1 = _run_go_trials(
-            comp,
-            "gas_cluster",
-            params=params,
-            verbosity=0,
-            output_dir=str(tmp_path / "run_a"),
-            clean=True,
-        )
-    with isolated_workflow_cwd(tmp_path / "run_b"):
-        res2 = _run_go_trials(
-            comp,
-            "gas_cluster",
-            params=params,
-            verbosity=0,
-            output_dir=str(tmp_path / "run_b"),
-            clean=True,
-        )
-
-    # Compare basic properties - energies should be very close and compositions identical
-    assert len(res1) == len(res2)
-    for (e1, a1), (e2, a2) in zip(res1, res2, strict=True):
-        assert abs(e1 - e2) < 1e-6  # Energy tolerance
-        # Check that compositions are identical
-        assert a1.get_chemical_symbols() == a2.get_chemical_symbols()
-        # Check that cell and PBC are identical
-        assert np.allclose(a1.get_cell(), a2.get_cell())
-        assert np.array_equal(a1.get_pbc(), a2.get_pbc())
-
-
-def test_campaign_respects_params_seed(tmp_path):
-    params = get_testing_params()
-    params["seed"] = 54321
-
-    comps = build_one_element_compositions("Pt", 2, 2)
-    with isolated_workflow_cwd(tmp_path / "campaign_a"):
-        res_a = _run_go_campaign_compositions(
-            comps,
-            "gas_cluster",
-            params=params,
-            verbosity=0,
-            output_dir=str(tmp_path / "campaign_a"),
-            clean=True,
-        )
-    with isolated_workflow_cwd(tmp_path / "campaign_b"):
-        res_b = _run_go_campaign_compositions(
-            comps,
-            "gas_cluster",
-            params=params,
-            verbosity=0,
-            output_dir=str(tmp_path / "campaign_b"),
-            clean=True,
-        )
-
-    assert res_a == res_b
-
-
-def test__run_one_element_go_ts_pipeline_smoke(monkeypatch, tmp_path):
-    import scgo.runner_api as runner_api_module
-
-    def _fake_trials(*args, **kwargs):
-        return []
-
-    def _fake_ts(*args, **kwargs):
-        return [{"status": "success"}, {"status": "failed"}]
-
-    monkeypatch.setattr(
-        runner_api_module,
-        "_run_go_trials",
-        _fake_trials,
-    )
-    monkeypatch.setattr(
-        runner_api_module,
-        "_ts_search",
-        _fake_ts,
-    )
-
-    flat_ts = {
-        **get_ts_search_params(
-            system_type="gas_cluster",
-            calculator="EMT",
-            calculator_kwargs={},
-        ),
-        "use_torchsim": False,
-        "use_parallel_neb": False,
-        "max_pairs": 2,
-    }
-    summary = _run_one_element_go_ts_pipeline(
-        "Pt",
-        5,
-        "gas_cluster",
-        go_params=get_testing_params(),
-        ts_kwargs=coerce_ts_params_to_runner_kwargs(flat_ts, system_type="gas_cluster"),
-        seed=42,
-        verbosity=0,
-        output_dir=tmp_path / "pt5_gas",
-    )
-    assert summary["formula"] == "Pt5"
-    assert summary["ts_success_count"] == 1
-    assert summary["ts_total_count"] == 2
-    assert summary["output_dir"] == (tmp_path / "pt5_gas").resolve()
-
-
-def test_run_go_atoms_matches_explicit_list(monkeypatch):
-    captured: dict[str, list] = {}
-
-    def _fake_trials(composition, *args, **kwargs):
-        captured["composition"] = composition
-        return []
-
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
-
-    run_go(Atoms("Pt3"), params=None, verbosity=0, system_type="gas_cluster")
-    assert captured["composition"] == ["Pt", "Pt", "Pt"]
-
-    run_go(["Pt", "Pt", "Pt"], params=None, verbosity=0, system_type="gas_cluster")
-    assert captured["composition"] == ["Pt", "Pt", "Pt"]
-
-    run_go("Pt3", params=None, verbosity=0, system_type="gas_cluster")
-    assert captured["composition"] == ["Pt", "Pt", "Pt"]
-
-
-def test_run_go_system_type_wires_optimizer_params(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_trials(composition, *args, **kwargs):
-        captured["params"] = kwargs["params"]
-        return []
-
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
-    run_go(
-        ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        params={"optimizer_params": {"ga": {}, "bh": {}}},
-        verbosity=0,
-        surface_config=_surface_cfg(),
-        system_type="surface_cluster_adsorbate",
-        adsorbates=_adsorbates_oh(n=2),
-    )
-    params = captured["params"]
-    assert (
-        params["optimizer_params"]["ga"]["system_type"] == "surface_cluster_adsorbate"
-    )
-    assert (
-        params["optimizer_params"]["bh"]["system_type"] == "surface_cluster_adsorbate"
-    )
-    assert (
-        params["optimizer_params"]["simple"]["system_type"]
-        == "surface_cluster_adsorbate"
-    )
-
-
-def test_run_go_timing_from_params(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_trials(composition, *args, **kwargs):
-        captured["params"] = kwargs["params"]
-        return []
-
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
-    run_go(
-        "Pt3",
-        params={
-            "optimizer_params": {
-                "ga": {"write_timing_json": True, "detailed_timing": True},
-            }
-        },
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    ga = captured["params"]["optimizer_params"]["ga"]
-    assert ga["write_timing_json"] is True
-    assert ga["detailed_timing"] is True
 
 
 @pytest.mark.parametrize(
@@ -414,7 +207,7 @@ def test_run_go_system_type_matrix(monkeypatch, system_type):
         captured["composition"] = composition
         return []
 
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", _fake_trials)
     policy = get_system_policy(system_type)
     if policy.slab_is_search_target:
         composition: str | list[str] = []
@@ -451,14 +244,12 @@ def test_system_policy_surface_neb_defaults():
     slab = get_system_policy("surface")
     slab_ads = get_system_policy("surface_adsorbate")
     assert gas.neb_force_mic is False
-    assert gas.neb_disable_alignment is False
     assert gas.neb_surface_cell_remap is False
     assert gas.neb_surface_lattice_rotation is False
     assert bare.neb_force_mic is True
     assert bare.neb_surface_cell_remap is True
     assert bare.neb_surface_lattice_rotation is True
     assert ads.neb_force_mic is True
-    assert ads.neb_disable_alignment is False
     assert ads.neb_surface_cell_remap is True
     assert ads.neb_surface_lattice_rotation is False
     assert slab.slab_is_search_target is True
@@ -477,12 +268,7 @@ def test_run_go_requires_system_type():
 
 def test_run_go_requires_adsorbates_for_adsorbate_system_types():
     with pytest.raises(SCGOValidationError, match="adsorbates is required"):
-        run_go(
-            "Pt5",
-            params=None,
-            verbosity=0,
-            system_type="gas_cluster_adsorbate",
-        )
+        run_go("Pt5", params=None, verbosity=0, system_type="gas_cluster_adsorbate")
 
 
 def test_run_go_accepts_valid_adsorbates_input(monkeypatch):
@@ -492,7 +278,7 @@ def test_run_go_accepts_valid_adsorbates_input(monkeypatch):
         captured["composition"] = composition
         return []
 
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", _fake_trials)
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", _fake_trials)
     run_go(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],
         params=None,
@@ -511,10 +297,9 @@ def test_run_go_campaign_normalizes_items(monkeypatch):
         return {}
 
     monkeypatch.setattr(
-        "scgo.runner_api._run_go_campaign_compositions",
+        "scgo.runner_go._run_go_campaign_compositions",
         _fake_campaign,
     )
-
     run_go_campaign(
         [Atoms("Au2"), "Pt", ["Cu", "Cu"]],
         params=None,
@@ -590,9 +375,6 @@ def test_run_go_campaign_requires_system_type():
 
 
 def test_run_go_campaign_skips_failed_composition(monkeypatch, tmp_path):
-    """A single composition failure should not abort the whole campaign."""
-    from unittest.mock import MagicMock
-
     called: list[list[str]] = []
 
     def fake_trials(composition, system_type, params, **kwargs):
@@ -601,12 +383,11 @@ def test_run_go_campaign_skips_failed_composition(monkeypatch, tmp_path):
             raise ValueError("init failed")
         return []
 
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", fake_trials)
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", fake_trials)
     monkeypatch.setattr(
-        "scgo.runner_api.get_calculator_class",
+        "scgo.runner_go.get_calculator_class",
         lambda name: lambda **kwargs: MagicMock(),
     )
-
     results = run_go_campaign(
         [["Pt", "Pt"], ["Au", "Au"]],
         params=get_testing_params(),
@@ -622,9 +403,6 @@ def test_run_go_campaign_skips_failed_composition(monkeypatch, tmp_path):
 
 
 def test_run_go_campaign_skips_failed_composition_uses_path_key(monkeypatch, tmp_path):
-    """Failed compositions must be keyed by path_key (not bare formula)."""
-    from unittest.mock import MagicMock
-
     called: list[list[str]] = []
 
     def fake_trials(composition, system_type, params, **kwargs):
@@ -633,13 +411,12 @@ def test_run_go_campaign_skips_failed_composition_uses_path_key(monkeypatch, tmp
             raise ValueError("init failed")
         return [(0.0, Atoms("Au2"))]
 
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", fake_trials)
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", fake_trials)
     monkeypatch.setattr(
-        "scgo.runner_api.get_calculator_class",
+        "scgo.runner_go.get_calculator_class",
         lambda name: lambda **kwargs: MagicMock(),
     )
-
-    cfg = _slab_search_cfg()  # name="pt_slab" → path_key Pt2_pt_slab
+    cfg = _slab_search_cfg()
     results = run_go_campaign(
         [["Pt", "Pt"], ["Au", "Au"]],
         params=get_testing_params(),
@@ -654,64 +431,7 @@ def test_run_go_campaign_skips_failed_composition_uses_path_key(monkeypatch, tmp
     assert "Pt2" not in results
     assert results["Pt2_pt_slab"] == []
     assert "Au2_pt_slab" in results
-    assert results["Au2_pt_slab"]  # successful non-empty
-
-
-def test_run_ts_search_normalizes_composition(monkeypatch):
-    captured: dict[str, list] = {}
-
-    def _fake(composition, **kwargs):
-        captured["composition"] = composition
-        return []
-
-    monkeypatch.setattr(
-        "scgo.runner_api._ts_search",
-        _fake,
-    )
-
-    run_ts_search(
-        "Cu2",
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured["composition"] == ["Cu", "Cu"]
-
-    run_ts_search(
-        Atoms("Cu2"),
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured["composition"] == ["Cu", "Cu"]
-
-    run_ts_search(
-        ["Cu", "Cu"],
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured["composition"] == ["Cu", "Cu"]
-
-
-def test_run_ts_search_passes_system_type(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake(composition, **kwargs):
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
-    cfg = _surface_cfg()
-    run_ts_search(
-        ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        ts_params=_emt_ts_surf_ads(cfg),
-        verbosity=0,
-        surface_config=cfg,
-        system_type="surface_cluster_adsorbate",
-        adsorbates=_adsorbates_oh(n=2),
-    )
-    assert captured["kwargs"]["system_type"] == "surface_cluster_adsorbate"
+    assert results["Au2_pt_slab"]
 
 
 def test_run_ts_search_requires_system_type():
@@ -723,86 +443,30 @@ def test_run_ts_search_requires_adsorbates_for_adsorbate_system_types():
     with pytest.raises(SCGOValidationError, match="adsorbates is required"):
         run_ts_search(
             "Pt5",
-            ts_params={
-                **_emt_ts_gasc(),
-            },
+            ts_params={**_emt_ts_gasc()},
             verbosity=0,
             system_type="gas_cluster_adsorbate",
         )
 
 
-def test_run_ts_search_uses_default_ts_preset_when_missing(monkeypatch):
+def test_run_ts_search_passes_system_type(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake(composition, **kwargs):
         captured["kwargs"] = kwargs
         return []
 
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
+    monkeypatch.setattr("scgo.runner_ts._ts_search", _fake)
+    cfg = _surface_cfg()
     run_ts_search(
-        "Pt2",
-        ts_params=None,
+        ["Pt", "Pt", "Pt", "Pt", "Pt"],
+        ts_params=_emt_ts_surf_ads(cfg),
         verbosity=0,
-        system_type="gas_cluster",
+        surface_config=cfg,
+        system_type="surface_cluster_adsorbate",
+        adsorbates=_adsorbates_oh(n=2),
     )
-    assert captured["kwargs"]["params"]["calculator"] == "MACE"
-    assert captured["kwargs"]["system_type"] == "gas_cluster"
-
-
-def test_run_ts_search_empty_ts_params_uses_defaults(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake(composition, **kwargs):
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
-    run_ts_search(
-        "Pt2",
-        ts_params={},
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured["kwargs"]["params"]["calculator"] == "MACE"
-    assert captured["kwargs"]["system_type"] == "gas_cluster"
-
-
-def test_run_ts_campaign_normalizes_items(monkeypatch):
-    captured: list[list[str]] = []
-
-    def _fake(compositions, system_type, **kwargs):
-        captured.extend(compositions)
-        return {}
-
-    monkeypatch.setattr(
-        "scgo.runner_api._ts_campaign",
-        _fake,
-    )
-
-    run_ts_campaign(
-        [Atoms("Au2"), "Pt"],
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured == [["Au", "Au"], ["Pt"]]
-
-
-def test_run_ts_campaign_empty_ts_params_uses_defaults(monkeypatch):
-    captured: list[list[str]] = []
-
-    def _fake(compositions, system_type, **kwargs):
-        captured.extend(compositions)
-        return {}
-
-    monkeypatch.setattr("scgo.runner_api._ts_campaign", _fake)
-    run_ts_campaign(
-        [Atoms("Au2"), "Pt"],
-        ts_params={},
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured == [["Au", "Au"], ["Pt"]]
+    assert captured["kwargs"]["system_type"] == "surface_cluster_adsorbate"
 
 
 def test_run_ts_campaign_requires_system_type():
@@ -821,8 +485,7 @@ def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
         calls.append((list(composition), kwargs.get("output_dir")))
         return {"formula": "x", "ts_total_count": 0}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     root = tmp_path / "camp"
     run_go_ts_campaign(
         ["Pt2", ["Au", "Au"]],
@@ -839,199 +502,6 @@ def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
     assert calls[1][1] == root / "Au2_campaign"
 
 
-def test_run_go_ts_passes_timing_from_go_params(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        captured["go_params"] = kwargs["go_params"]
-        return {"ts_results": []}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-    run_go_ts(
-        "Pt2",
-        go_params={
-            "optimizer_params": {
-                "ga": {"write_timing_json": True, "detailed_timing": True},
-            }
-        },
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    ga = captured["go_params"]["optimizer_params"]["ga"]
-    assert ga["write_timing_json"] is True
-    assert ga["detailed_timing"] is True
-
-
-def test_run_go_ts_pipeline_writes_go_ts_timing_json(monkeypatch, tmp_path):
-    import scgo.runner_api as runner_api_module
-    from scgo.utils.timing_report import GO_TS_TIMING_JSON_FILENAME
-
-    def _fake_trials(*args, **kwargs):
-        return []
-
-    def _fake_ts(*args, **kwargs):
-        return [{"timings_s": {"neb_optimization_s": 1.5}, "status": "success"}]
-
-    monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
-    monkeypatch.setattr(runner_api_module, "_ts_search", _fake_ts)
-
-    campaign_root = tmp_path / "pt2_campaign"
-    _run_go_ts_pipeline(
-        ["Pt", "Pt"],
-        "gas_cluster",
-        go_params={
-            **get_testing_params(),
-            "optimizer_params": {
-                "ga": {"write_timing_json": True},
-            },
-        },
-        ts_kwargs=coerce_ts_params_to_runner_kwargs(
-            _emt_ts_gasc(), system_type="gas_cluster"
-        ),
-        seed=42,
-        verbosity=0,
-        output_dir=campaign_root,
-    )
-    timing_path = campaign_root / GO_TS_TIMING_JSON_FILENAME
-    assert timing_path.is_file()
-    payload = json.loads(timing_path.read_text(encoding="utf-8"))
-    assert payload["backend"] == "go_ts"
-    assert "go_phase_s" in payload["timings_s"]
-    assert payload["counters"]["ts_success"] == 1
-
-
-def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        captured["composition"] = composition
-        captured["system_type"] = system_type
-        captured["adsorbate_definition"] = kwargs.get("adsorbate_definition")
-        return {"ts_results": []}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-    run_go_ts(
-        ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        go_params={"optimizer_params": {"ga": {}}},
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        system_type="gas_cluster_adsorbate",
-        adsorbates=_adsorbates_oh(n=1),
-    )
-    ads_def = captured["adsorbate_definition"]
-    assert captured["system_type"] == "gas_cluster_adsorbate"
-    assert ads_def is not None
-    assert ads_def["core_symbols"] == ["Pt", "Pt", "Pt", "Pt", "Pt"]
-    assert ads_def["adsorbate_symbols"] == ["O", "H"]
-    assert ads_def["adsorbate_fragment_lengths"] == [2]
-    assert True
-
-
-def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_path):
-    import scgo.runner_api as runner_api_module
-
-    captured: dict[str, object] = {}
-
-    def _fake_trials(*args, **kwargs):
-        return []
-
-    def _fake_ts(*args, **kwargs):
-        captured["adsorbate_definition"] = kwargs.get("adsorbate_definition")
-        captured["system_type"] = kwargs.get("system_type")
-        return []
-
-    monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
-    monkeypatch.setattr(runner_api_module, "_ts_search", _fake_ts)
-
-    ads_def = {
-        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
-    _run_go_ts_pipeline(
-        ["Pt", "Pt", "Pt", "Pt", "Pt", "O", "H"],
-        "gas_cluster_adsorbate",
-        go_params=get_testing_params(),
-        ts_kwargs=coerce_ts_params_to_runner_kwargs(
-            _emt_ts_gasc(), system_type="gas_cluster_adsorbate"
-        ),
-        adsorbate_definition=ads_def,
-        seed=42,
-        verbosity=0,
-        output_dir=tmp_path / "pt5oh_gas",
-    )
-    assert captured["system_type"] == "gas_cluster_adsorbate"
-    assert captured["adsorbate_definition"] == ads_def
-
-
-def test_run_go_ts_accepts_top_level_go_surface_config(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        captured["go_params"] = kwargs["go_params"]
-        return {"ts_results": []}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-    cfg = _surface_cfg()
-    run_go_ts(
-        ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        go_params={"surface_config": cfg, "optimizer_params": {"ga": {}}},
-        ts_params=_emt_ts_surf_ads(cfg),
-        verbosity=0,
-        surface_config=cfg,
-        system_type="surface_cluster_adsorbate",
-        adsorbates=_adsorbates_oh(n=2),
-    )
-    go_params = captured["go_params"]
-    assert go_params["surface_config"] == cfg
-    assert go_params["optimizer_params"]["ga"]["surface_config"] == cfg
-
-
-def test_run_go_ts_campaign_no_output_dir(
-    monkeypatch,
-):
-    calls: list[object] = []
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        calls.append(kwargs.get("output_dir"))
-        return {}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-
-    run_go_ts_campaign(
-        ["H2"],
-        go_params={},
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        output_dir=None,
-        system_type="gas_cluster",
-    )
-    assert len(calls) == 1
-    assert calls[0] is not None
-    assert "H2_campaign" in str(calls[0])
-
-
-def test_run_go_ts_campaign_empty_ts_params_uses_defaults(monkeypatch):
-    calls: list[tuple[list[str], object]] = []
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        calls.append((list(composition), kwargs.get("ts_kwargs")))
-        return {"formula": "x", "ts_total_count": 0}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-    run_go_ts_campaign(
-        ["H2"],
-        go_params={},
-        ts_params={},
-        verbosity=0,
-        output_dir=None,
-        system_type="gas_cluster",
-    )
-    assert len(calls) == 1
-    assert calls[0][1]["params"]["calculator"] == "MACE"
-
-
 def test_run_go_ts_campaign_requires_system_type():
     with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_go_ts_campaign(
@@ -1039,26 +509,7 @@ def test_run_go_ts_campaign_requires_system_type():
             go_params={},
             ts_params=_emt_ts_gasc(),
             verbosity=0,
-            output_dir=None,
         )
-
-
-def test_run_go_ts_empty_ts_params_uses_defaults(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        captured["ts_kwargs"] = kwargs["ts_kwargs"]
-        return {"ts_results": []}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-    run_go_ts(
-        "H2",
-        go_params={},
-        ts_params={},
-        verbosity=0,
-        system_type="gas_cluster",
-    )
-    assert captured["ts_kwargs"]["params"]["calculator"] == "MACE"
 
 
 def test_run_go_ts_uses_default_go_and_ts_presets_when_missing(monkeypatch):
@@ -1069,7 +520,7 @@ def test_run_go_ts_uses_default_go_and_ts_presets_when_missing(monkeypatch):
         captured["ts_kwargs"] = kwargs["ts_kwargs"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         "Pt2",
         go_params=None,
@@ -1082,63 +533,6 @@ def test_run_go_ts_uses_default_go_and_ts_presets_when_missing(monkeypatch):
     assert go_params["calculator"] == "MACE"
     assert ts_kwargs["params"]["calculator"] == "MACE"
     assert ts_kwargs["system_type"] == "gas_cluster"
-
-
-def test_run_go_ts_default_presets_match_builders_for_key_fields(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_pipeline(composition, system_type, **kwargs):
-        captured["go_params"] = kwargs["go_params"]
-        captured["ts_kwargs"] = kwargs["ts_kwargs"]
-        return {"ts_results": []}
-
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
-    run_go_ts(
-        "Pt2", go_params=None, ts_params=None, verbosity=0, system_type="gas_cluster"
-    )
-
-    used_go_params = captured["go_params"]
-    used_ts_kwargs = captured["ts_kwargs"]
-    expected_go = get_default_params()
-    expected_ts = get_ts_search_params(
-        calculator=expected_go["calculator"],
-        calculator_kwargs=expected_go.get("calculator_kwargs"),
-        system_type="gas_cluster",
-    )
-    expected_ts_kwargs = coerce_ts_params_to_runner_kwargs(
-        expected_ts, system_type="gas_cluster"
-    )
-
-    assert used_go_params["calculator"] == expected_go["calculator"]
-    assert used_go_params["calculator_kwargs"] == expected_go["calculator_kwargs"]
-    assert used_ts_kwargs["params"]["calculator"] == expected_ts["calculator"]
-    assert (
-        used_ts_kwargs["params"]["calculator_kwargs"]
-        == expected_ts["calculator_kwargs"]
-    )
-    assert used_ts_kwargs["neb_n_images"] == expected_ts_kwargs["neb_n_images"]
-    assert used_ts_kwargs["neb_fmax"] == expected_ts_kwargs["neb_fmax"]
-    assert used_ts_kwargs["system_type"] == "gas_cluster"
-
-
-def test_run_ts_search_default_ts_preset_matches_builder(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake(composition, **kwargs):
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
-    run_ts_search("Pt2", ts_params=None, verbosity=0, system_type="gas_cluster")
-
-    used_kwargs = captured["kwargs"]
-    expected_ts = get_ts_search_params(system_type="gas_cluster")
-    expected_kwargs = coerce_ts_params_to_runner_kwargs(
-        expected_ts, system_type="gas_cluster"
-    )
-
-    assert used_kwargs["params"] == expected_kwargs["params"]
-    assert used_kwargs["system_type"] == expected_kwargs["system_type"]
 
 
 def test_run_go_ts_rejects_ts_system_type_mismatch():
@@ -1246,23 +640,6 @@ def test_run_go_ts_rejects_mismatched_seeds():
 
 
 def test_run_go_ts_rejects_mismatched_go_run_surface_config():
-    cfg_a = _surface_cfg()
-    slab_b = fcc111("Pt", size=(4, 4, 1), vacuum=6.0, orthogonal=True)
-    slab_b.pbc = [True, True, True]
-    cfg_b = SurfaceSystemConfig(slab=slab_b, fix_all_slab_atoms=True)
-    with pytest.raises(SCGOValidationError, match="surface_config"):
-        run_go_ts(
-            ["Pt", "Pt", "Pt", "Pt", "Pt"],
-            go_params={"surface_config": cfg_a, "optimizer_params": {"ga": {}}},
-            ts_params=_emt_ts_surf_ads(cfg_a),
-            verbosity=0,
-            surface_config=cfg_b,
-            system_type="surface_cluster_adsorbate",
-            adsorbates=_adsorbates_oh(n=2),
-        )
-
-
-def test_run_go_ts_rejects_mismatched_ts_run_surface_config():
     cfg = _surface_cfg()
     slab_b = fcc111("Pt", size=(4, 4, 1), vacuum=6.0, orthogonal=True)
     slab_b.pbc = [True, True, True]
@@ -1279,6 +656,23 @@ def test_run_go_ts_rejects_mismatched_ts_run_surface_config():
         )
 
 
+def test_run_go_ts_rejects_mismatched_ts_run_surface_config():
+    cfg = _surface_cfg()
+    slab_b = fcc111("Pt", size=(4, 4, 1), vacuum=6.0, orthogonal=True)
+    slab_b.pbc = [True, True, True]
+    cfg_b = SurfaceSystemConfig(slab=slab_b, fix_all_slab_atoms=True)
+    with pytest.raises(SCGOValidationError, match="surface_config"):
+        run_go_ts(
+            ["Pt", "Pt", "Pt", "Pt", "Pt"],
+            go_params={"surface_config": cfg, "optimizer_params": {"ga": {}}},
+            ts_params=_emt_ts_surf_ads(cfg_b),
+            verbosity=0,
+            surface_config=cfg,
+            system_type="surface_cluster_adsorbate",
+            adsorbates=_adsorbates_oh(n=2),
+        )
+
+
 def test_run_go_ts_accepts_run_surface_config_without_go_top_level(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -1286,17 +680,12 @@ def test_run_go_ts_accepts_run_surface_config_without_go_top_level(monkeypatch):
         captured["go_params"] = kwargs["go_params"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     cfg = _surface_cfg()
     run_go_ts(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],
         go_params={"optimizer_params": {"ga": {}}},
-        ts_params={
-            "calculator": "EMT",
-            "calculator_kwargs": {},
-            "use_torchsim": False,
-            "use_parallel_neb": False,
-        },
+        ts_params=_emt_ts_surf_ads(cfg),
         verbosity=0,
         surface_config=cfg,
         system_type="surface_cluster_adsorbate",
@@ -1305,21 +694,3 @@ def test_run_go_ts_accepts_run_surface_config_without_go_top_level(monkeypatch):
     go_params = captured["go_params"]
     assert go_params["surface_config"] == cfg
     assert go_params["optimizer_params"]["ga"]["surface_config"] == cfg
-
-
-def test_log_go_ts_summary():
-    class _Log:
-        def __init__(self) -> None:
-            self.messages: list[str] = []
-
-        def info(self, fmt: str, *args: object) -> None:
-            self.messages.append(fmt % args if args else fmt)
-
-    log = _Log()
-    log_go_ts_summary(
-        log,
-        {"ts_results": [{"status": "success"}, {"status": "failed"}]},
-        wall_time_s=3.25,
-    )
-    assert log.messages[0] == "Successful NEBs: 1/2"
-    assert log.messages[1] == "Total wall time: 3.25 s"

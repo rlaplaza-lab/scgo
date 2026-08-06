@@ -14,13 +14,10 @@ from ase import Atoms
 from scgo.exceptions import (
     SCGOValidationError,
 )
-from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_in_choices
 
 if TYPE_CHECKING:
     from scgo.utils.diversity_scorer import DiversityScorer
-
-logger = get_logger(__name__)
 
 
 class FitnessStrategy(StrEnum):
@@ -59,21 +56,21 @@ _UNRESOLVED_FITNESS_STRATEGY_MSG = (
 
 def ensure_fitness_strategy_resolved(strategy: str | None) -> str:
     """Require a concrete fitness strategy at algorithm and orchestration boundaries."""
-    if strategy is None:
-        raise SCGOValidationError(_UNRESOLVED_FITNESS_STRATEGY_MSG)
-    validate_fitness_strategy(strategy)
-    return strategy
+    return resolve_fitness_strategy(strategy, allow_none=False)
 
 
 def resolve_fitness_strategy(
     strategy: str | None,
     *,
     inherit_from: str = "low_energy",
-) -> str:
+    allow_none: bool = True,
+) -> str | None:
     """Resolve fitness strategy, honoring preset None = inherit semantics."""
     if strategy is None:
-        validate_fitness_strategy(inherit_from)
-        return inherit_from
+        if allow_none:
+            validate_fitness_strategy(inherit_from)
+            return inherit_from
+        raise SCGOValidationError(_UNRESOLVED_FITNESS_STRATEGY_MSG)
     validate_fitness_strategy(strategy)
     return strategy
 
@@ -96,14 +93,10 @@ def calculate_fitness(
         return energy
 
     elif strategy == FitnessStrategy.DIVERSITY:
-        # If no references have been provided, return a neutral diversity score
-        # (0.0) rather than raising. This allows algorithms to continue running
-        # with a warning when reference structures are unavailable.
         if diversity_scorer is None:
-            logger.warning(
-                "No diversity_scorer provided; returning 0.0 fitness for diversity strategy"
+            raise SCGOValidationError(
+                "diversity fitness strategy requires a diversity_scorer"
             )
-            return 0.0
 
         return float(diversity_scorer.score(atoms))
 

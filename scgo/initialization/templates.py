@@ -1154,102 +1154,45 @@ def _generate_ase_template_from_registry(
     )
 
 
-def generate_icosahedron(
+def _generate_icosahedron(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate an icosahedral cluster.
-
-    Uses ASE's Icosahedron generator and adjusts atom count by adding/removing
-    surface atoms if needed.
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms
-        rng: Optional random number generator for reproducibility
-        connectivity_factor: Factor for connectivity threshold
-
-    Returns:
-        Atoms object with icosahedral structure, or None if generation fails
-    """
     return _generate_ase_template_from_registry(
         "icosahedron", composition, n_atoms, rng, connectivity_factor
     )
 
 
-def generate_decahedron(
+def _generate_decahedron(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate a decahedral cluster.
-
-    Uses ASE's Decahedron generator and adjusts atom count by adding/removing
-    surface atoms if needed.
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms
-        rng: Optional random number generator for reproducibility
-        connectivity_factor: Factor for connectivity threshold
-
-    Returns:
-        Atoms object with decahedral structure, or None if generation fails
-    """
     return _generate_ase_template_from_registry(
         "decahedron", composition, n_atoms, rng, connectivity_factor
     )
 
 
-def generate_octahedron(
+def _generate_octahedron(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate an octahedral cluster.
-
-    Uses ASE's Octahedron generator and adjusts atom count by adding/removing
-    surface atoms if needed.
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms
-        rng: Optional random number generator for reproducibility
-        connectivity_factor: Factor for connectivity threshold
-
-    Returns:
-        Atoms object with octahedral structure, or None if generation fails
-    """
     return _generate_ase_template_from_registry(
         "octahedron", composition, n_atoms, rng, connectivity_factor
     )
 
 
-def generate_tetrahedron(
+def _generate_tetrahedron(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate a tetrahedral cluster with the specified number of atoms.
-
-    Creates a regular tetrahedron with atoms at vertices. Only supports 4 atoms
-    (the vertices of a regular tetrahedron).
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms (must be 4)
-        rng: Optional random number generator for reproducibility
-
-    Returns:
-        Atoms object with tetrahedral structure, or None if generation fails
-        (e.g., n_atoms != 4)
-    """
-
     def _generate_tetrahedron_positions(
         comp: list[str], n: int, bond_length: float, cf: float
     ) -> list[np.ndarray]:
@@ -1277,41 +1220,24 @@ def generate_tetrahedron(
     )
 
 
-def generate_cube(
+def _generate_cube(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate a cubic cluster with the specified number of atoms.
-
-    Creates cubic structures (n×n×n cubes) for perfect cube sizes only.
-    Only supports perfect cubes (8, 27, 64, 125, etc.).
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms (must be a perfect cube: n³)
-        rng: Optional random number generator for reproducibility
-
-    Returns:
-        Atoms object with cubic structure, or None if generation fails
-        (e.g., n_atoms is not a perfect cube)
-    """
-
     def _validate_cube(n: int) -> tuple[bool, str | None]:
-        """Validate that n_atoms is a perfect cube."""
         cube_root = round(n ** (1 / 3))
         if cube_root**3 == n:
             return True, None
         return False, (
-            f"generate_cube only supports perfect cubes (n³), got {n}. "
+            f"_generate_cube only supports perfect cubes (n³), got {n}. "
             f"Returning None instead of falling back to other template."
         )
 
     def _generate_cube_positions(
         comp: list[str], n: int, bond_length: float, cf: float
     ) -> list[np.ndarray]:
-        """Generate positions for n×n×n cubic lattice."""
         cube_root = round(n ** (1 / 3))
         return [
             np.array([i * bond_length, j * bond_length, k * bond_length])
@@ -1331,25 +1257,12 @@ def generate_cube(
     )
 
 
-def generate_cuboctahedron(
+def _generate_cuboctahedron(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate a cuboctahedral cluster with the specified number of atoms.
-
-    Cuboctahedron has 12 vertices. For 13 atoms, adds a center atom.
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms (12 or 13 for perfect structures)
-        rng: Optional random number generator for reproducibility
-
-    Returns:
-        Atoms object with cuboctahedral structure, or None if generation fails
-    """
-
     def _generate_cuboctahedron_positions(
         comp: list[str], n: int, bond_length: float, cf: float
     ) -> list[np.ndarray]:
@@ -1363,7 +1276,6 @@ def generate_cuboctahedron(
         return _deduplicate_positions(positions, bond_length)
 
     def _post_process_cuboctahedron(cluster: Atoms, comp: list[str], n: int) -> Atoms:
-        """Add center atom for 13-atom cuboctahedron."""
         if n == 13:
             base_element: str = _get_base_element(comp)
             center_pos: np.ndarray[tuple[Any, ...], np.dtype[Any]] = np.array(
@@ -1383,27 +1295,12 @@ def generate_cuboctahedron(
     )
 
 
-def generate_truncated_octahedron(
+def _generate_truncated_octahedron(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Generate a truncated octahedral cluster with the specified number of atoms.
-
-    Truncated octahedron has 24 vertices (6 square faces, 8 hexagonal faces).
-    Only supports 24 atoms (the vertices of a truncated octahedron).
-
-    Args:
-        composition: List of element symbols (cycled to match n_atoms)
-        n_atoms: Target number of atoms (must be 24)
-        rng: Optional random number generator for reproducibility
-
-    Returns:
-        Atoms object with truncated octahedral structure, or None if generation fails
-        (e.g., n_atoms != 24 or position generation doesn't yield exactly 24 positions)
-    """
-
     def _generate_truncated_octahedron_positions(
         comp: list[str], n: int, bond_length: float, cf: float
     ) -> list[np.ndarray]:
@@ -1429,7 +1326,7 @@ def generate_truncated_octahedron(
         )
         if len(unique_positions) != 24:
             raise SCGOValidationError(
-                f"generate_truncated_octahedron requires exactly 24 positions, "
+                f"_generate_truncated_octahedron requires exactly 24 positions, "
                 f"got {len(unique_positions)}"
             )
         return unique_positions[:24]
@@ -1446,13 +1343,13 @@ def generate_truncated_octahedron(
 
 
 _TEMPLATE_GENERATORS: dict[str, Callable[..., Atoms | None]] = {
-    "icosahedron": generate_icosahedron,
-    "decahedron": generate_decahedron,
-    "cuboctahedron": generate_cuboctahedron,
-    "truncated_octahedron": generate_truncated_octahedron,
-    "octahedron": generate_octahedron,
-    "cube": generate_cube,
-    "tetrahedron": generate_tetrahedron,
+    "icosahedron": _generate_icosahedron,
+    "decahedron": _generate_decahedron,
+    "cuboctahedron": _generate_cuboctahedron,
+    "truncated_octahedron": _generate_truncated_octahedron,
+    "octahedron": _generate_octahedron,
+    "cube": _generate_cube,
+    "tetrahedron": _generate_tetrahedron,
 }
 
 

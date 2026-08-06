@@ -34,6 +34,7 @@ Contents
 
    api/runner_api
    api/database
+   api/metadata
    api/exceptions
    api/initialization
    api/surface

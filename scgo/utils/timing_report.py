@@ -22,8 +22,8 @@ from typing import Any
 from scgo.exceptions import (
     SCGOValidationError,
 )
+from scgo.metadata.provenance import output_json_provenance
 from scgo.utils.logging import get_logger
-from scgo.utils.ts_provenance import ts_output_provenance
 
 _logger = get_logger(__name__)
 
@@ -160,7 +160,7 @@ def build_timing_payload(
 ) -> dict[str, Any]:
     """Build a structured timing document with provenance header and schema version."""
     payload: dict[str, Any] = {
-        **ts_output_provenance(),
+        **output_json_provenance(),
         "timing_schema_version": RUN_TIMING_SCHEMA_VERSION,
         "backend": backend,
         "timings_s": timings_s,

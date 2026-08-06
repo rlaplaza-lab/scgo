@@ -15,7 +15,7 @@ from scgo.system_types import (
 )
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
-    ensure_fitness_strategy_resolved,
+    resolve_fitness_strategy,
 )
 
 __all__ = [
@@ -55,9 +55,12 @@ def validate_and_resolve_run_context(
         cluster_adsorbate_config=cluster_adsorbate_config,
         surface_config=surface_config,
     )
+
     policy = get_system_policy(system_type)
     strategy_arg = str(fitness_strategy) if fitness_strategy is not None else None
-    resolved_fitness = FitnessStrategy(ensure_fitness_strategy_resolved(strategy_arg))
+    resolved_fitness = FitnessStrategy(
+        resolve_fitness_strategy(strategy_arg, allow_none=False)
+    )
     return ResolvedRunContext(
         system_type=system_type,
         policy=policy,

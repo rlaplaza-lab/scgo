@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import re
 from collections import Counter
@@ -28,63 +27,15 @@ from scgo.constants import (
     MIN_ATOMIC_DISTANCE_WARNING,
     PENALTY_ENERGY,
 )
-from scgo.database.metadata import add_metadata, get_metadata
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
+from scgo.metadata.atoms import (
+    get_tag,
+    set_tags,
+)
 from scgo.utils.logging import get_logger
-
-
-def compute_final_id(atoms: Atoms, energy: float | None) -> str:
-    """Compute a deterministic identifier for a final structure.
-
-    The identifier is SHA256 over a canonical representation of the
-    atomic species, rounded positions and the (optional) energy. This
-    makes the id reproducible across runs for identical structures.
-
-    Args:
-        atoms: ASE Atoms object (positions are normalized by centering).
-        energy: Energy value (may be None).
-
-    Returns:
-        Hexadecimal string (SHA256 digest).
-    """
-    # Use a copy and canonicalize positions to avoid mutating caller
-    a = atoms.copy()
-    # Only suppress attribute/type errors from ASE objects; do not hide unexpected issues
-    with contextlib.suppress(AttributeError, TypeError):
-        a.center()
-
-    symbols = a.get_chemical_symbols()
-    pos = a.get_positions()
-
-    # Round positions for stable stringification
-    pos_rounded = [[f"{x:.8f}" for x in triple] for triple in pos]
-
-    parts = ["|".join(symbols)] + [";".join(p) for p in pos_rounded]
-    if energy is not None:
-        parts.append(f"E={energy:.12e}")
-    payload = "::".join(parts).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def ensure_final_id(atoms: Atoms, energy: float | None = None) -> str:
-    """Return stable ``final_id``, assigning it in ``key_value_pairs`` when missing.
-
-    Relaxed DB rows and final-minima tagging both use the same identifier so
-    :func:`scgo.database.metadata.mark_final_minima_in_db` can match by stored
-    ``final_id`` without recomputing geometry from write-frame coordinates.
-    """
-    kv = atoms.info.setdefault("key_value_pairs", {})
-    existing = kv.get("final_id")
-    if existing:
-        return str(existing)
-    if energy is None:
-        energy = extract_energy_from_atoms(atoms)
-    final_id = compute_final_id(atoms, energy)
-    kv["final_id"] = final_id
-    return final_id
 
 
 def _assign_penalty_energy(atoms: Atoms) -> float:
@@ -96,7 +47,7 @@ def _assign_penalty_energy(atoms: Atoms) -> float:
     Returns:
         The penalty energy value (PENALTY_ENERGY).
     """
-    add_metadata(
+    set_tags(
         atoms,
         potential_energy=PENALTY_ENERGY,
         raw_score=-PENALTY_ENERGY,
@@ -257,7 +208,7 @@ def perform_local_relaxation(
         elif np.any(atoms.get_pbc()):
             atoms.wrap()
 
-        add_metadata(atoms, potential_energy=energy, raw_score=-energy)
+        set_tags(atoms, potential_energy=energy, raw_score=-energy)
 
         atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
 
@@ -310,19 +261,16 @@ def ensure_float64_forces(atoms: Atoms) -> np.ndarray:
 def copy_atoms(atoms: Atoms) -> Atoms:
     """Copy ``Atoms`` with nested ``info`` dicts isolated from the source.
 
-    ASE's ``Atoms.copy()`` shallow-copies ``info``, so nested containers such as
-    ``key_value_pairs`` / ``metadata`` remain shared. TorchSim single-points then
-    write ``raw_score`` into those shared dicts and corrupt minima used by later
-    NEB pairs. Always use this helper when an Atoms object may receive calculator
-    metadata writes.
+    ASE's ``Atoms.copy()`` shallow-copies ``info``, so nested ``key_value_pairs``
+    remain shared. TorchSim single-points then write ``raw_score`` into those
+    shared dicts and corrupt minima used by later NEB pairs. Always use this
+    helper when an Atoms object may receive calculator tag writes.
     """
     out = atoms.copy()
-    # Replace top-level info mapping, then detach known nested dicts.
     out.info = dict(out.info)
-    for key in ("metadata", "provenance", "key_value_pairs"):
-        val = out.info.get(key)
-        if isinstance(val, dict):
-            out.info[key] = dict(val)
+    tags = out.info.get("key_value_pairs")
+    if isinstance(tags, dict):
+        out.info["key_value_pairs"] = dict(tags)
     return out
 
 
@@ -330,7 +278,7 @@ def extract_energy_from_atoms(atoms: Atoms) -> float | None:
     """Extract energy from atoms object, handling various formats.
 
     Attempts to extract energy from atoms object in order of preference:
-    1. info['key_value_pairs']['raw_score'] (ASE GA database format, returns -raw_score)
+    1. structure tag ``raw_score`` (ASE GA database format, returns -raw_score)
     2. get_potential_energy() method (if calculator is attached)
 
     Args:
@@ -339,8 +287,7 @@ def extract_energy_from_atoms(atoms: Atoms) -> float | None:
     Returns:
         Energy value in eV, or None if energy cannot be extracted.
     """
-    # Try unified metadata first
-    raw = get_metadata(atoms, "raw_score", default=None)
+    raw = get_tag(atoms, "raw_score")
     if raw is not None:
         return -float(raw)
 
@@ -398,29 +345,6 @@ def extract_minima_from_database(
 def get_composition_counts(composition: list[str]) -> Counter[str]:
     """Return element counts for a composition."""
     return Counter(composition)
-
-
-def get_provenance(atoms: Atoms) -> dict[str, Any]:
-    """Get provenance from :attr:`Atoms.info` (metadata, provenance, key_value_pairs).
-
-    Later sources override earlier ones; ``metadata`` is canonical when keys collide.
-
-    Args:
-        atoms: The Atoms object to extract provenance from.
-
-    Returns:
-        Dictionary containing provenance information (may be empty).
-    """
-    info = getattr(atoms, "info", {})
-    merged: dict[str, Any] = {}
-    for src in (
-        info.get("key_value_pairs", {}),
-        info.get("provenance", {}),
-        info.get("metadata", {}),
-    ):
-        if isinstance(src, dict):
-            merged.update(src)
-    return merged
 
 
 def get_cluster_formula(composition: list[str]) -> str:
@@ -721,8 +645,8 @@ def filter_unique_minima(
         return []
 
     for energy, atoms in valid_minima:
-        kvp = atoms.info.setdefault("key_value_pairs", {})
-        kvp.setdefault("raw_score", -float(energy))
+        if get_tag(atoms, "raw_score") is None:
+            set_tags(atoms, raw_score=-float(energy))
 
     from scgo.utils.comparators import PureInteratomicDistanceComparator
 

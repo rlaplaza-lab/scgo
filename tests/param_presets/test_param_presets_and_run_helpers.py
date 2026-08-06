@@ -592,9 +592,10 @@ class TestGetCalculatorClass:
 
     def test_get_calculator_class_unavailable_raises(self, monkeypatch):
         """Test get_calculator_class raises error for unavailable calculator."""
+        emt = _get_calculators()["EMT"]
         monkeypatch.setattr(
-            "scgo.utils.run_helpers._CALCULATORS_CACHE",
-            {"EMT": _get_calculators()["EMT"], "TEST": None},
+            "scgo.utils.run_helpers._get_calculators",
+            lambda: {"EMT": emt, "TEST": None},
         )
         with pytest.raises(SCGOValidationError, match="not available"):
             get_calculator_class("TEST")

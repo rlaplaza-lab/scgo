@@ -264,17 +264,16 @@ def test_validate_initial_neb_energy_profile_rejects_one_sided_slide() -> None:
 
 
 def test_copy_atoms_isolates_nested_info_from_metadata_writes() -> None:
-    from scgo.database.metadata import update_metadata
+    from scgo.metadata.atoms import set_tags
     from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 
     src = Atoms("H", positions=[[0.0, 0.0, 0.0]])
     src.info["key_value_pairs"] = {"raw_score": 1.0}
-    src.info["metadata"] = {"raw_score": 1.0}
     clone = copy_atoms(src)
-    update_metadata(clone, raw_score=-9.0, potential_energy=9.0)
+    set_tags(clone, raw_score=-9.0, potential_energy=9.0)
     assert extract_energy_from_atoms(src) == pytest.approx(-1.0)
     assert extract_energy_from_atoms(clone) == pytest.approx(9.0)
     # ASE Atoms.copy() alone would have shared the nested dicts.
     shallow = src.copy()
-    update_metadata(shallow, raw_score=-3.0)
+    set_tags(shallow, raw_score=-3.0)
     assert extract_energy_from_atoms(src) == pytest.approx(3.0)

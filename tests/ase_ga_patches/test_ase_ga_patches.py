@@ -30,9 +30,9 @@ def ga_database(tmp_path, pt3_atoms, rng):
         atoms = pt3_atoms.copy()
         atoms.positions += rng.random((3, 3)) * 0.1  # Small random displacement
         atoms.calc = EMT()
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
 
-        add_metadata(atoms, raw_score=-10.0 - i)
+        set_tags(atoms, raw_score=-10.0 - i)
         atoms.info["confid"] = i  # Add confid for GA compatibility
         db.add_unrelaxed_candidate(atoms, description=f"test_{i}")
 
@@ -41,14 +41,14 @@ def ga_database(tmp_path, pt3_atoms, rng):
     while da.get_number_of_unrelaxed_candidates() > 0:
         a = da.get_an_unrelaxed_candidate()
         # Ensure the atoms have the required info for add_relaxed_step
-        from scgo.database.metadata import get_all_metadata, get_metadata
+        from scgo.metadata.atoms import get_tag, get_tags
 
         if "key_value_pairs" not in a.info:
-            a.info["key_value_pairs"] = get_all_metadata(a).copy()
+            a.info["key_value_pairs"] = get_tags(a).copy()
 
         # Ensure raw_score exists for ASE GA expectations
         if "raw_score" not in a.info["key_value_pairs"]:
-            raw = get_metadata(a, "raw_score", default=None)
+            raw = get_tag(a, "raw_score", default=None)
             if raw is not None:
                 a.info["key_value_pairs"]["raw_score"] = raw
             else:
@@ -372,7 +372,7 @@ def get_blmin(atoms):
 
 def test_rattle_mutation(pt4_tetrahedron, rng):
     """Test rattle mutation operator."""
-    from scgo.ase_ga_patches.standardmutations import RattleMutation
+    from scgo.ase_ga_patches.mutations import RattleMutation
 
     atoms = pt4_tetrahedron.copy()
     initial_positions = atoms.get_positions().copy()
@@ -397,7 +397,7 @@ def test_rattle_mutation(pt4_tetrahedron, rng):
 
 def test_custom_permutation_mutation_bimetallic(au2pt2_atoms, rng):
     """Test permutation mutation on bimetallic cluster."""
-    from scgo.ase_ga_patches.standardmutations import CustomPermutationMutation
+    from scgo.ase_ga_patches.mutations import CustomPermutationMutation
 
     atoms = au2pt2_atoms.copy()
     initial_positions = atoms.get_positions().copy()
@@ -419,7 +419,7 @@ def test_custom_permutation_mutation_bimetallic(au2pt2_atoms, rng):
 
 def test_custom_permutation_mutation_monometallic(pt4_tetrahedron, rng):
     """Test permutation mutation on monometallic cluster."""
-    from scgo.ase_ga_patches.standardmutations import CustomPermutationMutation
+    from scgo.ase_ga_patches.mutations import CustomPermutationMutation
 
     atoms = pt4_tetrahedron.copy()
     n_top = len(atoms)
@@ -436,7 +436,7 @@ def test_custom_permutation_mutation_monometallic(pt4_tetrahedron, rng):
 
 def test_flattening_mutation(pt4_tetrahedron, rng):
     """Test flattening mutation operator."""
-    from scgo.ase_ga_patches.standardmutations import FlatteningMutation
+    from scgo.ase_ga_patches.mutations import FlatteningMutation
 
     atoms = pt4_tetrahedron.copy()
     initial_positions = atoms.get_positions().copy()

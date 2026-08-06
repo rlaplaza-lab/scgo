@@ -14,6 +14,7 @@ from ase.calculators.emt import EMT
 from ase.constraints import FixAtoms
 
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.ts_search.transition_state import (
     calculate_structure_similarity,
     find_transition_state,
@@ -25,7 +26,6 @@ from scgo.ts_search.transition_state_io import (
     adsorbate_pair_select_cap,
     select_structure_pairs,
 )
-from scgo.utils.ts_provenance import TS_OUTPUT_SCHEMA_VERSION
 
 
 @pytest.fixture
@@ -49,12 +49,12 @@ def test_image_potential_energy_falls_back_to_metadata():
     """Finalize helper reads cached potential_energy when SinglePoint is stale."""
     from ase.calculators.singlepoint import SinglePointCalculator
 
-    from scgo.database.metadata import update_metadata
+    from scgo.metadata.atoms import set_tags
     from scgo.ts_search.transition_state import _image_potential_energy
 
     atoms = Atoms("Cu", positions=[[0.0, 0.0, 0.0]])
     atoms.calc = SinglePointCalculator(atoms, energy=-1.5, forces=np.zeros((1, 3)))
-    update_metadata(atoms, potential_energy=-1.5, raw_score=1.5)
+    set_tags(atoms, potential_energy=-1.5, raw_score=1.5)
     atoms.positions += 0.2  # invalidate SinglePoint
     assert _image_potential_energy(atoms) == pytest.approx(-1.5)
 
@@ -378,8 +378,8 @@ def test_calculate_similarity_uses_adsorbate_slice_when_surface_metadata_present
         ],
     )
     atoms2 = atoms1.copy()
-    atoms1.info.setdefault("metadata", {})["n_slab_atoms"] = 4
-    atoms2.info.setdefault("metadata", {})["n_slab_atoms"] = 4
+    atoms1.info.setdefault("key_value_pairs", {})["n_slab_atoms"] = 4
+    atoms2.info.setdefault("key_value_pairs", {})["n_slab_atoms"] = 4
     pos2 = atoms2.get_positions()
     pos2[:4, 0] += 0.7  # slab-only displacement
     atoms2.set_positions(pos2)
@@ -416,6 +416,7 @@ def test_select_structure_pairs_ignores_slab_when_n_slab_from_surface_config():
         max_pairs=None,
         similarity_tolerance=0.01,
         similarity_pair_cor_max=0.2,
+        use_mic=False,
         n_slab=3,
     )
 
@@ -452,6 +453,7 @@ def test_select_structure_pairs_ignores_fixed_slab_atom_differences():
         max_pairs=None,
         similarity_tolerance=0.01,
         similarity_pair_cor_max=0.2,
+        use_mic=False,
     )
 
     assert (0, 1) not in pairs
@@ -700,7 +702,7 @@ def test_save_neb_result_success(temp_output_dir, default_rel_tol):
         metadata = json.load(f)
 
     assert metadata["status"] == "success"
-    assert metadata["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+    assert metadata["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
     assert metadata["scgo_version"] != "unknown"
     assert "created_at" in metadata
     assert metadata["barrier_height"] == pytest.approx(0.5, rel=default_rel_tol)
@@ -733,7 +735,7 @@ def test_save_neb_result_failed(temp_output_dir):
     assert os.path.exists(meta_path)
     with open(meta_path) as f:
         failed_meta = json.load(f)
-    assert failed_meta["schema_version"] == TS_OUTPUT_SCHEMA_VERSION
+    assert failed_meta["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
     assert "created_at" in failed_meta
 
     # TS structure should not be saved for failed runs
@@ -759,7 +761,9 @@ def test_select_structure_pairs_basic():
         (-0.7, atoms3),
     ]
 
-    pairs = select_structure_pairs(minima, max_pairs=None, similarity_tolerance=0.1)
+    pairs = select_structure_pairs(
+        minima, max_pairs=None, similarity_tolerance=0.1, use_mic=False
+    )
 
     # Should get all unique pairs: (0,1), (0,2), (1,2)
     assert len(pairs) == 3
@@ -773,7 +777,9 @@ def test_select_structure_pairs_max_limit():
     atoms = Atoms("H2", positions=[[0, 0, 0], [1, 0, 0]])
     minima = [(float(-i), atoms.copy()) for i in range(10)]
 
-    pairs = select_structure_pairs(minima, max_pairs=5, similarity_tolerance=0.01)
+    pairs = select_structure_pairs(
+        minima, max_pairs=5, similarity_tolerance=0.01, use_mic=False
+    )
 
     assert len(pairs) <= 5
 
@@ -792,7 +798,7 @@ def test_select_structure_pairs_energy_gap():
 
     # Only allow pairs within 0.1 eV
     pairs = select_structure_pairs(
-        minima, energy_gap_threshold=0.1, similarity_tolerance=0.01
+        minima, energy_gap_threshold=0.1, similarity_tolerance=0.01, use_mic=False
     )
 
     # Should only get (0,1) since gap to 2 is too large
@@ -836,7 +842,7 @@ def test_select_structure_pairs_physics_ranking_when_capped(monkeypatch):
         _fake_similarity,
     )
 
-    ranked = select_structure_pairs(minima, max_pairs=2)
+    ranked = select_structure_pairs(minima, max_pairs=2, use_mic=False)
     assert ranked == [(1, 2), (0, 2)]
 
 
@@ -896,6 +902,7 @@ def test_select_structure_pairs_adsorbate_prefers_activated_hops(monkeypatch):
     ranked = select_structure_pairs(
         minima,
         max_pairs=1,
+        use_mic=False,
         adsorbate_aware=True,
         n_core_mobile=2,
         max_endpoint_mismatch=1.25,
@@ -932,7 +939,7 @@ def test_select_structure_pairs_max_endpoint_mismatch_hard_gate(monkeypatch):
         "scgo.ts_search.transition_state_io.calculate_structure_similarity",
         _fake_similarity,
     )
-    pairs = select_structure_pairs(minima, max_endpoint_mismatch=1.25)
+    pairs = select_structure_pairs(minima, max_endpoint_mismatch=1.25, use_mic=False)
     assert pairs == [(0, 1)]
 
 
@@ -981,6 +988,7 @@ def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop(monkeypatch) -
     pairs = select_structure_pairs(
         minima,
         max_pairs=1,
+        use_mic=False,
         adsorbate_aware=True,
         n_core_mobile=2,
         max_endpoint_mismatch=1.25,
