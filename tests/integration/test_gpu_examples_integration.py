@@ -112,7 +112,7 @@ GPU_EXAMPLE_CASES = [
     # example_pt5_gas.py: NITER=10, POPULATION_SIZE=50, MAX_PAIRS=15
     GpuExampleCase(
         system_type="gas_cluster",
-        ga_overrides={"niter": 3, "population_size": 7},
+        ga_overrides={"niter": 4, "population_size": 10},
         ts_overrides={"max_pairs": 2, "neb_steps": 70},
         require_ts_candidates=True,
     ),
@@ -131,7 +131,7 @@ GPU_EXAMPLE_CASES = [
         adsorbates=_adsorbates_oh(n=1),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
-        ga_overrides={"niter": 3, "population_size": 6},
+        ga_overrides={"niter": 4, "population_size": 8},
         ts_overrides={"max_pairs": 2, "neb_steps": 70},
         expected_mobile_atoms=7,
         adsorbate_fragment_lengths=[2],
