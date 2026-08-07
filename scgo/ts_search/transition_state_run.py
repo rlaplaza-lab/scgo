@@ -1013,7 +1013,7 @@ def run_transition_state_search(
     neb_sum = float(parallel_meta.get("neb_batch_optimization_s", 0.0))
     if neb_sum <= 0.0:
         logger.debug(
-            "neb_batch_optimization_s unavailable; summing per-pair neb_optimization_s"
+            "neb_batch_optimization_s unavailable; summing per-pair NEB timings"
         )
         neb_sum = sum_neb_seconds_from_ts_results(ts_results)
     ts_rollup: dict[str, float] = {

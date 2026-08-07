@@ -1499,9 +1499,9 @@ def test_run_parallel_neb_does_not_retry_non_oom_runtime_errors(
 def test_run_parallel_neb_reports_avg_timing_keys(tmp_path, cu3_triangle, cu3_linear):
     """B7: per-pair timings are labelled ``*_avg_s`` (chunk time / n pairs).
 
-    ``neb_optimization_s`` is kept as an alias so the run-level rollup in
-    :func:`scgo.utils.timing_report.sum_neb_seconds_from_ts_results` and the
-    benchmark readers keep working.
+    The old ``neb_optimization_s`` alias is gone; the run-level rollup in
+    :func:`scgo.utils.timing_report.sum_neb_seconds_from_ts_results` reads the
+    ``*_avg_s`` key directly.
     """
     from unittest.mock import MagicMock, patch
 
@@ -1545,8 +1545,8 @@ def test_run_parallel_neb_reports_avg_timing_keys(tmp_path, cu3_triangle, cu3_li
     for key in ("total_wall_avg_s", "neb_optimization_avg_s", "cpu_non_relax_avg_s"):
         assert key in timings, timings
         assert timings[key] >= 0.0
-    # Back-compat alias for the run-level rollup.
-    assert timings["neb_optimization_s"] == timings["neb_optimization_avg_s"]
+    # The back-compat alias is removed.
+    assert "neb_optimization_s" not in timings
     assert sum_neb_seconds_from_ts_results(results) == pytest.approx(
         timings["neb_optimization_avg_s"]
     )

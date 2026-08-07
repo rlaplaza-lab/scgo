@@ -82,6 +82,7 @@ def test_read_timing_file_warns_on_corrupt_json(tmp_path: Path, caplog):
     [
         ({"go_phase_s": 10.0, "ts_neb_sum_s": 5.0}, 15.0),
         ({"neb_optimization_s": 7.0}, 7.0),
+        ({"neb_optimization_avg_s": 7.0}, 7.0),
         ({"local_relaxation_s": 3.0}, 3.0),
         (
             {"initial_local_relaxation_s": 2.0, "offspring_local_relaxation_s": 4.0},
@@ -145,3 +146,20 @@ def test_sum_neb_seconds_from_ts_results():
         {},
     ]
     assert sum_neb_seconds_from_ts_results(results) == pytest.approx(4.0)
+
+
+def test_sum_neb_seconds_reads_parallel_avg_keys():
+    """Parallel NEB emits ``*_avg_s`` only; the rollup must still see it."""
+    results = [
+        {"timings_s": {"neb_optimization_avg_s": 1.5}},
+        {"timings_s": {"neb_optimization_avg_s": 2.5}},
+    ]
+    assert sum_neb_seconds_from_ts_results(results) == pytest.approx(4.0)
+
+
+def test_sum_neb_seconds_mixes_serial_and_parallel_pairs():
+    results = [
+        {"timings_s": {"neb_optimization_s": 1.0}},
+        {"timings_s": {"neb_optimization_avg_s": 2.0}},
+    ]
+    assert sum_neb_seconds_from_ts_results(results) == pytest.approx(3.0)

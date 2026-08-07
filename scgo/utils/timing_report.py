@@ -61,6 +61,8 @@ def relax_seconds_from_timings(timings: dict[str, float]) -> float:
         )
     if "neb_optimization_s" in timings:
         return float(timings.get("neb_optimization_s", 0.0))
+    if "neb_optimization_avg_s" in timings:
+        return float(timings.get("neb_optimization_avg_s", 0.0))
     if "initial_relax_batch_s" in timings or (
         "relax_batch_s" in timings and "initial_local_relaxation_s" not in timings
     ):
@@ -194,11 +196,22 @@ def write_run_timing_file(
     return write_timing_file(run_dir, payload)
 
 
+def neb_seconds_from_pair_timings(timings: dict[str, Any]) -> float:
+    """Return a pair's NEB wall time from serial or parallel timing keys.
+
+    Serial NEB records a true per-pair ``neb_optimization_s``. Parallel NEB
+    records ``neb_optimization_avg_s`` (chunk wall time divided across the
+    pairs in the chunk), so summing it across a chunk recovers the chunk time.
+    """
+    if "neb_optimization_s" in timings:
+        return float(timings.get("neb_optimization_s", 0.0))
+    return float(timings.get("neb_optimization_avg_s", 0.0))
+
+
 def sum_neb_seconds_from_ts_results(
     ts_results: list[dict[str, Any]],
 ) -> float:
-    """Sum per-pair ``neb_optimization_s`` values from TS result dicts."""
+    """Sum per-pair NEB wall time from TS result dicts."""
     return sum(
-        float((r.get("timings_s") or {}).get("neb_optimization_s", 0.0))
-        for r in ts_results
+        neb_seconds_from_pair_timings(r.get("timings_s") or {}) for r in ts_results
     )

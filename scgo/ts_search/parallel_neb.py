@@ -795,15 +795,12 @@ def run_parallel_neb_search(
         pair_dir.mkdir(parents=True, exist_ok=True)
         save_neb_result(result, str(pair_dir), pair_id)
         # Chunk wall time divided across pairs, not per-pair measurements: the
-        # ``*_avg_s`` suffix keeps that explicit. ``neb_optimization_s`` is kept
-        # as an alias so the run-level rollup
-        # (:func:`~scgo.utils.timing_report.sum_neb_seconds_from_ts_results`) and
-        # existing benchmark readers keep working.
+        # ``*_avg_s`` suffix keeps that explicit. Consumers read these via
+        # :func:`~scgo.utils.timing_report.neb_seconds_from_pair_timings`.
         result["timings_s"] = {
             "total_wall_avg_s": wall_each,
             "neb_optimization_avg_s": neb_each,
             "cpu_non_relax_avg_s": max(0.0, wall_each - neb_each),
-            "neb_optimization_s": neb_each,
         }
 
     meta = {

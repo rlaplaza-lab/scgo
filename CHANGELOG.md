@@ -38,9 +38,11 @@
 
 - Per-pair parallel NEB ``timings_s`` keys are renamed to ``total_wall_avg_s`` /
   ``neb_optimization_avg_s`` / ``cpu_non_relax_avg_s``, reflecting that they are
-  chunk wall time divided across pairs rather than per-pair measurements.
-  ``neb_optimization_s`` is retained as an alias so the run-level rollup and the
-  benchmark readers keep working.
+  chunk wall time divided across pairs rather than per-pair measurements. No
+  ``neb_optimization_s`` alias is emitted; readers use the new
+  ``scgo.utils.timing_report.neb_seconds_from_pair_timings`` helper, which
+  accepts the serial ``neb_optimization_s`` key and the parallel
+  ``neb_optimization_avg_s`` key.
 - Structure tags live only in ASE ``key_value_pairs`` via ``set_tags`` /
   ``get_tag`` / ``get_tags`` / ``filter_by_tags``; remove the old
   ``atoms.info["metadata"]`` / ``provenance`` bags, ``add_metadata`` /
