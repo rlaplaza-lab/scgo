@@ -49,6 +49,8 @@ class UnifiedCache:
         >>> print(value)
         {'data': 42}
         >>> cache.clear_namespace("namespace1")
+        >>> print(cache.get_metrics())
+        {'hits': 1, 'misses': 0, 'evictions': 0, 'size': 0}
     """
 
     def __init__(self, max_size: int = 1000):
@@ -197,6 +199,30 @@ class UnifiedCache:
             self._hits = 0
             self._misses = 0
             self._evictions = 0
+
+    def get_metrics(self) -> dict[str, int]:
+        """Get cache performance metrics.
+
+        Returns:
+            Dictionary containing:
+                - hits: Number of cache hits
+                - misses: Number of cache misses
+                - evictions: Number of LRU evictions
+                - size: Current number of cached entries
+                - hit_rate: Hit rate as a percentage (0-100)
+        """
+        with self._lock:
+            total_requests = self._hits + self._misses
+            hit_rate = (
+                int(100 * self._hits / total_requests) if total_requests > 0 else 0
+            )
+            return {
+                "hits": self._hits,
+                "misses": self._misses,
+                "evictions": self._evictions,
+                "size": len(self._cache),
+                "hit_rate": hit_rate,
+            }
 
     def __len__(self) -> int:
         """Return the number of entries in the cache."""

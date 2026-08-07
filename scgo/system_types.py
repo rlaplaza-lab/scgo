@@ -958,6 +958,15 @@ def flatten_adsorbate_symbols(adsorbates: list[Atoms]) -> list[str]:
     return symbols
 
 
+def combine_adsorbates_to_template(adsorbates: list[Atoms]) -> Atoms:
+    if not adsorbates:
+        raise SCGOValidationError("adsorbates must contain at least one fragment")
+    combined = adsorbates[0].copy()
+    for frag in adsorbates[1:]:
+        combined += frag.copy()
+    return combined
+
+
 def build_adsorbate_definition_from_inputs(
     *,
     system_type: SystemType,

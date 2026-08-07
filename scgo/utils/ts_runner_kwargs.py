@@ -16,6 +16,18 @@ from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
 
 
 @dataclass(frozen=True)
+class TsRunConfig:
+    """Resolved transition-state runner configuration (flat dict view)."""
+
+    calculator: str
+    calculator_kwargs: dict[str, Any]
+    system_type: SystemType
+    use_torchsim: bool
+    use_parallel_neb: bool
+    surface_config: SurfaceSystemConfig | None
+
+
+@dataclass(frozen=True)
 class NebRunConfig:
     """Shared NEB geometry / validation knobs for serial and parallel runners."""
 

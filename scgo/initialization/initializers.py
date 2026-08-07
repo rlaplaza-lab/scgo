@@ -12,6 +12,7 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
 from typing import Any
 
 import numpy as np

@@ -195,6 +195,37 @@ class Population:
         self.__calc_participation__()
         self._write_log()
 
+    def get_current_population(self):
+        """Returns a copy of the current population."""
+        self.update()
+        return [a.copy() for a in self.pop]
+
+    def get_population_after_generation(self, gen):
+        """Returns a copy of the population as it where
+        after generation gen
+        """
+        if self.logfile is not None:
+            with open(self.logfile) as fd:
+                gens = {}
+                for line in fd:
+                    _, no, popul = line.split(":")
+                    gens[int(no)] = [int(i) for i in popul.split(",")]
+            return [c.copy() for c in self.all_cand[::-1]
+                    if c.info["relax_id"] in gens[gen]]
+
+        all_candidates = [c for c in self.all_cand
+                          if get_metadata(c, "generation", default=float("inf")) <= gen]
+        cands = [all_candidates[0]]
+        for b in all_candidates:
+            if b not in cands:
+                for a in cands:
+                    if self.comparator.looks_like(a, b):
+                        break
+                else:
+                    cands.append(b)
+        pop = cands[: self.population_size]
+        return [a.copy() for a in pop]
+
     def __add_candidate__(self, a):
         """Adds a single candidate to the population."""
         # check if the structure is too low in raw score
