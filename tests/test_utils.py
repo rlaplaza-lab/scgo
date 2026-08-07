@@ -12,7 +12,7 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 
 import tests.constants as _tc
-from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_PAIR_COR_CUM_DIFF
+from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 
 # Re-exported for `from tests.test_utils import ...` (single source: _tc).
 REPRODUCIBILITY_RTOL = _tc.REPRODUCIBILITY_RTOL
@@ -53,7 +53,7 @@ class MockRelaxer:
 
 
 def positions_equal(a: Atoms, b: Atoms, tolerance: float = 1e-6) -> bool:
-    """Check if two Atoms objects have the same positions within tolerance.
+    """Check if two Atoms objects are position- and composition-equal.
 
     Args:
         a: First Atoms object to compare
@@ -61,12 +61,25 @@ def positions_equal(a: Atoms, b: Atoms, tolerance: float = 1e-6) -> bool:
         tolerance: Maximum allowed difference in positions (default: 1e-6)
 
     Returns:
-        True if positions are equal within tolerance, False otherwise
+        True if positions (and chemical composition) are equal within tolerance.
 
     Note:
-        This function only compares positions, not other properties like
-        chemical symbols, cell, or other attributes.
+        Composition is compared via atomic numbers because two clusters with
+        identical positions but different element assignments are not equivalent.
+        Use :func:`positions_equal_ignore_composition` only when a pure position
+        comparison is genuinely required.
     """
+    if len(a) != len(b):
+        return False
+    if not np.all(a.get_atomic_numbers() == b.get_atomic_numbers()):
+        return False
+    return np.allclose(a.get_positions(), b.get_positions(), atol=tolerance)
+
+
+def positions_equal_ignore_composition(
+    a: Atoms, b: Atoms, tolerance: float = 1e-6
+) -> bool:
+    """Pure position comparison without composition check (use sparingly)."""
     if len(a) != len(b):
         return False
     return np.allclose(a.get_positions(), b.get_positions(), atol=tolerance)
@@ -197,13 +210,80 @@ def seeded_globals(seed: int) -> Iterator[None]:
 _MINIMUM_XYZ_RANK_RE = re.compile(r"_minimum_(\d+)_")
 
 
+def _minima_match_key(energy: float, atoms: Atoms) -> tuple[tuple[float, ...], float]:
+    """Stable pairing key: production geometry signature + rounded energy.
+
+    Uses the production ``get_structure_signature`` (precision 4) rather than a
+    raw energy-only sort, so equal-energy / mismatched-structure minima cannot be
+    silently paired and pass.
+    """
+    from scgo.initialization.candidate_discovery import get_structure_signature
+
+    signature = get_structure_signature(atoms, precision=4)
+    return (signature, round(float(energy), 6))
+
+
+def _compare_minima_core(
+    minima1,
+    minima2,
+    *,
+    rtol: float = REPRODUCIBILITY_RTOL,
+    atol: float = REPRODUCIBILITY_ATOL,
+) -> list[str]:
+    """Core order-independent minima comparison.
+
+    Pairs minima by (geometry signature, rounded energy). Returns a list of
+    mismatch descriptions; empty means the lists are equivalent.
+    """
+    if len(minima1) != len(minima2):
+        return [f"Minima count mismatch: {len(minima1)} != {len(minima2)}"]
+
+    keys1 = [_minima_match_key(e, a) for e, a in minima1]
+    keys2 = [_minima_match_key(e, a) for e, a in minima2]
+
+    unmatched2 = list(enumerate(keys2))
+    mismatches: list[str] = []
+    for i, (sig1, e1) in enumerate(keys1):
+        best_j = -1
+        best_diff = None
+        for j, (j_item, (sig2, e2)) in enumerate(unmatched2):
+            if j_item is None:
+                continue
+            if sig1 != sig2:
+                continue
+            if not np.isclose(e1, e2, rtol=rtol, atol=atol):
+                continue
+            diff = abs(e1 - e2)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_j = j
+        if best_j < 0:
+            mismatches.append(
+                f"Minimum {i} (signature={sig1}, energy={e1}) has no match in second set"
+            )
+            continue
+        unmatched2[best_j] = (None, unmatched2[best_j][1])  # consume
+
+    unmatched = [j for j, (j_item, _) in enumerate(unmatched2) if j_item is not None]
+    if unmatched:
+        mismatches.append(
+            f"{len(unmatched)} minima in second set have no match: "
+            f"{[keys2[j] for j in unmatched]}"
+        )
+    return mismatches
+
+
 def compare_minima_lists(
     minima1,
     minima2,
     rtol=REPRODUCIBILITY_RTOL,
     atol=REPRODUCIBILITY_ATOL,
 ):
-    """Compare two lists of minima (energy, atoms) tuples.
+    """Compare two lists of minima (energy, atoms) tuples (order-independent).
+
+    Pairing uses (production geometry signature, rounded energy) rather than a
+    raw energy-only sort, so equal-energy / mismatched-structure cases that
+    previously passed silently are now caught.
 
     Args:
         minima1: First list of (energy, atoms) tuples
@@ -214,26 +294,7 @@ def compare_minima_lists(
     Returns:
         True if lists are equal (order-independent), False otherwise
     """
-    if len(minima1) != len(minima2):
-        return False
-
-    # Sort by energy to make comparison order-independent
-    minima1_sorted = sorted(minima1, key=lambda x: x[0])
-    minima2_sorted = sorted(minima2, key=lambda x: x[0])
-
-    for (e1, a1), (e2, a2) in zip(minima1_sorted, minima2_sorted, strict=True):
-        if not np.isclose(e1, e2, rtol=rtol, atol=atol):
-            return False
-        if not np.allclose(
-            a1.get_positions(),
-            a2.get_positions(),
-            rtol=rtol,
-            atol=atol,
-        ):
-            return False
-        if not np.all(a1.get_atomic_numbers() == a2.get_atomic_numbers()):
-            return False
-    return True
+    return not _compare_minima_core(minima1, minima2, rtol=rtol, atol=atol)
 
 
 def assert_minima_lists_equal(
@@ -244,31 +305,8 @@ def assert_minima_lists_equal(
     atol: float = REPRODUCIBILITY_ATOL,
 ) -> None:
     """Assert two minima lists match within floating-point tolerance."""
-    assert len(minima1) == len(minima2), (
-        f"Minima count mismatch: {len(minima1)} != {len(minima2)}"
-    )
-
-    for index, ((e1, a1), (e2, a2)) in enumerate(
-        zip(minima1, minima2, strict=True),
-        start=1,
-    ):
-        np.testing.assert_allclose(
-            e1,
-            e2,
-            rtol=rtol,
-            atol=atol,
-            err_msg=f"Energy mismatch at minimum {index}",
-        )
-        np.testing.assert_allclose(
-            a1.get_positions(),
-            a2.get_positions(),
-            rtol=rtol,
-            atol=atol,
-            err_msg=f"Position mismatch at minimum {index}",
-        )
-        assert np.all(a1.get_atomic_numbers() == a2.get_atomic_numbers()), (
-            f"Composition mismatch at minimum {index}"
-        )
+    mismatches = _compare_minima_core(minima1, minima2, rtol=rtol, atol=atol)
+    assert not mismatches, "Minima lists differ:\n" + "\n".join(mismatches)
 
 
 def xyz_files_by_minimum_rank(directory: Path) -> dict[int, Path]:
@@ -561,40 +599,31 @@ def mark_test_minima_as_final(db_path: Path | str) -> None:
 def create_ga_comparator(n_top: int):
     """Create a SequentialComparator for GA testing.
 
-    This helper reduces duplication in GA patch tests by extracting the common
-    comparator configuration pattern.
+    Delegates to the production ``create_structure_comparator`` factory so the
+    test comparator cannot silently drift from production duplicate-detection
+    criteria. The test-only signature uses the default energy tolerance.
 
     Args:
         n_top: Number of atoms in the cluster (for InteratomicDistanceComparator)
 
     Returns:
-        SequentialComparator instance configured for GA testing
+        SequentialComparator instance configured identically to production GA.
 
     Example:
         >>> comp = create_ga_comparator(len(pt3_atoms))
         >>> population = Population(..., comparator=comp, ...)
     """
-    from ase_ga.standard_comparators import (
-        InteratomicDistanceComparator,
-        RawScoreComparator,
-        SequentialComparator,
-    )
+    from scgo.algorithms.ga_common import create_structure_comparator
 
-    return SequentialComparator(
-        methods=[
-            RawScoreComparator(dist=DEFAULT_ENERGY_TOLERANCE),
-            InteratomicDistanceComparator(
-                n_top=n_top,
-                mic=False,
-                dE=DEFAULT_ENERGY_TOLERANCE,
-                pair_cor_cum_diff=DEFAULT_PAIR_COR_CUM_DIFF,
-            ),
-        ],
-    )
+    return create_structure_comparator(n_top, DEFAULT_ENERGY_TOLERANCE, mic=False)
 
 
-def get_structure_signature(atoms: Atoms, *, precision: int = 6) -> tuple[float, ...]:
-    """Geometry signature for tests (delegates to production helper)."""
+def get_structure_signature(atoms: Atoms, *, precision: int = 4) -> tuple[float, ...]:
+    """Geometry signature for tests.
+
+    Delegates to the production helper using the SAME default precision (4) so
+    that test-side uniqueness semantics match production duplicate detection.
+    """
     from scgo.initialization.candidate_discovery import get_structure_signature as _sig
 
     return _sig(atoms, precision=precision)
@@ -669,7 +698,18 @@ def assert_ts_result_valid(
     barrier_range: tuple[float, float] = EMT_H2_BARRIER_EV,
     require_interior_ts: bool = True,
 ) -> None:
-    """Assert a NEB/TS result satisfies basic transition-state physics invariants."""
+    """Assert a NEB/TS result satisfies basic transition-state physics invariants.
+
+    Always enforced: TS energy >= max(endpoint energies) - 1e-6, an interior
+    ``ts_image_index`` (0 < idx < n_images) when ``require_interior_ts`` (which
+    also requires ``status == "success"``), and ``final_fmax < TS_FMAX_CONVERGED``
+    when the run reports ``neb_converged``.
+
+    ``barrier_range`` bounds the accepted barrier height. It defaults to the
+    physical EMT H2 window ``EMT_H2_BARRIER_EV``. MLIP (MACE/UPET) tests, which
+    have no analytic ground-truth barrier, should pass
+    ``barrier_range=(0.0, float("inf"))`` to require only a non-negative barrier.
+    """
     barrier = result.get("barrier_height")
     assert barrier is not None, f"Missing barrier_height in result: {result}"
     lo, hi = barrier_range
@@ -825,17 +865,26 @@ def assert_pt_o_distance_reasonable(
 
 
 def assert_run_id_persisted(atoms: Atoms, expected_run_id: str) -> None:
-    """Assert `run_id` is present in `Atoms.info` (`metadata` or `key_value_pairs`).
+    """Assert `run_id` is persisted in the canonical location.
 
-    This helper centralizes the run_id check across the test suite so tests
-    don't branch on storage location.
+    The canonical storage location is ``Atoms.info["key_value_pairs"]["run_id"]``.
+    A missing/incorrect key_value_pairs entry fails the test (a write to the
+    wrong place must not pass). ``metadata.run_id`` is recorded as a secondary,
+    informational check: if present it must also match, but its absence does not
+    fail the test.
     """
-    md_run = atoms.info.get("metadata", {}).get("run_id")
     kv_run = atoms.info.get("key_value_pairs", {}).get("run_id")
-    assert md_run == expected_run_id or kv_run == expected_run_id, (
-        f"run_id not persisted (expected={expected_run_id!r}); "
-        f"metadata.run_id={md_run!r}, key_value_pairs.run_id={kv_run!r}"
+    assert kv_run == expected_run_id, (
+        f"run_id not persisted in canonical location key_value_pairs.run_id "
+        f"(expected={expected_run_id!r}, got={kv_run!r}); "
+        f"metadata.run_id={atoms.info.get('metadata', {}).get('run_id')!r}"
     )
+
+    md_run = atoms.info.get("metadata", {}).get("run_id")
+    if md_run is not None:
+        assert md_run == expected_run_id, (
+            f"metadata.run_id {md_run!r} does not match expected {expected_run_id!r}"
+        )
 
 
 def assert_db_final_row(db_path, expected_run_id, expect_final_id=True):

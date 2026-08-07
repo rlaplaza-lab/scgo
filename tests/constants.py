@@ -54,8 +54,14 @@ MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 EMT_PT2_BOND_ANG = 2.26
 EMT_PT2_BOND_TOL_ANG = 0.02
 EMT_H2_BARRIER_EV = (2.0, 5.0)
+# NN distance band as a fraction of the sum of covalent radii. The lower bound
+# (0.9) guards against unphysically short bonds / near-clashes; the upper bound
+# (1.3) guards against disconnected fragments. Used by assert_nn_distances_in_band.
 NN_DISTANCE_BAND = (0.9, 1.3)
-TS_FMAX_CONVERGED = 0.15
+# NEB convergence force tolerance (eV/Å) applied when a TS run reports
+# neb_converged. Generous-but-tight: real EMT/MLIP converged barriers sit well
+# below this; a reported "converged" run with larger residual force is suspect.
+TS_FMAX_CONVERGED = 0.1
 ADSORPTION_HEIGHT_TOLERANCE_ANG = 0.15
 PT_O_DISTANCE_ANG = (1.8, 2.4)
 # EMT barrier for Pt4 tetrahedron <-> planar isomerization (eV).

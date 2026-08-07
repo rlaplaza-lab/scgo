@@ -31,7 +31,12 @@ from scgo.system_types import (
     build_adsorbate_definition_from_inputs,
     get_system_policy,
 )
-from tests.test_utils import assert_supported_cluster_binding
+from tests.test_utils import (
+    assert_minima_lists_equal,
+    assert_supported_cluster_binding,
+    assert_ts_result_valid,
+    validate_structure_with_diagnostics,
+)
 
 SEED = 42
 
@@ -227,13 +232,26 @@ def _build_ts_params(case: GpuExampleCase) -> dict:
     return ts_params
 
 
+# Representative case used for the (expensive) same-seed determinism double-run.
+# MACE forward passes are deterministic for a fixed seed + single process, but
+# the GA uses parallel workers; this guards against CUDA nondeterminism / RNG
+# threading regressions. Kept to one case to bound Kaggle wall time.
+DETERMINISM_CASE_SYSTEM_TYPE = "gas_cluster"
+
+
 @pytest.mark.parametrize("case", GPU_EXAMPLE_CASES, ids=lambda c: c.system_type)
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.requires_cuda
 @pytest.mark.requires_mace
 def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> None:
-    """End-to-end GO+TS with MACE/TorchSim for each example system type."""
+    """End-to-end GO+TS with MACE/TorchSim for each example system type.
+
+    Enforces self-consistent physical invariants (no hardcoded MLIP reference
+    values): TS energy >= endpoints, interior TS image index, NEB fmax
+    convergence on success, connected/clash-free GO minima of the expected atom
+    count, plus a same-seed determinism assertion for a representative case.
+    """
     output_dir = tmp_path / f"gpu_{case.system_type}"
     go_params = _build_go_params(case)
     summary = run_go_ts(
@@ -272,6 +290,13 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
     n_slab = len(case.surface_config.slab) if case.surface_config is not None else 0
     assert len(best) == n_slab + case.expected_mobile_atoms
 
+    # GO minimum must be a connected, clash-free cluster of the expected size.
+    validate_structure_with_diagnostics(
+        best,
+        context=f"{case.system_type} GO minimum",
+    )
+    assert len(best) == n_slab + case.expected_mobile_atoms
+
     if (
         case.surface_config is not None
         and case.check_supported_binding
@@ -290,7 +315,25 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
         assert isinstance(result, dict)
         assert "pair_id" in result
         assert "status" in result
-        if result.get("status") == "success":
-            barrier = result.get("barrier_height")
-            assert barrier is not None
-            assert np.isfinite(float(barrier))
+        # MLIP-aware: require only a non-negative barrier (no analytic ground truth).
+        assert_ts_result_valid(result, barrier_range=(0.0, float("inf")))
+
+    # Same-seed determinism: re-run on a sibling dir with identical params and
+    # assert element-identical GO minima (GPU float-noise tolerant via atol).
+    if case.system_type == DETERMINISM_CASE_SYSTEM_TYPE:
+        output_dir2 = tmp_path / f"gpu_{case.system_type}_repeat"
+        summary2 = run_go_ts(
+            case.composition,
+            go_params=_build_go_params(case),
+            ts_params=_build_ts_params(case),
+            seed=SEED,
+            verbosity=0,
+            output_dir=output_dir2,
+            system_type=case.system_type,
+            surface_config=case.surface_config,
+            adsorbates=case.adsorbates,
+            log_summary=False,
+        )
+        minima2 = summary2["minima_by_formula"][expected_formula]
+        # GPU float noise floor: 1e-6 (not the CPU 1e-12 reproducibility tolerance).
+        assert_minima_lists_equal(minima, minima2, rtol=1e-5, atol=1e-6)

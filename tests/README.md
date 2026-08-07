@@ -86,6 +86,29 @@ Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examp
 
 UPET GPU smoke coverage: `tests/integration/test_gpu_upet_smoke.py`.
 
+### Stricter GPU suite invariants
+
+The Kaggle GPU suites now enforce **physical invariants** (not just finiteness):
+
+- **MACE** (`test_gpu_examples_integration.py`): for every successful TS result,
+  `assert_ts_result_valid` checks TS energy ≥ endpoints, an interior `ts_image_index`,
+  and NEB `final_fmax` convergence; each GO minimum is validated as a connected,
+  clash-free cluster of the expected atom count. A **same-seed determinism** check
+  re-runs the `gas_cluster` case and asserts element-identical minima.
+- **UPET** (`test_gpu_upet_smoke.py`): GO runs assert finite, well-formed energies
+  and connected/clash-free minima, plus a **same-seed determinism** double-run;
+  the batched relaxer asserts finite relaxed energies and cluster connectivity.
+
+MLIP tests pass `barrier_range=(0.0, float("inf"))` (only a non-negative barrier is
+required) because MACE/UPET have no analytic ground-truth barrier — no hardcoded
+reference values. The determinism comparisons use a relaxed `atol=1e-6` ("GPU float
+noise floor"), distinct from the CPU `1e-12` reproducibility tolerance.
+
+> **Wall time**: the MACE determinism double-run raises the MACE suite cost
+> (roughly doubles the `gas_cluster` case within the 10800 s Kaggle cap). The
+> determinism check is limited to the single representative `gas_cluster` case to
+> bound total runtime; UPET double-runs are cheap.
+
 ### Local equivalents
 
 ```bash

@@ -11,6 +11,13 @@ pytest.importorskip("upet")
 pytest.importorskip("metatomic_torchsim")
 pytest.importorskip("torch_sim")
 
+import numpy as np
+
+from tests.test_utils import (
+    assert_minima_lists_equal,
+    validate_structure_with_diagnostics,
+)
+
 
 @pytest.mark.requires_cuda
 @pytest.mark.requires_upet
@@ -65,8 +72,11 @@ def test_upet_torchsim_relax_batch_gpu(tmp_path: Path):
     assert len(results) == 2
     for energy, atoms in results:
         assert isinstance(energy, float)
+        assert np.isfinite(energy), "Relaxed energy must be finite"
         assert len(atoms) == 4
         assert atoms.cell.sum() != 0.0  # storage cell restored after metatomic path
+        # Relaxed cluster must stay a connected, clash-free structure.
+        validate_structure_with_diagnostics(atoms, context="upet relaxed Pt4")
 
 
 @pytest.mark.slow
@@ -105,3 +115,22 @@ def test_upet_run_go_gpu_smoke(tmp_path: Path):
     )
     assert results
     assert all(isinstance(e, float) for e, _ in results)
+    assert all(np.isfinite(e) for e, _ in results)
+    # Energies should be well-formed (finite and mutually comparable).
+    assert len({round(e, 6) for e, _ in results}) >= 1
+    # Each GO minimum must be a connected, clash-free Pt4 cluster.
+    for _energy, atoms in results:
+        assert len(atoms) == 4
+        validate_structure_with_diagnostics(atoms, context="upet GO Pt4")
+
+    # Same-seed determinism: a second identical run must yield element-identical
+    # GO minima (UPET forward passes are deterministic for a fixed seed).
+    results2 = run_go(
+        ["Pt"] * 4,
+        params=params,
+        seed=42,
+        system_type="gas_cluster",
+        output_dir=tmp_path / "upet_go_repeat",
+        verbosity=0,
+    )
+    assert_minima_lists_equal(results, results2, rtol=1e-5, atol=1e-6)
