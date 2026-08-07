@@ -1,8 +1,9 @@
 """Shared provenance header for on-disk JSON artifacts.
 
-``schema_version`` tracks the output-JSON provenance header (currently 3).
+``schema_version`` tracks the single output-JSON provenance header (currently 3).
 This is distinct from the SQLite DB stamp ``schema_version`` in
-:mod:`scgo.metadata.db_stamp`.
+:mod:`scgo.metadata.db_stamp`. All output-JSON artifacts (GO/TS/NEB metadata,
+timing, and cluster-adsorbate provenance) share this one version.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ logger = get_logger(__name__)
 _version_warned: set[str] = set()
 
 OUTPUT_JSON_SCHEMA_VERSION = 3
-CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION = 1
 
 
 def output_json_provenance(*, extra: dict[str, Any] | None = None) -> dict[str, Any]:

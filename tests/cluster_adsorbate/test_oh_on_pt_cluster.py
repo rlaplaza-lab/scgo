@@ -16,7 +16,7 @@ from scgo.cluster_adsorbate import (
     relax_metal_cluster_with_adsorbate,
 )
 from scgo.exceptions import SCGOValidationError
-from scgo.metadata.provenance import CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from tests.test_utils import assert_pt_o_distance_reasonable
 
 _OH_BOND = 0.96
@@ -98,10 +98,7 @@ def test_oh_relax_reports_connected_structure_emt() -> None:
     assert info["structure_ok_final"] is True
     assert "oh_distance" in info
     prov = info["output_provenance"]
-    assert (
-        prov["cluster_adsorbate_schema_version"]
-        == CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION
-    )
+    assert prov["cluster_adsorbate_schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
     assert prov["calculator_class"] == "EMT"
     assert prov["n_frag"] == 2
     assert_pt_o_distance_reasonable(relaxed, pt_idx=0, o_idx=2)

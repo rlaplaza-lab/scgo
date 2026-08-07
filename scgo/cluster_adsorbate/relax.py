@@ -23,7 +23,7 @@ from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.metadata.provenance import (
-    CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION,
+    OUTPUT_JSON_SCHEMA_VERSION,
     output_json_provenance,
 )
 from scgo.utils.rng_helpers import ensure_rng_or_create
@@ -159,7 +159,7 @@ def relax_metal_cluster_with_adsorbate(
     calc_obj = combined.calc
     info["output_provenance"] = output_json_provenance(
         extra={
-            "cluster_adsorbate_schema_version": CLUSTER_ADSORBATE_OUTPUT_SCHEMA_VERSION,
+            "cluster_adsorbate_schema_version": OUTPUT_JSON_SCHEMA_VERSION,
             "formula": combined.get_chemical_formula(),
             "n_core": n_core,
             "n_frag": n_frag,

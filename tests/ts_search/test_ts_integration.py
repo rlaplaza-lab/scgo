@@ -224,6 +224,29 @@ def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
         parallel_calls.append(kwargs)
         return [], {}
 
+    class FakeRelaxer:
+        """Stand-in for the shared TorchSim relaxer.
+
+        This test only asserts serial-vs-parallel dispatch, so it must not
+        depend on any MLIP extra. Without this the real relaxer would load a
+        MACE model and the test would fail on the UMA/UPET CI suites.
+        """
+
+        def __init__(self, **kwargs):
+            pass
+
+        def relax_batch(self, atoms_list, steps=0):
+            results = []
+            for a in atoms_list:
+                ra = a.copy()
+                ra.arrays["forces"] = np.zeros((len(a), 3))
+                results.append((0.0, ra))
+            return results
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer", FakeRelaxer
+    )
+
     monkeypatch.setattr(
         ts_run_mod,
         "load_minima_by_composition",
