@@ -8,8 +8,11 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.exceptions import SCGONotImplementedError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+
+logger = get_logger(__name__)
 
 _MISSING_FAIRCHEM_MSG = (
     "fairchem-core is not installed. Install with: pip install 'scgo[uma]' "
@@ -18,7 +21,7 @@ _MISSING_FAIRCHEM_MSG = (
 
 
 class UMA(Calculator):
-    """ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
+    r"""ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
     is a fairchem pretrained name or path; ``task_name`` selects the UMA task
@@ -37,14 +40,13 @@ class UMA(Calculator):
         try:
             from fairchem.core import FAIRChemCalculator
         except ImportError as e:
-            raise ImportError(_MISSING_FAIRCHEM_MSG) from e
+            raise SCGONotImplementedError(_MISSING_FAIRCHEM_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
 
         name = f"UMA-{model_name}"
         super().__init__(name=name, **kwargs)
 
-        logger = get_logger(__name__)
         logger.info(
             'Initializing UMA calculator ("%s") on device: "%s"', model_name, dev
         )

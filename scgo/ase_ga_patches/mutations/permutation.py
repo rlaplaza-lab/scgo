@@ -1,8 +1,9 @@
+"""Mutations that permute atom types between groups."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutations that permute atom types between groups."""
 
 import numpy as np
 from ase import Atoms

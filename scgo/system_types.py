@@ -158,6 +158,7 @@ class TSParams(TypedDict, total=False):
     use_torchsim: bool
     use_parallel_neb: bool
     parallel_neb_max_bands: int | None
+    parallel_neb_max_batch_atoms: int | None
     connectivity_factor: float
     similarity_tolerance: float
     similarity_pair_cor_max: float
@@ -336,7 +337,6 @@ def resolve_connectivity_factor(
     surface_config: SurfaceSystemConfig | None = None,
 ) -> float:
     """Resolve structure connectivity factor from explicit value or configs."""
-
     if connectivity_factor is not None:
         return float(connectivity_factor)
     if cluster_adsorbate_config is not None:

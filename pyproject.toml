@@ -99,6 +99,7 @@ select = [
     "SIM", # simplify
     "PERF", # performance
     "PIE", # flake8-pie
+    "D",   # pydocstyle (Google convention)
 ]
 ignore = [
     "E501",  # line too long, handled by ruff format
@@ -106,6 +107,16 @@ ignore = [
     "C901",  # too complex
     "PERF401", # manual lists are fine
     "UP046",  # Keep current generic class style used across the codebase.
+    # Docstring *completeness* (per-function/class/method docstrings) is a
+    # larger, separate effort (see plan Open Question 3). We enforce the
+    # Google-style *structural* conventions (formatting, module docstrings,
+    # escape sequences) but not missing-docstring completeness here.
+    "D101",  # undocumented public class
+    "D102",  # undocumented public method
+    "D103",  # undocumented public function
+    "D105",  # undocumented magic method
+    "D107",  # undocumented public __init__
+    "D417",  # undocumented parameter
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -113,9 +124,12 @@ ignore = [
 "scgo/calculators/mace_helpers.py" = ["E402"]  # patch torch.load before mace/e3nn import
 # PEP 695 ``type CompositionInput = ...`` after imports confuses isort's import-block span (I001).
 "scgo/runner_api.py" = ["I001"]
-"tests/**/*" = ["B011"]
-"scgo/ase_ga_patches/*" = ["B011", "E402"]
-"benchmark/*" = ["E501", "T201", "SIM108", "C408", "PERF401"]  # scripts: prints, dict builders, nested grid loops
+"tests/**/*" = ["B011", "D"]  # test modules are not part of the public API docstring convention
+"scgo/ase_ga_patches/*" = ["B011", "E402", "D", "I001"]
+"benchmark/*" = ["E501", "T201", "SIM108", "C408", "PERF401", "D"]  # scripts: prints, dict builders, nested grid loops
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.format]
 quote-style = "double"

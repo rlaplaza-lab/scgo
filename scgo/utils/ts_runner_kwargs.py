@@ -57,6 +57,10 @@ class NebRunConfig:
     system_type: SystemType
     surface_config: SurfaceSystemConfig | None
     torchsim_params: dict[str, Any] | None
+    # Atom budget (sum of n_images * n_atoms) for one fused parallel-NEB force
+    # batch. Used only when ``parallel_neb_max_bands`` is None; ``None`` means
+    # "no atom budget" (all bands in one batch).
+    parallel_neb_max_batch_atoms: int | None = None
 
 
 def coerce_ts_params_to_runner_kwargs(
@@ -109,6 +113,10 @@ def coerce_ts_params_to_runner_kwargs(
             "or as the run surface_config argument."
         )
 
+    ts_batch_atoms = ts_params.get(
+        "parallel_neb_max_batch_atoms",
+        ts_defaults.get("parallel_neb_max_batch_atoms"),
+    )
     kwargs: dict[str, Any] = {
         "params": {
             "calculator": ts_params["calculator"],
@@ -124,6 +132,13 @@ def coerce_ts_params_to_runner_kwargs(
             ),
         },
     }
+    if ts_batch_atoms is not None and int(ts_batch_atoms) > 0:
+        # Mirror the GO pattern (geneticalgorithm_go_torchsim sets
+        # expected_max_atoms = mobile+fixed x pop_size): size the relaxer for the
+        # largest fused NEB force batch so the on-disk memory-scaler cache bucket
+        # is stable across runs and the autobatcher probe stays capped.
+        kwargs["torchsim_params"]["expected_max_atoms"] = int(ts_batch_atoms)
+        kwargs["torchsim_params"]["max_atoms_to_try"] = int(ts_batch_atoms)
     if str(ts_params.get("calculator", "")).strip().upper() == "UMA":
         ck = ts_params.get("calculator_kwargs", {}) or {}
         model_name = ck.get("model_name")
@@ -197,6 +212,7 @@ def coerce_ts_params_to_runner_kwargs(
         "neb_surface_max_lattice_shift",
         "max_endpoint_mismatch",
         "parallel_neb_max_bands",
+        "parallel_neb_max_batch_atoms",
     ):
         kwargs[key] = ts_params.get(key, ts_defaults[key])
 

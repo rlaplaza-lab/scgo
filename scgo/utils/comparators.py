@@ -256,8 +256,9 @@ class PureInteratomicDistanceComparator:
         return cum_diff < self.tol and max_diff < self.pair_cor_max
 
     def get_differences(self, a1: Atoms, a2: Atoms) -> tuple[float, float]:
-        """Calculates the cumulative and maximum structural differences between two
-        Atoms objects based on their sorted interatomic distances.
+        """Compute cumulative and maximum structural differences between two Atoms.
+
+        Differences are based on their sorted interatomic distances.
 
         Args:
             a1: The first Atoms object.

@@ -17,6 +17,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+import torch
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.optimize import FIRE
@@ -91,7 +92,12 @@ from scgo.utils.fitness_strategies import (
 from scgo.utils.helpers import (
     extract_minima_from_database,
 )
-from scgo.utils.logging import get_logger, should_show_progress
+from scgo.utils.logging import (
+    get_logger,
+    log_debug_v,
+    log_info_v,
+    should_show_progress,
+)
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.phase_logging import (
@@ -114,6 +120,8 @@ from scgo.utils.torchsim_policy import (
     is_ml_calculator,
 )
 from scgo.utils.validation import validate_composition
+
+logger = get_logger(__name__)
 
 
 def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
@@ -620,8 +628,11 @@ def _relax_unrelaxed_candidates(
 
     if available == 0:
         return (0, 0)
-    if not force and max_batch is not None and available < max_batch:
-        return (0, 0)
+    # When not forced, relax all currently available candidates (drop the
+    # `available < max_batch` early-return stall). A generation that produced
+    # few children no longer defers work and starves the GPU; remaining
+    # unrelaxed candidates are simply re-queued for the next generation.
+    # A user-set `max_batch` still caps the take via `min` below.
 
     to_take = available if force or max_batch is None else min(available, max_batch)
 
@@ -672,7 +683,6 @@ def _relax_unrelaxed_candidates(
     # Disconnected structures are persisted but marked ineligible for GA evolution.
     successful_count = 0
     ineligible_count = 0
-    logger = get_logger(__name__)
 
     def _write_batch_under_connection():
         """Write relaxed results under a single connection."""
@@ -763,6 +773,7 @@ def ga_go(
     early_stopping_niter: int = 10,
     relaxer: TorchSimBatchRelaxer | None = None,
     batch_size: int | None = None,
+    torchsim_dtype: str | None = None,
     verbosity: int = 1,
     elite_fraction: float = 0.1,
     run_id: str | None = None,
@@ -826,8 +837,12 @@ def ga_go(
         timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``).
             ``run_trials`` sets this to the run directory alongside ``metadata.json``.
         timing_collector: Optional list appended with the timing payload after the run.
+        torchsim_dtype: Optional TorchSim compute dtype, ``"float32"`` or ``"float64"``.
+            Defaults to ``None``, which keeps the :class:`TorchSimBatchRelaxer`
+            default of ``float64``. Set ``"float32"`` for much faster FP32/TF32 GPU
+            kernels at the cost of some numerical accuracy. Only applies when this
+            function builds the relaxer; ignored when ``relaxer`` is supplied.
     """
-    logger = get_logger(__name__)
     profile_t0 = perf_counter()
     profile_timings: dict[str, float] = {}
     profile_counters: dict[str, int] = {
@@ -873,6 +888,17 @@ def ga_go(
 
     if batch_size is not None and batch_size <= 0:
         batch_size = None
+
+    # Resolve the optional TorchSim dtype knob for the auto-built relaxer.
+    # ``None`` keeps the TorchSimBatchRelaxer default (float64). Callers that
+    # pass their own ``relaxer`` set its dtype directly and ignore this.
+    if torchsim_dtype is not None and torchsim_dtype not in ("float32", "float64"):
+        raise SCGOValidationError(
+            f"torchsim_dtype must be 'float32' or 'float64', got {torchsim_dtype!r}"
+        )
+    torchsim_dtype_resolved = (
+        getattr(torch, torchsim_dtype) if torchsim_dtype is not None else None
+    )
 
     # Normalize RNG early and enforce Generator-only policy
     rng = ensure_rng_or_create(rng)
@@ -970,6 +996,7 @@ def ga_go(
                 fmax=fmax,
                 max_steps=niter_local_relaxation,
                 expected_max_atoms=expected_max_atoms,
+                dtype=torchsim_dtype_resolved,
             )
         else:
             relaxer = AseBatchRelaxer(
@@ -1118,9 +1145,12 @@ def ga_go(
             if n_jobs_population_init == -2
             else f"{n_jobs_population_init} workers"
         )
-        logger.info(
-            f"Generated initial population of {population_size} candidates "
-            f"(batched, parallel n_jobs={n_workers})"
+        log_info_v(
+            logger,
+            "Generated initial population of %d candidates (batched, parallel n_jobs=%s)",
+            population_size,
+            n_workers,
+            verbosity=verbosity,
         )
 
     # Do not pass initial_population to SetupDB (avoids formula keys in key_value_pairs).
@@ -1136,10 +1166,18 @@ def ga_go(
         run_id=run_id,
     )
 
+    # Declared before the `try` so the `finally` cleanup below can never raise
+    # UnboundLocalError (which would mask an earlier failure, e.g. one raised
+    # during the initial population relaxation). Created lazily in the loop.
+    offspring_executor: ProcessPoolExecutor | None = None
+
     try:
         if verbosity >= 1:
-            logger.info(
-                f"Relaxing initial population of {population_size} candidates..."
+            log_info_v(
+                logger,
+                "Relaxing initial population of %d candidates...",
+                population_size,
+                verbosity=verbosity,
             )
 
         logger.debug(
@@ -1326,17 +1364,21 @@ def ga_go(
         population._write_log()
         if verbosity >= 1:
             eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
-            logger.info(
+            log_info_v(
+                logger,
                 "Initial population: size=%d, %d GA-eligible, %d discarded pre-relax, %d ineligible post-relax",
                 len(population.pop),
                 eligible_initial,
                 initial_discarded_count,
                 initial_ineligible_relaxed_count,
+                verbosity=verbosity,
             )
         if verbosity >= 2:
-            logger.debug(
+            log_debug_v(
+                logger,
                 "Initial Population confids=%s",
                 [a.info.get("confid") for a in population.pop],
+                verbosity=verbosity,
             )
 
         log_early_stopping_info(
@@ -1351,6 +1393,12 @@ def ga_go(
         best_value = None  # Energy for low_energy, fitness for others
         generations_without_improvement = 0
         recent_acceptance_ratios: list[float] = []
+
+        # The offspring ProcessPoolExecutor is hoisted above the `try` and created
+        # lazily below, so it is forked + pickled once instead of every generation.
+        # Workers reload their pairing/operator state per generation via
+        # `_build_offspring_worker` (keyed on `operators_epoch`), so reuse is
+        # correctness-preserving.
 
         for generation in tqdm(
             range(niter),
@@ -1447,8 +1495,8 @@ def ga_go(
             n_workers_offspring = _resolve_parallel_worker_count(
                 n_jobs_offspring, max(1, n_offspring)
             )
-            offspring_executor: ProcessPoolExecutor | None = None
-            if n_workers_offspring > 1:
+            # Create the (hoisted) pool once on first need; reuse across generations.
+            if n_workers_offspring > 1 and offspring_executor is None:
                 offspring_executor = ProcessPoolExecutor(
                     max_workers=n_workers_offspring,
                     initializer=_offspring_worker_bootstrap_init,
@@ -1602,8 +1650,8 @@ def ga_go(
                                 created += 1
                         t_db_unrelaxed_gen += perf_counter() - t0
             finally:
-                if offspring_executor is not None:
-                    offspring_executor.shutdown(wait=True)
+                # The pool is reused across generations; only clear the cached
+                # worker state. Shutdown happens once after the generational loop.
                 _OFFSPRING_WORKER_STATE.clear()
 
             generation_acceptance = created / max(attempts, 1)
@@ -1651,10 +1699,16 @@ def ga_go(
             )
 
             # Ask TorchSim relaxer to process available unrelaxed candidates now.
-            # Enforce a per-generation limit: when `batch_size` is None, treat the
-            # per-call limit as the GA `n_offspring` so a single relax call does not
-            # drain an unrelated backlog and make logs look cumulative.
-            per_gen_max = batch_size if batch_size is not None else n_offspring
+            # Enforce a per-generation limit: when `batch_size` is None, target the
+            # full population so a single relax_batch submission keeps the autobatcher's
+            # in-flight swap reservoir full (its budget tracks the systems handed to
+            # one call). This maximizes GPU utilization; a user-set `batch_size`
+            # (non-None) still caps the call as before.
+            per_gen_max = (
+                batch_size
+                if batch_size is not None
+                else max(n_offspring, population_size)
+            )
             pre_db_read = float(profile_timings.get("db_read_s", 0.0))
             pre_relax = float(profile_timings.get("relax_batch_s", 0.0))
             pre_db_write = float(profile_timings.get("db_write_s", 0.0))
@@ -1693,11 +1747,13 @@ def ga_go(
             gen_pop_update_s_from_relax = max(0.0, post_pop_update - pre_pop_update)
             pop_update_s = gen_pop_update_s_from_relax
             if verbosity >= 1 and (eligible_count + ineligible_count) > 0:
-                logger.info(
+                log_info_v(
+                    logger,
                     "Relaxation: %d/%d GA-eligible, %d ineligible",
                     eligible_count,
                     eligible_count + ineligible_count,
                     ineligible_count,
+                    verbosity=verbosity,
                 )
             if offspring_count > 0:
                 profile_counters["offspring_relaxed"] += int(offspring_count)
@@ -1747,10 +1803,14 @@ def ga_go(
                             if fitness_strategy != FitnessStrategy.LOW_ENERGY
                             else "energy"
                         )
-                        logger.info(
-                            f"Early stopping triggered: no {stopping_metric} improvement for "
-                            f"{generations_without_improvement} generations "
-                            f"(best {stopping_metric}: {best_value:.6f})"
+                        log_info_v(
+                            logger,
+                            "Early stopping triggered: no %s improvement for %d generations (best %s: %.6f)",
+                            stopping_metric,
+                            generations_without_improvement,
+                            stopping_metric,
+                            best_value,
+                            verbosity=verbosity,
                         )
                     break
 
@@ -1791,8 +1851,11 @@ def ga_go(
         all_minima = extract_minima_from_database(all_candidates)
 
         if verbosity >= 1:
-            logger.info(
-                f"GA evolution complete. Found {len(all_minima)} unique minima."
+            log_info_v(
+                logger,
+                "GA evolution complete. Found %d unique minima.",
+                len(all_minima),
+                verbosity=verbosity,
             )
 
         # Sort by fitness (highest first) for non-default strategies
@@ -1833,4 +1896,8 @@ def ga_go(
         return all_minima
 
     finally:
+        # Shut down the hoisted offspring pool once (it was created lazily and
+        # reused across generations) before closing the data connection.
+        if offspring_executor is not None:
+            offspring_executor.shutdown(wait=True)
         close_data_connection(da, log_errors=False)

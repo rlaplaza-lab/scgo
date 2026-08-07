@@ -42,7 +42,7 @@ from scgo.utils.run_helpers import initialize_params, initialize_ts_params
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 
 _ALGO_KEYS = ("simple", "bh", "ga")
-_LOGGER = get_logger(__name__)
+logger = get_logger(__name__)
 _VALIDATION_LOGGER = get_logger("scgo.validation")
 _DEFAULT_GO_PARAMS: dict[str, Any] | None = None
 
@@ -439,12 +439,12 @@ def _default_go_ts_output_path(
     )
     path = (p / f"{stem}_{_calculator_slug_from_go_params(go_params)}").resolve()
     if output_root is None:
-        _LOGGER.info("No output_dir provided; using default campaign root %s", path)
+        logger.info("No output_dir provided; using default campaign root %s", path)
     return path
 
 
 def _log_completion(kind: str, *, elapsed_s: float, details: str) -> None:
-    _LOGGER.info("%s completed in %.2f s (%s)", kind, elapsed_s, details)
+    logger.info("%s completed in %.2f s (%s)", kind, elapsed_s, details)
 
 
 def _as_int_seed(label: str, value: Any) -> int:

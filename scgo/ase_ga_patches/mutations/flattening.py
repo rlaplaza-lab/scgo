@@ -1,8 +1,9 @@
+"""Mutation that flattens a nanoparticle by projecting onto a random plane."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that flattens a nanoparticle by projecting onto a random plane."""
 
 import numpy as np
 from ase_ga.offspring_creator import OffspringCreator

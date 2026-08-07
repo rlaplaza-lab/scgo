@@ -1,8 +1,9 @@
+"""Mutation that applies random rotations to multi-atom moieties."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that applies random rotations to multi-atom moieties."""
 
 import numpy as np
 from ase_ga.offspring_creator import OffspringCreator

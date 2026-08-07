@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from scgo.exceptions import SCGORuntimeError
+from scgo.exceptions import SCGODatabaseError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -198,4 +198,4 @@ def retry_transaction(
                     f"{effective_config.max_retries} attempts"
                 )
                 raise
-    raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
+    raise SCGODatabaseError(f"{operation_name} failed unexpectedly")

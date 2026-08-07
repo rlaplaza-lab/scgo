@@ -1,8 +1,9 @@
+"""Mutation that uniformly scales atom positions relative to the centre of mass."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that uniformly scales atom positions relative to the centre of mass."""
 
 import numpy as np
 from ase import Atoms

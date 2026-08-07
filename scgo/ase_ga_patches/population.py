@@ -1,10 +1,11 @@
+"""Implementation of a population for maintaining a GA population and
+proposing structures to pair.
+"""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Implementation of a population for maintaining a GA population and
-proposing structures to pair.
-"""
 from math import sqrt, tanh
 
 import numpy as np

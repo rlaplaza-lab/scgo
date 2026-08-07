@@ -38,7 +38,11 @@ from scgo.utils.comparators import (
     get_shared_mobile_atom_indices,
 )
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import (
+    get_logger,
+    log_info_v,
+    log_warning_v,
+)
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
     build_timing_payload,
@@ -220,6 +224,11 @@ class TorchSimNEB(NEB):
         )
         self.relaxer = relaxer
         self._force_calls = 0
+        # Set by ``ParallelNEBBatch``: the batch runner counts one force call per
+        # batched ``relax_batch`` the band participates in, so ``get_forces`` must
+        # not double-count on top of that (see B2). The serial fallback leaves
+        # this False and keeps owning the counter itself.
+        self._force_calls_counted_externally = False
 
     def get_forces(self) -> np.ndarray:
         """Batch-evaluate PES forces with TorchSim and return NEB forces.
@@ -231,7 +240,8 @@ class TorchSimNEB(NEB):
         if all(_image_has_cached_forces(img) for img in self.images):
             return super().get_forces()
 
-        self._force_calls += 1
+        if not self._force_calls_counted_externally:
+            self._force_calls += 1
         results = self.relaxer.relax_batch(self.images, steps=0)
 
         for atoms, (energy, relaxed_atoms) in zip(self.images, results, strict=True):
@@ -1683,12 +1693,17 @@ def find_transition_state(
                 f"Cannot extract energy from product atoms for pair {pair_id}"
             )
 
-    if verbosity >= 1:
-        logger.info("Finding transition state for pair %s", pair_id)
-        if reactant_energy is not None:
-            logger.info("  Reactant energy: %.6f eV", reactant_energy)
-        if product_energy is not None:
-            logger.info("  Product energy: %.6f eV", product_energy)
+    log_info_v(
+        logger, "Finding transition state for pair %s", pair_id, verbosity=verbosity
+    )
+    if reactant_energy is not None:
+        log_info_v(
+            logger, "  Reactant energy: %.6f eV", reactant_energy, verbosity=verbosity
+        )
+    if product_energy is not None:
+        log_info_v(
+            logger, "  Product energy: %.6f eV", product_energy, verbosity=verbosity
+        )
 
     result = make_ts_result(
         pair_id=pair_id,
@@ -1716,10 +1731,13 @@ def find_transition_state(
                 f"Endpoints are identical for pair {pair_id}; no interior TS"
             )
 
-        if verbosity >= 2:
-            logger.info(
-                f"Generating initial path with {interpolation_method} interpolation"
-            )
+        log_info_v(
+            logger,
+            "Generating initial path with %s interpolation",
+            interpolation_method,
+            verbosity=verbosity,
+            min_verbosity=2,
+        )
         # Keep interpolation unconstrained; constraints are applied during NEB.
         images = interpolate_path(
             atoms1,
@@ -1782,8 +1800,13 @@ def find_transition_state(
                 result["reactant_energy"] = float(band_energies[0])
                 result["product_energy"] = float(band_energies[-1])
 
-            if verbosity >= 2:
-                logger.info("Using TorchSim batched NEB (climb=%s)", climb)
+            log_info_v(
+                logger,
+                "Using TorchSim batched NEB (climb=%s)",
+                climb,
+                verbosity=verbosity,
+                min_verbosity=2,
+            )
 
             steps_budget = int(neb_steps)
             use_two_stage = neb_uses_two_stage_climb(
@@ -1820,8 +1843,13 @@ def find_transition_state(
         # actually used (so early stage-1 convergence does not starve climb).
         stage1_cap = steps_budget // 2 if use_two_stage else steps_budget
 
-        if verbosity >= 2:
-            logger.info("Starting NEB optimization with %s", optimizer.__name__)
+        log_info_v(
+            logger,
+            "Starting NEB optimization with %s",
+            optimizer.__name__,
+            verbosity=verbosity,
+            min_verbosity=2,
+        )
 
         t_neb0 = perf_counter()
         dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
@@ -1830,11 +1858,13 @@ def find_transition_state(
         if use_two_stage:
             neb.climb = True
             stage2_steps = max(1, steps_budget - steps_taken)
-            if verbosity >= 2:
-                logger.info(
-                    "Enabling climbing image for second NEB stage (%d steps)",
-                    stage2_steps,
-                )
+            log_info_v(
+                logger,
+                "Enabling climbing image for second NEB stage (%d steps)",
+                stage2_steps,
+                verbosity=verbosity,
+                min_verbosity=2,
+            )
             dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
             dyn.run(fmax=fmax, steps=stage2_steps)
             steps_taken += int(dyn.nsteps)
@@ -1855,22 +1885,25 @@ def find_transition_state(
                 f"NEB did not converge (final_fmax={final_fmax}, fmax={fmax})"
             )
 
-        if verbosity >= 1:
-            fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
-            if result["neb_converged"]:
-                logger.info(
-                    "NEB converged in %d steps (final_fmax=%s < %.6f)",
-                    result["steps_taken"],
-                    fmax_str,
-                    fmax,
-                )
-            else:
-                logger.warning(
-                    "NEB not converged after %d steps (final_fmax=%s, target_fmax=%.6f)",
-                    result["steps_taken"],
-                    fmax_str,
-                    fmax,
-                )
+        fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
+        if result["neb_converged"]:
+            log_info_v(
+                logger,
+                "NEB converged in %d steps (final_fmax=%s < %.6f)",
+                result["steps_taken"],
+                fmax_str,
+                fmax,
+                verbosity=verbosity,
+            )
+        else:
+            log_warning_v(
+                logger,
+                "NEB not converged after %d steps (final_fmax=%s, target_fmax=%.6f)",
+                result["steps_taken"],
+                fmax_str,
+                fmax,
+                verbosity=verbosity,
+            )
 
         # Last optimizer step can invalidate SinglePoint caches; refresh PES at
         # the final geometries before barrier finalize (TorchSim path only).
@@ -1883,17 +1916,28 @@ def find_transition_state(
             result["force_calls"] = neb.get_force_calls()
 
         if verbosity >= 1 and result["status"] == "success":
-            logger.info(
+            log_info_v(
+                logger,
                 "TS found at image %d/%d",
                 result["ts_image_index"],
                 len(neb.images) - 1,
+                verbosity=verbosity,
             )
-            logger.info("  TS energy: %.6f eV", result["ts_energy"])
-            logger.info("  Barrier height: %.6f eV", result["barrier_height"])
+            log_info_v(
+                logger, "  TS energy: %.6f eV", result["ts_energy"], verbosity=verbosity
+            )
+            log_info_v(
+                logger,
+                "  Barrier height: %.6f eV",
+                result["barrier_height"],
+                verbosity=verbosity,
+            )
             if use_torchsim:
-                logger.info(
+                log_info_v(
+                    logger,
                     "  GPU-batched force calls: %s",
                     result.get("force_calls"),
+                    verbosity=verbosity,
                 )
 
     except KeyboardInterrupt:
@@ -1902,15 +1946,19 @@ def find_transition_state(
         result["error"] = str(e)
         if is_cuda_oom_error(e):
             cleanup_torch_cuda(logger=logger)
-            if verbosity >= 1:
-                logger.warning(
-                    "Detected CUDA out-of-memory during NEB for pair %s — attempted GPU cleanup",
-                    pair_id,
-                )
-        if verbosity >= 1:
-            logger.error(
-                f"Failed to find TS for pair {pair_id}: {type(e).__name__}: {e}"
+            log_warning_v(
+                logger,
+                "Detected CUDA out-of-memory during NEB for pair %s — attempted GPU cleanup",
+                pair_id,
+                verbosity=verbosity,
             )
+        logger.error(
+            "Failed to find TS for pair %s: %s: %s",
+            pair_id,
+            type(e).__name__,
+            e,
+            exc_info=(verbosity >= 2),
+        )
 
     if t_wall0 is not None:
         total_s = perf_counter() - t_wall0

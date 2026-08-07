@@ -25,7 +25,7 @@ from scgo.exceptions import (
 from scgo.metadata.provenance import output_json_provenance
 from scgo.utils.logging import get_logger
 
-_logger = get_logger(__name__)
+logger = get_logger(__name__)
 
 TIMING_JSON_FILENAME = "timing.json"
 GO_TS_TIMING_JSON_FILENAME = "go_ts_timing.json"
@@ -128,7 +128,7 @@ def read_timing_file(path: str) -> dict[str, Any] | None:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        _logger.warning("Failed to read timing file %s: %s", path, exc)
+        logger.warning("Failed to read timing file %s: %s", path, exc)
         return None
 
 

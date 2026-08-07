@@ -46,7 +46,7 @@ def write_vasp_inputs(
     ensure_directory_exists(output_dir)
 
     logger = get_logger(__name__)
-    logger.info(f"Writing VASP inputs to {os.path.basename(output_dir)}")
+    logger.info("Writing VASP inputs to %s", os.path.basename(output_dir))
     # Use a copy to avoid modifying the original atoms object
     atoms_for_vasp = atoms.copy()
     if center_structure:

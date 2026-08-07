@@ -41,7 +41,7 @@ from .initialization_config import (
 
 # Core utilities
 
-template_debug_logger = get_logger("scgo.initialization.templates")
+template_debug_logger = get_logger(__name__)
 
 
 def format_composition_counts_short(

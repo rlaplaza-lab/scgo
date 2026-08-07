@@ -69,6 +69,8 @@ from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.validation import validate_composition
 
+logger = get_logger(__name__)
+
 _SURFACE_SYSTEM_TYPES = frozenset(
     {
         "surface_cluster",
@@ -461,8 +463,6 @@ def scgo(
     Raises:
         ValueError: For invalid parameters.
     """
-    logger = get_logger(__name__)
-
     _validate_common_run_inputs(
         composition=composition,
         global_optimizer=global_optimizer,
@@ -672,8 +672,6 @@ def run_trials(
     Returns:
         List of (energy, Atoms) for unique minima.
     """
-    logger = get_logger(__name__)
-
     _validate_common_run_inputs(
         composition=composition,
         global_optimizer=global_optimizer,
@@ -749,8 +747,9 @@ def run_trials(
             )
             if previous_minima:
                 logger.info(
-                    f"Loaded {len(previous_minima)} minima from previous runs "
-                    f"(excluding current run {run_id})"
+                    "Loaded %s minima from previous runs (excluding current run %s)",
+                    len(previous_minima),
+                    run_id,
                 )
 
     all_raw_minima = []
@@ -776,7 +775,9 @@ def run_trials(
     if previous_minima:
         all_minima_for_filtering = previous_minima + all_raw_minima
         logger.info(
-            f"Combined {len(previous_minima)} previous + {len(all_raw_minima)} current minima"
+            "Combined %s previous + %s current minima",
+            len(previous_minima),
+            len(all_raw_minima),
         )
     else:
         all_minima_for_filtering = all_raw_minima
@@ -793,7 +794,8 @@ def run_trials(
         return []
 
     logger.info(
-        f"Run complete. Found {len(all_raw_minima)} raw minima from current run."
+        "Run complete. Found %s raw minima from current run.",
+        len(all_raw_minima),
     )
     logger.info("Filtering for unique structures across all runs...")
     surface_cfg = global_optimizer_kwargs.get("surface_config")
@@ -808,7 +810,7 @@ def run_trials(
         n_top=len(composition),
         mic=dedupe_mic,
     )
-    logger.info(f"Found {len(unique_candidates)} unique candidates.")
+    logger.info("Found %s unique candidates.", len(unique_candidates))
 
     if not unique_candidates:
         _write_results_summary(
@@ -822,7 +824,8 @@ def run_trials(
 
     if validate_with_hessian:
         logger.info(
-            f"Validating {len(unique_candidates)} unique candidates to confirm they are true minima...",
+            "Validating %s unique candidates to confirm they are true minima...",
+            len(unique_candidates),
         )
 
         # Ensure validation runs in a separate directory to avoid overwriting run files
@@ -876,7 +879,10 @@ def run_trials(
         else:
             for i, (energy, atoms) in enumerate(unique_candidates):
                 logger.info(
-                    f"Validating candidate {i + 1}/{len(unique_candidates)} (E={energy:.4f} eV)...",
+                    "Validating candidate %s/%s (E=%.4f eV)...",
+                    i + 1,
+                    len(unique_candidates),
+                    energy,
                 )
                 try:
                     is_valid = is_true_minimum(
@@ -889,10 +895,14 @@ def run_trials(
                     if is_valid:
                         validated_minima.append((energy, atoms))
                     else:
-                        logger.info(f"Candidate {i + 1} rejected")
+                        logger.info("Candidate %s rejected", i + 1)
                 except (OSError, RuntimeError, ValueError, SCGOValidationError) as e:
                     logger.warning(
-                        f"Validation failed for candidate {i + 1} (E={energy:.4f} eV): {e}"
+                        "Validation failed for candidate %s (E=%.4f eV): %s",
+                        i + 1,
+                        energy,
+                        e,
+                        exc_info=(verbosity >= 2),
                     )
 
         if not validated_minima:
@@ -913,12 +923,14 @@ def run_trials(
         final_minima = unique_candidates
 
     best_energy, _ = final_minima[0]
-    logger.info(f"Process complete. Found {len(final_minima)} final unique minima.")
-    logger.info(f"Best potential energy: {best_energy:.4f} eV")
+    logger.info("Process complete. Found %s final unique minima.", len(final_minima))
+    logger.info("Best potential energy: %.4f eV", best_energy)
 
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")
     logger.info(
-        f'Writing {len(final_minima)} final structures to "{os.path.basename(final_xyz_dir)}"'
+        'Writing %s final structures to "%s"',
+        len(final_minima),
+        os.path.basename(final_xyz_dir),
     )
 
     # Write results summary file (composition_str already cached above)
@@ -1038,7 +1050,7 @@ def run_trials(
             mark_final_minima_in_db(final_minima_info, base_dir=output_dir)
         except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
             # Consider DB tagging a systemic failure -- surface it after logging
-            logger.warning(f"Failed to tag final minima in DB: {e}")
+            logger.warning("Failed to tag final minima in DB: %s", e)
             raise
 
     return final_minima
@@ -1060,8 +1072,6 @@ def _write_results_summary(
         run_id: Current run ID.
         params: Same snapshot as ``run_*/metadata.json`` (optimizer, trials, etc.).
     """
-    logger = get_logger(__name__)
-
     # Count structures by run_id
     run_counts = Counter()
     for _, atoms in final_minima:
@@ -1090,7 +1100,7 @@ def _write_results_summary(
         with open(summary_file, "w") as f:
             json.dump(summary, f, indent=2, cls=RunDirJSONEncoder)
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Wrote results summary to {summary_file}")
+            logger.debug("Wrote results summary to %s", summary_file)
     except (OSError, TypeError) as e:
-        logger.warning(f"Failed to write results summary: {e}")
+        logger.warning("Failed to write results summary: %s", e)
         raise

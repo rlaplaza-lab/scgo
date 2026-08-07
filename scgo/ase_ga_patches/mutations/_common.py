@@ -1,8 +1,9 @@
+"""Shared helpers used by more than one mutation operator."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Shared helpers used by more than one mutation operator."""
 
 import numpy as np
 

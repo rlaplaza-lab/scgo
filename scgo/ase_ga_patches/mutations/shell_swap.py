@@ -1,8 +1,9 @@
+"""Mutation that swaps atom groups between inner and outer radial shells."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that swaps atom groups between inner and outer radial shells."""
 
 import numpy as np
 from ase import Atoms

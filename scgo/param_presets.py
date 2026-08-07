@@ -97,6 +97,10 @@ _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "max_endpoint_mismatch": None,
     # None = all selected bands in one ParallelNEBBatch.
     "parallel_neb_max_bands": None,
+    # Atom budget per fused force batch (sum of n_images * n_atoms), used when
+    # parallel_neb_max_bands is None. Gas cells are small, so a larger budget
+    # keeps the GPU saturated; parallel_neb_max_bands still overrides it.
+    "parallel_neb_max_batch_atoms": 6000,
 }
 
 _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -117,8 +121,16 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "torchsim_fmax": _TS_NEB_FMAX,
     "torchsim_max_steps": 2000,
     "max_endpoint_mismatch": None,
-    # Large slab cells OOM when many bands×images share one force batch.
-    "parallel_neb_max_bands": 1,
+    # Surface OOM safety: chunk parallel NEB + CUDA cleanup between chunks.
+    # 4 bands/force-batch trades some headroom for throughput. A chunk that
+    # still OOMs is retried once at half the atom budget before its bands fail,
+    # so lower this (down to 1) only for very large slab cells.
+    "parallel_neb_max_bands": 4,
+    # Atom budget per fused force batch (sum of n_images * n_atoms), applied
+    # when parallel_neb_max_bands is cleared to None. Kept at/below the previous
+    # 4-band x ~130-atom x 7-image path (~3.6k) so the on-disk memory-scaler
+    # cache bucket is reused instead of re-probed.
+    "parallel_neb_max_batch_atoms": 4000,
 }
 
 # Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),
@@ -364,6 +376,7 @@ def _attach_fairchem_torchsim_relaxer(
     max_steps: int,
     autobatcher: bool | None = None,
     expected_max_atoms: int | None = None,
+    dtype: Any | None = None,
 ) -> None:
     """Set ``ga["relaxer"]`` to a FairChem-backed :class:`TorchSimBatchRelaxer`."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
@@ -376,7 +389,7 @@ def _attach_fairchem_torchsim_relaxer(
         force_tol=fmax_val,
         optimizer_name="fire",
         max_steps=max_steps,
-        dtype=None,  # TorchSim default per model; keep lazy/portable
+        dtype=dtype,  # None -> model default; set torch.float32 for speed
         autobatcher=autobatcher,
         expected_max_atoms=expected_max_atoms,
     )
@@ -389,6 +402,7 @@ def _attach_upet_torchsim_relaxer(
     max_steps: int,
     autobatcher: bool | None = None,
     expected_max_atoms: int | None = None,
+    dtype: Any | None = None,
 ) -> None:
     """Set ``ga["relaxer"]`` to a UPET-backed :class:`TorchSimBatchRelaxer`.
 
@@ -412,7 +426,7 @@ def _attach_upet_torchsim_relaxer(
         optimizer_name="fire",
         max_steps=max_steps,
         device=torch.device("cuda") if on_cuda else torch.device("cpu"),
-        dtype=None,  # synced from MetatomicModel capabilities in __post_init__
+        dtype=dtype,  # None -> model default; set torch.float32 for speed
         autobatcher=on_cuda if autobatcher is None else autobatcher,
         expected_max_atoms=expected_max_atoms,
         max_atoms_to_try=expected_max_atoms,
@@ -434,6 +448,8 @@ def get_uma_ga_benchmark_params(
     For general UMA runs with default GA ``"auto"`` local steps, use
     :func:`get_default_uma_params` instead.
     """
+    import torch
+
     params = _get_base_ga_benchmark_params(seed)
     params["calculator"] = "UMA"
     params["calculator_kwargs"] = {"model_name": model_name, "task_name": uma_task}
@@ -447,6 +463,7 @@ def get_uma_ga_benchmark_params(
         max_steps=max_steps,
         autobatcher=True,
         expected_max_atoms=600,
+        dtype=torch.float32,
     )
     return params
 
@@ -461,6 +478,8 @@ def get_default_uma_params() -> GLOptimizerParams:
     :func:`get_uma_ga_benchmark_params` when you need the same structure as the MACE
     benchmark preset (fixed local steps, explicit autobatcher/expected_max_atoms).
     """
+    import torch
+
     params = get_default_params()
     params["calculator"] = "UMA"
     params["calculator_kwargs"] = {
@@ -476,6 +495,7 @@ def get_default_uma_params() -> GLOptimizerParams:
         max_steps=max_steps,
         autobatcher=None,
         expected_max_atoms=None,
+        dtype=torch.float32,
     )
     return params
 
@@ -493,6 +513,8 @@ def get_upet_ga_benchmark_params(
     ``run_*`` or override keys. For general UPET runs with default GA ``"auto"``
     local steps, use :func:`get_default_upet_params` instead.
     """
+    import torch
+
     params = _get_base_ga_benchmark_params(seed)
     params["calculator"] = "UPET"
     params["calculator_kwargs"] = {
@@ -509,6 +531,7 @@ def get_upet_ga_benchmark_params(
         max_steps=max_steps,
         autobatcher=True,
         expected_max_atoms=600,
+        dtype=torch.float32,
     )
     return params
 
@@ -519,6 +542,8 @@ def get_default_upet_params() -> GLOptimizerParams:
     Pass as-is to ``run_*`` or override keys. Default model is ``pet-mad-s`` v1.5.0.
     For benchmark-style fixed local steps, use :func:`get_upet_ga_benchmark_params`.
     """
+    import torch
+
     params = get_default_params()
     params["calculator"] = "UPET"
     params["calculator_kwargs"] = {
@@ -534,6 +559,7 @@ def get_default_upet_params() -> GLOptimizerParams:
         max_steps=max_steps,
         autobatcher=None,
         expected_max_atoms=None,
+        dtype=torch.float32,
     )
     return params
 
@@ -710,8 +736,9 @@ def get_ts_search_params(
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,
         "similarity_pair_cor_max": 0.1,
         "use_torchsim": True,
-        # Surface OOM safety is ``parallel_neb_max_bands=1`` (chunked parallel
-        # NEB + CUDA cleanup between chunks), not a separate batch-size knob.
+        # Surface OOM safety: chunk parallel NEB + CUDA cleanup between chunks.
+        # parallel_neb_max_bands defaults to 4 bands/force-batch (set in
+        # _SURFACE_TS_NEB_DEFAULTS); lower it for very large slab cells.
         "use_parallel_neb": True,
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,

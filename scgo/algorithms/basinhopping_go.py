@@ -60,7 +60,12 @@ from scgo.utils.helpers import (
     extract_minima_from_database,
     perform_local_relaxation,
 )
-from scgo.utils.logging import get_logger, should_show_progress
+from scgo.utils.logging import (
+    get_logger,
+    log_debug_v,
+    log_info_v,
+    should_show_progress,
+)
 from scgo.utils.timing_report import (
     build_timing_payload,
     log_timing_summary,
@@ -74,6 +79,8 @@ from scgo.utils.validation import (
     validate_integer,
     validate_positive,
 )
+
+logger = get_logger(__name__)
 
 
 def _move_atoms(
@@ -375,8 +382,6 @@ def bh_go(
             adsorbate_definition=adsorbate_definition,
         )
 
-    logger = get_logger(__name__)
-
     movable_indices = list(range(len(atoms)))
     if surface_mode:
         if n_slab <= 0:
@@ -570,11 +575,15 @@ def bh_go(
         )
         set_fitness_in_atoms(a_current, fitness_current, fitness_strategy)
 
-        if verbosity >= 1:
-            logger.info(
-                f"Starting Basin Hopping with fitness_strategy='{fitness_strategy}' "
-                f"(initial energy: {e_current:.4f} eV, fitness: {fitness_current:.4f})"
-            )
+        log_info_v(
+            logger,
+            "Starting Basin Hopping with fitness_strategy='%s' "
+            "(initial energy: %.4f eV, fitness: %.4f)",
+            fitness_strategy,
+            e_current,
+            fitness_current,
+            verbosity=verbosity,
+        )
 
         iteration_iterator = range(niter)
         if verbosity >= 1:
@@ -686,23 +695,30 @@ def bh_go(
             if fitness_trial > fitness_current:
                 # Better fitness - always accept
                 accept = True
-                if verbosity >= 2:
-                    logger.debug(
-                        f"Iteration {iteration}: Accepting (fitness improved: "
-                        f"{fitness_current:.4f} → {fitness_trial:.4f})"
-                    )
+                log_debug_v(
+                    logger,
+                    "Iteration %d: Accepting (fitness improved: %.4f → %.4f)",
+                    iteration,
+                    fitness_current,
+                    fitness_trial,
+                    verbosity=verbosity,
+                )
             elif temperature > 0.0:
                 # Metropolis acceptance based on fitness difference
                 fitness_diff = fitness_trial - fitness_current
                 acceptance_prob = np.exp(fitness_diff / temperature)
                 accept = rng.random() < acceptance_prob
 
-                if verbosity >= 2:
-                    logger.debug(
-                        f"Iteration {iteration}: Metropolis test "
-                        f"(fitness_diff: {fitness_diff:.4f}, "
-                        f"acceptance_prob: {acceptance_prob:.4f}, accept: {accept})"
-                    )
+                log_debug_v(
+                    logger,
+                    "Iteration %d: Metropolis test "
+                    "(fitness_diff: %.4f, acceptance_prob: %.4f, accept: %s)",
+                    iteration,
+                    fitness_diff,
+                    acceptance_prob,
+                    accept,
+                    verbosity=verbosity,
+                )
 
             if accept:
                 profile_counters["accepted"] += 1
@@ -717,10 +733,12 @@ def bh_go(
                     and iteration % diversity_update_interval == 0
                 ):
                     diversity_scorer.add_reference(a_trial)
-                    if verbosity >= 2:
-                        logger.debug(
-                            f"Updated reference structures (total: {len(diversity_scorer)})"
-                        )
+                    log_debug_v(
+                        logger,
+                        "Updated reference structures (total: %d)",
+                        len(diversity_scorer),
+                        verbosity=verbosity,
+                    )
 
             if per_iteration is not None:
                 per_iteration.append(

@@ -15,7 +15,7 @@ from typing import Any
 from scgo._version import __version__ as SCGO_VERSION
 from scgo.utils.logging import get_logger
 
-_logger = get_logger(__name__)
+logger = get_logger(__name__)
 _version_warned: set[str] = set()
 
 OUTPUT_JSON_SCHEMA_VERSION = 3
@@ -47,7 +47,7 @@ def package_version(dist_name: str) -> str:
         return version(dist_name)
     except PackageNotFoundError:
         if dist_name not in _version_warned:
-            _logger.warning(
+            logger.warning(
                 "Could not resolve package version for %r; provenance will record "
                 "'unknown'",
                 dist_name,

@@ -428,6 +428,7 @@ def build_torchsim_relaxer(
     max_steps: int,
     expected_max_atoms: int,
     torchsim_params: dict[str, Any] | None = None,
+    dtype: Any | None = None,
 ) -> TorchSimBatchRelaxer:
     """Build a TorchSim relaxer from a live MLIP ASE calculator.
 
@@ -437,6 +438,12 @@ def build_torchsim_relaxer(
     :class:`TorchSimBatchRelaxer`. Optional ``torchsim_params`` override any
     constructed kwargs. Preset builders that already know ``model_kind`` /
     model names construct :class:`TorchSimBatchRelaxer` directly.
+
+    Args:
+        dtype: Optional torch dtype (e.g. ``torch.float32``). Pass ``None`` to
+            keep :class:`TorchSimBatchRelaxer`'s default (``torch.float64``, for
+            parity with the ASE MACE wrapper). ``torch.float32`` enables much
+            faster FP32/TF32 GPU kernels at the cost of some numerical accuracy.
     """
     from scgo.utils.torchsim_policy import (
         is_uma_like_calculator,
@@ -449,6 +456,10 @@ def build_torchsim_relaxer(
         "expected_max_atoms": expected_max_atoms,
         "max_atoms_to_try": expected_max_atoms,
     }
+    if dtype is not None:
+        # Override the relaxer default (float64) for faster FP32/TF32 kernels.
+        # ``None`` leaves the model default untouched (parity for non-preset users).
+        base["dtype"] = dtype
 
     if is_uma_like_calculator(calculator):
         from scgo.calculators.uma_helpers import (

@@ -1,8 +1,9 @@
+"""Mutation that translates adsorbate atoms parallel to the slab surface."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that translates adsorbate atoms parallel to the slab surface."""
 
 import numpy as np
 from ase import Atoms

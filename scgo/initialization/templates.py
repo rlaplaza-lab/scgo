@@ -591,10 +591,12 @@ def grow_template_via_facets(
         )
         if not candidates:
             logger.debug(
-                f"grow_template_via_facets: no candidates generated for {template_name}, "
-                f"n_atoms={len(current)}, to_add={len(to_add)}, "
-                f"bond_distance={bond_distance:.3f}, max_conn={max_conn:.3f}"
-                f" (discovery failure: candidate discarded; not a per-structure fallback)"
+                "grow_template_via_facets: no candidates generated for %s, n_atoms=%s, to_add=%s, bond_distance=%.3f, max_conn=%.3f (discovery failure: candidate discarded; not a per-structure fallback)",
+                template_name,
+                len(current),
+                len(to_add),
+                bond_distance,
+                max_conn,
             )
             return None
 
@@ -628,15 +630,19 @@ def grow_template_via_facets(
         if placed_count == 0 and to_add and round_retry_count < max_round_retries:
             round_retry_count += 1
             logger.debug(
-                f"grow_template_via_facets: no atoms placed, retry {round_retry_count}/{max_round_retries}, "
-                f"candidates={len(candidates)}, to_add={len(to_add)}"
+                "grow_template_via_facets: no atoms placed, retry %s/%s, candidates=%s, to_add=%s",
+                round_retry_count,
+                max_round_retries,
+                len(candidates),
+                len(to_add),
             )
             continue
         elif placed_count == 0 and to_add:
             logger.debug(
-                f"grow_template_via_facets: failed to place any atoms after {max_round_retries} retries, "
-                f"candidates={len(candidates)}, to_add={len(to_add)}"
-                f" (discovery failure: candidate discarded; not a per-structure fallback)"
+                "grow_template_via_facets: failed to place any atoms after %s retries, candidates=%s, to_add=%s (discovery failure: candidate discarded; not a per-structure fallback)",
+                max_round_retries,
+                len(candidates),
+                len(to_add),
             )
             return None
 
@@ -652,8 +658,10 @@ def grow_template_via_facets(
         )
         if not is_valid:
             logger.debug(
-                f"grow_template_via_facets: validation failed after placing {placed_count} atoms, "
-                f"n_atoms={len(current)}, error: {err}"
+                "grow_template_via_facets: validation failed after placing %s atoms, n_atoms=%s, error: %s",
+                placed_count,
+                len(current),
+                err,
             )
             return None
 
@@ -1072,23 +1080,27 @@ def _adjust_template_to_target(
             )
             if grown is None:
                 logger.debug(
-                    f"Failed to add atoms to {template_name} template "
-                    f"while maintaining connectivity"
-                    f" (discovery failure: candidate discarded; not a per-structure fallback)"
+                    "Failed to add atoms to %s template while maintaining connectivity (discovery failure: candidate discarded; not a per-structure fallback)",
+                    template_name,
                 )
                 return None
             if len(grown) != target_n_atoms:
                 logger.debug(
-                    f"{template_name} template has {len(grown)} atoms after growth, "
-                    f"expected {target_n_atoms}"
+                    "%s template has %s atoms after growth, expected %s",
+                    template_name,
+                    len(grown),
+                    target_n_atoms,
                 )
                 return None
             _set_template_info(grown, template_name)
             return grown
         except (ValueError, SCGOValidationError) as e:
             logger.debug(
-                f"Failed to grow {template_name} template from {base_count} "
-                f"to {target_n_atoms} atoms: {e}"
+                "Failed to grow %s template from %s to %s atoms: %s",
+                template_name,
+                base_count,
+                target_n_atoms,
+                e,
             )
             return None
     elif base_count > target_n_atoms:
@@ -1137,7 +1149,7 @@ def _generate_ase_template_from_registry(
     """
     config = _TEMPLATE_REGISTRY.get(template_name)
     if config is None:
-        logger.warning(f"{template_name.capitalize()} template not registered")
+        logger.warning("%s template not registered", template_name.capitalize())
         return None
 
     find_params = cast(Callable[[int], Any], config["find_params"])
@@ -1401,7 +1413,7 @@ def generate_template_structure(
 
     gen_func = _TEMPLATE_GENERATORS.get(template_type)
     if gen_func is None:
-        logger.warning(f"Unknown template type: {template_type}")
+        logger.warning("Unknown template type: %s", template_type)
         return None
     return gen_func(composition, n_atoms, rng, connectivity_factor)
 

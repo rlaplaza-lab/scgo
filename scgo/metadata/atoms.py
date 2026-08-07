@@ -1,4 +1,4 @@
-"""Structure tags on ASE Atoms (single bag: ``key_value_pairs``).
+r"""Structure tags on ASE Atoms (single bag: ``key_value_pairs``).
 
 All structure annotations go through this API. ASE persists
 ``atoms.info['key_value_pairs']`` into SQLite ``systems.key_value_pairs``.

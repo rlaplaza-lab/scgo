@@ -118,12 +118,15 @@ GPU_EXAMPLE_CASES = [
         # surface cluster cases keep require_ts_candidates=True.
     ),
     # example_pt5_graphite.py: NITER=6, POPULATION_SIZE=24, MAX_PAIRS=10
+    # max_pairs=6 (>4) so more bands than parallel_neb_max_bands=4 are produced
+    # and the surface chunking path actually runs on the T4. GA cost is unchanged
+    # (population_size stays 6); only the NEB band count grows.
     GpuExampleCase(
         system_type="surface_cluster",
         surface_config=_graphite_config(),
         connectivity_factor=CONNECTIVITY,
         ga_overrides={"niter": 2, "population_size": 6},
-        ts_overrides={"max_pairs": 2, "neb_steps": 90},
+        ts_overrides={"max_pairs": 6, "neb_steps": 90},
         require_ts_candidates=True,
     ),
     # example_pt5_oh_gas.py: NITER=8, POPULATION_SIZE=40, MAX_PAIRS=12

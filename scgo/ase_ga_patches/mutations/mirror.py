@@ -1,8 +1,9 @@
+"""Mirror mutation that reflects half of a cluster across a random plane."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mirror mutation that reflects half of a cluster across a random plane."""
 
 import numpy as np
 from ase import Atoms

@@ -751,12 +751,11 @@ class SurfaceSlabStartGenerator(StartGenerator):
                 f"len(slab)={len(self.slab)}"
             )
         n_pop = int(population_size) if population_size is not None else 1
-        if verbosity >= 1:
-            log_phase_header(
-                logger,
-                "Population initialization",
-                verbosity=verbosity,
-            )
+        log_phase_header(
+            logger,
+            "Population initialization",
+            verbosity=verbosity,
+        )
         for _ in range(max(n_pop, 1)):
             self._candidate_batch.append(self._make_candidate())
 
@@ -965,7 +964,7 @@ def _append_partitioned_mutation(
     include_ads_variant: bool,
     kwargs_for: typing.Callable[[str], dict[str, typing.Any]],
 ) -> None:
-    """Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
+    r"""Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
 
     ``kwargs_for`` receives ``\"plain\"``, ``\"core\"``, or ``\"ads\"`` and must
     return constructor kwargs for that variant (including ``target_tags`` when

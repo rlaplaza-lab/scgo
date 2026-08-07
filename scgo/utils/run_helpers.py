@@ -38,6 +38,8 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
 
+logger = get_logger(__name__)
+
 
 @cache
 def _get_calculators() -> dict[str, Any]:
@@ -158,7 +160,6 @@ def log_params_resolution(
     verbosity: int,
 ) -> None:
     """Log how user params were merged onto preset defaults."""
-    logger = get_logger(__name__)
     if verbosity < 1:
         return
     if user_params is None:
@@ -535,7 +536,6 @@ def log_ts_configuration(
     base: dict[str, Any] | None = None,
 ) -> None:
     """Log resolved transition-state search configuration."""
-    logger = get_logger(__name__)
     if verbosity < 1:
         return
 
@@ -566,6 +566,7 @@ def log_ts_configuration(
         "use_torchsim",
         "use_parallel_neb",
         "parallel_neb_max_bands",
+        "parallel_neb_max_batch_atoms",
         "neb_align_endpoints",
         "neb_interpolation_mic",
         "neb_n_images",
@@ -604,8 +605,6 @@ def log_configuration(
         user_params: Original user dict before merge (for provenance logging).
         params_base: Base defaults used for merge (defaults to ``get_default_params()``).
     """
-    logger = get_logger(__name__)
-
     if verbosity < 1:
         return
 

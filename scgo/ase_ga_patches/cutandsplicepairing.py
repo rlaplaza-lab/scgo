@@ -1,3 +1,5 @@
+"""Implementation of the cut-and-splice paring operator."""
+
 # fmt: off
 
 from __future__ import annotations
@@ -6,7 +8,6 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 
-"""Implementation of the cut-and-splice paring operator."""
 import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic

@@ -1,8 +1,9 @@
+"""Rattle-style mutations that perturb atomic positions locally."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Rattle-style mutations that perturb atomic positions locally."""
 
 import numpy as np
 from ase import Atoms

@@ -27,7 +27,7 @@ class SCGOConfigurationError(SCGOError):
     """Configuration or system-setup errors."""
 
 
-class SCGORuntimeError(SCGOError):
+class SCGORuntimeError(SCGOError, RuntimeError):
     """Runtime errors during optimization."""
 
 

@@ -6,9 +6,41 @@
 
 - :mod:`scgo.metadata` package for structure tags, run-dir records, DB stamps,
   and output-JSON provenance (separate schemas under one namespace).
+- ``parallel_neb_max_batch_atoms`` TS parameter (``6000`` gas / ``4000``
+  surface): when ``parallel_neb_max_bands`` is ``None``, parallel NEB bands are
+  greedily binned so each fused force batch stays within this atom budget
+  (``sum(n_images * n_atoms)``). The same value sizes the TorchSim relaxer's
+  ``expected_max_atoms`` / ``max_atoms_to_try``, mirroring the GO pattern, so
+  the on-disk memory-scaler cache bucket stays stable across runs.
+- Parallel NEB chunks that hit CUDA OOM are now retried once at half the atom
+  budget (after ``cleanup_torch_cuda``) before their bands are marked failed.
+
+### Fixed
+
+- Parallel NEB no longer evaluates forces twice per step: the batched NEB forces
+  are passed straight into ``FIRE.step(f)`` (guarded by an ``inspect.signature``
+  check, so optimizers without an ``f`` parameter still fall back to ``step()``).
+  Previously the optimizer recomputed the gradient, which could re-enter
+  ``TorchSimNEB.get_forces`` and dispatch an unbatched per-band ``relax_batch``.
+- ``force_calls`` is no longer double-counted for parallel NEB bands. The batch
+  runner now owns the counter (one increment per batched evaluation the band
+  actually participates in); ``TorchSimNEB.get_forces`` only self-counts on the
+  serial fallback path.
+- The NEB image dedup key now includes the rounded cell and PBC flags. Surface
+  bands enable cell remap and lattice rotation, which legitimately produce
+  identical Cartesian positions in different cells; those images could
+  previously collide and receive a neighbour's energy/forces.
+- Bands whose NEB forces went non-finite (NaN/Inf ``fmax``) are now marked
+  ``failed`` and skip ``_finalize_neb_result`` instead of being reported as a
+  transition state.
 
 ### Changed
 
+- Per-pair parallel NEB ``timings_s`` keys are renamed to ``total_wall_avg_s`` /
+  ``neb_optimization_avg_s`` / ``cpu_non_relax_avg_s``, reflecting that they are
+  chunk wall time divided across pairs rather than per-pair measurements.
+  ``neb_optimization_s`` is retained as an alias so the run-level rollup and the
+  benchmark readers keep working.
 - Structure tags live only in ASE ``key_value_pairs`` via ``set_tags`` /
   ``get_tag`` / ``get_tags`` / ``filter_by_tags``; remove the old
   ``atoms.info["metadata"]`` / ``provenance`` bags, ``add_metadata`` /

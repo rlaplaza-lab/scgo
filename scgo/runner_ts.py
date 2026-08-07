@@ -74,7 +74,7 @@ from scgo.utils.timing_report import (
 )
 from scgo.utils.validation import validate_composition
 
-_LOGGER = get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _run_go_ts_pipeline(
@@ -99,7 +99,6 @@ def _run_go_ts_pipeline(
     For high-level entry points see :mod:`scgo.runner_api`.
     """
     configure_logging(verbosity)
-    logger = get_logger(__name__)
 
     policy = get_system_policy(system_type)
     allow_empty_comp = policy.slab_is_search_target and not policy.has_adsorbate
@@ -348,7 +347,7 @@ def run_go_ts(
     t0 = perf_counter()
     summary = _execute_run_go_ts(context)
     if log_summary:
-        log_go_ts_summary(_LOGGER, summary, wall_time_s=perf_counter() - t0)
+        log_go_ts_summary(logger, summary, wall_time_s=perf_counter() - t0)
     return summary
 
 

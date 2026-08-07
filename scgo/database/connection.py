@@ -12,7 +12,7 @@ from ase_ga.data import DataConnection
 
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock
 from scgo.exceptions import (
-    SCGORuntimeError,
+    SCGODatabaseError,
     SCGOValidationError,
 )
 from scgo.utils.logging import get_logger
@@ -280,7 +280,7 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
         AttributeError,
     ) as e:
         if log_errors:
-            logger.debug(f"Error closing database connection: {e}")
+            logger.debug("Error closing database connection: %s", e)
         with contextlib.suppress(sqlite3.OperationalError, sqlite3.DatabaseError):
             conn.close()
         backend.connection = None
@@ -328,7 +328,7 @@ def _ensure_sqlite_json1(
 
         _run_sqlite(db_path, _probe, timeout=5.0)
     except sqlite3.OperationalError as e:
-        raise SCGORuntimeError(
+        raise SCGODatabaseError(
             "SQLite JSON1 extension is required but not available. "
             "Please use a Python build or system SQLite with JSON1 support (e.g., install a sqlite3 package with JSON1 enabled)."
         ) from e

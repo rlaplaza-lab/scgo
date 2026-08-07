@@ -8,8 +8,11 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.exceptions import SCGONotImplementedError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+
+logger = get_logger(__name__)
 
 _MISSING_UPET_MSG = (
     "upet is not installed. Install with: pip install 'scgo[upet]' "
@@ -18,7 +21,7 @@ _MISSING_UPET_MSG = (
 
 
 class UPET(Calculator):
-    """ASE calculator wrapping UPET checkpoints via ``upet.calculator.UPETCalculator``.
+    r"""ASE calculator wrapping UPET checkpoints via ``upet.calculator.UPETCalculator``.
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
     is a UPET model identifier (e.g. ``\"pet-mad-s\"``); ``version`` selects the
@@ -39,7 +42,7 @@ class UPET(Calculator):
         try:
             from upet.calculator import UPETCalculator
         except ImportError as e:
-            raise ImportError(_MISSING_UPET_MSG) from e
+            raise SCGONotImplementedError(_MISSING_UPET_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UPET")
 
@@ -49,7 +52,6 @@ class UPET(Calculator):
             name = f"UPET-{model_name}-v{version}"
         super().__init__(name=name, **kwargs)
 
-        logger = get_logger(__name__)
         logger.info(
             'Initializing UPET calculator ("%s", version=%s) on device: "%s"',
             model_name,

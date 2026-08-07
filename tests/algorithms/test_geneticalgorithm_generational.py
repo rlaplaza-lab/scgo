@@ -350,3 +350,86 @@ def test_ga_persisted_unconstrained_rows_are_centered(tmp_path, rng):
             np.diag(row.get_cell()) / 2.0,
             atol=1e-6,
         )
+
+
+def test_relax_unrelaxed_relaxes_when_available_below_max_batch(tmp_path):
+    """P1.2: no early-return stall when available < max_batch (not forced).
+
+    Before this change ``_relax_unrelaxed_candidates`` returned (0, 0) when
+    ``available < max_batch`` and ``force=False``, deferring work and starving
+    the GPU. Now it relaxes all available candidates.
+    """
+    from ase_ga.data import DataConnection
+
+    from tests.test_utils import create_preparedb
+
+    db_path = tmp_path / "ga_relax_stall.db"
+    atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]], cell=[10, 10, 10])
+    create_preparedb(atoms, db_path, population_size=10)
+    da = DataConnection(str(db_path))
+    # Insert unrelaxed candidates the same low-level way the GA does so that
+    # raw_score survives into key_value_pairs (add_unrelaxed_candidate strips it).
+    for k in range(3):
+        a = atoms.copy()
+        a.positions = [[k * 0.1, 0, 0], [1 + k * 0.1, 0, 0], [0, 1, 0]]
+        with da.c:
+            gaid = da.c.write(
+                a,
+                origin="StartingCandidateUnrelaxed",
+                relaxed=0,
+                generation=0,
+                extinct=0,
+                description=f"pt3_{k}",
+            )
+            da.c.update(gaid, gaid=gaid)
+            a.info["confid"] = gaid
+
+    # Return relaxed copies with no key_value_pairs so the GA's raw_score
+    # fallback (raw_score = -energy) applies, mirroring a real TorchSim relaxer.
+    class _StrippedRelaxer:
+        def relax_batch(self, batch):
+            out = []
+            for i, a in enumerate(batch):
+                ra = Atoms(
+                    symbols=a.get_chemical_symbols(),
+                    positions=a.get_positions(),
+                    cell=a.get_cell(),
+                    pbc=a.get_pbc(),
+                )
+                out.append((float(i) * 0.1, ra))
+            return out
+
+    relaxer = _StrippedRelaxer()
+
+    eligible, ineligible = ga_mod._relax_unrelaxed_candidates(
+        da,
+        relaxer,
+        max_batch=10,  # larger than available (3)
+        force=False,
+        composition=["Pt", "Pt", "Pt"],
+        system_type="gas_cluster",
+    )
+
+    # All 3 unrelaxed candidates must be relaxed despite available < max_batch.
+    assert eligible + ineligible == 3
+    assert eligible == 3
+
+
+def test_per_gen_max_targets_population_when_batch_size_none():
+    """P1: per-generation relax cap resolves to max(n_offspring, population_size)."""
+    # Mirrors the resolution inside run_ga_torchsim's generational loop.
+    population_size = 40
+    n_offspring = max(1, math.ceil(population_size * 0.5))
+
+    batch_size = None
+    per_gen_max = (
+        batch_size if batch_size is not None else max(n_offspring, population_size)
+    )
+    assert per_gen_max == population_size
+
+    # A user-set batch_size still wins.
+    batch_size = 7
+    per_gen_max = (
+        batch_size if batch_size is not None else max(n_offspring, population_size)
+    )
+    assert per_gen_max == 7

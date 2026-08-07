@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from scgo.metadata.provenance import output_json_provenance
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_info_v
+
+logger = get_logger(__name__)
 
 
 class RunDirJSONEncoder(json.JSONEncoder):
@@ -72,10 +74,9 @@ def ensure_run_id(run_id: str | None, verbosity: int = 0, logger=None) -> str:
     """Ensure a run_id exists, generating one if needed and logging if appropriate."""
     if run_id is None:
         run_id = generate_run_id()
-        if verbosity >= 1:
-            if logger is None:
-                logger = get_logger(__name__)
-            logger.info(f"Generated run ID: {run_id}")
+        if logger is None:
+            logger = get_logger(__name__)
+        log_info_v(logger, "Generated run ID: %s", run_id, verbosity=verbosity)
     return run_id
 
 
@@ -118,8 +119,7 @@ def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
             data = json.load(f)
         return RunDirRecord.from_dict(data)
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logger = get_logger(__name__)
-        logger.warning(f"Failed to load run dir record from {metadata_file}: {e}")
+        logger.warning("Failed to load run dir record from %s: %s", metadata_file, e)
         return None
 
 
@@ -173,7 +173,6 @@ def resolve_run_id_from_db_path(
         return parent_name
 
     basename = os.path.basename(db_path_str)
-    logger = get_logger(__name__)
     logger.warning(
         "Could not resolve run_id from path %s; using database basename %r as fallback",
         db_path,

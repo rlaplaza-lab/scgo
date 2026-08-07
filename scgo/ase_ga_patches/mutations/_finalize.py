@@ -1,8 +1,9 @@
+"""Shared finalization helper for mutation ``get_new_individual`` methods."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Shared finalization helper for mutation ``get_new_individual`` methods."""
 
 __all__ = ["_finalize_mutant"]
 

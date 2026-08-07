@@ -57,7 +57,7 @@ def set_db_schema_version(db: DataConnection, version: int) -> None:
     with db.c.managed_connection() as conn:
         _upsert_scgo_metadata_keys(conn, schema_version=version)
         conn.commit()
-        logger.debug(f"Set DB schema version to {version}")
+        logger.debug("Set DB schema version to %s", version)
 
 
 def bump_db_schema_version(
@@ -73,7 +73,7 @@ def bump_db_schema_version(
     current_version = get_db_schema_version(db)
 
     if current_version == target_version:
-        logger.debug(f"Database already at version {target_version}")
+        logger.debug("Database already at version %s", target_version)
         return True
 
     if current_version > target_version:
@@ -84,11 +84,12 @@ def bump_db_schema_version(
     try:
         set_db_schema_version(db, target_version)
         logger.info(
-            f"Marked database schema version as {target_version} (no migrations applied)"
+            "Marked database schema version as %s (no migrations applied)",
+            target_version,
         )
         return True
     except (OSError, sqlite3.Error, TypeError, ValueError) as e:
-        logger.error(f"Failed to set schema version to {target_version}: {e}")
+        logger.error("Failed to set schema version to %s: %s", target_version, e)
         raise DatabaseMigrationError(f"Failed to set schema version: {e}") from e
 
 
@@ -98,13 +99,17 @@ def ensure_db_schema_version(db: DataConnection) -> None:
 
     if current_version < CURRENT_DB_SCHEMA_VERSION:
         logger.info(
-            f"Database needs migration from v{current_version} to v{CURRENT_DB_SCHEMA_VERSION}"
+            "Database needs migration from v%s to v%s",
+            current_version,
+            CURRENT_DB_SCHEMA_VERSION,
         )
         bump_db_schema_version(db, CURRENT_DB_SCHEMA_VERSION)
     elif current_version > CURRENT_DB_SCHEMA_VERSION:
         logger.warning(
-            f"Database version {current_version} is newer than expected "
-            f"{CURRENT_DB_SCHEMA_VERSION}. Update SCGO to latest version."
+            "Database version %s is newer than expected "
+            "%s. Update SCGO to latest version.",
+            current_version,
+            CURRENT_DB_SCHEMA_VERSION,
         )
 
 

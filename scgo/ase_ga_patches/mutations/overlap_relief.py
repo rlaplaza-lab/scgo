@@ -1,8 +1,9 @@
+"""Mutation that resolves steric clashes with bounded geometric sweeps."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that resolves steric clashes with bounded geometric sweeps."""
 
 import numpy as np
 from ase import Atoms

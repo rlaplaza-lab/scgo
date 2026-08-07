@@ -8,7 +8,6 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
-from logging import Logger
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,8 @@ from scgo.metadata.atoms import (
     set_tags,
 )
 from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _assign_penalty_energy(atoms: Atoms) -> float:
@@ -180,8 +181,6 @@ def perform_local_relaxation(
     Returns:
         The potential energy of the relaxed structure. Returns penalty energy if relaxation fails.
     """
-    logger: Logger = get_logger(__name__)
-
     atoms.calc = calculator
     dyn: Optimizer = optimizer(atoms, trajectory=trajectory, logfile=logfile)
 
@@ -193,7 +192,7 @@ def perform_local_relaxation(
             min_distance = np.min(distances[:, 1])
             if min_distance < MIN_ATOMIC_DISTANCE_WARNING:
                 logger.warning(
-                    f"Atoms dangerously close (min distance: {min_distance:.3f} Å)"
+                    "Atoms dangerously close (min distance: %.3f Å)", min_distance
                 )
                 logger.warning(
                     "This may cause numerical issues with some calculators (especially EMT)"
@@ -216,7 +215,7 @@ def perform_local_relaxation(
     except KeyboardInterrupt:
         raise
     except (RuntimeError, ValueError, FloatingPointError) as e:
-        logger.warning(f"Local relaxation failed: {e}")
+        logger.warning("Local relaxation failed: %s", e)
         logger.warning("Assigning large penalty energy to this structure.")
         return _assign_penalty_energy(atoms)
 
@@ -445,8 +444,6 @@ def is_true_minimum(
     imag_freq_threshold: float = 50.0,
 ) -> bool:
     """Return True if `atoms` is a local minimum (force + optional Hessian checks)."""
-    logger: Logger = get_logger(__name__)
-
     atoms_check: Atoms = atoms.copy()
     atoms_check.calc = calculator
 
@@ -455,7 +452,9 @@ def is_true_minimum(
 
     if max_force > fmax_threshold:
         logger.debug(
-            f"Check failed: Max force ({max_force:.4f} eV/Å) > threshold ({fmax_threshold:.4f} eV/Å).",
+            "Check failed: Max force (%.4f eV/Å) > threshold (%.4f eV/Å).",
+            max_force,
+            fmax_threshold,
         )
         return False
 
@@ -474,14 +473,16 @@ def is_true_minimum(
         vib.clean()
     except (RuntimeError, OSError, ValueError) as e:
         # Treat vibrational analysis failures as a non-minimum condition
-        logger.warning(f"Vibrational analysis failed with error: {e}")
+        logger.warning("Vibrational analysis failed with error: %s", e)
         return False
 
     problematic_freqs = frequencies[frequencies < -imag_freq_threshold]
     if problematic_freqs.size > 0:
         logger.debug(
-            f"Check failed: Found {problematic_freqs.size} imaginary frequencies "
-            f"below -{imag_freq_threshold:.1f} cm-1: {np.round(problematic_freqs, 2)}.",
+            "Check failed: Found %s imaginary frequencies below -%.1f cm-1: %s.",
+            problematic_freqs.size,
+            imag_freq_threshold,
+            np.round(problematic_freqs, 2),
         )
         logger.debug("Structure is likely a saddle point.")
         return False
@@ -492,11 +493,14 @@ def is_true_minimum(
     expected_zero_modes: int = 5 if is_linear else 6
 
     logger.debug(
-        f"Check passed: Found 0 imaginary frequencies above threshold ({imag_freq_threshold:.1f} cm-1).",
+        "Check passed: Found 0 imaginary frequencies above threshold (%.1f cm-1).",
+        imag_freq_threshold,
     )
     logger.debug(
-        f"Total of {total_imag_count} imaginary/zero frequencies found (within threshold), "
-        f"which is consistent with the {expected_zero_modes} expected translational/rotational modes.",
+        "Total of %s imaginary/zero frequencies found (within threshold), "
+        "which is consistent with the %s expected translational/rotational modes.",
+        total_imag_count,
+        expected_zero_modes,
     )
     logger.debug("Structure is confirmed as a true local minimum.")
     return True
@@ -836,9 +840,11 @@ def _prepare_calculator_calculations(
         **write_kwargs: Additional keyword arguments to pass to write_function.
     """
     ensure_directory_exists(base_dir)
-    logger: Logger = get_logger(__name__)
     logger.info(
-        f"Preparing {calculator_name} inputs for {len(unique_minima)} unique minima in '{base_dir}'",
+        "Preparing %s inputs for %s unique minima in '%s'",
+        calculator_name,
+        len(unique_minima),
+        base_dir,
     )
 
     for i, (_energy, atoms) in enumerate(unique_minima):

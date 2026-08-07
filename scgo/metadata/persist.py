@@ -115,7 +115,8 @@ def mark_final_minima_in_db(
         if not db_files:
             logger.warning(
                 "mark_final_minima_in_db: no databases found for "
-                f"run={run_id} — check output layout, registry, or pass db_paths"
+                "run=%s — check output layout, registry, or pass db_paths",
+                run_id,
             )
             continue
 
@@ -206,7 +207,7 @@ def mark_final_minima_in_db(
             json.JSONDecodeError,
             ValueError,
         ) as e:
-            logger.warning(f"mark_final_minima_in_db: failed for {db_path}: {e}")
+            logger.warning("mark_final_minima_in_db: failed for %s: %s", db_path, e)
             continue
 
     return {

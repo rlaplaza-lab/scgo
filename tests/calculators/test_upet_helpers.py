@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scgo.exceptions import SCGORuntimeError
+from scgo.exceptions import SCGOConfigurationError
 
 
 def test_upet_class_is_ase_calculator():
@@ -58,7 +58,7 @@ def test_multiple_mlip_stacks_raises_when_more_than_one_importable():
 
     from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
-    with pytest.raises(SCGORuntimeError, match="Multiple MLIP stacks"):
+    with pytest.raises(SCGOConfigurationError, match="Multiple MLIP stacks"):
         ensure_mace_uma_not_both_installed()
 
 

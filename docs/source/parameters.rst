@@ -341,9 +341,17 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - ``True``
      - Batch multiple NEB bands in one TorchSim force eval (all system types)
    * - ``parallel_neb_max_bands``
-     - ``None`` / ``1`` (surface)
-     - Cap concurrent bands in the parallel NEB runner; surface defaults to
-       ``1`` (chunked one-at-a-time) to avoid GPU OOM on large slab cells
+     - ``None`` / ``4`` (surface)
+     - Explicit cap on concurrent bands in the parallel NEB runner. Surface
+       defaults to ``4`` bands per force batch for OOM safety on large slab
+       cells. When ``None``, bands are chunked by
+       ``parallel_neb_max_batch_atoms`` instead
+   * - ``parallel_neb_max_batch_atoms``
+     - ``6000`` / ``4000`` (surface)
+     - Atom budget (sum of ``n_images * n_atoms``) per fused parallel NEB force
+       batch, used only when ``parallel_neb_max_bands`` is ``None``. Also sizes
+       the TorchSim relaxer's ``expected_max_atoms`` / ``max_atoms_to_try``. A
+       chunk that hits CUDA OOM is retried once at half the budget
    * - ``max_endpoint_mismatch``
      - ``None`` / ``1.25`` (gas adsorbate) / ``1.5`` (surface adsorbate)
      - Å geometric gate on comparator ``max_diff``; when set, also enables pre-NEB clash/IDPP energy checks
@@ -391,8 +399,11 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
   ``surface``; ``False`` for ``surface_cluster_adsorbate`` /
   ``surface_adsorbate`` (registry-safe)
 - ``neb_surface_max_lattice_shift=1``
-- ``parallel_neb_max_bands=1`` (parallel NEB path stays on; bands are
-  chunked one-at-a-time for OOM safety on large slab cells)
+- ``parallel_neb_max_bands=4`` (parallel NEB path stays on; bands are
+  chunked four-at-a-time for OOM safety on large slab cells)
+- ``parallel_neb_max_batch_atoms=4000`` (atom budget used when the band cap is
+  cleared to ``None``; kept at/below the previous 4-band path so the TorchSim
+  memory-scaler disk cache bucket is reused)
 
 --------------
 Surface Config

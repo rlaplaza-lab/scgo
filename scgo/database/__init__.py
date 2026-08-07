@@ -1,4 +1,4 @@
-"""SCGO Database Module
+"""SCGO Database Module.
 
 Designed for **HPC** use: SQLite on shared filesystems (Lustre, GPFS, NFS-class),
 batch jobs, and optional multi-process access. WAL mode is off by default.

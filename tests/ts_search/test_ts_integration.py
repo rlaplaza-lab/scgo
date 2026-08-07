@@ -202,8 +202,8 @@ def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_databas
 def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
     """``use_parallel_neb=True`` always dispatches to the parallel runner.
 
-    Surface presets pass ``parallel_neb_max_bands=1`` so the runner chunks
-    bands one-at-a-time; that must not fall back to the serial path.
+    Surface presets pass ``parallel_neb_max_bands=4`` so the runner chunks
+    bands four-at-a-time; that must not fall back to the serial path.
     """
     from ase import Atoms
 

@@ -26,7 +26,12 @@ from scgo.system_types import (
     resolve_search_mobile_composition,
 )
 from scgo.utils.helpers import get_cluster_formula
-from scgo.utils.logging import configure_logging, get_logger
+from scgo.utils.logging import (
+    configure_logging,
+    get_logger,
+    log_info_v,
+    log_warning_v,
+)
 from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
@@ -41,6 +46,8 @@ from scgo.utils.run_helpers import (
     validate_algorithm_params,
 )
 from scgo.utils.validation import validate_composition
+
+logger = get_logger(__name__)
 
 ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
 
@@ -110,7 +117,6 @@ def _run_go_trials(
 ) -> list[tuple[float, Atoms]]:
     """Run global optimization for a composition; return unique minima sorted by energy."""
     configure_logging(verbosity)
-    logger = get_logger(__name__)
 
     policy = get_system_policy(system_type)
     allow_empty_comp = policy.slab_is_search_target and not policy.has_adsorbate
@@ -267,7 +273,6 @@ def _run_go_campaign_compositions(
 
     params = _prepare_go_params(params)
     configure_logging(verbosity)
-    logger = get_logger(__name__)
 
     # Generate run_id once at campaign start if not provided
     run_id = ensure_run_id(run_id, verbosity=verbosity, logger=logger)
@@ -292,15 +297,16 @@ def _run_go_campaign_compositions(
         path_key = resolve_run_path_key(
             composition, system_type=system_type, params=params
         )
-        if verbosity >= 1:
-            logger.info("\n%s", "=" * 60)
-            logger.info(
-                "Running minima search for %s (%d/%d)",
-                path_key,
-                i + 1,
-                num_compositions,
-            )
-            logger.info("%s", "=" * 60)
+        log_info_v(logger, "\n%s", "=" * 60, verbosity=verbosity)
+        log_info_v(
+            logger,
+            "Running minima search for %s (%d/%d)",
+            path_key,
+            i + 1,
+            num_compositions,
+            verbosity=verbosity,
+        )
+        log_info_v(logger, "%s", "=" * 60, verbosity=verbosity)
 
         comp_seed = int(rng.integers(0, 2**63 - 1))
         trial_output_dir = resolve_go_campaign_searches_dir(output_dir, path_key)
@@ -325,10 +331,20 @@ def _run_go_campaign_compositions(
             # downstream consumers and tests.
             all_results[path_key] = results
             if not results and verbosity >= 1:
-                logger.warning("No minima found for %s (results empty)", path_key)
-            if verbosity >= 1:
-                logger.info("Finished processing %s.", path_key)
-                logger.info("  Returned %d final minima for %s", len(results), path_key)
+                log_warning_v(
+                    logger,
+                    "No minima found for %s (results empty)",
+                    path_key,
+                    verbosity=verbosity,
+                )
+            log_info_v(logger, "Finished processing %s.", path_key, verbosity=verbosity)
+            log_info_v(
+                logger,
+                "  Returned %d final minima for %s",
+                len(results),
+                path_key,
+                verbosity=verbosity,
+            )
         except (
             RuntimeError,
             ValueError,
@@ -356,11 +372,15 @@ def _run_go_campaign_compositions(
 
             logger.error(" | ".join(error_details), exc_info=(verbosity >= 2))
             all_results[path_key] = []
-            if verbosity >= 1:
-                logger.warning(
-                    f"Skipping {path_key} ({formula_str}) and continuing campaign "
-                    f"({i + 1}/{num_compositions})"
-                )
+            log_warning_v(
+                logger,
+                "Skipping %s (%s) and continuing campaign (%d/%d)",
+                path_key,
+                formula_str,
+                i + 1,
+                num_compositions,
+                verbosity=verbosity,
+            )
             continue
 
     # Best-effort: drop shared calculator reference and free CUDA memory to avoid

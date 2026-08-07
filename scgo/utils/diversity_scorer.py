@@ -16,6 +16,8 @@ from scgo.utils.comparators import (
 )
 from scgo.utils.logging import get_logger
 
+logger = get_logger(__name__)
+
 
 class DiversityScorer:
     """Efficient scorer for diversity-based fitness calculation.
@@ -64,7 +66,6 @@ class DiversityScorer:
 
         lengths = [len(d) for d in descriptors]
         if len(set(lengths)) > 1:
-            logger = get_logger(__name__)
             logger.warning(
                 f"Inconsistent descriptor lengths: {set(lengths)}. "
                 f"May indicate different compositions."
@@ -116,7 +117,6 @@ class DiversityScorer:
         candidate_desc = self._atoms_to_descriptor(atoms)
 
         if len(candidate_desc) != self._ref_descriptors.shape[1]:
-            logger = get_logger(__name__)
             logger.warning(
                 f"Descriptor length mismatch: candidate {len(candidate_desc)} vs "
                 f"references {self._ref_descriptors.shape[1]}. "
@@ -170,7 +170,6 @@ class DiversityScorer:
         else:
             # Verify length matches
             if len(new_desc) != self._ref_descriptors.shape[1]:
-                logger = get_logger(__name__)
                 logger.warning(
                     f"New reference descriptor length {len(new_desc)} doesn't match "
                     f"existing {self._ref_descriptors.shape[1]}. "

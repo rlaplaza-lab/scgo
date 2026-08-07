@@ -60,7 +60,7 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import AdsorbatesInput, SystemType
 from scgo.utils.logging import get_logger
 
-_LOGGER = get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _execute_run_go(context: RunGOContext) -> list[tuple[float, Atoms]]:

@@ -33,6 +33,8 @@ from .transition_state import (
     minima_provenance_dict,
 )
 
+logger = get_logger(__name__)
+
 # Absolute ceiling for adsorbate pair oversample before IDPP re-rank.
 _ADSORBATE_PAIR_OVERSAMPLE_CAP = 50
 
@@ -73,8 +75,6 @@ def load_minima_by_composition(
         >>> list(minima.keys())
         ['Pt3']
     """
-    logger = get_logger(__name__)
-
     if not os.path.exists(base_dir):
         logger.warning("Output directory does not exist: %s", base_dir)
         return {}
@@ -240,7 +240,6 @@ def select_structure_pairs(
     Returns:
         List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
     """
-    logger = get_logger(__name__)
     mic = bool(use_mic)
 
     if len(minima) < 2:
@@ -389,7 +388,12 @@ def select_structure_pairs(
                     continue
             except (ValueError, RuntimeError) as e:
                 logger.warning(
-                    f"Failed to calculate similarity for pair ({i}, {j}): {type(e).__name__}: {e}"
+                    "Failed to calculate similarity for pair (%s, %s): %s: %s",
+                    i,
+                    j,
+                    type(e).__name__,
+                    e,
+                    exc_info=True,
                 )
                 continue
 
@@ -466,8 +470,6 @@ def save_transition_state_results(
     Returns:
         Path to saved summary file.
     """
-    logger = get_logger(__name__)
-
     os.makedirs(output_dir, exist_ok=True)
 
     formula = get_cluster_formula(composition)
@@ -610,8 +612,6 @@ def write_final_unique_ts(
 
     This function is best-effort and will not raise on IO errors.
     """
-    logger = get_logger(__name__)
-
     os.makedirs(output_dir, exist_ok=True)
     formula = path_key or get_cluster_formula(composition)
 

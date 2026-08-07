@@ -121,7 +121,7 @@ def get_database_statistics(db_path: str | Path) -> dict:
     stats = {}
 
     if not db_path.exists():
-        logger.warning(f"Database does not exist: {db_path}")
+        logger.warning("Database does not exist: %s", db_path)
         return stats
 
     try:

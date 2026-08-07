@@ -160,6 +160,8 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert bare["neb_climb"] is False
     assert bare["use_parallel_neb"] is True
     assert bare["parallel_neb_max_bands"] is None
+    # No explicit band cap: gas bands are chunked by the atom budget instead.
+    assert bare["parallel_neb_max_batch_atoms"] == 6000
     assert bare["neb_fmax"] == pytest.approx(0.20)
     assert bare["max_endpoint_mismatch"] is None
     assert bare["energy_gap_threshold"] == pytest.approx(2.0)
@@ -175,7 +177,8 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert surf["neb_fmax"] == pytest.approx(0.20)
     assert surf["torchsim_fmax"] == pytest.approx(0.20)
     assert surf["use_parallel_neb"] is True
-    assert surf["parallel_neb_max_bands"] == 1
+    assert surf["parallel_neb_max_bands"] == 4
+    assert surf["parallel_neb_max_batch_atoms"] == 4000
     assert "torchsim_batch_size" not in surf
     assert surf["max_endpoint_mismatch"] == pytest.approx(1.5)
     assert surf["neb_n_images"] == 7
@@ -237,7 +240,8 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert ts["neb_steps"] == 2000
     assert ts["torchsim_max_steps"] == 2000
     assert ts["use_parallel_neb"] is True
-    assert ts["parallel_neb_max_bands"] == 1
+    assert ts["parallel_neb_max_bands"] == 4
+    assert ts["parallel_neb_max_batch_atoms"] == 4000
     assert "torchsim_batch_size" not in ts
     assert ts["neb_climb"] is False
     assert ts["neb_interpolation_method"] == "idpp"
@@ -255,6 +259,30 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert kwargs["neb_align_endpoints"] is True
     assert kwargs["neb_surface_cell_remap"] is True
     assert kwargs["neb_surface_lattice_rotation"] is True
+    assert kwargs["parallel_neb_max_batch_atoms"] == 4000
+    # G3: the TS relaxer is sized for the largest fused NEB force batch, mirroring
+    # the GO expected_max_atoms pattern so the memory-scaler cache bucket is stable.
+    assert kwargs["torchsim_params"]["expected_max_atoms"] == 4000
+    assert kwargs["torchsim_params"]["max_atoms_to_try"] == 4000
+
+
+def test_coerce_ts_gas_relaxer_sized_for_atom_budget():
+    """G3: gas presets size the relaxer from their own (larger) atom budget."""
+    ts = get_ts_search_params(system_type="gas_cluster")
+    kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
+    assert kwargs["parallel_neb_max_batch_atoms"] == 6000
+    assert kwargs["torchsim_params"]["expected_max_atoms"] == 6000
+    assert kwargs["torchsim_params"]["max_atoms_to_try"] == 6000
+
+
+def test_coerce_ts_omits_relaxer_sizing_without_atom_budget():
+    """No atom budget -> no expected_max_atoms cap (torch-sim defaults apply)."""
+    ts = get_ts_search_params(system_type="gas_cluster")
+    ts["parallel_neb_max_batch_atoms"] = None
+    kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
+    assert kwargs["parallel_neb_max_batch_atoms"] is None
+    assert "expected_max_atoms" not in kwargs["torchsim_params"]
+    assert "max_atoms_to_try" not in kwargs["torchsim_params"]
 
 
 def test_ts_search_step_defaults_can_be_auto():

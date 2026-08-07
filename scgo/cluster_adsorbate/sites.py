@@ -8,6 +8,7 @@ from typing import Literal
 import numpy as np
 from ase import Atoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.geometry_helpers import try_convex_hull
 from scgo.utils.logging import get_logger
 
@@ -136,7 +137,7 @@ def planar_layer_site_candidates(
         return out
     axis = int(surface_normal_axis)
     if axis not in (0, 1, 2):
-        raise ValueError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
+        raise SCGOValidationError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
     normal = np.zeros(3, dtype=float)
     normal[axis] = 1.0
     pos = np.asarray(layer.get_positions(), dtype=float)
