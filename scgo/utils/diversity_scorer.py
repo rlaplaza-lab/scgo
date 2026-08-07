@@ -13,6 +13,7 @@ from scgo.exceptions import SCGOValidationError
 from scgo.utils.comparators import (
     PureInteratomicDistanceComparator,
     get_sorted_dist_list,
+    get_sorted_hetero_dist_list,
 )
 from scgo.utils.logging import get_logger
 
@@ -77,7 +78,12 @@ class DiversityScorer:
 
         Flattens sorted interatomic distances into a consistent vector format
         for efficient vectorized operations. Order: by atomic number (ascending),
-        then by sorted distances.
+        then by sorted distances, then (when the comparator opts in) by hetero
+        element pair.
+
+        Only the comparator's ``n_top`` trailing atoms are fingerprinted so the
+        descriptor matches what :meth:`PureInteratomicDistanceComparator.get_differences`
+        compares. Fingerprinting a whole slab would swamp the mobile-atom signal.
 
         Args:
             atoms: Atoms object to convert.
@@ -85,11 +91,18 @@ class DiversityScorer:
         Returns:
             1D numpy array of sorted interatomic distances.
         """
-        dist_dict = get_sorted_dist_list(atoms, mic=self.comparator.mic)
+        n_top = int(getattr(self.comparator, "n_top", 0) or 0)
+        subject = atoms[-n_top:] if 0 < n_top < len(atoms) else atoms
+
+        dist_dict = get_sorted_dist_list(subject, mic=self.comparator.mic)
 
         descriptor_parts = [
             dist_dict[atomic_num] for atomic_num in sorted(dist_dict.keys())
         ]
+
+        if getattr(self.comparator, "include_hetero_pairs", False):
+            hetero = get_sorted_hetero_dist_list(subject, mic=self.comparator.mic)
+            descriptor_parts.extend(hetero[key] for key in sorted(hetero.keys()))
 
         if descriptor_parts:
             descriptor = np.concatenate(descriptor_parts)

@@ -154,6 +154,7 @@ class SurfaceSystemConfig:
         return self.adsorption_height_max
 
     def __post_init__(self) -> None:
+        """Copy the slab and normalize PBC settings after initialization."""
         # Copy slab so post-init pbc adjustments do not mutate a shared Atoms.
         object.__setattr__(self, "slab", self.slab.copy())
         slab = self.slab

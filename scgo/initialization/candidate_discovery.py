@@ -77,7 +77,7 @@ def _load_candidates_from_file(db_file: str, mtime: float) -> list[CandidateEntr
             results.append((symbols, energy, atoms))
         return results
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError, ValueError) as e:
-        logger.debug(f"Failed to load candidates from {db_file}: {e}")
+        logger.debug("Failed to load candidates from %s: %s", db_file, e)
         return []
 
 
@@ -204,7 +204,7 @@ def get_structure_signature(atoms: Atoms, precision: int = 4) -> tuple[float, ..
     return tuple(np.round(np.sort(distances), precision))
 
 
-def deduplicate_seed_candidates(
+def deduplicate_seed_candidates(  # noqa: C901
     entries: list[tuple[float, Atoms]],
     precision: int = 4,
     energy_bin: float | None = None,
@@ -247,7 +247,7 @@ def deduplicate_seed_candidates(
     return deduped
 
 
-def _find_smaller_candidates(
+def _find_smaller_candidates(  # noqa: C901
     target_composition: list[str],
     db_glob_pattern: str,
 ) -> dict[str, list[tuple[float, Atoms]]]:

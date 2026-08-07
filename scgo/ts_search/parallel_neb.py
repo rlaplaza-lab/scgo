@@ -11,7 +11,7 @@ from ase import Atoms
 from ase.optimize import FIRE
 
 from scgo.calculators import torchsim_helpers as _tsh
-from scgo.exceptions import SCGORuntimeError, SCGOValidationError
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.logging import get_logger
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.ts_runner_kwargs import NebRunConfig
@@ -70,9 +70,9 @@ class ParallelNEBBatch:
 
         # Per-NEB optimizer instances (created lazily). Uses ASE optimizers
         # (default: FIRE) so stepping respects NEB forces / spring terms.
-        self._optimizers: dict[int, object] = {}
+        self._optimizers: dict[int, Any] = {}
 
-    def run_optimization(
+    def run_optimization(  # noqa: C901
         self,
         fmax: float = 0.05,
         max_steps: int = 500,
@@ -82,7 +82,7 @@ class ParallelNEBBatch:
             logger.error("No NEB instances provided to run_optimization")
             return []
 
-        results = [
+        results: list[dict[str, Any]] = [
             {
                 "converged": False,
                 "steps_taken": 0,
@@ -255,7 +255,7 @@ class ParallelNEBBatch:
         }
 
 
-def run_parallel_neb_search(
+def run_parallel_neb_search(  # noqa: C901
     pairs: list[tuple[int, int]],
     minima: list[tuple[float, Atoms]],
     *,
@@ -507,8 +507,9 @@ def run_parallel_neb_search(
     for neb_idx, (pair_ord, i, j) in enumerate(neb_meta):
         neb = neb_instances[neb_idx]
         summary = batch_results[neb_idx]
-        result = pair_results[pair_ord]
-        assert result is not None
+        stored_result = pair_results[pair_ord]
+        assert stored_result is not None
+        result = stored_result
         result["neb_converged"] = bool(summary.get("converged", False))
         result["error"] = summary.get("error")
         result["final_fmax"] = summary.get("final_fmax")
@@ -533,9 +534,10 @@ def run_parallel_neb_search(
         else:
             try:
                 _finalize_neb_result(result, neb.images, logger=logger)
-            except (RuntimeError, SCGORuntimeError, SCGOValidationError) as e:
-                # SCGORuntimeError is not a RuntimeError subclass; catch both so a
-                # missing-energy finalize cannot abort the whole parallel batch.
+            except (RuntimeError, SCGOValidationError) as e:
+                # SCGORuntimeError is a RuntimeError subclass; catch RuntimeError
+                # (plus SCGOValidationError) so a missing-energy finalize cannot
+                # abort the whole parallel batch.
                 result["status"] = "failed"
                 result["error"] = str(e)
                 _detach_calc(result.get("transition_state"))

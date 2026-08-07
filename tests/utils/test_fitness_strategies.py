@@ -255,10 +255,19 @@ def test_comparator_tolerance():
     assert not comp_strict.looks_like(atoms1, atoms2)
 
 
-def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
-    """Repeated looks_like / get_sorted_dist_list should populate and reuse cache."""
+def test_sorted_dist_list_leaves_no_unhashable_info_cache():
+    """The fingerprint must not be cached on ``atoms.info``.
+
+    ``Atoms[-n_top:]`` returns a fresh ``info`` dict, so a cache there was never
+    reused; it only leaked an unhashable dict that made every extxyz/db write
+    emit ``Skipping unhashable information _scgo_sorted_dist_fp``.
+    """
+    import warnings
+    from io import StringIO
+
+    from ase.io import write
+
     from scgo.utils.comparators import (
-        _SORTED_DIST_FP_INFO_KEY,
         PureInteratomicDistanceComparator,
         get_sorted_dist_list,
     )
@@ -267,29 +276,23 @@ def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
     atoms2 = atoms1.copy()
     atoms2.positions[2, 1] += 1e-4
 
-    first = get_sorted_dist_list(atoms1)
-    assert _SORTED_DIST_FP_INFO_KEY in atoms1.info
-    cached_id = id(atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"])
-    second = get_sorted_dist_list(atoms1)
-    assert second is first
-    assert id(second) == cached_id
+    info_before = dict(atoms1.info)
+    get_sorted_dist_list(atoms1)
 
     comp = PureInteratomicDistanceComparator()
     assert comp.looks_like(atoms1, atoms2)
-    assert comp.looks_like(atoms1, atoms2)
-    assert _SORTED_DIST_FP_INFO_KEY in atoms1.info
-    assert _SORTED_DIST_FP_INFO_KEY in atoms2.info
+    assert atoms1.info == info_before
+    assert atoms2.info == {}
 
-    # Position change invalidates cache
-    atoms1.positions[0, 0] += 0.5
-    refreshed = get_sorted_dist_list(atoms1)
-    assert refreshed is not first
-    assert atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"] is refreshed
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        write(StringIO(), atoms1, format="extxyz")
+    assert not [w for w in caught if "unhashable" in str(w.message)]
 
 
 def test_sorted_dist_list_mic_matches_nested_get_distance():
     """MIC fingerprint via get_all_distances agrees with nested get_distance."""
-    from scgo.utils.comparators import _compute_sorted_dist_list, get_sorted_dist_list
+    from scgo.utils.comparators import get_sorted_dist_list
 
     atoms = Atoms(
         "Cu4",
@@ -324,6 +327,6 @@ def test_sorted_dist_list_mic_matches_nested_get_distance():
     # Non-MIC gas-phase fingerprint still works for the same geometry without PBC
     gas = atoms.copy()
     gas.set_pbc(False)
-    gas_fp = _compute_sorted_dist_list(gas, mic=False)
+    gas_fp = get_sorted_dist_list(gas, mic=False)
     assert 29 in gas_fp
     assert len(gas_fp[29]) == 6

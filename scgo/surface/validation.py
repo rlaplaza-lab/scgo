@@ -205,7 +205,7 @@ def _classify_mobile_component(
     return "ads_only"
 
 
-def _validate_mobile_connectivity_policy(
+def _validate_mobile_connectivity_policy(  # noqa: C901
     combined: Atoms,
     n_slab: int,
     mobile: Atoms,

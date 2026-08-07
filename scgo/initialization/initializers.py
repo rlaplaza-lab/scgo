@@ -12,8 +12,7 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 from ase import Atoms
@@ -26,7 +25,7 @@ from scgo.exceptions import (
 from scgo.utils.helpers import (
     get_composition_counts,
 )
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_trace
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.phase_logging import InitDiagnosticsCollector, infer_verbosity
 from scgo.utils.validation import validate_composition
@@ -210,7 +209,7 @@ def _boltzmann_sample(
         energy_spread = max_energy - min_energy
         if energy_spread < ENERGY_SPREAD_TOLERANCE:
             # All energies are essentially the same - use uniform sampling
-            selected_idx = rng.integers(0, len(candidates))
+            selected_idx: int = int(rng.integers(0, len(candidates)))
             energy, atoms = candidates[selected_idx]
             return energy, atoms.copy()
 
@@ -238,7 +237,7 @@ def _boltzmann_sample(
     probabilities = weights / np.sum(weights)
 
     # Sample according to probabilities
-    selected_idx: int = int(rng.choice(len(candidates), p=probabilities))
+    selected_idx = int(rng.choice(len(candidates), p=probabilities))
     energy, atoms = candidates[selected_idx]
     return energy, atoms.copy()
 
@@ -433,7 +432,7 @@ def _apply_template_rotation_and_validate(
     return selected
 
 
-def _try_template_generation(
+def _try_template_generation(  # noqa: C901
     composition: list[str],
     n_atoms: int,
     cell_side: float,
@@ -542,7 +541,7 @@ def _try_template_generation(
     weighted_candidates = []
 
     # Count template types in candidates for systematic diversity (compute once)
-    template_type_counts = {}
+    template_type_counts: dict[str, int] = {}
     for candidate in template_candidates:
         template_type = _get_template_type(candidate)
         template_type_counts[template_type] = (
@@ -905,23 +904,26 @@ def _try_seed_growth(
     """
     if len(composition) <= 2:
         return None
-    random_seed_kwargs = {
-        "composition": composition,
-        "cell_side": cell_side,
-        "rng": rng,
-        "placement_radius_scaling": placement_radius_scaling,
-        "min_distance_factor": min_distance_factor,
-        "connectivity_factor": connectivity_factor,
-    }
+
+    def _random_seed_growth() -> Atoms | None:
+        return _grow_from_random_seed(
+            composition=composition,
+            cell_side=cell_side,
+            rng=rng,
+            placement_radius_scaling=placement_radius_scaling,
+            min_distance_factor=min_distance_factor,
+            connectivity_factor=connectivity_factor,
+        )
+
     if not candidates_by_formula:
         logger.info("seed+growth: no database seeds found; using random seed growth")
-        return _grow_from_random_seed(**random_seed_kwargs)
+        return _random_seed_growth()
 
     if not valid_combinations:
         logger.info(
             "seed+growth: no valid DB seed combinations; using random seed growth"
         )
-        return _grow_from_random_seed(**random_seed_kwargs)
+        return _random_seed_growth()
 
     tried_positions: set[int] = set()
 
@@ -945,7 +947,8 @@ def _try_seed_growth(
             if seed is None:
                 reason = failure_reason or "unknown"
                 _SeedSamplingLogCollector.record(formula, reason)
-                logger.trace(
+                log_trace(
+                    logger,
                     "seed+growth: no suitable seed for %s (%s)",
                     formula,
                     reason,
@@ -980,7 +983,7 @@ def _try_seed_growth(
         "DB combinations exhausted; trying random-seed growth",
         SEED_COMBINATION_STRATEGY_COUNT,
     )
-    return _grow_from_random_seed(**random_seed_kwargs)
+    return _random_seed_growth()
 
 
 def _discover_available_strategies(
@@ -1060,8 +1063,29 @@ def _discover_available_strategies(
     }
 
 
+@overload
 def _try_strategies_in_order(
-    strategies: list[tuple[str, Callable[..., Atoms]]],
+    strategies: list[tuple[str, Callable[[], Atoms | None]]],
+    composition: list[str],
+    connectivity_factor: float,
+    min_distance_factor: float = ...,
+    *,
+    return_strategy: Literal[True],
+) -> tuple[Atoms, str, str | None]: ...
+
+
+@overload
+def _try_strategies_in_order(
+    strategies: list[tuple[str, Callable[[], Atoms | None]]],
+    composition: list[str],
+    connectivity_factor: float,
+    min_distance_factor: float = ...,
+    return_strategy: Literal[False] = ...,
+) -> Atoms: ...
+
+
+def _try_strategies_in_order(
+    strategies: list[tuple[str, Callable[[], Atoms | None]]],
     composition: list[str],
     connectivity_factor: float,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
@@ -1080,6 +1104,8 @@ def _try_strategies_in_order(
         composition: Target composition (for validation)
         connectivity_factor: Factor for connectivity threshold (for validation)
         min_distance_factor: Factor for minimum distance checks (for validation)
+        return_strategy: When True, also return the used strategy name and any
+            fallback source as a tuple.
 
     Returns:
         Atoms object if successful. When ``return_strategy=True``, returns
@@ -1198,9 +1224,9 @@ def create_initial_cluster(
         ``composition`` is empty, returns an empty ``Atoms`` object.
 
     Raises:
-        TypeError: If ``composition`` is ``None`` or not a list/tuple of
+        SCGOValidationError: If ``composition`` is ``None`` or not a list/tuple of
             strings.
-        ValueError: If numeric parameters are invalid or a valid cluster
+        SCGOValidationError: If numeric parameters are invalid or a valid cluster
             satisfying the distance/connectivity constraints cannot be
             constructed.
 
@@ -1365,7 +1391,7 @@ def _generate_structure_batch_item(
     return idx, atoms, used_strategy, fallback_from
 
 
-def create_initial_cluster_batch(
+def create_initial_cluster_batch(  # noqa: C901
     composition: list[str],
     n_structures: int,
     rng: np.random.Generator,

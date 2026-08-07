@@ -161,7 +161,7 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
         ConvexHull object for the given positions
 
     Raises:
-        ValueError: If positions array has fewer than 4 points (insufficient for 3D hull)
+        SCGOValidationError: If positions array has fewer than 4 points (insufficient for 3D hull)
     """
     if len(positions) < 4:
         raise SCGOValidationError(
@@ -327,7 +327,9 @@ def _compute_facet_properties(
     """
     positions = atoms.get_positions()
     center_of_mass = atoms.get_center_of_mass()
-    facet_properties = []
+    facet_properties: list[
+        tuple[np.ndarray, np.ndarray, float, tuple[float, float]]
+    ] = []
 
     for simplex_indices in hull.simplices:
         facet_positions = positions[simplex_indices]
@@ -356,13 +358,18 @@ def _compute_facet_properties(
             normal *= -1
 
         facet_properties.append(
-            (centroid, normal, area, (min_centroid_dist, max_centroid_dist))
+            (
+                centroid,
+                normal,
+                float(area),
+                (float(min_centroid_dist), float(max_centroid_dist)),
+            )
         )
 
     return facet_properties
 
 
-def _filter_safe_facets_for_placement(
+def _filter_safe_facets_for_placement(  # noqa: C901
     atoms: Atoms,
     facet_properties: list[tuple[np.ndarray, np.ndarray, float, tuple[float, float]]],
     bond_distance: float,
@@ -463,7 +470,7 @@ def _filter_safe_facets_for_placement(
     return safe_facet_indices
 
 
-def _generate_batch_positions_on_convex_hull(
+def _generate_batch_positions_on_convex_hull(  # noqa: C901
     atoms: Atoms,
     n_candidates: int,
     bond_distance: float,
@@ -598,6 +605,7 @@ def _generate_batch_positions_on_convex_hull(
         safe_sorted_indices = list(range(n_facets))
         n_safe_facets = n_facets
 
+    selected_indices: list[int] | np.ndarray
     if use_all_facets:
         # Use all safe facets (or all facets if not filtering)
         selected_indices = safe_sorted_indices
@@ -981,7 +989,7 @@ def place_multi_atom_seed_on_facet(
     return placed_seed
 
 
-def _find_connected_components(
+def _find_connected_components(  # noqa: C901
     atoms: Atoms, connectivity_factor: float, use_mic: bool = False
 ) -> tuple[dict[int, list[int]], list[int]]:
     """Find connected components using Union-Find algorithm.
@@ -1023,7 +1031,7 @@ def _find_connected_components(
                 if use_mic:
                     distance = float(atoms.get_distance(i, j, mic=True))
                 else:
-                    distance = np.linalg.norm(positions[i] - positions[j])
+                    distance = float(np.linalg.norm(positions[i] - positions[j]))
                 r_i = get_covalent_radius(symbols[i])
                 r_j = get_covalent_radius(symbols[j])
                 threshold = (r_i + r_j) * connectivity_factor
@@ -1046,7 +1054,7 @@ def _find_connected_components(
                 if use_mic:
                     distance = float(atoms.get_distance(i, j, mic=True))
                 else:
-                    distance = np.linalg.norm(positions[i] - positions[j])
+                    distance = float(np.linalg.norm(positions[i] - positions[j]))
                 r_j = get_covalent_radius(symbols[j])
                 threshold = (r_i + r_j) * connectivity_factor
 
@@ -1125,7 +1133,9 @@ def analyze_disconnection(
             comp1, comp2 = component_list[i], component_list[j]
             for atom1 in comp1:
                 for atom2 in comp2:
-                    distance = np.linalg.norm(positions[atom1] - positions[atom2])
+                    distance = float(
+                        np.linalg.norm(positions[atom1] - positions[atom2])
+                    )
                     if distance < min_inter_component_distance:
                         min_inter_component_distance = distance
                         closest_atoms = (atom1, atom2, symbols[atom1], symbols[atom2])
@@ -1153,7 +1163,7 @@ def analyze_disconnection(
     return min_inter_component_distance, suggested_factor, analysis_msg
 
 
-def _build_connectivity_adjacency(
+def _build_connectivity_adjacency(  # noqa: C901
     cluster: Atoms, connectivity_factor: float, use_mic: bool = False
 ) -> list[list[int]]:
     """Build an undirected adjacency list using covalent-radius connectivity."""
@@ -1232,6 +1242,7 @@ def _identify_safe_removal_candidates(
         cluster: The cluster to analyze
         candidate_indices: List of atom indices to test for safe removal
         connectivity_factor: Factor for connectivity threshold
+        use_mic: Whether to use the minimum-image convention for distances
         max_to_check: Maximum number of candidates to check (for performance)
 
     Returns:
@@ -1298,7 +1309,7 @@ class StructureDiagnostics:
         self.summary = summary
 
 
-def get_structure_diagnostics(
+def get_structure_diagnostics(  # noqa: C901
     atoms: Atoms,
     min_distance_factor: float,
     connectivity_factor: float,
@@ -1313,6 +1324,7 @@ def get_structure_diagnostics(
         atoms: The Atoms object to analyze
         min_distance_factor: Factor to scale covalent radii for minimum distance checks
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
+        use_mic: Whether to use the minimum-image convention for distances
 
     Returns:
         StructureDiagnostics object containing detailed analysis results
@@ -1337,12 +1349,12 @@ def get_structure_diagnostics(
     # Pre-compute covalent radii to avoid repeated lookups
     radii = {symbol: get_covalent_radius(symbol) for symbol in set(symbols)}
 
-    clash_details = []
+    clash_details: list[str] = []
     for i in range(n_atoms):
         if len(clash_details) >= 10:
             break
         for j in range(i + 1, n_atoms):
-            distance = np.linalg.norm(positions[i] - positions[j])
+            distance = float(np.linalg.norm(positions[i] - positions[j]))
             r_i = radii[symbols[i]]
             r_j = radii[symbols[j]]
             min_allowed = (r_i + r_j) * min_distance_factor
@@ -1375,7 +1387,9 @@ def get_structure_diagnostics(
             for cj in range(ci + 1, len(component_list)):
                 for atom1 in component_list[ci]:
                     for atom2 in component_list[cj]:
-                        dist = np.linalg.norm(positions[atom1] - positions[atom2])
+                        dist = float(
+                            np.linalg.norm(positions[atom1] - positions[atom2])
+                        )
                         if dist < min_dist:
                             min_dist = dist
                             closest_pair = (atom1, atom2)
@@ -1439,6 +1453,7 @@ def validate_cluster_structure(
         atoms: The Atoms object to validate
         min_distance_factor: Factor to scale covalent radii for minimum distance checks
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
+        use_mic: Whether to use the minimum-image convention for distances
         check_clashes: Whether to check for atomic clashes (default: True)
         check_connectivity: Whether to check connectivity (default: True)
 
@@ -1543,6 +1558,7 @@ def validate_cluster(
             ``composition``, fall back to alphabetical element sort.
         raise_on_failure: Whether to raise ValueError on validation failure
         source: Context string for error messages (e.g., "template", "seed+growth")
+        use_mic: Whether to use the minimum-image convention for distances
 
     Returns:
         Tuple of (validated_atoms, is_valid, error_message). If is_valid is True,
@@ -1582,9 +1598,16 @@ def validate_cluster(
 
     # Validate structure (clashes and connectivity)
     if check_clashes or check_connectivity:
+        # min_distance_factor is guaranteed non-None here (set above when either
+        # check is requested), but narrow it explicitly for the type checker.
+        effective_min_distance_factor = (
+            MIN_DISTANCE_FACTOR_DEFAULT
+            if min_distance_factor is None
+            else min_distance_factor
+        )
         is_valid, error_message = validate_cluster_structure(
             atoms,
-            min_distance_factor,
+            effective_min_distance_factor,
             connectivity_factor,
             check_clashes=check_clashes,
             check_connectivity=check_connectivity,

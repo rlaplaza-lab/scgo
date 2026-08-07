@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 from scgo.constants import (
     BOLTZMANN_K_EV_PER_K,
@@ -21,7 +21,9 @@ from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     SYSTEM_TYPE_POLICIES,
+    CalculatorKwargs,
     GLOptimizerParams,
+    OptimizerSlotParams,
     SystemType,
     get_system_policy,
 )
@@ -285,6 +287,7 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
                 "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
                 "batch_size": None,
+                "relax_batch_target": "auto",
                 "relaxer": None,
                 "fitness_strategy": None,  # None = inherit from top-level
                 "diversity_reference_db": None,  # For diversity strategy
@@ -411,8 +414,8 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
 
 
 def _attach_fairchem_torchsim_relaxer(
-    ga: dict[str, Any],
-    calculator_kwargs: dict[str, Any],
+    ga: OptimizerSlotParams,
+    calculator_kwargs: CalculatorKwargs,
     *,
     max_steps: int,
     autobatcher: bool | None = None,
@@ -436,8 +439,8 @@ def _attach_fairchem_torchsim_relaxer(
 
 
 def _attach_upet_torchsim_relaxer(
-    ga: dict[str, Any],
-    calculator_kwargs: dict[str, Any],
+    ga: OptimizerSlotParams,
+    calculator_kwargs: CalculatorKwargs,
     *,
     max_steps: int,
     autobatcher: bool | None = None,
@@ -641,7 +644,7 @@ def get_torchsim_ga_params(
                 optimizer_name="fire",
                 mace_model_name=mace_model,
                 seed=seed,
-                max_steps=niter_local,
+                max_steps=int(niter_local),
                 dtype=torch.float32,
                 autobatcher=True,
                 expected_max_atoms=600,
@@ -651,9 +654,12 @@ def get_torchsim_ga_params(
     for algo in ("simple", "bh", "ga"):
         params["optimizer_params"][algo]["system_type"] = system_type
     if policy.uses_surface:
-        params["surface_config"] = surface_config
+        resolved_surface_config: SurfaceSystemConfig = cast(
+            SurfaceSystemConfig, surface_config
+        )
+        params["surface_config"] = resolved_surface_config
         for algo in ("simple", "bh", "ga"):
-            params["optimizer_params"][algo]["surface_config"] = surface_config
+            params["optimizer_params"][algo]["surface_config"] = resolved_surface_config
 
     return params
 

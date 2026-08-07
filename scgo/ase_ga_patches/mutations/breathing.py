@@ -1,8 +1,8 @@
+"""Mutation that uniformly scales atom positions relative to the centre of mass."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutation that uniformly scales atom positions relative to the centre of mass."""
 
 import numpy as np
 from ase import Atoms
@@ -83,7 +83,7 @@ class BreathingMutation(OffspringCreator):
         # pdist ratios can sit on the blmin threshold; atoms_too_close needs slack.
         return max(self.scale_min, lower_bound * (1.0 + 1e-6))
 
-    def _candidate_scales(self, positions, atomic_numbers, slab):
+    def _candidate_scales(self, positions, atomic_numbers, slab):  # noqa: C901
         feasible_lower = self._minimum_feasible_scale(positions, atomic_numbers)
         tol = 1e-9
         # Dense parents (e.g. tight random-spherical init) can require s > scale_max to
@@ -169,11 +169,13 @@ class BreathingMutation(OffspringCreator):
         return candidates
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the breathing mutation."""
         f = parents[0]
         indi = self.mutate(f)
         return _finalize_mutant(self, f, indi, "mutation: breathing")
 
     def mutate(self, atoms):
+        """Scale positions about the centre of mass by a random factor."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
         top = atoms[-N:]

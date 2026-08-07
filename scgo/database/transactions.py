@@ -42,7 +42,7 @@ def database_transaction(
     with db.c.managed_connection() as conn:
         try:
             conn.execute(f"BEGIN {isolation_level.upper()}")
-            logger.debug(f"Started {isolation_level} transaction")
+            logger.debug("Started %s transaction", isolation_level)
 
             yield conn  # Yield connection instead of db
 

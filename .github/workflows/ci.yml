@@ -55,6 +55,10 @@ jobs:
         run: |
           ruff check .
 
+      - name: Run mypy
+        run: |
+          mypy scgo
+
       - name: Run ruff format (check only)
         run: |
           ruff format --check .

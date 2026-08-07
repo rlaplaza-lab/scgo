@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scgo.utils.helpers import ensure_directory_exists, get_cluster_formula
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_info_v
 from scgo.utils.ts_provenance import ts_output_provenance
 
 
@@ -22,6 +23,7 @@ class RunMetadataJSONEncoder(json.JSONEncoder):
     """JSON encoder: ``type`` objects become their ``__name__`` (for params snapshots)."""
 
     def default(self, obj: Any) -> Any:
+        """Serialize types by name for JSON run-tracking metadata."""
         if isinstance(obj, type):
             return obj.__name__
         return super().default(obj)
@@ -82,10 +84,12 @@ def ensure_run_id(run_id: str | None, verbosity: int = 0, logger=None) -> str:
     """
     if run_id is None:
         run_id = generate_run_id()
-        if verbosity >= 1:
-            if logger is None:
-                logger = get_logger(__name__)
-            logger.info(f"Generated run ID: {run_id}")
+        log_info_v(
+            logger if logger is not None else get_logger(__name__),
+            "Generated run ID: %s",
+            run_id,
+            verbosity=verbosity,
+        )
     return run_id
 
 
@@ -144,7 +148,7 @@ def load_run_metadata(run_dir: str) -> RunMetadata | None:
         return RunMetadata.from_dict(data)
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         logger = get_logger(__name__)
-        logger.warning(f"Failed to load metadata from {metadata_file}: {e}")
+        logger.warning("Failed to load metadata from %s: %s", metadata_file, e)
         return None
 
 
@@ -180,6 +184,7 @@ def resolve_run_id_from_db_path(
 ) -> str:
     """Resolve GO run ID from a database path (``run_*`` segment when present)."""
     db_path_str = os.path.abspath(str(db_path))
+    parts: Sequence[str]
     if base_dir is not None:
         base_s = os.path.abspath(str(base_dir))
         try:

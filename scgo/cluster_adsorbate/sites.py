@@ -8,6 +8,7 @@ from typing import Literal
 import numpy as np
 from ase import Atoms
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.geometry_helpers import try_convex_hull
 from scgo.utils.logging import get_logger
 
@@ -18,6 +19,8 @@ SiteType = Literal["vertex", "edge", "facet"]
 
 @dataclass(frozen=True)
 class SurfaceSiteCandidate:
+    """Candidate adsorption site on a surface (vertex, edge, or facet)."""
+
     site_type: SiteType
     anchor: np.ndarray
     normal: np.ndarray
@@ -92,9 +95,9 @@ def compute_surface_site_candidates(
     edge_pairs: set[tuple[int, int]] = set()
     for simplex in hull.simplices:
         i, j, k = int(simplex[0]), int(simplex[1]), int(simplex[2])
-        edge_pairs.add(tuple(sorted((i, j))))
-        edge_pairs.add(tuple(sorted((j, k))))
-        edge_pairs.add(tuple(sorted((i, k))))
+        edge_pairs.add((min(i, j), max(i, j)))
+        edge_pairs.add((min(j, k), max(j, k)))
+        edge_pairs.add((min(i, k), max(i, k)))
     for i, j in sorted(edge_pairs):
         midpoint = 0.5 * (pos[i] + pos[j])
         normal = _safe_normalize(midpoint - com)
@@ -136,7 +139,7 @@ def planar_layer_site_candidates(
         return out
     axis = int(surface_normal_axis)
     if axis not in (0, 1, 2):
-        raise ValueError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
+        raise SCGOValidationError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
     normal = np.zeros(3, dtype=float)
     normal[axis] = 1.0
     pos = np.asarray(layer.get_positions(), dtype=float)

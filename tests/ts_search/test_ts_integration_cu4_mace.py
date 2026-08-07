@@ -248,7 +248,7 @@ def test_full_workflow_cu4_mace_database_persistence():
                     "use torch-sim with alchemiops (nvalchemi-toolkit-ops) or avoid vesin"
                 )
             # Otherwise fail because there were unexpected errors
-            assert False, (
+            raise AssertionError(
                 f"No successful TS runs and unexpected failure reasons: {errs}"
             )
 

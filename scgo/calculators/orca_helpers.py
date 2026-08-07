@@ -36,7 +36,7 @@ def write_orca_inputs(
     """
     ensure_directory_exists(output_dir)
     logger = get_logger(__name__)
-    logger.info(f"Writing ORCA input to {os.path.basename(output_dir)}")
+    logger.info("Writing ORCA input to %s", os.path.basename(output_dir))
 
     # Defaults
     default_keywords_1 = "! RI PBE def2-tzvp def2/J Opt Freq VerySlowConv"

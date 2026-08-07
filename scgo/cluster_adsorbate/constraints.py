@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from ase import Atoms
 from ase.constraints import FixBondLength
 
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
 from scgo.exceptions import SCGOValidationError
+
+if TYPE_CHECKING:  # avoid circular import at runtime
+    from scgo.system_types import AdsorbateDefinition
 
 
 def attach_fix_bond_lengths(
@@ -41,7 +45,7 @@ def attach_adsorbate_internal_geometry_constraints(
     atoms: Atoms,
     *,
     n_slab: int,
-    adsorbate_definition: dict | None,
+    adsorbate_definition: AdsorbateDefinition | Mapping[str, Any] | None,
 ) -> None:
     """Freeze pairwise distances inside each adsorbate fragment.
 
@@ -62,8 +66,7 @@ def attach_adsorbate_internal_geometry_constraints(
     cursor = ads_start
     for frag_len in fragment_lengths:
         for i in range(cursor, cursor + frag_len):
-            for j in range(i + 1, cursor + frag_len):
-                bond_pairs.append((i, j))
+            bond_pairs.extend((i, j) for j in range(i + 1, cursor + frag_len))
         cursor += frag_len
 
     if bond_pairs:

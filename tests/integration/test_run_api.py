@@ -18,8 +18,6 @@ from scgo.runner_api import (
     _prepare_run_go_campaign_context,
     _run_go_campaign_compositions,
     _run_go_trials,
-    _run_go_ts_pipeline,
-    _run_one_element_go_ts_pipeline,
     build_one_element_compositions,
     build_two_element_compositions,
     log_go_ts_summary,
@@ -31,11 +29,18 @@ from scgo.runner_api import (
     run_ts_campaign,
     run_ts_search,
 )
+from scgo.runner_ts import _run_go_ts_pipeline, _run_one_element_go_ts_pipeline
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import get_system_policy
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 from tests.test_utils import isolated_workflow_cwd
+
+# Monkeypatch targets below follow the "patch where it is looked up" rule: the
+# runner modules import their collaborators with ``from ... import ...``, so a
+# fake must replace the name in the *calling* module. Hence ``_run_go_trials``
+# is patched on ``scgo.runner_api`` for ``run_go``, on ``scgo.runner_go`` for
+# ``run_go_campaign``, and on ``scgo.runner_ts`` for the GO->TS pipeline.
 
 
 def _emt_ts_gasc() -> dict:
@@ -279,7 +284,7 @@ def test_campaign_respects_params_seed(tmp_path):
 
 
 def test__run_one_element_go_ts_pipeline_smoke(monkeypatch, tmp_path):
-    import scgo.runner_api as runner_api_module
+    import scgo.runner_ts as runner_ts_module
 
     def _fake_trials(*args, **kwargs):
         return []
@@ -288,13 +293,13 @@ def test__run_one_element_go_ts_pipeline_smoke(monkeypatch, tmp_path):
         return [{"status": "success"}, {"status": "failed"}]
 
     monkeypatch.setattr(
-        runner_api_module,
+        runner_ts_module,
         "_run_go_trials",
         _fake_trials,
     )
     monkeypatch.setattr(
-        runner_api_module,
-        "_ts_search",
+        runner_ts_module,
+        "run_transition_state_search",
         _fake_ts,
     )
 
@@ -601,9 +606,9 @@ def test_run_go_campaign_skips_failed_composition(monkeypatch, tmp_path):
             raise ValueError("init failed")
         return []
 
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", fake_trials)
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", fake_trials)
     monkeypatch.setattr(
-        "scgo.runner_api.get_calculator_class",
+        "scgo.runner_go.get_calculator_class",
         lambda name: lambda **kwargs: MagicMock(),
     )
 
@@ -633,9 +638,9 @@ def test_run_go_campaign_skips_failed_composition_uses_path_key(monkeypatch, tmp
             raise ValueError("init failed")
         return [(0.0, Atoms("Au2"))]
 
-    monkeypatch.setattr("scgo.runner_api._run_go_trials", fake_trials)
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", fake_trials)
     monkeypatch.setattr(
-        "scgo.runner_api.get_calculator_class",
+        "scgo.runner_go.get_calculator_class",
         lambda name: lambda **kwargs: MagicMock(),
     )
 
@@ -665,7 +670,7 @@ def test_run_ts_search_normalizes_composition(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "scgo.runner_api._ts_search",
+        "scgo.runner_ts.run_transition_state_search",
         _fake,
     )
 
@@ -701,7 +706,7 @@ def test_run_ts_search_passes_system_type(monkeypatch):
         captured["kwargs"] = kwargs
         return []
 
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
+    monkeypatch.setattr("scgo.runner_ts.run_transition_state_search", _fake)
     cfg = _surface_cfg()
     run_ts_search(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],
@@ -738,7 +743,7 @@ def test_run_ts_search_uses_default_ts_preset_when_missing(monkeypatch):
         captured["kwargs"] = kwargs
         return []
 
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
+    monkeypatch.setattr("scgo.runner_ts.run_transition_state_search", _fake)
     run_ts_search(
         "Pt2",
         ts_params=None,
@@ -756,7 +761,7 @@ def test_run_ts_search_empty_ts_params_uses_defaults(monkeypatch):
         captured["kwargs"] = kwargs
         return []
 
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
+    monkeypatch.setattr("scgo.runner_ts.run_transition_state_search", _fake)
     run_ts_search(
         "Pt2",
         ts_params={},
@@ -775,7 +780,7 @@ def test_run_ts_campaign_normalizes_items(monkeypatch):
         return {}
 
     monkeypatch.setattr(
-        "scgo.runner_api._ts_campaign",
+        "scgo.runner_ts.run_transition_state_campaign",
         _fake,
     )
 
@@ -795,7 +800,7 @@ def test_run_ts_campaign_empty_ts_params_uses_defaults(monkeypatch):
         captured.extend(compositions)
         return {}
 
-    monkeypatch.setattr("scgo.runner_api._ts_campaign", _fake)
+    monkeypatch.setattr("scgo.runner_ts.run_transition_state_campaign", _fake)
     run_ts_campaign(
         [Atoms("Au2"), "Pt"],
         ts_params={},
@@ -821,7 +826,7 @@ def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
         calls.append((list(composition), kwargs.get("output_dir")))
         return {"formula": "x", "ts_total_count": 0}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
 
     root = tmp_path / "camp"
     run_go_ts_campaign(
@@ -846,7 +851,7 @@ def test_run_go_ts_passes_timing_from_go_params(monkeypatch):
         captured["go_params"] = kwargs["go_params"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         "Pt2",
         go_params={
@@ -864,7 +869,7 @@ def test_run_go_ts_passes_timing_from_go_params(monkeypatch):
 
 
 def test_run_go_ts_pipeline_writes_go_ts_timing_json(monkeypatch, tmp_path):
-    import scgo.runner_api as runner_api_module
+    import scgo.runner_ts as runner_ts_module
     from scgo.utils.timing_report import GO_TS_TIMING_JSON_FILENAME
 
     def _fake_trials(*args, **kwargs):
@@ -873,8 +878,8 @@ def test_run_go_ts_pipeline_writes_go_ts_timing_json(monkeypatch, tmp_path):
     def _fake_ts(*args, **kwargs):
         return [{"timings_s": {"neb_optimization_s": 1.5}, "status": "success"}]
 
-    monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
-    monkeypatch.setattr(runner_api_module, "_ts_search", _fake_ts)
+    monkeypatch.setattr(runner_ts_module, "_run_go_trials", _fake_trials)
+    monkeypatch.setattr(runner_ts_module, "run_transition_state_search", _fake_ts)
 
     campaign_root = tmp_path / "pt2_campaign"
     _run_go_ts_pipeline(
@@ -910,7 +915,7 @@ def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
         captured["adsorbate_definition"] = kwargs.get("adsorbate_definition")
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],
         go_params={"optimizer_params": {"ga": {}}},
@@ -929,7 +934,7 @@ def test_run_go_ts_passes_adsorbate_definition_to_pipeline(monkeypatch):
 
 
 def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_path):
-    import scgo.runner_api as runner_api_module
+    import scgo.runner_ts as runner_ts_module
 
     captured: dict[str, object] = {}
 
@@ -941,8 +946,8 @@ def test_go_ts_pipeline_forwards_adsorbate_definition_to_ts(monkeypatch, tmp_pat
         captured["system_type"] = kwargs.get("system_type")
         return []
 
-    monkeypatch.setattr(runner_api_module, "_run_go_trials", _fake_trials)
-    monkeypatch.setattr(runner_api_module, "_ts_search", _fake_ts)
+    monkeypatch.setattr(runner_ts_module, "_run_go_trials", _fake_trials)
+    monkeypatch.setattr(runner_ts_module, "run_transition_state_search", _fake_ts)
 
     ads_def = {
         "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
@@ -972,7 +977,7 @@ def test_run_go_ts_accepts_top_level_go_surface_config(monkeypatch):
         captured["go_params"] = kwargs["go_params"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     cfg = _surface_cfg()
     run_go_ts(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],
@@ -997,7 +1002,7 @@ def test_run_go_ts_campaign_no_output_dir(
         calls.append(kwargs.get("output_dir"))
         return {}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
 
     run_go_ts_campaign(
         ["H2"],
@@ -1019,7 +1024,7 @@ def test_run_go_ts_campaign_empty_ts_params_uses_defaults(monkeypatch):
         calls.append((list(composition), kwargs.get("ts_kwargs")))
         return {"formula": "x", "ts_total_count": 0}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts_campaign(
         ["H2"],
         go_params={},
@@ -1050,7 +1055,7 @@ def test_run_go_ts_empty_ts_params_uses_defaults(monkeypatch):
         captured["ts_kwargs"] = kwargs["ts_kwargs"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         "H2",
         go_params={},
@@ -1069,7 +1074,7 @@ def test_run_go_ts_uses_default_go_and_ts_presets_when_missing(monkeypatch):
         captured["ts_kwargs"] = kwargs["ts_kwargs"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         "Pt2",
         go_params=None,
@@ -1092,7 +1097,7 @@ def test_run_go_ts_default_presets_match_builders_for_key_fields(monkeypatch):
         captured["ts_kwargs"] = kwargs["ts_kwargs"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     run_go_ts(
         "Pt2", go_params=None, ts_params=None, verbosity=0, system_type="gas_cluster"
     )
@@ -1128,7 +1133,7 @@ def test_run_ts_search_default_ts_preset_matches_builder(monkeypatch):
         captured["kwargs"] = kwargs
         return []
 
-    monkeypatch.setattr("scgo.runner_api._ts_search", _fake)
+    monkeypatch.setattr("scgo.runner_ts.run_transition_state_search", _fake)
     run_ts_search("Pt2", ts_params=None, verbosity=0, system_type="gas_cluster")
 
     used_kwargs = captured["kwargs"]
@@ -1286,7 +1291,7 @@ def test_run_go_ts_accepts_run_surface_config_without_go_top_level(monkeypatch):
         captured["go_params"] = kwargs["go_params"]
         return {"ts_results": []}
 
-    monkeypatch.setattr("scgo.runner_api._run_go_ts_pipeline", _fake_pipeline)
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     cfg = _surface_cfg()
     run_go_ts(
         ["Pt", "Pt", "Pt", "Pt", "Pt"],

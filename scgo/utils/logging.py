@@ -38,6 +38,12 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+def log_trace(logger: logging.Logger, message: str, *args: object) -> None:
+    """Log ``message`` at the custom TRACE level (typed alias for ``logger.trace``)."""
+    if logger.isEnabledFor(TRACE):
+        logger.log(TRACE, message, *args)
+
+
 def configure_logging(
     verbosity: int = 1,
     format_string: str | None = None,

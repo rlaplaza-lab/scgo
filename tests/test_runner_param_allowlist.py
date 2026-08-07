@@ -8,11 +8,11 @@ import pytest
 
 from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import get_testing_params
-from scgo.runner_api import _run_go_trials
+from scgo.runner_go import _run_go_trials
 
 
 def test_validation_n_jobs_accepted_by_param_gate(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("scgo.runner_api.run_trials", lambda **_kwargs: [])
+    monkeypatch.setattr("scgo.runner_go.run_trials", lambda **_kwargs: [])
     params = get_testing_params()
     params["calculator"] = "EMT"
     params["validation_n_jobs"] = 2
@@ -28,7 +28,7 @@ def test_validation_n_jobs_accepted_by_param_gate(tmp_path: Path, monkeypatch) -
 
 
 def test_unexpected_top_level_param_rejected(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("scgo.runner_api.run_trials", lambda **_kwargs: [])
+    monkeypatch.setattr("scgo.runner_go.run_trials", lambda **_kwargs: [])
     params = get_testing_params()
     params["calculator"] = "EMT"
     params["not_a_real_param"] = 1

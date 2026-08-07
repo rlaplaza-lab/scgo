@@ -15,10 +15,18 @@ DEFAULT_ENERGY_TOLERANCE: float = 0.02
 """Default energy tolerance (eV)."""
 
 DEFAULT_COMPARATOR_TOL: float = 0.015
-"""Distance comparator tolerance (Å)."""
+"""Cumulative structural-difference tolerance (dimensionless).
+
+Population-weighted sum of relative sorted-distance deviations (eq. 2 of
+Vilhelmsen & Hammer, PRL 108, 126101), not a length.
+"""
 
 DEFAULT_PAIR_COR_MAX: float = 0.7
-"""Max pairwise correlation coefficient."""
+"""Largest allowed single sorted-distance difference (Å).
+
+Absolute distance-difference tolerance (eq. 3 of Vilhelmsen & Hammer,
+PRL 108, 126101) — not a correlation coefficient.
+"""
 
 DEFAULT_PAIR_COR_CUM_DIFF: float = DEFAULT_COMPARATOR_TOL
 """Cumulative pair-correlation difference tolerance (same as DEFAULT_COMPARATOR_TOL)."""

@@ -61,6 +61,7 @@ class FragmentRepositionMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant by repositioning a fragment on the parent."""
         parent = parents[0]
         mutant = self.mutate(parent)
         if mutant is None:
@@ -84,6 +85,7 @@ class FragmentRepositionMutation(OffspringCreator):
         return mobile[mask].copy()
 
     def mutate(self, atoms: Atoms) -> Atoms | None:
+        """Reposition the adsorbate fragment to a sampled surface site."""
         n_top = int(self.n_top)
         slab = atoms[: len(atoms) - n_top]
         mobile = atoms[-n_top:].copy()

@@ -88,6 +88,8 @@ class SCGODatabaseManager:
 
         Args:
             cache_key: Cache key to check
+            fingerprint: Expected (count, mtime, paths) fingerprint to compare
+                against the stored entry
 
         Returns:
             True if cache is valid, False if expired
@@ -238,8 +240,10 @@ class SCGODatabaseManager:
         self.clear_cache()
 
     def __enter__(self):
+        """Enter the runtime context, returning the manager instance."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the runtime context and close the underlying connection."""
         self.close()
         return False

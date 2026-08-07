@@ -11,12 +11,14 @@ import os
 import sqlite3
 from pathlib import Path
 
+from ase import Atoms
+
 from scgo.database.connection import get_connection
 from scgo.database.registry import get_registry
 from scgo.database.schema import clear_scgo_database_cache, is_scgo_database
 from scgo.database.streaming import relaxed_rows_where_clause
 from scgo.utils.helpers import get_cluster_formula, get_composition_counts
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_trace
 from scgo.utils.run_tracking import load_run_metadata, resolve_run_id_from_db_path
 
 logger = get_logger(__name__)
@@ -55,7 +57,7 @@ class DatabaseDiscovery:
         cache_key = self._build_cache_key(composition, run_id, db_filename)
 
         if use_cache and cache_key in self._cache:
-            logger.trace("Using cached results for: %s", cache_key)
+            log_trace(logger, "Using cached results for: %s", cache_key)
             return self._cache[cache_key]
 
         if db_filename == "*.db":
@@ -129,7 +131,7 @@ class DatabaseDiscovery:
             return f"{run_id}/{db_filename}"
         return f"run_*/{db_filename}"
 
-    def _get_first_relaxed_candidate(self, db) -> object | None:
+    def _get_first_relaxed_candidate(self, db) -> Atoms | None:
         """Get one relaxed candidate via SQL."""
         where_sql = relaxed_rows_where_clause()
         try:
@@ -141,7 +143,8 @@ class DatabaseDiscovery:
             rowid = row[0] if row else None
             if rowid is None:
                 return None
-            return db.get_atoms(rowid)
+            atoms: Atoms = db.get_atoms(rowid)
+            return atoms
         except (
             AttributeError,
             sqlite3.DatabaseError,

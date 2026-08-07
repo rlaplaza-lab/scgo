@@ -24,7 +24,26 @@ class MockVibrationsSaddle:
         pass
 
     def get_frequencies(self):
-        # Simulate a saddle point with one significant imaginary frequency
+        # ASE convention: imaginary modes are purely imaginary complex numbers.
+        return np.array(
+            [0 + 100j, 0.0, 0.0, 50.0, 100.0, 150.0],
+            dtype=complex,
+        )
+
+    def clean(self):
+        pass
+
+
+class MockVibrationsSaddleLegacyReal:
+    """Real-valued frequencies where an imaginary mode is encoded as negative."""
+
+    def __init__(self, atoms, name=None):
+        self.atoms = atoms
+
+    def run(self):
+        pass
+
+    def get_frequencies(self):
         return np.array([-100.0, 0.0, 0.0, 50.0, 100.0, 150.0])
 
     def clean(self):
@@ -39,8 +58,11 @@ class MockVibrationsTrueMinimum:
         pass
 
     def get_frequencies(self):
-        # Simulate a true minimum with only near-zero frequencies (translational/rotational)
-        return np.array([-0.1, 0.0, 0.1, 50.0, 100.0, 150.0])
+        # True minimum: five near-zero modes (linear dimer) and real modes only.
+        return np.array(
+            [0.0, 0.0, 0.0, 0.0, 0.0, 150.0],
+            dtype=complex,
+        )
 
     def clean(self):
         pass
@@ -98,9 +120,63 @@ def test_is_true_minimum_saddle_point(tmp_path, monkeypatch):
         calculator=EMT(),
         fmax_threshold=0.05,
         check_hessian=True,
-        imag_freq_threshold=50.0,  # Threshold to catch the -100.0 freq
+        imag_freq_threshold=50.0,  # Threshold to catch the 100i cm-1 mode
     )
     assert is_min is False
+
+
+def test_is_true_minimum_rejects_legacy_negative_real_frequencies(
+    tmp_path, monkeypatch
+):
+    """Real-valued frequency arrays with negative entries are still rejected."""
+    atoms = Atoms(["H", "H", "H"], positions=[[0, 0, 0], [0, 0, 1.0], [0, 0, 2.0]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=10)
+
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsSaddleLegacyReal)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is False
+
+
+def test_is_true_minimum_ignores_positive_real_frequencies(tmp_path, monkeypatch):
+    """Large positive real frequencies must never be read as imaginary modes."""
+
+    class MockVibrationsStiffMinimum:
+        def __init__(self, atoms, name=None):
+            self.atoms = atoms
+
+        def run(self):
+            pass
+
+        def get_frequencies(self):
+            return np.array([0j, 0j, 0j, 0j, 0j, 900 + 0j], dtype=complex)
+
+        def clean(self):
+            pass
+
+    atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=10)
+
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsStiffMinimum)
+
+    assert (
+        is_true_minimum(
+            atoms,
+            calculator=EMT(),
+            fmax_threshold=0.05,
+            check_hessian=True,
+            imag_freq_threshold=50.0,
+        )
+        is True
+    )
 
 
 def test_is_true_minimum_hessian_skipped(tmp_path):
@@ -116,6 +192,82 @@ def test_is_true_minimum_hessian_skipped(tmp_path):
         check_hessian=False,  # Hessian check skipped
     )
     assert is_min is True
+
+
+def test_is_true_minimum_real_emt_dimer_is_minimum(tmp_path):
+    """Regression: a relaxed EMT dimer passes the real (complex-valued) Hessian gate."""
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        atoms = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]])
+        perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.001, steps=200)
+
+        assert (
+            is_true_minimum(
+                atoms,
+                calculator=EMT(),
+                fmax_threshold=0.05,
+                check_hessian=True,
+                imag_freq_threshold=1.0,
+            )
+            is True
+        )
+    finally:
+        os.chdir(cwd)
+
+
+def test_is_true_minimum_real_emt_saddle_is_rejected(tmp_path):
+    """Regression for the ASE complex-frequency convention.
+
+    A symmetric linear Pt3 chain is a genuine stationary point (forces vanish by
+    symmetry) but a saddle point: the degenerate bending mode is imaginary. ASE
+    reports it as ``0 + 3.8j`` cm^-1, which the pre-fix ``freqs < -threshold``
+    test silently accepted.
+    """
+    from scipy.optimize import minimize_scalar
+
+    def _linear_pt3(distance: float) -> Atoms:
+        atoms = Atoms(
+            "Pt3",
+            positions=[[-distance, 0, 0], [0, 0, 0], [distance, 0, 0]],
+        )
+        atoms.calc = EMT()
+        return atoms
+
+    result = minimize_scalar(
+        lambda d: _linear_pt3(d).get_potential_energy(),
+        bracket=(2.0, 2.6, 3.5),
+    )
+    saddle = _linear_pt3(float(result.x))
+    forces = saddle.get_forces()
+    assert np.sqrt((forces**2).sum(axis=1).max()) < 1e-4
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        # Sanity check the convention this test guards against.
+        vib = Vibrations(saddle, name="vib_saddle_check")
+        try:
+            vib.run()
+            freqs = vib.get_frequencies()
+        finally:
+            vib.clean()
+        assert np.iscomplexobj(freqs)
+        assert np.max(np.abs(freqs.imag)) > 1.0
+        assert not np.any(np.asarray(freqs).real < -1.0)
+
+        assert (
+            is_true_minimum(
+                saddle,
+                calculator=EMT(),
+                fmax_threshold=0.05,
+                check_hessian=True,
+                imag_freq_threshold=1.0,
+            )
+            is False
+        )
+    finally:
+        os.chdir(cwd)
 
 
 @pytest.mark.slow
@@ -228,8 +380,8 @@ def test_is_true_minimum_imag_freq_threshold_variations(tmp_path, monkeypatch):
             pass
 
         def get_frequencies(self):
-            # Small imaginary frequency
-            return np.array([-5.0, 0.0, 0.0, 50.0, 100.0, 150.0])
+            # Small imaginary frequency (ASE complex convention)
+            return np.array([0 + 5j, 0.0, 0.0, 50.0, 100.0, 150.0], dtype=complex)
 
         def clean(self):
             pass
@@ -242,7 +394,7 @@ def test_is_true_minimum_imag_freq_threshold_variations(tmp_path, monkeypatch):
         calculator=EMT(),
         fmax_threshold=0.05,
         check_hessian=True,
-        imag_freq_threshold=1.0,  # Catches -5.0
+        imag_freq_threshold=1.0,  # Catches 5i
     )
     assert is_min_strict is False
 
@@ -252,7 +404,7 @@ def test_is_true_minimum_imag_freq_threshold_variations(tmp_path, monkeypatch):
         calculator=EMT(),
         fmax_threshold=0.05,
         check_hessian=True,
-        imag_freq_threshold=10.0,  # Ignores -5.0
+        imag_freq_threshold=10.0,  # Ignores 5i
     )
     assert is_min_loose is True
 

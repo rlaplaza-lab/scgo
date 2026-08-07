@@ -65,8 +65,8 @@ def simple_go(
         List of (energy, Atoms) tuples for local minima found. Typically a single structure.
 
     Raises:
-        TypeError: If atoms is not an Atoms object.
-        ValueError: If calculator is not attached or atoms is not 1-2 atoms.
+        SCGOValidationError: If atoms is not an Atoms object.
+        SCGOValidationError: If calculator is not attached or atoms is not 1-2 atoms.
     """
     logger = get_logger(__name__)
 

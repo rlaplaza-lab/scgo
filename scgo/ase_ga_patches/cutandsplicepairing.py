@@ -1,3 +1,5 @@
+"""Cut-and-splice pairing operator for the patched ASE-GA driver."""
+
 # fmt: off
 
 from __future__ import annotations
@@ -331,7 +333,7 @@ class CutAndSplicePairing(OffspringCreator):
         return cut_candidates[:12]
 
     def update_scaling_volume(self, population, w_adapt=0.5, n_adapt=0):
-        """Updates the scaling volume that is used in the pairing
+        """Updates the scaling volume that is used in the pairing.
 
         w_adapt: weight of the new vs the old scaling volume
         n_adapt: number of best candidates in the population that
@@ -350,8 +352,9 @@ class CutAndSplicePairing(OffspringCreator):
             self.scaling_volume = np.average(volumes, weights=weights)
 
     def get_new_individual(self, parents):
-        """The method called by the user that
-        returns the paired structure.
+        """The method called by the user.
+
+        Returns the paired structure.
         """
         f, m = parents
 
@@ -368,8 +371,8 @@ class CutAndSplicePairing(OffspringCreator):
 
         return self.finalize_individual(indi), desc
 
-    def cross(self, a1, a2):
-        """Crosses the two atoms objects and returns one"""
+    def cross(self, a1, a2):  # noqa: C901
+        """Crosses the two atoms objects and returns one."""
         if len(a1) != len(self.slab) + self.n_top:
             raise SCGOValidationError("Wrong size of structure to optimize")
         if len(a1) != len(a2):
@@ -492,7 +495,9 @@ class CutAndSplicePairing(OffspringCreator):
         return None
 
     def generate_unit_cell(self, cell1, cell2, maxcount=10000):
-        """Generates a new unit cell by a random linear combination
+        """Generates a new unit cell.
+
+        The new cell is a random linear combination
         of the parent cells. The new cell must satisfy the
         self.cellbounds constraints. Returns None if no such cell
         was generated within a given number of attempts.
@@ -542,7 +547,7 @@ class CutAndSplicePairing(OffspringCreator):
 
         return newcell
 
-    def _get_pairing(self, a1, a2, cutting_point, cutting_normal, cell):
+    def _get_pairing(self, a1, a2, cutting_point, cutting_normal, cell):  # noqa: C901
         """Creates a child from two parents using the given cut.
 
         Returns None if the generated structure does not contain
@@ -741,11 +746,13 @@ class DualCutAndSplicePairing:
         self.rng = _ensure_rng(rng)
 
     def get_new_individual(self, parents):
+        """Produce a child from the exploratory or primary pairing operator."""
         if self.rng.random() < self.exploratory_probability:
             return self.exploratory.get_new_individual(parents)
         return self.primary.get_new_individual(parents)
 
     def update_scaling_volume(self, population, **kwargs):
+        """Forward a population volume rescale to the primary and exploratory operators."""
         self.primary.update_scaling_volume(population, **kwargs)
         self.exploratory.update_scaling_volume(population, **kwargs)
 

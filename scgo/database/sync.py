@@ -28,12 +28,14 @@ class RetryConfig:
     backoff_factor: float = 2.0
 
     def __post_init__(self) -> None:
+        """Clamp retry configuration to sane non-negative bounds after init."""
         object.__setattr__(self, "max_retries", max(1, self.max_retries))
         object.__setattr__(self, "initial_delay", max(0.0, self.initial_delay))
         object.__setattr__(self, "max_delay", max(self.initial_delay, self.max_delay))
         object.__setattr__(self, "backoff_factor", max(1.0, self.backoff_factor))
 
     def get_delay(self, attempt: int) -> float:
+        """Compute the retry delay (seconds) for a given attempt index."""
         delay = self.initial_delay * (self.backoff_factor**attempt)
         return min(delay, self.max_delay)
 
@@ -168,7 +170,7 @@ def retry_on_lock(
                         raise
             raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
     return decorator
 

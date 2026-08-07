@@ -77,6 +77,7 @@ class SlabSearchPartition:
         return self.n_mobile_slab
 
     def n_top_with_adsorbates(self, n_adsorbate: int) -> int:
+        """Count mobile top atoms plus adsorbates for the partition."""
         if n_adsorbate < 0:
             raise SCGOValidationError("n_adsorbate must be >= 0")
         return self.n_mobile_slab + int(n_adsorbate)

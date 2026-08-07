@@ -355,6 +355,7 @@ def maybe_apply_mobile_core_ads_tags(
     adsorbate_definition: AdsorbateDefinition | None,
     system_type: SystemType,
 ) -> None:
+    """Tag mobile/slab/core atoms for adsorbate-aware GA when applicable."""
     part = core_adsorbate_partition_details(
         system_type,
         composition,
@@ -410,7 +411,7 @@ class ClusterStartGenerator(StartGenerator):
     not pass these keyword arguments.
     """
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         composition: list[str],
         vacuum: float,
@@ -451,6 +452,7 @@ class ClusterStartGenerator(StartGenerator):
             cluster_adsorbate_config: Optional placement/validation for the fragment.
             max_hierarchical_attempts: Max inner tries in hierarchical core+fragment
                 build (per candidate).
+            verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace). Default 1.
         """
         st_pol = get_system_policy(system_type)
         if st_pol.uses_surface:
@@ -702,6 +704,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
             )
 
     def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+        """Return the next precomputed candidate or generate one on demand."""
         atoms = None
         if self._candidate_batch is not None and self._candidate_count < len(
             self._candidate_batch
@@ -765,12 +768,11 @@ class SurfaceSlabStartGenerator(StartGenerator):
                 f"len(slab)={len(self.slab)}"
             )
         n_pop = int(population_size) if population_size is not None else 1
-        if verbosity >= 1:
-            log_phase_header(
-                logger,
-                "Population initialization",
-                verbosity=verbosity,
-            )
+        log_phase_header(
+            logger,
+            "Population initialization",
+            verbosity=verbosity,
+        )
         for _ in range(max(n_pop, 1)):
             self._candidate_batch.append(self._make_candidate())
 
@@ -785,6 +787,7 @@ class SurfaceSlabStartGenerator(StartGenerator):
         return atoms
 
     def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+        """Return the next precomputed candidate or synthesize a fresh one."""
         if self._candidate_count < len(self._candidate_batch):
             atoms = self._candidate_batch[self._candidate_count]
             self._candidate_count += 1
@@ -818,8 +821,9 @@ def create_ga_pairing(
         rng: Random number generator.
         slab_atoms: If provided, real slab atoms for adsorbate GA (non-empty).
             If None, an empty slab with the template cell/pbc is used (gas-phase GA).
-        composition, adsorbate_definition: If both set for a two-block ``*_adsorbate``
-            run, pairing uses ``use_tags`` (rigid core/fragment groups).
+        system_type: ``gas_cluster`` or ``gas_cluster_adsorbate``; selects the run policy.
+        composition: List of atomic symbols defining the cluster composition.
+        adsorbate_definition: Adsorbate partition/symbols for adsorbate-aware GA runs.
         exploratory_crossover_probability: When > 0 and exploratory ``minfrac``
             differs from the primary, a dual wrapper uses this probability to
             pick the more asymmetric cut-and-splice variant.
@@ -863,6 +867,7 @@ def create_ga_pairing(
     blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
 
     if uses_surface(system_type):
+        assert slab_atoms is not None
         slab = slab_atoms.copy()
     else:
         slab = Atoms(cell=atoms_template.get_cell(), pbc=atoms_template.get_pbc())
@@ -884,7 +889,7 @@ def create_ga_pairing(
     def _cut_and_splice(
         minfrac: float, *, pairing_rng: Generator | None
     ) -> CutAndSplicePairing:
-        return CutAndSplicePairing(  # type: ignore[arg-type]
+        return CutAndSplicePairing(
             slab,
             n_to_optimize,
             blmin,
@@ -915,7 +920,7 @@ def create_ga_pairing(
     )
 
 
-def _effective_operator_weight(
+def _effective_operator_weight(  # noqa: C901
     name: str | None,
     operator_weights: dict[str, float],
     name_map: dict[str, int],
@@ -978,7 +983,7 @@ def _append_partitioned_mutation(
     include_ads_variant: bool,
     kwargs_for: typing.Callable[[str], dict[str, typing.Any]],
 ) -> None:
-    """Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
+    r"""Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
 
     ``kwargs_for`` receives ``\"plain\"``, ``\"core\"``, or ``\"ads\"`` and must
     return constructor kwargs for that variant (including ``target_tags`` when
@@ -995,7 +1000,7 @@ def _append_partitioned_mutation(
         name_map[f"{base_name}_ads"] = len(operators) - 1
 
 
-def create_mutation_operators(
+def create_mutation_operators(  # noqa: C901
     composition: list[str],
     n_to_optimize: int,
     blmin: dict,
@@ -1044,6 +1049,10 @@ def create_mutation_operators(
             in-plane direction for in-plane slide mutation.
         breathing_scale_min: Lower bound for radial scale factors (about the fragment CoM).
         breathing_scale_max: Upper bound for radial scale factors.
+        system_type: ``gas_cluster`` or ``gas_cluster_adsorbate``; selects the run policy.
+        adsorbate_fragment_template: Optional fragment geometry for hierarchical layout.
+        cluster_adsorbate_config: Optional placement/validation config for the fragment.
+        freeze_adsorbate_internal_geometry: Freeze internal adsorbate geometry during mutation.
 
     Returns:
         Tuple of (operators_list, operator_name_to_index_map).
@@ -1106,7 +1115,7 @@ def create_mutation_operators(
         rattle_prop=min(0.4, 0.4 * shared_move_scale),
         use_tags=use_partition_tags,
         system_type=system_type,
-        rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+        rng=get_child_rng_or_none(rng),
     )
     operators.append(rattle)
     name_map["rattle"] = 0
@@ -1116,7 +1125,7 @@ def create_mutation_operators(
         n_to_optimize,
         system_type=system_type,
         use_tags=use_partition_tags,
-        rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+        rng=get_child_rng_or_none(rng),
     )
     if include_overlap_relief:
         operators.append(overlap_relief)
@@ -1125,7 +1134,7 @@ def create_mutation_operators(
     if len(set(composition)) > 1 and policy.allow_composition_permutations:
         permutation: CustomPermutationMutation = CustomPermutationMutation(
             n_to_optimize,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            rng=get_child_rng_or_none(rng),
             blmin=blmin,
             test_dist_to_slab=uses_surface(system_type),
             system_type=system_type,
@@ -1136,7 +1145,7 @@ def create_mutation_operators(
         if include_cluster_shape_ops:
             shell_swap: ShellSwapMutation = ShellSwapMutation(
                 n_to_optimize,
-                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+                rng=get_child_rng_or_none(rng),
                 blmin=blmin,
                 test_dist_to_slab=uses_surface(system_type),
                 system_type=system_type,
@@ -1178,7 +1187,7 @@ def create_mutation_operators(
             n_top=n_to_optimize,
             target_tags=core_only_tags,
             use_tags=use_partition_tags,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            rng=get_child_rng_or_none(rng),
             max_inner_attempts=rotational_max_inner_attempts,
         )
         operators.append(rotational)
@@ -1190,7 +1199,7 @@ def create_mutation_operators(
             reflect=True,
             system_type=system_type,
             target_tags=core_only_tags,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            rng=get_child_rng_or_none(rng),
             max_tries=mirror_max_tries,
         )
         operators.append(mirror)
@@ -1204,7 +1213,7 @@ def create_mutation_operators(
             rattle_prop=min(0.5, 0.5 * shared_move_scale),
             use_tags=use_partition_tags,
             system_type=system_type,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            rng=get_child_rng_or_none(rng),
         )
         operators.append(anisotropic)
         name_map["anisotropic_rattle"] = len(operators) - 1
@@ -1286,7 +1295,7 @@ def create_mutation_operators(
             adsorbate_definition=adsorbate_definition,
             fragment_templates=adsorbate_fragment_template,
             cluster_adsorbate_config=cluster_adsorbate_config,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            rng=get_child_rng_or_none(rng),
         )
         operators.append(reposition)
         name_map["fragment_reposition"] = len(operators) - 1
@@ -1367,8 +1376,16 @@ def create_structure_comparator(
 ) -> SequentialComparator:
     """Create a SequentialComparator for structure duplicate detection.
 
-    This is the shared comparator factory used by both GA population management
-    and run-level filtering to ensure consistent duplicate detection criteria.
+    This is the shared comparator factory used by GA population management to
+    ensure consistent duplicate detection criteria.
+
+    Note:
+        ASE's :class:`~ase.ga.standard_comparators.InteratomicDistanceComparator`
+        only compares *same-species* distances, so it cannot separate structures
+        that differ solely in hetero-atomic geometry. This factory keeps that
+        reference behavior on purpose; run-level filtering
+        (:func:`scgo.utils.helpers.filter_unique_minima`) opts into hetero-pair
+        discrimination instead.
 
     Args:
         n_atoms: Number of trailing (adsorbate) atoms to compare.
@@ -1414,10 +1431,11 @@ def update_early_stopping_state_unified(
             return best_value, generations_without_improvement, False
 
         current_best_fitness: float = max(
-            (
-                get_fitness_from_atoms(atoms_obj, default=-float("inf"))
-                for atoms_obj in population.pop
-            ),
+            typing.cast(
+                float,
+                get_fitness_from_atoms(atoms_obj, default=-float("inf")),
+            )
+            for atoms_obj in population.pop
         )
 
         if best_value is None or current_best_fitness > best_value:
@@ -1528,7 +1546,7 @@ def select_population_class(
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
-        PopulationClass = FitnessStrategyPopulation
+        PopulationClass: type[Population] = FitnessStrategyPopulation
         population_kwargs = {
             "fitness_strategy": fitness_strategy,
             "diversity_scorer": diversity_scorer,
@@ -1597,7 +1615,9 @@ def sort_minima_by_fitness(
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
         all_minima.sort(
-            key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
+            key=lambda x: typing.cast(
+                float, get_fitness_from_atoms(x[1], default=-float("inf"))
+            ),
             reverse=True,  # Higher fitness first
         )
         logger.info(

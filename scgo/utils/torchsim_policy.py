@@ -18,6 +18,7 @@ import importlib.util
 from ase.calculators.calculator import Calculator
 
 from scgo.exceptions import (
+    SCGODependencyError,
     SCGOValidationError,
 )
 
@@ -35,7 +36,7 @@ def calculator_name_supports_torchsim_batched_neb(calculator_name: str) -> bool:
 
 def _require_torchsim() -> None:
     if importlib.util.find_spec("torch_sim") is None:
-        raise ImportError(
+        raise SCGODependencyError(
             "TorchSim was requested but torch_sim is not installed. "
             "Install the appropriate extra (e.g., pip install 'scgo[uma]', "
             "'scgo[mace]', or 'scgo[upet]')."
@@ -46,7 +47,7 @@ def _require_torchsim_fairchem() -> None:
     _require_torchsim()
     # torch_sim.models.fairchem requires fairchem-core; validate importability.
     if importlib.util.find_spec("fairchem") is None:
-        raise ImportError(
+        raise SCGODependencyError(
             "TorchSim FairChem/UMA support was requested but fairchem-core is not installed. "
             "Install with: pip install 'scgo[uma]'."
         )
@@ -55,12 +56,12 @@ def _require_torchsim_fairchem() -> None:
 def _require_torchsim_upet() -> None:
     _require_torchsim()
     if importlib.util.find_spec("upet") is None:
-        raise ImportError(
+        raise SCGODependencyError(
             "TorchSim UPET support was requested but upet is not installed. "
             "Install with: pip install 'scgo[upet]'."
         )
     if importlib.util.find_spec("metatomic_torchsim") is None:
-        raise ImportError(
+        raise SCGODependencyError(
             "TorchSim UPET support was requested but metatomic-torchsim is not installed. "
             "Install with: pip install 'scgo[upet]'."
         )

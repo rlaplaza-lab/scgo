@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 
-def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):
+def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):  # noqa: C901
     """Ranked unit directions from slab normal, PCA axes, and random fill."""
     centered = positions - center_of_mass
     candidates = []

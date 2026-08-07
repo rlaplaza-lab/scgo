@@ -39,7 +39,7 @@ def _ensure_torch_load_mace_checkpoints() -> None:
             kwargs["weights_only"] = False
         return _orig_load(*args, **kwargs)
 
-    torch.load = _load  # type: ignore[method-assign]
+    torch.load = _load
 
 
 clear_torch_force_no_weights_only_load_env()

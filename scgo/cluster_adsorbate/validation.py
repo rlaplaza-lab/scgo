@@ -37,7 +37,7 @@ def validate_combined_cluster_structure(
     )
 
 
-def validate_adsorbate_fragment_integrity(
+def validate_adsorbate_fragment_integrity(  # noqa: C901
     atoms: Atoms,
     *,
     n_slab: int,

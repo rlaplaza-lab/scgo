@@ -1,8 +1,8 @@
+"""Mirror mutation that reflects half of a cluster across a random plane."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mirror mutation that reflects half of a cluster across a random plane."""
 
 import numpy as np
 from ase import Atoms
@@ -26,8 +26,9 @@ __all__ = ["MirrorMutation"]
 
 
 class MirrorMutation(OffspringCreator):
-    """A mirror mutation, as described in
-    TO BE PUBLISHED.
+    """A mirror mutation.
+
+    As described in TO BE PUBLISHED.
 
     This mutation mirrors half of the cluster in a
     randomly oriented cutting plane discarding the other half.
@@ -64,6 +65,7 @@ class MirrorMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the mirror mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
@@ -93,7 +95,7 @@ class MirrorMutation(OffspringCreator):
 
         return candidates[:max_candidates]
 
-    def _build_mirror_top(self, num, pos, center_of_mass, plane, reflect):
+    def _build_mirror_top(self, num, pos, center_of_mass, plane, reflect):  # noqa: C901
         unique_types = list(set(num))
         nu = {u: sum(num == u) for u in unique_types}
 

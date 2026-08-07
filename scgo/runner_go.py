@@ -3,15 +3,9 @@
 Implements algorithm selection and the low-level GO execution used by the
 public ``run_go`` / ``run_go_campaign`` API in :mod:`scgo.runner_api`.
 
-Note on the local ``scgo.runner_api`` imports inside :func:`_run_go_trials`
-and :func:`_run_go_campaign_compositions`: ``scgo.runner_api`` re-exports
-``run_trials`` and ``get_calculator_class`` (and, transitively, this module's
-own ``_run_go_trials``) as its own module attributes specifically so tests can
-``monkeypatch.setattr("scgo.runner_api.run_trials", ...)`` etc. Since
-``scgo.runner_api`` imports from this module at top level, importing it back
-here at module load time would be circular; the calls are therefore routed
-through a function-local import so the patched attribute on
-``scgo.runner_api`` is honored regardless of where the call originates.
+This module only imports downstream building blocks (``scgo.minima_search``,
+``scgo.param_presets``, ``scgo.utils.*``); it must never import
+:mod:`scgo.runner_api`, which sits above it in the layering.
 """
 
 from __future__ import annotations
@@ -21,20 +15,31 @@ import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
-from scgo.exceptions import SCGOValidationError
+from scgo.exceptions import SCGOError, SCGOValidationError
+from scgo.minima_search import run_trials
+from scgo.param_presets import get_default_params
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
+    GO_PARAM_KEYS,
+    AdsorbateDefinition,
     SystemType,
     get_system_policy,
     resolve_search_mobile_composition,
+    validate_param_keys,
 )
 from scgo.utils.helpers import get_cluster_formula
-from scgo.utils.logging import configure_logging, get_logger
+from scgo.utils.logging import (
+    configure_logging,
+    get_logger,
+    log_exception_v,
+    log_info_v,
+    log_warning_v,
+)
 from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
@@ -43,6 +48,7 @@ from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
+    get_calculator_class,
     initialize_params,
     log_configuration,
     prepare_algorithm_kwargs,
@@ -88,8 +94,6 @@ def _run_go_trials(
     params_already_merged: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Run global optimization for a composition; return unique minima sorted by energy."""
-    from scgo import runner_api as _runner_api
-
     configure_logging(verbosity)
     logger = get_logger(__name__)
 
@@ -105,7 +109,7 @@ def _run_go_trials(
 
     # Validate calculator availability
     calculator_name = params.get("calculator", "MACE")
-    _ = _runner_api.get_calculator_class(calculator_name)
+    _ = get_calculator_class(calculator_name)
 
     # Validate params structure - rng should not be in optimizer_params
     for algo in ["bh", "ga"]:
@@ -133,7 +137,7 @@ def _run_go_trials(
         surface_config=surface_cfg
         if isinstance(surface_cfg, SurfaceSystemConfig)
         else None,
-        adsorbate_definition=ads_def,
+        adsorbate_definition=cast("AdsorbateDefinition | None", ads_def),
     )
     n_atoms = len(search_comp)
     cluster_formula = (
@@ -161,7 +165,7 @@ def _run_go_trials(
     algo_params = params["optimizer_params"].get(chosen_go, {})
 
     user_params = None if params_already_merged else params
-    params_base = None if params_already_merged else _runner_api.get_default_params()
+    params_base = None if params_already_merged else get_default_params()
 
     # Validate algorithm-specific parameters
     validate_algorithm_params(algo_params, chosen_go, verbosity)
@@ -179,37 +183,7 @@ def _run_go_trials(
     )
 
     # Validate that no unexpected top-level keys were provided
-    expected_top_level_keys = {
-        "validate_with_hessian",
-        "calculator",
-        "calculator_kwargs",
-        "surface_config",
-        "fmax_threshold",
-        "check_hessian",
-        "imag_freq_threshold",
-        "optimizer_params",
-        "fitness_strategy",
-        "diversity_reference_db",
-        "diversity_max_references",
-        "diversity_update_interval",
-        "tag_final_minima",
-        "connectivity_factor",
-        "allow_cluster_fragmentation",
-        "allow_adsorbate_surface_detachment",
-        "enforce_adsorbate_subgraph_integrity",
-        "freeze_adsorbate_internal_geometry",
-        "adsorbate_definition",
-        "adsorbate_fragment_template",
-        "cluster_adsorbate_config",
-        "validation_n_jobs",
-        "seed",  # seed is handled separately at API boundary, not passed to algorithms
-    }
-    unexpected_keys = set(params.keys()) - expected_top_level_keys
-    if unexpected_keys:
-        raise SCGOValidationError(
-            f"Unexpected parameter keys: {sorted(unexpected_keys)}. "
-            f"Expected keys: {sorted(expected_top_level_keys)}"
-        )
+    validate_param_keys(params, GO_PARAM_KEYS)
 
     # Log the final configuration being used
     log_configuration(
@@ -223,7 +197,7 @@ def _run_go_trials(
         params_base=params_base,
     )
 
-    final_unique_minima = _runner_api.run_trials(
+    final_unique_minima = run_trials(
         composition=composition,
         global_optimizer=chosen_go,
         global_optimizer_kwargs=global_optimizer_kwargs,
@@ -231,9 +205,7 @@ def _run_go_trials(
         calculator_for_global_optimization=(
             calculator_for_global_optimization
             if calculator_for_global_optimization is not None
-            else _runner_api.get_calculator_class(params["calculator"])(
-                **calculator_kwargs
-            )
+            else get_calculator_class(params["calculator"])(**calculator_kwargs)
         ),
         validate_with_hessian=params.get("validate_with_hessian", False),
         fmax_threshold=params.get("fmax_threshold", 0.05),
@@ -251,7 +223,7 @@ def _run_go_trials(
     return final_unique_minima
 
 
-def _run_go_campaign_compositions(
+def _run_go_campaign_compositions(  # noqa: C901
     compositions: Iterable[list[str]],
     system_type: SystemType,
     params: dict | None = None,
@@ -264,8 +236,6 @@ def _run_go_campaign_compositions(
     params_already_merged: bool = False,
 ) -> dict[str, list[tuple[float, Atoms]]]:
     """Run optimizations for an iterable of compositions; return mapping formula->minima."""
-    from scgo import runner_api as _runner_api
-
     if params_already_merged:
         params = copy.deepcopy(params or {})
     else:
@@ -304,9 +274,7 @@ def _run_go_campaign_compositions(
 
     # Create calculator once and reuse it for all compositions to avoid file handle leaks
     calculator_kwargs = params.get("calculator_kwargs", {})
-    calculator_for_global_optimization = _runner_api.get_calculator_class(
-        params["calculator"]
-    )(
+    calculator_for_global_optimization = get_calculator_class(params["calculator"])(
         **calculator_kwargs,
     )
 
@@ -315,15 +283,16 @@ def _run_go_campaign_compositions(
         path_key = resolve_run_path_key(
             composition, system_type=system_type, params=params
         )
-        if verbosity >= 1:
-            logger.info("\n%s", "=" * 60)
-            logger.info(
-                "Running minima search for %s (%d/%d)",
-                path_key,
-                i + 1,
-                num_compositions,
-            )
-            logger.info("%s", "=" * 60)
+        log_info_v(logger, "\n%s", "=" * 60, verbosity=verbosity)
+        log_info_v(
+            logger,
+            "Running minima search for %s (%d/%d)",
+            path_key,
+            i + 1,
+            num_compositions,
+            verbosity=verbosity,
+        )
+        log_info_v(logger, "%s", "=" * 60, verbosity=verbosity)
 
         comp_seed = int(rng.integers(0, 2**63 - 1))
         trial_output_dir = resolve_go_campaign_searches_dir(output_dir, path_key)
@@ -332,7 +301,7 @@ def _run_go_campaign_compositions(
         )
 
         try:
-            results = _runner_api._run_go_trials(
+            results = _run_go_trials(
                 composition,
                 system_type,
                 params,
@@ -348,17 +317,27 @@ def _run_go_campaign_compositions(
             # requested composition; this makes the function predictable for
             # downstream consumers and tests.
             all_results[path_key] = results
-            if not results and verbosity >= 1:
-                logger.warning("No minima found for %s (results empty)", path_key)
-            if verbosity >= 1:
-                logger.info("Finished processing %s.", path_key)
-                logger.info("  Returned %d final minima for %s", len(results), path_key)
+            if not results:
+                log_warning_v(
+                    logger,
+                    "No minima found for %s (results empty)",
+                    path_key,
+                    verbosity=verbosity,
+                )
+            log_info_v(logger, "Finished processing %s.", path_key, verbosity=verbosity)
+            log_info_v(
+                logger,
+                "  Returned %d final minima for %s",
+                len(results),
+                path_key,
+                verbosity=verbosity,
+            )
         except (
+            SCGOError,
             RuntimeError,
             ValueError,
             OSError,
             sqlite3.DatabaseError,
-            SCGOValidationError,
         ) as e:
             # Enhanced error logging for HPC debugging
             error_details = [
@@ -378,13 +357,23 @@ def _run_go_campaign_compositions(
                 else:
                     error_details.append("Output directory does not exist")
 
-            logger.error(" | ".join(error_details), exc_info=(verbosity >= 2))
+            log_exception_v(
+                logger,
+                " | ".join(error_details),
+                verbosity=verbosity,
+                min_verbosity=0,
+                min_verbosity_for_traceback=2,
+            )
             all_results[path_key] = []
-            if verbosity >= 1:
-                logger.warning(
-                    f"Skipping {path_key} ({formula_str}) and continuing campaign "
-                    f"({i + 1}/{num_compositions})"
-                )
+            log_warning_v(
+                logger,
+                "Skipping %s (%s) and continuing campaign (%d/%d)",
+                path_key,
+                formula_str,
+                i + 1,
+                num_compositions,
+                verbosity=verbosity,
+            )
             continue
 
     # Best-effort: drop shared calculator reference and free CUDA memory to avoid

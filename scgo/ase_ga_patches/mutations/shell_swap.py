@@ -1,8 +1,8 @@
+"""Mutation that swaps atom groups between inner and outer radial shells."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutation that swaps atom groups between inner and outer radial shells."""
 
 import numpy as np
 from ase import Atoms
@@ -58,13 +58,15 @@ class ShellSwapMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the shell-swap mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
 
         return _finalize_mutant(self, f, indi, "mutation: shell_swap")
 
-    def mutate(self, atoms):
+    def mutate(self, atoms):  # noqa: C901
+        """Swap atom groups between inner and outer radial shells."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
         top = atoms[-N:].copy()

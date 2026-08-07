@@ -155,13 +155,36 @@ class TestAutoNiter:
             (["Pt"] * 5, (3, 1000)),
             (["Pt"] * 10, (3, 1000)),
             (["Pt"] * 20, (3, 1000)),
-            (["Pt"] * 50, (100, 200)),
+            (["Pt"] * 50, (250, 400)),
         ],
     )
     def test_auto_niter_scaling(self, composition, expected_range):
         """Test that auto_niter scales appropriately with composition size."""
         result = auto_niter(composition)
         assert expected_range[0] <= result <= expected_range[1]
+
+    def test_auto_niter_grows_faster_than_population_size(self):
+        """Iterations must dominate the budget at every cluster size."""
+        for n in (1, 2, 3, 5, 8, 13, 20, 38, 55, 100, 200, 400):
+            composition = ["Pt"] * n
+            assert auto_population_size(composition) <= auto_niter(composition), n
+
+    def test_auto_niter_is_monotonic_and_clamped(self):
+        """Budget increases with size and respects the min/max clamps."""
+        sizes = [1, 2, 3, 5, 10, 20, 55, 100, 300, 1000]
+        values = [auto_niter(["Pt"] * n) for n in sizes]
+        assert values == sorted(values)
+        assert min(values) >= 3
+        assert max(values) <= 1000
+        assert auto_niter(["Pt"] * 3, min_niter=800, max_niter=1200) == 800
+        assert auto_niter(["Pt"] * 500, max_niter=42) == 42
+
+    def test_auto_niter_large_systems_get_proportionally_more_iterations(self):
+        """Pt55 must receive far more iterations than Pt5, not merely 2x."""
+        small = auto_niter(["Pt"] * 5)
+        large = auto_niter(["Pt"] * 55)
+        # The previous log1p budget gave a ratio of only ~2.2.
+        assert large / small > 3.0
 
     def test_auto_niter_reproducibility(self):
         """Test that auto_niter is reproducible."""
@@ -273,6 +296,14 @@ class TestAutoNiterLocalRelaxation:
         results = [auto_niter_local_relaxation(["Pt"] * n) for n in sizes]
         # Should generally increase (allowing for some non-monotonicity due to rounding)
         assert results[-1] >= results[0]  # Largest should be >= smallest
+
+    def test_auto_niter_local_relaxation_scales_up_for_large_systems(self):
+        """Large systems get more steps than the old log1p budget allowed."""
+        legacy_100 = int(50 + 50 * np.log1p(100))
+        assert auto_niter_local_relaxation(["Pt"] * 100) > legacy_100
+        # Small clusters keep essentially the previous budget.
+        legacy_5 = int(50 + 50 * np.log1p(5))
+        assert abs(auto_niter_local_relaxation(["Pt"] * 5) - legacy_5) <= 5
 
 
 class TestAutoNiterTS:

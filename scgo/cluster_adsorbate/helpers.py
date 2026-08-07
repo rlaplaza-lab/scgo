@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any, cast
 
 from scgo.exceptions import SCGOValidationError
 
@@ -11,11 +12,13 @@ def resolve_fragment_anchor_and_bond_axis(
     adsorbate_definition: Mapping[str, object],
 ) -> tuple[int, tuple[int, int] | None]:
     """Return fragment anchor index and optional bond-axis pair from adsorbate metadata."""
-    anchor = int(adsorbate_definition.get("fragment_anchor_index", 0))
+    raw_anchor = adsorbate_definition.get("fragment_anchor_index", 0)
+    anchor = int(raw_anchor) if isinstance(raw_anchor, (int, float, str)) else 0
     fba = adsorbate_definition.get("fragment_bond_axis")
     bond_axis: tuple[int, int] | None = None
     if fba is not None:
-        bond_axis = (int(fba[0]), int(fba[1]))
+        fba_seq = cast("Sequence[Any]", fba)
+        bond_axis = (int(fba_seq[0]), int(fba_seq[1]))
     return anchor, bond_axis
 
 

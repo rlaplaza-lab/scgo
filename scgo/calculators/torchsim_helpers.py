@@ -20,7 +20,7 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import torch
@@ -36,6 +36,9 @@ from scgo.exceptions import (
 )
 from scgo.utils.helpers import copy_atoms, ensure_float64_forces
 from scgo.utils.logging import get_logger
+
+if TYPE_CHECKING:  # lazy/optional dependency: only needed for static typing
+    from torch_sim.models.interface import ModelInterface
 
 logger = get_logger(__name__)
 
@@ -172,7 +175,7 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
     Phase 5: remove once TorchSim fixes CPU/CUDA ``atom_idx`` handling in
     constraints (see CHANGELOG maintainer notes for related leave-alone shims).
     """
-    from torch_sim.constraints import AtomConstraint  # type: ignore
+    from torch_sim.constraints import AtomConstraint
 
     if getattr(AtomConstraint, "_scgo_device_patch", False):
         return
@@ -187,8 +190,8 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
             return None
         return type(self)(new_atom_idx)
 
-    AtomConstraint.select_sub_constraint = select_sub_constraint
-    AtomConstraint._scgo_device_patch = True
+    AtomConstraint.select_sub_constraint = select_sub_constraint  # type: ignore[method-assign]  # monkey-patch an untyped torch_sim class
+    AtomConstraint._scgo_device_patch = True  # type: ignore[attr-defined]  # set a new attribute on an untyped torch_sim class
 
 
 _TORCHSIM_WARNINGS_REGISTERED = False
@@ -237,7 +240,7 @@ def _install_torchsim_max_steps_zero_log_filter() -> None:
 
 def build_torchsim_fixatoms_from_ase_batch(
     atoms_list: Sequence[Atoms],
-    device: object,
+    device: torch.device | str | int | None,
 ) -> object | None:
     """Map per-structure ASE ``FixAtoms`` to one TorchSim ``FixAtoms`` (global indices).
 
@@ -255,7 +258,7 @@ def build_torchsim_fixatoms_from_ase_batch(
         A ``torch_sim.constraints.FixAtoms`` instance, or ``None`` if nothing to fix.
     """
     # Lazy import: do not require TorchSim until needed.
-    from torch_sim.constraints import FixAtoms as TSFixAtoms  # type: ignore
+    from torch_sim.constraints import FixAtoms as TSFixAtoms
 
     _patch_torchsim_constraint_device_mismatch()
 
@@ -283,8 +286,8 @@ def _load_default_mace_model(
 
     clear_torch_force_no_weights_only_load_env()
     # Lazy imports: only required for the MACE TorchSim path.
-    from mace.calculators.foundations_models import mace_mp  # type: ignore
-    from torch_sim.models.mace import MaceModel  # type: ignore
+    from mace.calculators.foundations_models import mace_mp
+    from torch_sim.models.mace import MaceModel
 
     from scgo.calculators.mace_helpers import (
         MaceUrls,
@@ -324,7 +327,7 @@ def _ensure_torchsim_mace_wrapper(
     name = type(model).__name__
     if "mace" not in mod.lower() and "MACE" not in name:
         return model
-    from torch_sim.models.mace import MaceModel  # type: ignore
+    from torch_sim.models.mace import MaceModel
 
     return MaceModel(
         model=model,
@@ -344,7 +347,7 @@ def _load_default_fairchem_model(
     compute_stress: bool = False,
 ):
     """Create a TorchSim FairChem model for UMA checkpoints."""
-    from torch_sim.models.fairchem import FairChemModel  # type: ignore
+    from torch_sim.models.fairchem import FairChemModel
 
     return FairChemModel(
         model=fairchem_model_name,
@@ -393,8 +396,8 @@ def _load_default_upet_model(
     compute_stress: bool = False,
 ):
     """Create a TorchSim MetatomicModel for UPET checkpoints."""
-    import metatomic_torchsim._neighbors as _mt_neighbors  # type: ignore
-    from metatomic_torchsim import MetatomicModel  # type: ignore
+    import metatomic_torchsim._neighbors as _mt_neighbors
+    from metatomic_torchsim import MetatomicModel
     from upet import get_upet
 
     # nvalchemiops CUDA NL can fail for non-cubic gas-phase cells (float max_neighbors
@@ -438,7 +441,7 @@ def _steps_taken_from_optimize_state(state: Any) -> int | None:
     return None
 
 
-def build_torchsim_relaxer(
+def build_torchsim_relaxer(  # noqa: C901
     calculator: Any,
     *,
     fmax: float,
@@ -613,9 +616,9 @@ class TorchSimBatchRelaxer:
 
     """
 
-    device: object | None = None
-    dtype: object | None = None
-    model: object | None = None
+    device: torch.device | None = None
+    dtype: torch.dtype | None = None
+    model: Any | None = None
     model_kind: str = "mace"  # "mace", "fairchem", or "upet"
     mace_model_name: str = "mace_matpes_0"
     fairchem_model_name: str | None = None
@@ -643,10 +646,11 @@ class TorchSimBatchRelaxer:
     runner_kwargs: dict | None = None
     seed: int | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
+        """Resolve the torch backend and lazily import TorchSim on instantiation."""
         self._torch = torch
         # Lazy import: only require TorchSim when actually instantiating the relaxer.
-        import torch_sim as ts  # type: ignore
+        import torch_sim as ts
 
         _register_torchsim_warning_filters()
         self._ts = ts
@@ -678,7 +682,10 @@ class TorchSimBatchRelaxer:
                     f"Available: {available}",
                 ) from exc
         else:
-            self.optimizer = self.optimizer_name
+            # Defensive: callers may inject an already-resolved ``ts.Optimizer``
+            # member through ``torchsim_params``; the annotation says ``str``,
+            # so mypy considers this branch unreachable.
+            self.optimizer = self.optimizer_name  # type: ignore[unreachable]
 
         if self.model is None:
             mk = str(self.model_kind or "mace").strip().lower()
@@ -869,7 +876,7 @@ class TorchSimBatchRelaxer:
             initial_time = time.time()
             _ = self._ts.optimize(
                 system=[dummy],
-                model=self.model,
+                model=cast("ModelInterface", self.model),
                 optimizer=self.optimizer,
                 max_steps=1,
                 **{k: v for k, v in self._runner_kwargs.items() if k != "max_steps"},
@@ -948,6 +955,7 @@ class TorchSimBatchRelaxer:
 
         # torch_sim.initialize_state ignores ASE constraints; map FixAtoms -> TorchSim.
         ts_fix = build_torchsim_fixatoms_from_ase_batch(atoms_seq, self.device)
+        system_in: Any
         if ts_fix is not None:
             system_in = self._ts.initialize_state(
                 atoms_seq,
@@ -1045,9 +1053,9 @@ class TorchSimBatchRelaxer:
         """
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
         logger.debug("Running TorchSim single-point evaluation via static().")
-        props = self._ts.static(  # type: ignore[call-arg]
+        props = self._ts.static(
             system=system_in,
-            model=self.model,
+            model=cast("ModelInterface", self.model),
             autobatcher=self._static_autobatcher_arg(
                 n_structures=len(atoms_seq),
                 max_atoms=max_atoms_in_batch,
@@ -1057,7 +1065,7 @@ class TorchSimBatchRelaxer:
             props, atoms_seq=atoms_seq, reference_atoms=reference_atoms
         )
 
-    def _relax_batch_once(
+    def _relax_batch_once(  # noqa: C901
         self,
         atoms_list: Sequence[Atoms],
         *,
@@ -1084,9 +1092,9 @@ class TorchSimBatchRelaxer:
 
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
 
-        state = self._ts.optimize(  # type: ignore[call-arg]
+        state = self._ts.optimize(
             system=system_in,
-            model=self.model,
+            model=cast("ModelInterface", self.model),
             optimizer=self.optimizer,
             **runner_kwargs,
         )
@@ -1116,7 +1124,7 @@ class TorchSimBatchRelaxer:
         energies = [float(val) for val in energies_tensor.detach().cpu().tolist()]
 
         forces_tensor = getattr(state, "forces", None)
-        forces_list = None
+        forces_list: list[np.ndarray] | None = None
         if forces_tensor is not None:
             forces_np = forces_tensor.detach().cpu().numpy()  # Shape: (total_atoms, 3)
 
@@ -1225,6 +1233,9 @@ class TorchSimBatchRelaxer:
         setup_fn = getattr(self.model, "setup_from_system_idx", None)
         if setup_fn is None or getattr(type(self.model), "_scgo_setup_patched", False):
             return
+        # ``setup_fn`` is only non-None when a model object is attached.
+        model = self.model
+        assert model is not None
 
         @functools.wraps(setup_fn)
         def patched_setup(atomic_numbers, system_idx):
@@ -1239,8 +1250,8 @@ class TorchSimBatchRelaxer:
                 )
             return result
 
-        self.model.setup_from_system_idx = patched_setup  # type: ignore[assignment]
-        type(self.model)._scgo_setup_patched = True
+        model.setup_from_system_idx = patched_setup
+        type(model)._scgo_setup_patched = True
 
 
 def get_global_memory_scaler_cache() -> MemoryScalerCache:

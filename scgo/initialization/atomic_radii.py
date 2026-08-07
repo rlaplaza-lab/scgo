@@ -23,8 +23,11 @@ from scgo.exceptions import (
 if TYPE_CHECKING:
     from ase import Atoms
 
-# NOTE: Keep stdlib logging here to avoid early package-import cycles during
-# scgo bootstrap (initialization imports can execute before scgo.utils is ready).
+# NOTE: Intentional exception to the scgo logging convention. We deliberately
+# use stdlib ``logging.getLogger`` here instead of ``scgo.utils.logging.get_logger``
+# to avoid early package-import cycles during scgo bootstrap (initialization
+# imports can execute before scgo.utils is fully initialized). Do not "fix" this
+# to get_logger without first verifying the import order.
 logger = logging.getLogger(__name__)
 
 VDW_COVALENT_FALLBACK_SCALE = 1.3
@@ -36,7 +39,7 @@ def _is_valid_radius(value: float) -> bool:
     return bool(np.isfinite(value) and value > 0)
 
 
-def _interpolate_radius_at_z(z: int, radii: np.ndarray) -> float | None:
+def _interpolate_radius_at_z(z: int, radii: np.ndarray) -> float | None:  # noqa: C901
     """Linearly interpolate or extrapolate a radius at atomic number ``z``.
 
     Scans left and right for the nearest elements with finite positive radii.

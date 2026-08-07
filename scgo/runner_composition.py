@@ -165,8 +165,9 @@ def build_two_element_compositions(
         raise SCGOValidationError("min_atoms must be >= 1")
     if max_atoms < min_atoms:
         raise SCGOValidationError("max_atoms must be >= min_atoms")
-    compositions: list[list[str]] = []
-    for n_atoms in range(min_atoms, max_atoms + 1):
-        for i in range(n_atoms + 1):
-            compositions.append([element1] * i + [element2] * (n_atoms - i))
+    compositions = [
+        [element1] * i + [element2] * (n_atoms - i)
+        for n_atoms in range(min_atoms, max_atoms + 1)
+        for i in range(n_atoms + 1)
+    ]
     return compositions

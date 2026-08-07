@@ -67,7 +67,7 @@ def set_schema_version(db: DataConnection, version: int) -> None:
     with db.c.managed_connection() as conn:
         _upsert_scgo_metadata_keys(conn, schema_version=version)
         conn.commit()
-        logger.debug(f"Set schema version to {version}")
+        logger.debug("Set schema version to %s", version)
 
 
 def migrate_database(db: DataConnection, target_version: int | None = None) -> bool:
@@ -81,7 +81,7 @@ def migrate_database(db: DataConnection, target_version: int | None = None) -> b
     current_version = get_schema_version(db)
 
     if current_version == target_version:
-        logger.debug(f"Database already at version {target_version}")
+        logger.debug("Database already at version %s", target_version)
         return True
 
     if current_version > target_version:
@@ -96,7 +96,7 @@ def migrate_database(db: DataConnection, target_version: int | None = None) -> b
         )
         return True
     except (OSError, sqlite3.Error, TypeError, ValueError) as e:
-        logger.error(f"Failed to set schema version to {target_version}: {e}")
+        logger.error("Failed to set schema version to %s: %s", target_version, e)
         raise DatabaseMigrationError(f"Failed to set schema version: {e}") from e
 
 

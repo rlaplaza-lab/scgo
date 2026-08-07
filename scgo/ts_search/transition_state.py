@@ -8,7 +8,7 @@ import os
 import sys
 from copy import deepcopy
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from ase import Atoms
@@ -37,7 +37,12 @@ from scgo.utils.comparators import (
     get_shared_mobile_atom_indices,
 )
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import (
+    get_logger,
+    log_error_v,
+    log_info_v,
+    log_warning_v,
+)
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
     build_timing_payload,
@@ -150,8 +155,15 @@ def calculate_structure_similarity(
     use_mic: bool = False,
     n_slab: int | None = None,
     comparator: PureInteratomicDistanceComparator | None = None,
+    include_hetero_pairs: bool = True,
 ) -> tuple[float, float, bool]:
-    """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ."""
+    """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ.
+
+    ``include_hetero_pairs`` defaults to True so endpoint pairs that differ only
+    in cross-species geometry (e.g. an adsorbate atop vs bridge) are not gated
+    away as duplicates. It is ignored when an explicit ``comparator`` matching
+    the mobile-atom count is supplied.
+    """
     if len(atoms1) != len(atoms2):
         raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
@@ -168,24 +180,20 @@ def calculate_structure_similarity(
     atoms1_cmp = atoms1[comparison_indices]
     atoms2_cmp = atoms2[comparison_indices]
 
-    if comparator is None:
+    if comparator is None or comparator.n_top != len(atoms1_cmp):
+        # No comparator supplied, or the mobile count changed; build a matching one.
         comparator = PureInteratomicDistanceComparator(
             n_top=len(atoms1_cmp),
             tol=tolerance,
             pair_cor_max=pair_cor_max,
             mic=use_mic,
-        )
-    elif comparator.n_top != len(atoms1_cmp):
-        # Mobile count changed; fall back to a matching comparator.
-        comparator = PureInteratomicDistanceComparator(
-            n_top=len(atoms1_cmp),
-            tol=tolerance,
-            pair_cor_max=pair_cor_max,
-            mic=use_mic,
+            include_hetero_pairs=include_hetero_pairs,
         )
 
+    # Single fingerprint pass: derive the verdict from the returned differences
+    # instead of re-running the comparison inside ``looks_like``.
     cum_diff, max_diff = comparator.get_differences(atoms1_cmp, atoms2_cmp)
-    are_similar = comparator.looks_like(atoms1_cmp, atoms2_cmp)
+    are_similar = comparator.is_similar(cum_diff, max_diff)
 
     return cum_diff, max_diff, are_similar
 
@@ -313,8 +321,7 @@ def _match_atoms_by_fingerprint(
         raise SCGOValidationError("Atoms objects have different lengths")
 
     mapping = [-1] * len(a1)
-    use_mic = mic_cell is not None and mic_pbc is not None
-    if use_mic:
+    if mic_cell is not None and mic_pbc is not None:
         fp1_all = _local_distance_fingerprints_mic(a1, mic_cell, mic_pbc)
         fp2_all = _local_distance_fingerprints_mic(a2, mic_cell, mic_pbc)
     else:
@@ -403,7 +410,7 @@ def _permute_atoms_block_spatially(
     return pos2[order], nums2[order]
 
 
-def _match_adsorbate_fragments_by_com(
+def _match_adsorbate_fragments_by_com(  # noqa: C901
     a1_ads: Atoms,
     a2_ads: Atoms,
     fragment_lengths: list[int],
@@ -473,8 +480,8 @@ def _match_adsorbate_fragments_by_com(
 
     out_pos = np.empty_like(p_pos)
     out_num = np.empty_like(p_num)
-    for i, j in zip(rows, cols, strict=True):
-        rs, ps = r_slices[i], p_slices[j]
+    for ri, pi in zip(rows, cols, strict=True):
+        rs, ps = r_slices[ri], p_slices[pi]
         p_blk, n_blk = _permute_atoms_block_to_match(
             a1_ads[rs], a2_ads[ps], mic_cell=mic_cell, mic_pbc=mic_pbc
         )
@@ -1047,7 +1054,7 @@ def _reorder_product_to_match_reactant(
         and n_adsorbate_mobile is not None
         and n_slab + int(n_core_mobile) + int(n_adsorbate_mobile) == n_atom
     )
-    if use_blocks:
+    if use_blocks and n_core_mobile is not None and n_adsorbate_mobile is not None:
         _align_endpoints_blockwise(
             reactant,
             product,
@@ -1308,7 +1315,7 @@ def validate_initial_neb_path(
             )
 
 
-def validate_initial_neb_energy_profile(
+def validate_initial_neb_energy_profile(  # noqa: C901
     energies: list[float] | np.ndarray,
     *,
     max_spurious_barrier: float = MAX_SPURIOUS_NEB_BARRIER_EV,
@@ -1588,7 +1595,7 @@ def _finalize_neb_result(
         result["status"] = "success" if result.get("neb_converged") else "failed"
 
 
-def find_transition_state(
+def find_transition_state(  # noqa: C901
     atoms1: Atoms,
     atoms2: Atoms,
     calculator: Calculator | None,
@@ -1625,6 +1632,28 @@ def find_transition_state(
     """Run NEB to locate a transition state between two structures.
 
     Args:
+        atoms1: Initial endpoint structure.
+        atoms2: Final endpoint structure.
+        calculator: ASE calculator (or None to use a default/relaxer).
+        output_dir: Directory for TS outputs and trajectory.
+        pair_id: Identifier for the endpoint pair.
+        rng: Optional random number generator.
+        n_images: Number of NEB images.
+        spring_constant: NEB spring constant.
+        optimizer: ASE optimizer class for NEB relaxation.
+        fmax: Force convergence threshold.
+        neb_steps: Maximum NEB steps.
+        trajectory: Optional trajectory filename.
+        verbosity: Verbosity level.
+        use_torchsim: Whether to use TorchSim for relaxation.
+        torchsim_params: Optional TorchSim parameters.
+        climb: Enable climbing-image NEB.
+        interpolation_method: Path interpolation method (e.g. "idpp").
+        align_endpoints: Align endpoints before interpolation.
+        perturb_sigma: Optional endpoint perturbation sigma (Å).
+        system_type: System type controlling surface/adsorbate behavior.
+        write_timing_json: Write per-pair timing JSON when True.
+        relaxer: Optional TorchSim relaxer.
         neb_interpolation_mic: Forwarded to :func:`interpolate_path` as ``mic``.
             Use ``True`` for periodic cells (e.g. slabs); default ``False`` for
             isolated clusters.
@@ -1683,12 +1712,17 @@ def find_transition_state(
                 f"Cannot extract energy from product atoms for pair {pair_id}"
             )
 
-    if verbosity >= 1:
-        logger.info("Finding transition state for pair %s", pair_id)
-        if reactant_energy is not None:
-            logger.info("  Reactant energy: %.6f eV", reactant_energy)
-        if product_energy is not None:
-            logger.info("  Product energy: %.6f eV", product_energy)
+    log_info_v(
+        logger, "Finding transition state for pair %s", pair_id, verbosity=verbosity
+    )
+    if reactant_energy is not None:
+        log_info_v(
+            logger, "  Reactant energy: %.6f eV", reactant_energy, verbosity=verbosity
+        )
+    if product_energy is not None:
+        log_info_v(
+            logger, "  Product energy: %.6f eV", product_energy, verbosity=verbosity
+        )
 
     result = make_ts_result(
         pair_id=pair_id,
@@ -1716,10 +1750,13 @@ def find_transition_state(
                 f"Endpoints are identical for pair {pair_id}; no interior TS"
             )
 
-        if verbosity >= 2:
-            logger.info(
-                f"Generating initial path with {interpolation_method} interpolation"
-            )
+        log_info_v(
+            logger,
+            "Generating initial path with %s interpolation",
+            interpolation_method,
+            verbosity=verbosity,
+            min_verbosity=2,
+        )
         # Keep interpolation unconstrained; constraints are applied during NEB.
         images = interpolate_path(
             atoms1,
@@ -1782,8 +1819,13 @@ def find_transition_state(
                 result["reactant_energy"] = float(band_energies[0])
                 result["product_energy"] = float(band_energies[-1])
 
-            if verbosity >= 2:
-                logger.info("Using TorchSim batched NEB (climb=%s)", climb)
+            log_info_v(
+                logger,
+                "Using TorchSim batched NEB (climb=%s)",
+                climb,
+                verbosity=verbosity,
+                min_verbosity=2,
+            )
 
             steps_budget = int(neb_steps)
             use_two_stage = neb_uses_two_stage_climb(
@@ -1820,8 +1862,13 @@ def find_transition_state(
         # actually used (so early stage-1 convergence does not starve climb).
         stage1_cap = steps_budget // 2 if use_two_stage else steps_budget
 
-        if verbosity >= 2:
-            logger.info("Starting NEB optimization with %s", optimizer.__name__)
+        log_info_v(
+            logger,
+            "Starting NEB optimization with %s",
+            optimizer.__name__,
+            verbosity=verbosity,
+            min_verbosity=2,
+        )
 
         t_neb0 = perf_counter()
         dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
@@ -1830,11 +1877,13 @@ def find_transition_state(
         if use_two_stage:
             neb.climb = True
             stage2_steps = max(1, steps_budget - steps_taken)
-            if verbosity >= 2:
-                logger.info(
-                    "Enabling climbing image for second NEB stage (%d steps)",
-                    stage2_steps,
-                )
+            log_info_v(
+                logger,
+                "Enabling climbing image for second NEB stage (%d steps)",
+                stage2_steps,
+                verbosity=verbosity,
+                min_verbosity=2,
+            )
             dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
             dyn.run(fmax=fmax, steps=stage2_steps)
             steps_taken += int(dyn.nsteps)
@@ -1855,22 +1904,25 @@ def find_transition_state(
                 f"NEB did not converge (final_fmax={final_fmax}, fmax={fmax})"
             )
 
-        if verbosity >= 1:
-            fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
-            if result["neb_converged"]:
-                logger.info(
-                    "NEB converged in %d steps (final_fmax=%s < %.6f)",
-                    result["steps_taken"],
-                    fmax_str,
-                    fmax,
-                )
-            else:
-                logger.warning(
-                    "NEB not converged after %d steps (final_fmax=%s, target_fmax=%.6f)",
-                    result["steps_taken"],
-                    fmax_str,
-                    fmax,
-                )
+        fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
+        if result["neb_converged"]:
+            log_info_v(
+                logger,
+                "NEB converged in %d steps (final_fmax=%s < %.6f)",
+                result["steps_taken"],
+                fmax_str,
+                fmax,
+                verbosity=verbosity,
+            )
+        else:
+            log_warning_v(
+                logger,
+                "NEB not converged after %d steps (final_fmax=%s, target_fmax=%.6f)",
+                result["steps_taken"],
+                fmax_str,
+                fmax,
+                verbosity=verbosity,
+            )
 
         # Last optimizer step can invalidate SinglePoint caches; refresh PES at
         # the final geometries before barrier finalize (TorchSim path only).
@@ -1880,20 +1932,31 @@ def find_transition_state(
         _finalize_neb_result(result, neb.images, logger=logger)
 
         if use_torchsim and result["status"] == "success":
-            result["force_calls"] = neb.get_force_calls()
+            result["force_calls"] = cast("TorchSimNEB", neb).get_force_calls()
 
-        if verbosity >= 1 and result["status"] == "success":
-            logger.info(
+        if result["status"] == "success":
+            log_info_v(
+                logger,
                 "TS found at image %d/%d",
                 result["ts_image_index"],
                 len(neb.images) - 1,
+                verbosity=verbosity,
             )
-            logger.info("  TS energy: %.6f eV", result["ts_energy"])
-            logger.info("  Barrier height: %.6f eV", result["barrier_height"])
+            log_info_v(
+                logger, "  TS energy: %.6f eV", result["ts_energy"], verbosity=verbosity
+            )
+            log_info_v(
+                logger,
+                "  Barrier height: %.6f eV",
+                result["barrier_height"],
+                verbosity=verbosity,
+            )
             if use_torchsim:
-                logger.info(
+                log_info_v(
+                    logger,
                     "  GPU-batched force calls: %s",
                     result.get("force_calls"),
+                    verbosity=verbosity,
                 )
 
     except KeyboardInterrupt:
@@ -1902,15 +1965,20 @@ def find_transition_state(
         result["error"] = str(e)
         if is_cuda_oom_error(e):
             cleanup_torch_cuda(logger=logger)
-            if verbosity >= 1:
-                logger.warning(
-                    "Detected CUDA out-of-memory during NEB for pair %s — attempted GPU cleanup",
-                    pair_id,
-                )
-        if verbosity >= 1:
-            logger.error(
-                f"Failed to find TS for pair {pair_id}: {type(e).__name__}: {e}"
+            log_warning_v(
+                logger,
+                "Detected CUDA out-of-memory during NEB for pair %s — attempted GPU cleanup",
+                pair_id,
+                verbosity=verbosity,
             )
+        log_error_v(
+            logger,
+            "Failed to find TS for pair %s: %s: %s",
+            pair_id,
+            type(e).__name__,
+            e,
+            verbosity=verbosity,
+        )
 
     if t_wall0 is not None:
         total_s = perf_counter() - t_wall0

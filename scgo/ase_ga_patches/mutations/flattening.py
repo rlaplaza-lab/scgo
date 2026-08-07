@@ -1,8 +1,8 @@
+"""Mutation that flattens a nanoparticle by projecting onto a random plane."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutation that flattens a nanoparticle by projecting onto a random plane."""
 
 import numpy as np
 from ase_ga.offspring_creator import OffspringCreator
@@ -20,8 +20,10 @@ __all__ = ["FlatteningMutation"]
 
 
 class FlatteningMutation(OffspringCreator):
-    """A mutation that flattens the nanoparticle by projecting the coordinates
-    to a plane that cuts the structure in a random angle.
+    """A mutation that flattens the nanoparticle.
+
+    The coordinates are projected to a plane that cuts the structure in a
+    random angle.
     Atoms are then perturbed perpendicular to the plane within a given thickness.
 
     Parameters
@@ -158,6 +160,7 @@ class FlatteningMutation(OffspringCreator):
         return score, candidate_positions
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the flattening mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
@@ -165,6 +168,7 @@ class FlatteningMutation(OffspringCreator):
         return _finalize_mutant(self, f, indi, "mutation: flattening")
 
     def mutate(self, atoms):
+        """Project atoms onto a random plane to flatten the cluster."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
         top = atoms[-N:]

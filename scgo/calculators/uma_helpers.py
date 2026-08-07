@@ -8,6 +8,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.exceptions import SCGODependencyError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
@@ -18,7 +19,7 @@ _MISSING_FAIRCHEM_MSG = (
 
 
 class UMA(Calculator):
-    """ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
+    r"""ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
     is a fairchem pretrained name or path; ``task_name`` selects the UMA task
@@ -37,7 +38,7 @@ class UMA(Calculator):
         try:
             from fairchem.core import FAIRChemCalculator
         except ImportError as e:
-            raise ImportError(_MISSING_FAIRCHEM_MSG) from e
+            raise SCGODependencyError(_MISSING_FAIRCHEM_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
 
@@ -64,6 +65,7 @@ class UMA(Calculator):
         properties: list[str] | None = None,
         system_changes: list[str] = all_changes,
     ) -> None:
+        """Compute energy/forces for an Atoms object using the UMA model."""
         if properties is None:
             properties = self.implemented_properties
         super().calculate(atoms, properties, system_changes)
@@ -86,7 +88,7 @@ def try_extract_torchsim_model_from_uma_calculator(
     """
     try:
         import torch
-        from torch_sim.models.fairchem import FairChemModel  # type: ignore
+        from torch_sim.models.fairchem import FairChemModel
     except ImportError:
         return None
 
@@ -112,12 +114,15 @@ def try_extract_torchsim_model_from_uma_calculator(
         device = torch.device(str(device))
 
     model = FairChemModel.__new__(FairChemModel)
-    model._dtype = torch.float32
-    model._compute_stress = False
-    model._compute_forces = True
-    model._memory_scales_with = "n_atoms"
-    model._device = device
-    model.predictor = predictor
-    model.task_name = task_name
-    model.implemented_properties = ["energy", "forces"]
+    # ``FairChemModel`` derives from ``torch.nn.Module``, whose ``__setattr__`` is
+    # typed as ``Tensor | Module``; these shell attributes are plain Python values.
+    model_any: Any = model
+    model_any._dtype = torch.float32
+    model_any._compute_stress = False
+    model_any._compute_forces = True
+    model_any._memory_scales_with = "n_atoms"
+    model_any._device = device
+    model_any.predictor = predictor
+    model_any.task_name = task_name
+    model_any.implemented_properties = ["energy", "forces"]
     return model

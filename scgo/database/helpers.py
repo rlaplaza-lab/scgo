@@ -12,6 +12,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from ase import Atoms
@@ -38,7 +39,7 @@ from scgo.database.schema import (
 )
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, database_retry
-from scgo.exceptions import SCGORuntimeError
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.utils.helpers import (
     ensure_directory_exists,
     ensure_final_id,
@@ -98,7 +99,7 @@ def _ensure_database_indices(
             config=PRESET_AGGRESSIVE,
             operation_name=f"create indices on {db_path}",
         )
-        logger.debug(f"Database indices created for {db_path}")
+        logger.debug("Database indices created for %s", db_path)
     except sqlite3.OperationalError as e:
         if enable_wal_mode:
             logger.warning(
@@ -107,9 +108,9 @@ def _ensure_database_indices(
                 e,
             )
         else:
-            logger.debug(f"Could not create all indices on {db_path}: {e}")
+            logger.debug("Could not create all indices on %s: %s", db_path, e)
     except OSError as e:
-        logger.warning(f"Unexpected error creating indices on {db_path}: {e}")
+        logger.warning("Unexpected error creating indices on %s: %s", db_path, e)
 
 
 def _register_database_best_effort(
@@ -152,7 +153,7 @@ def _register_database_best_effort(
             )
 
 
-def setup_database(
+def setup_database(  # noqa: C901
     output_dir: str | Path,
     db_filename: str,
     atoms_template: Atoms,
@@ -190,7 +191,7 @@ def setup_database(
                 exception_types=(OSError,),
             )
         except OSError as e:
-            logger.warning(f"Failed to remove database {db_file}: {e}")
+            logger.warning("Failed to remove database %s: %s", db_file, e)
 
     all_atom_numbers = [int(num) for num in atoms_template.get_atomic_numbers()]
 
@@ -286,7 +287,7 @@ def setup_database(
                 if Counter(int(x) for x in a.get_atomic_numbers()) != Counter(
                     self._expected_atomic_numbers
                 ):
-                    raise AssertionError(
+                    raise SCGOValidationError(
                         "Candidate composition does not match database stoichiometry"
                     )
 
@@ -349,7 +350,7 @@ def setup_database(
         raise DatabaseSetupError(f"Failed to setup database {db_file}: {e}") from e
 
 
-def _extract_structures_from_db(
+def _extract_structures_from_db(  # noqa: C901
     db_path: str | Path,
     run_id: str,
     *,
@@ -386,14 +387,13 @@ def _extract_structures_from_db(
             if empty_log is not None and not out:
                 empty_log()
 
-            metadata_kwargs: dict[str, str] = {
-                "run_id": run_id,
+            extra_metadata: dict[str, Any] = {
                 "source_db": os.path.basename(db_path),
             }
             if source_db_relpath is not None:
-                metadata_kwargs["source_db_relpath"] = source_db_relpath
+                extra_metadata["source_db_relpath"] = source_db_relpath
             for _, atoms in out:
-                add_metadata(atoms, **metadata_kwargs)
+                add_metadata(atoms, run_id=run_id, **extra_metadata)
 
             if persist:
                 try:
@@ -480,7 +480,7 @@ def extract_transition_states_from_database_file(
     )
 
 
-def load_previous_run_results(
+def load_previous_run_results(  # noqa: C901
     base_output_dir: str,
     db_filename: str | None = None,
     composition: list[str] | None = None,
@@ -524,7 +524,7 @@ def load_previous_run_results(
             all_db_files.extend((p, run_id) for p in db_list)
 
     if not all_db_files:
-        logger.info(f"No databases found in {base_output_dir}")
+        logger.info("No databases found in %s", base_output_dir)
         return []
 
     if max_workers is None:
@@ -561,7 +561,7 @@ def load_previous_run_results(
                 }
 
                 for future in as_completed(futures):
-                    db_path, run_id = futures[future]
+                    db_path, _run_id = futures[future]
                     try:
                         minima = future.result(timeout=30)
                         all_minima.extend(minima)
@@ -590,11 +590,11 @@ def load_previous_run_results(
             ) from e
 
     else:
-        logger.info(f"Loading {len(all_db_files)} databases sequentially")
+        logger.info("Loading %d databases sequentially", len(all_db_files))
 
-        for db_path, run_id in all_db_files:
+        for db_path, entry_run_id in all_db_files:
             minima = extract_minima_from_database_file(
-                db_path, run_id or "", require_final=prefer_final_unique
+                db_path, entry_run_id or "", require_final=prefer_final_unique
             )
             filtered_minima = _filter_minima_by_composition(minima, composition)
             all_minima.extend(filtered_minima)
@@ -610,7 +610,7 @@ def load_previous_run_results(
     return all_minima
 
 
-def load_reference_structures(
+def load_reference_structures(  # noqa: C901
     db_glob_pattern: str,
     composition: list[str] | None = None,
     max_structures: int = 100,
@@ -628,7 +628,7 @@ def load_reference_structures(
     ]
 
     if not db_files:
-        logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
+        logger.warning("No database files found matching pattern: %s", db_glob_pattern)
         return []
 
     target_counts = None
@@ -676,7 +676,7 @@ def load_reference_structures(
                     )
                     heapq.heapreplace(heap, (-energy, counter, atoms))
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
-            logger.debug(f"Failed to extract minima from {db_file}: {e}")
+            logger.debug("Failed to extract minima from %s: %s", db_file, e)
             continue
 
     if not heap:
@@ -729,7 +729,7 @@ def _load_single_database_worker(
             db_path, run_id or "", require_final=require_final
         )
     except (sqlite3.DatabaseError, OSError, ValueError) as e:
-        logger.error(f"Failed to extract minima from {db_path} in worker: {e}")
+        logger.error("Failed to extract minima from %s in worker: %s", db_path, e)
         return []
 
     return _filter_minima_by_composition(minima, composition)

@@ -1,3 +1,5 @@
+"""Population and offspring-management classes for the patched ASE-GA driver."""
+
 # fmt: off
 
 from __future__ import annotations
@@ -8,9 +10,13 @@ from scgo.exceptions import SCGOValidationError
 proposing structures to pair.
 """
 from math import sqrt, tanh
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ase.db.core import now
+
+if TYPE_CHECKING:
+    from ase import Atoms
 
 from scgo.database.metadata import get_metadata
 from scgo.utils.fitness_strategies import (
@@ -41,7 +47,13 @@ def _population_candidate_sort_key(a):
 
 
 def count_looks_like(a, all_cand, comp):
-    """Utility method for counting occurrences."""
+    """Count how many candidates in ``all_cand`` look like ``a``.
+
+    Callers pass the *current population* rather than the full candidate
+    history: the fitness modifier ``1/sqrt(1 + looks_like)`` is meant to damp
+    structures that crowd the population, and scanning the growing history made
+    the bookkeeping O(N^2) over a run.
+    """
     n = 0
     for b in all_cand:
         if a.info.get("confid") == b.info.get("confid"):
@@ -55,8 +67,9 @@ from scgo.utils.rng_helpers import ensure_rng_or_create
 
 
 class Population:
-    """Population class which maintains the current population
-    and proposes which candidates to pair together.
+    """Population class which maintains the current population.
+
+    It also proposes which candidates to pair together.
 
     Parameters
     ----------
@@ -103,10 +116,32 @@ class Population:
         self.elite_fraction = elite_fraction
         self.elite_size = max(1, int(self.population_size * self.elite_fraction))
         self.run_id = run_id
-        self.pop = []
+        self.pop: list[Atoms] = []
         self.pairs = None
         self.all_cand = None
+        self._max_gen = None
+        self._all_have_generation = True
         self.__initialize_pop__()
+
+    def _track_generation(self, candidates):
+        """Update the incrementally tracked maximum generation number.
+
+        Avoids rescanning ``all_cand`` on every ``_write_log`` call. Mirrors the
+        previous ``max(gen_nums)`` semantics: when any candidate lacks a
+        generation the maximum is reported as unknown.
+        """
+        for cand in candidates:
+            gen = get_metadata(cand, "generation", default=None)
+            if gen is None:
+                self._all_have_generation = False
+                continue
+            try:
+                gen_i = int(gen)
+            except (TypeError, ValueError):
+                self._all_have_generation = False
+                continue
+            if self._max_gen is None or gen_i > self._max_gen:
+                self._max_gen = gen_i
 
     def _filter_candidates_by_run_id(self, candidates):
         if self.run_id is None:
@@ -134,8 +169,9 @@ class Population:
         return self._filter_candidates_by_ga_eligibility(candidates)
 
     def __initialize_pop__(self):
-        """Private method that initializes the population when
-        the population is created.
+        """Private method that initializes the population.
+
+        Called when the population is created.
         """
         # Get all relaxed candidates from the database
         ue = self.use_extinct
@@ -156,15 +192,20 @@ class Population:
                 self.pop.append(c)
 
         for a in self.pop:
-            a.info["looks_like"] = count_looks_like(a, all_cand,
+            a.info["looks_like"] = count_looks_like(a, self.pop,
                                                     self.comparator)
 
         self.all_cand = all_cand
+        self._max_gen = None
+        self._all_have_generation = True
+        self._track_generation(all_cand)
         self.__calc_participation__()
 
     def __calc_participation__(self):
-        """Determines, from the database, how many times each
-        candidate has been used to generate new candidates.
+        """Determines how many times each candidate has been used.
+
+        The number of times a candidate has been used to generate new
+        candidates is read from the database.
         """
         (participation, pairs) = self.dc.get_participation_in_pairing()
         for a in self.pop:
@@ -175,7 +216,9 @@ class Population:
         self.pairs = pairs
 
     def update(self, new_cand=None):
-        """New candidates can be added to the database
+        """Includes new database candidates in the population.
+
+        New candidates can be added to the database
         after the population object has been created.
         This method extracts these new candidates from the
         database and includes them in the population.
@@ -192,6 +235,7 @@ class Population:
         for a in new_cand:
             self.__add_candidate__(a)
             self.all_cand.append(a)
+        self._track_generation(new_cand)
         self.__calc_participation__()
         self._write_log()
 
@@ -201,9 +245,7 @@ class Population:
         return [a.copy() for a in self.pop]
 
     def get_population_after_generation(self, gen):
-        """Returns a copy of the population as it where
-        after generation gen
-        """
+        """Returns a copy of the population as it where after generation gen."""
         if self.logfile is not None:
             with open(self.logfile) as fd:
                 gens = {}
@@ -247,7 +289,7 @@ class Population:
                         return
                     del self.pop[i]
                     a.info["looks_like"] = count_looks_like(a,
-                                                            self.all_cand,
+                                                            self.pop,
                                                             self.comparator)
                     self.pop.append(a)
                     self.pop.sort(key=_raw_score, reverse=True)
@@ -261,14 +303,16 @@ class Population:
 
         # add the new candidate
         a.info["looks_like"] = count_looks_like(a,
-                                                self.all_cand,
+                                                self.pop,
                                                 self.comparator)
         self.pop.append(a)
         self.pop.sort(key=_raw_score, reverse=True)
 
     def __get_fitness__(self, indecies, with_history=True):
-        """Calculates the fitness using the formula from
-            L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
+        """Calculates the fitness.
+
+        Uses the formula from
+        L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816.
 
         Sign change on the fitness compared to the formulation in the
         abovementioned paper due to maximizing raw_score instead of
@@ -294,13 +338,14 @@ class Population:
                  for i in range(len(f))]
         return f
 
-    def get_two_candidates(self, with_history=True):
-        """Returns two candidates for pairing employing the
-        fitness criteria from
+    def get_two_candidates(self, with_history=True):  # noqa: C901
+        """Returns two candidates for pairing.
+
+        Employs the fitness criteria from
         L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
         and the roulete wheel selection scheme described in
         R.L. Johnston Dalton Transactions,
-        Vol. 22, No. 22. (2003), pp. 4193-4207
+        Vol. 22, No. 22. (2003), pp. 4193-4207.
         """
         if len(self.pop) < 2:
             self.update()
@@ -356,12 +401,13 @@ class Population:
         return (c1.copy(), c2.copy())
 
     def get_one_candidate(self, with_history=True):
-        """Returns one candidate for mutation employing the
-        fitness criteria from
+        """Returns one candidate for mutation.
+
+        Employs the fitness criteria from
         L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
         and the roulete wheel selection scheme described in
         R.L. Johnston Dalton Transactions,
-        Vol. 22, No. 22. (2003), pp. 4193-4207
+        Vol. 22, No. 22. (2003), pp. 4193-4207.
         """
         if len(self.pop) < 1:
             self.update()
@@ -402,11 +448,10 @@ class Population:
             ids = [str(a.info["relax_id"]) for a in self.pop]
             # Always touch the logfile so it exists even if the population is empty.
             # If we have IDs, write a log entry; otherwise just create the file.
-            try:
-                gen_nums = [get_metadata(c, "generation", default=None)
-                            for c in self.all_cand]
-                max_gen = max(gen_nums) if gen_nums else " "
-            except (TypeError, ValueError):
+            # ``_max_gen`` is tracked incrementally on insert, so the whole
+            # candidate history is never rescanned here.
+            max_gen = self._max_gen if self._all_have_generation else " "
+            if max_gen is None:
                 max_gen = " "
             # Opening in append mode will create the file if it doesn't exist.
             with open(self.logfile, "a") as fd:
@@ -415,6 +460,7 @@ class Population:
 
     def is_uniform(self, func, min_std, pop=None):
         """Tests whether the current population is uniform or diverse.
+
         Returns True if uniform, False otherwise.
 
         Parameters
@@ -438,8 +484,9 @@ class Population:
         return stddev < min_std
 
     def mass_extinction(self, ids):
-        """Kills every candidate in the database with gaid in the
-        supplied list of ids. Typically used on the main part of the current
+        """Kills every candidate in the database with gaid in the supplied list.
+
+        Typically used on the main part of the current
         population if the diversity is to small.
 
         Parameters

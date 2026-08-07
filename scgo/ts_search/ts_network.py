@@ -19,7 +19,7 @@ from scgo.database.sync import database_retry
 from scgo.ts_search.transition_state import minima_provenance_dict
 from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.helpers import get_cluster_formula
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_exception_v
 from scgo.utils.ts_provenance import ts_output_provenance
 
 logger = get_logger(__name__)
@@ -75,7 +75,7 @@ def _stamp_ts_metadata(
 
 
 def add_ts_to_database(
-    ts_structure: Atoms,
+    ts_structure: Atoms | None,
     ts_energy: float,
     minima_idx_1: int,
     minima_idx_2: int,
@@ -86,11 +86,13 @@ def add_ts_to_database(
     *,
     canonical_ts: bool = False,
     neb_converged: bool = True,
+    verbosity: int = 1,
 ) -> bool:
     """Add a transition state structure to the minima database.
 
     Args:
-        ts_structure: Transition state Atoms object.
+        ts_structure: Transition state Atoms object, or None when the TS
+            structure is missing (the call is then rejected).
         ts_energy: Computed energy of the TS (eV).
         minima_idx_1: Index of first minimum this TS connects.
         minima_idx_2: Index of second minimum this TS connects.
@@ -104,6 +106,8 @@ def add_ts_to_database(
             converged TS from the standard pipeline). Integrator-only writes
             should leave this False.
         neb_converged: Whether the NEB reached convergence; stored for queries.
+        verbosity: Verbosity level controlling whether DB failure tracebacks are
+            emitted (traceback only at verbosity >= 2).
 
     Returns:
         True if successfully added, False otherwise.
@@ -173,14 +177,17 @@ def add_ts_to_database(
         return True
 
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError, ValueError):
-        logger.exception("Error adding TS %s to database", pair_id)
+        log_exception_v(
+            logger, "Error adding TS %s to database", pair_id, verbosity=verbosity
+        )
         return False
 
 
-def tag_unique_ts_in_databases(
+def tag_unique_ts_in_databases(  # noqa: C901
     unique_ts: list[dict[str, Any]],
     minima: list,
     base_dir: str,
+    verbosity: int = 1,
 ) -> int:
     """Persist deduplicated TS entries into discovered ``run_*/*.db`` minima databases.
 
@@ -278,6 +285,7 @@ def tag_unique_ts_in_databases(
                     endpoint_provenance=endpoint_prov,
                     canonical_ts=True,
                     neb_converged=bool(neb_conv),
+                    verbosity=verbosity,
                 )
                 if success:
                     added += 1
@@ -293,10 +301,12 @@ def tag_unique_ts_in_databases(
                 OSError,
                 ValueError,
             ):
-                logger.exception(
+                log_exception_v(
+                    logger,
                     "Failed to add TS %s to DB %s",
                     pair_id,
                     db_candidate,
+                    verbosity=verbosity,
                 )
 
     if missing_db_pairs:
@@ -352,9 +362,11 @@ def save_ts_network_metadata(
         ts_energy = result.get("ts_energy")
         barrier_height = result.get("barrier_height")
 
-        if any(
-            x is None
-            for x in (reactant_energy, product_energy, ts_energy, barrier_height)
+        if (
+            reactant_energy is None
+            or product_energy is None
+            or ts_energy is None
+            or barrier_height is None
         ):
             logger.warning(
                 "Skipping malformed successful TS result for pair %s: "
@@ -540,7 +552,8 @@ def _build_graph_from_connections(
         adjacency_sets[idx1].add(idx2)
         adjacency_sets[idx2].add(idx1)
 
-        edge_key = tuple(sorted((idx1, idx2)))
+        lo, hi = sorted((idx1, idx2))
+        edge_key: tuple[int, int] = (lo, hi)
         edge_metadata[edge_key] = {
             "pair_id": connection.get("pair_id"),
             "barrier": connection.get("barrier_height"),
@@ -638,7 +651,7 @@ def find_shortest_path(
     return None  # No path exists
 
 
-def find_minimum_barrier_path(
+def find_minimum_barrier_path(  # noqa: C901
     graph: dict[str, Any],
     start: int,
     end: int,

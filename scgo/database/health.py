@@ -35,18 +35,26 @@ def check_database_health(db_path: str | Path) -> dict:
             - 'info': dict of database statistics
     """
     db_path = Path(db_path)
-    result = {"healthy": True, "errors": [], "warnings": [], "info": {}}
+    errors: list[str] = []
+    warnings: list[str] = []
+    info: dict[str, object] = {}
+    result: dict[str, object] = {
+        "healthy": True,
+        "errors": errors,
+        "warnings": warnings,
+        "info": info,
+    }
 
     # Check file existence
     if not db_path.exists():
         result["healthy"] = False
-        result["errors"].append(f"Database file does not exist: {db_path}")
+        errors.append(f"Database file does not exist: {db_path}")
         return result
 
     # Check file permissions
     if not os.access(db_path, os.R_OK):
         result["healthy"] = False
-        result["errors"].append(f"Database file is not readable: {db_path}")
+        errors.append(f"Database file is not readable: {db_path}")
         return result
 
     # Check SQLite integrity
@@ -58,7 +66,7 @@ def check_database_health(db_path: str | Path) -> dict:
 
             if integrity_result != "ok":
                 result["healthy"] = False
-                result["errors"].append(f"Integrity check failed: {integrity_result}")
+                errors.append(f"Integrity check failed: {integrity_result}")
 
             # Get database size
             cursor = conn.execute("PRAGMA page_count;")
@@ -66,19 +74,19 @@ def check_database_health(db_path: str | Path) -> dict:
             cursor = conn.execute("PRAGMA page_size;")
             page_size = cursor.fetchone()[0]
             db_size_mb = (page_count * page_size) / (1024 * 1024)
-            result["info"]["size_mb"] = round(db_size_mb, 2)
+            info["size_mb"] = round(db_size_mb, 2)
 
             # Check journal mode
             cursor = conn.execute("PRAGMA journal_mode;")
             journal_mode = cursor.fetchone()[0]
-            result["info"]["journal_mode"] = journal_mode
+            info["journal_mode"] = journal_mode
 
             # Get table count
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table';"
             )
             table_count = cursor.fetchone()[0]
-            result["info"]["table_count"] = table_count
+            info["table_count"] = table_count
 
             # Check for ASE tables
             cursor = conn.execute(
@@ -87,18 +95,16 @@ def check_database_health(db_path: str | Path) -> dict:
             has_systems_table = cursor.fetchone() is not None
 
             if not has_systems_table:
-                result["warnings"].append(
-                    "Missing 'systems' table - may not be an ASE database"
-                )
+                warnings.append("Missing 'systems' table - may not be an ASE database")
             else:
                 # Count rows in systems table
                 cursor = conn.execute("SELECT COUNT(*) FROM systems;")
                 row_count = cursor.fetchone()[0]
-                result["info"]["systems_count"] = row_count
+                info["systems_count"] = row_count
 
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         result["healthy"] = False
-        result["errors"].append(f"Database error: {e}")
+        errors.append(f"Database error: {e}")
 
     return result
 
@@ -118,10 +124,10 @@ def get_database_statistics(db_path: str | Path) -> dict:
             - fragmentation: Estimated fragmentation percentage
     """
     db_path = Path(db_path)
-    stats = {}
+    stats: dict[str, object] = {}
 
     if not db_path.exists():
-        logger.warning(f"Database does not exist: {db_path}")
+        logger.warning("Database does not exist: %s", db_path)
         return stats
 
     try:

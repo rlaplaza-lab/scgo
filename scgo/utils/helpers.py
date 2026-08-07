@@ -238,7 +238,8 @@ def perform_local_relaxation(
         positions = atoms.get_positions()
         if len(positions) > 1:
             tree = KDTree(positions)
-            distances, _ = tree.query(positions, k=2)
+            distances_raw, _ = tree.query(positions, k=2)
+            distances = np.asarray(distances_raw)
             min_distance = np.min(distances[:, 1])
             if min_distance < MIN_ATOMIC_DISTANCE_WARNING:
                 logger.warning(
@@ -265,7 +266,7 @@ def perform_local_relaxation(
     except KeyboardInterrupt:
         raise
     except (RuntimeError, ValueError, FloatingPointError) as e:
-        logger.warning(f"Local relaxation failed: {e}")
+        logger.warning("Local relaxation failed: %s", e)
         logger.warning("Assigning large penalty energy to this structure.")
         return _assign_penalty_energy(atoms)
 
@@ -286,7 +287,7 @@ def ensure_float64_forces(atoms: Atoms) -> np.ndarray:
 
     if forces is None:
         if "forces" in atoms.arrays:
-            forces = atoms.arrays["forces"]  # type: ignore[assignment]
+            forces = atoms.arrays["forces"]
         else:
             raise SCGORuntimeError(
                 "Atoms object has no calculator and no forces in arrays."
@@ -458,7 +459,7 @@ def get_ordered_formula(symbols: list[str]) -> str:
     )
 
 
-def get_system_path_key(
+def get_system_path_key(  # noqa: C901
     composition: list[str],
     *,
     adsorbate_definition: dict[str, Any] | None = None,
@@ -513,6 +514,57 @@ def get_system_path_key(
     return "_".join(parts)
 
 
+def _imaginary_frequency_magnitudes(
+    frequencies: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split ASE vibrational frequencies into (imaginary magnitude, real part).
+
+    ASE :meth:`ase.vibrations.Vibrations.get_frequencies` returns ``complex128``
+    where imaginary (saddle-point) modes are stored as *purely imaginary*
+    numbers such as ``0 + 60j`` — never as negative reals. Real arrays are also
+    accepted for robustness: there, the legacy convention of encoding an
+    imaginary mode as a negative real value is honored.
+
+    Args:
+        frequencies: Frequencies in cm^-1 (complex or real array).
+
+    Returns:
+        Tuple ``(imag_magnitudes, real_parts)``, both real-valued arrays in cm^-1.
+    """
+    freqs = np.asarray(frequencies)
+    if np.iscomplexobj(freqs):
+        return np.abs(freqs.imag), np.asarray(freqs.real, dtype=float)
+
+    real = np.asarray(freqs, dtype=float)
+    # Legacy/real-valued convention: negative entries denote imaginary modes.
+    return np.where(real < 0.0, np.abs(real), 0.0), np.abs(real)
+
+
+def _expected_zero_modes(atoms: Atoms) -> int | None:
+    """Number of near-zero vibrational modes expected for ``atoms``.
+
+    Returns ``None`` when the expectation is undefined, i.e. when constraints
+    remove translational/rotational invariance (``FixAtoms`` on part of the
+    system), so callers can skip the bookkeeping check instead of emitting a
+    spurious warning.
+    """
+    from ase.constraints import FixAtoms
+
+    if any(isinstance(c, FixAtoms) for c in getattr(atoms, "constraints", ())):
+        return None
+
+    if np.any(atoms.get_pbc()):
+        # Periodic cells retain the three acoustic (translational) modes only.
+        return 3
+
+    if len(atoms) < 2:
+        return None
+
+    moi = atoms.get_moments_of_inertia(vectors=False)
+    is_linear: bool = bool(np.any(np.isclose(moi, 0, atol=1e-5)))
+    return 5 if is_linear else 6
+
+
 def is_true_minimum(
     atoms: Atoms,
     calculator: Calculator,
@@ -520,7 +572,13 @@ def is_true_minimum(
     check_hessian: bool = True,
     imag_freq_threshold: float = 50.0,
 ) -> bool:
-    """Return True if `atoms` is a local minimum (force + optional Hessian checks)."""
+    """Return True if `atoms` is a local minimum (force + optional Hessian checks).
+
+    The Hessian gate rejects structures with an imaginary vibrational mode whose
+    magnitude exceeds ``imag_freq_threshold`` (cm^-1). ASE reports imaginary
+    modes as purely imaginary complex frequencies, so the test inspects
+    ``|Im(nu)|`` rather than negative real values.
+    """
     logger: Logger = get_logger(__name__)
 
     atoms_check: Atoms = atoms.copy()
@@ -550,29 +608,39 @@ def is_true_minimum(
         vib.clean()
     except (RuntimeError, OSError, ValueError) as e:
         # Treat vibrational analysis failures as a non-minimum condition
-        logger.warning(f"Vibrational analysis failed with error: {e}")
+        logger.warning("Vibrational analysis failed with error: %s", e)
         return False
 
-    problematic_freqs = frequencies[frequencies < -imag_freq_threshold]
-    if problematic_freqs.size > 0:
+    imag_magnitudes, real_parts = _imaginary_frequency_magnitudes(frequencies)
+
+    problematic_mask = imag_magnitudes > imag_freq_threshold
+    if bool(np.any(problematic_mask)):
+        problematic_freqs = imag_magnitudes[problematic_mask]
         logger.debug(
             f"Check failed: Found {problematic_freqs.size} imaginary frequencies "
-            f"below -{imag_freq_threshold:.1f} cm-1: {np.round(problematic_freqs, 2)}.",
+            f"above {imag_freq_threshold:.1f}i cm-1: {np.round(problematic_freqs, 2)}i.",
         )
         logger.debug("Structure is likely a saddle point.")
         return False
 
-    total_imag_count = int(np.sum(frequencies < 0.0))
-    moi = atoms_check.get_moments_of_inertia(vectors=False)
-    is_linear: bool = any(np.isclose(moi, 0, atol=1e-5))
-    expected_zero_modes: int = 5 if is_linear else 6
+    total_imag_count = int(np.sum(imag_magnitudes > 0.0))
+    n_zero_modes = int(np.sum(np.abs(real_parts) < 1.0))
+    expected_zero_modes = _expected_zero_modes(atoms_check)
+
+    if expected_zero_modes is not None and n_zero_modes < expected_zero_modes:
+        logger.warning(
+            "Vibrational analysis found %d near-zero modes but expected at least %d "
+            "translational/rotational modes; the Hessian may be numerically noisy.",
+            n_zero_modes,
+            expected_zero_modes,
+        )
 
     logger.debug(
         f"Check passed: Found 0 imaginary frequencies above threshold ({imag_freq_threshold:.1f} cm-1).",
     )
     logger.debug(
-        f"Total of {total_imag_count} imaginary/zero frequencies found (within threshold), "
-        f"which is consistent with the {expected_zero_modes} expected translational/rotational modes.",
+        f"Total of {total_imag_count} imaginary frequencies found (within threshold) and "
+        f"{n_zero_modes} near-zero modes (expected {expected_zero_modes}).",
     )
     logger.debug("Structure is confirmed as a true local minimum.")
     return True
@@ -693,6 +761,7 @@ def filter_unique_minima(
     mic: bool = False,
     comparator_tol: float = DEFAULT_COMPARATOR_TOL,
     comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
+    comparator_include_hetero_pairs: bool = True,
 ) -> list[tuple[float, Atoms]]:
     """Filters a list of (energy, Atoms) tuples to identify unique structures.
 
@@ -705,6 +774,13 @@ def filter_unique_minima(
         n_top: Number of trailing atoms to compare (same as GA ``n_to_optimize``).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC),
              matching :func:`scgo.algorithms.ga_common.create_structure_comparator`.
+        comparator_tol: Cumulative structural difference tolerance (dimensionless).
+        comparator_pair_cor_max: Largest allowed single distance difference (Å).
+        comparator_include_hetero_pairs: If True (default), also compare
+             hetero-atomic distances so multi-element arrangements that differ
+             only in cross-species geometry (e.g. atop vs bridge adsorption) are
+             kept as distinct minima. The GA population comparator stays on the
+             ASE-reference same-species-only behavior.
 
     Returns:
         A new list of (energy, Atoms) tuples containing only the unique
@@ -732,6 +808,7 @@ def filter_unique_minima(
         pair_cor_max=comparator_pair_cor_max,
         dE=energy_tolerance,
         mic=mic,
+        include_hetero_pairs=comparator_include_hetero_pairs,
     )
 
     sorted_minima: list[tuple[float, Atoms]] = sorted(
@@ -760,23 +837,30 @@ def _auto_scale_parameter(
     scaling: float = 35.0,
     min_val: int = 3,
     max_val: int = 1000,
+    exponent: float | None = None,
 ) -> int:
     """Common scaling logic for auto parameters.
 
-    Scales parameter value with cluster size using log1p.
+    Scales a parameter value with cluster size, either logarithmically
+    (``log1p(n_atoms)``, the default) or as a power law (``n_atoms**exponent``).
+    The power-law form is used where the quantity must keep up with the roughly
+    exponential growth of the minima count for larger systems.
 
     Args:
         composition: Cluster definition.
         base: Offset applied before scaling.
-        scaling: Multiplier applied to log1p(n_atoms).
+        scaling: Multiplier applied to the growth term.
         min_val: Lower bound after scaling.
         max_val: Upper bound after scaling.
+        exponent: When set, use ``n_atoms**exponent`` instead of
+            ``log1p(n_atoms)`` as the growth term.
 
     Returns:
         Scaled integer parameter value.
     """
     n_atoms: int = max(len(composition), 1)
-    scaled = base + scaling * np.log1p(n_atoms)
+    growth = n_atoms**exponent if exponent is not None else np.log1p(n_atoms)
+    scaled = base + scaling * growth
     return int(np.clip(scaled, min_val, max_val))
 
 
@@ -784,13 +868,28 @@ def auto_niter(
     composition: list[str],
     *,
     base: int = 3,
-    scaling: float = 35.0,
+    scaling: float = 30.0,
     min_niter: int = 3,
     max_niter: int = 1000,
+    exponent: float = 0.6,
 ) -> int:
-    """Heuristic iteration budget scaled by cluster size."""
+    """Heuristic iteration budget scaled by cluster size.
+
+    Uses a power law (``n_atoms**0.6``) rather than the ``log1p`` shape used for
+    :func:`auto_population_size`. The number of distinct local minima grows
+    roughly exponentially with cluster size, so a logarithmic iteration budget
+    under-samples large systems; a log-scaled budget also forced
+    ``population_size == niter``. The power law keeps
+    ``auto_population_size(c) <= auto_niter(c)`` for every size, so iterations
+    (and therefore relaxations) dominate the search budget.
+    """
     return _auto_scale_parameter(
-        composition, base=base, scaling=scaling, min_val=min_niter, max_val=max_niter
+        composition,
+        base=base,
+        scaling=scaling,
+        min_val=min_niter,
+        max_val=max_niter,
+        exponent=exponent,
     )
 
 
@@ -802,7 +901,12 @@ def auto_population_size(
     min_population: int = 3,
     max_population: int = 1000,
 ) -> int:
-    """Heuristic GA population size scaled by cluster size."""
+    """Heuristic GA population size scaled by cluster size.
+
+    Deliberately keeps the ``log1p`` shape: a bigger population costs memory and
+    per-generation work without exploring more basins, so exploration budget is
+    spent on iterations (see :func:`auto_niter`) instead.
+    """
     return _auto_scale_parameter(
         composition,
         base=base,
@@ -819,14 +923,21 @@ def auto_niter_local_relaxation(
     scaling: float = 50.0,
     min_steps: int = 50,
     max_steps: int = 2000,
+    exponent: float = 0.38,
 ) -> int:
-    """Heuristic number of relaxation steps scaled by cluster size."""
+    """Heuristic number of relaxation steps scaled by cluster size.
+
+    The mild power law tracks the previous ``log1p`` budget for small clusters
+    while giving large systems (which need more steps to reach ``fmax``) a
+    proportionally larger allowance.
+    """
     return _auto_scale_parameter(
         composition,
         base=base,
         scaling=scaling,
         min_val=min_steps,
         max_val=max_steps,
+        exponent=exponent,
     )
 
 

@@ -41,6 +41,8 @@ _RANKED_CANDIDATES_PER_ATTEMPT = 12
 _BLMIN_RATIO_FLOOR = 0.55
 _MIN_DISTANCE_FACTOR_FLOOR = 0.3
 
+_ALL_SITE_TYPES: tuple[SiteType, ...] = ("vertex", "edge", "facet")
+
 
 @dataclass(frozen=True)
 class _PlacementTrial:
@@ -168,9 +170,10 @@ def _generate_placement_trials(
 ) -> list[_PlacementTrial]:
     trials: list[_PlacementTrial] = []
     for _ in range(n_trials):
+        site_type: str
         if flat_candidates:
             available_types: list[SiteType] = [
-                st for st in ("vertex", "edge", "facet") if site_candidates[st]
+                st for st in _ALL_SITE_TYPES if site_candidates[st]
             ]
             selected_type = _select_site_type(
                 available_types=available_types,
@@ -204,7 +207,7 @@ def _generate_placement_trials(
     return trials
 
 
-def place_fragment_on_cluster(
+def place_fragment_on_cluster(  # noqa: C901
     core: Atoms,
     fragment_template: Atoms,
     rng: Generator,

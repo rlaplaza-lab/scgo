@@ -9,7 +9,7 @@ dataclasses consumed by :mod:`scgo.runner_api`'s public run functions.
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,10 +29,12 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbatesInput,
+    GLOptimizerParams,
     SystemType,
     extract_adsorbate_definition_from_params,
     get_system_policy,
     resolve_adsorbate_run_composition,
+    resolve_search_mobile_composition,
     validate_system_type_settings,
 )
 from scgo.utils.logging import get_logger
@@ -42,9 +44,9 @@ from scgo.utils.run_helpers import initialize_params, initialize_ts_params
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 
 _ALGO_KEYS = ("simple", "bh", "ga")
-_LOGGER = get_logger(__name__)
+logger = get_logger(__name__)
 _VALIDATION_LOGGER = get_logger("scgo.validation")
-_DEFAULT_GO_PARAMS: dict[str, Any] | None = None
+_DEFAULT_GO_PARAMS: GLOptimizerParams | None = None
 
 
 def _log_validation_error(exc: SCGOValidationError) -> None:
@@ -54,8 +56,10 @@ def _log_validation_error(exc: SCGOValidationError) -> None:
 
 @dataclass(frozen=True)
 class RunGOContext:
-    composition: list[str]
+    """Resolved inputs and environment for a single global-optimization run."""
+
     system_type: SystemType
+    composition: list[str]
     params: dict[str, Any]
     seed: int | None
     run_id: str | None
@@ -68,8 +72,10 @@ class RunGOContext:
 
 @dataclass(frozen=True)
 class RunGOCampaignContext:
-    compositions: list[list[str]]
+    """Resolved inputs and environment for a multi-composition GO campaign."""
+
     system_type: SystemType
+    compositions: list[list[str]]
     params: dict[str, Any]
     seed: int | None
     run_id: str | None
@@ -81,8 +87,10 @@ class RunGOCampaignContext:
 
 @dataclass(frozen=True)
 class RunGOTSContext:
-    composition: list[str]
+    """Resolved inputs and environment for a combined GO + TS run."""
+
     system_type: SystemType
+    composition: list[str]
     go_params: dict[str, Any]
     ts_kwargs: dict[str, Any]
     seed: int | None
@@ -93,7 +101,8 @@ class RunGOTSContext:
 
 @dataclass(frozen=True)
 class RunTSContext:
-    composition: list[str]
+    """Resolved inputs and environment for a transition-state search run."""
+
     system_type: SystemType
     ts_params: dict[str, Any]
     ts_base: dict[str, Any]
@@ -103,6 +112,7 @@ class RunTSContext:
     output_dir: Path | None
     searches_dir: Path | None
     adsorbate_definition: AdsorbateDefinition | None
+    composition: list[str]
 
 
 def _optimizer_write_timing_json_enabled(params: dict[str, Any]) -> bool:
@@ -122,7 +132,9 @@ def _default_optimizer_system_type(algo: str) -> SystemType | None:
     slot = _DEFAULT_GO_PARAMS.get("optimizer_params", {}).get(algo, {})
     if isinstance(slot, dict):
         return slot.get("system_type")
-    return None
+    # Defensive: the TypedDict declares a dict slot, but defaults may be
+    # overridden at runtime with a non-dict value.
+    return None  # type: ignore[unreachable]
 
 
 def _resolved_path(path: str | Path | None) -> Path | None:
@@ -133,6 +145,139 @@ def _require_system_type(system_type: SystemType | None, fn_name: str) -> System
     if system_type is None:
         raise SCGOValidationError(f"system_type is required for {fn_name}.")
     return system_type
+
+
+_SlotApply = Callable[[dict[str, Any], str, dict[str, Any]], None]
+
+_DEFAULT_SLOT_TYPE_ERROR = "optimizer_params['{algo}'] must be a dict."
+
+
+def _with_each_algo_slot(
+    params: dict[str, Any] | None,
+    apply: _SlotApply,
+    *,
+    create_missing: bool = False,
+    slot_type_error: str = _DEFAULT_SLOT_TYPE_ERROR,
+) -> dict[str, Any]:
+    """Deep-copy ``params`` and run ``apply(out, algo, slot)`` for each algo slot.
+
+    Args:
+        params: GO params dict (or ``None``); never mutated.
+        apply: Callback receiving the copied params, the algo key, and its
+            ``optimizer_params`` slot dict (mutated in place).
+        create_missing: Create absent slots as empty dicts instead of skipping
+            them.
+        slot_type_error: ``SCGOValidationError`` message template (``{algo}``)
+            raised when a slot is present but is not a dict.
+
+    Returns:
+        The deep-copied params with ``optimizer_params`` populated.
+    """
+    out = copy.deepcopy(params) if params is not None else {}
+    op = out.setdefault("optimizer_params", {})
+    for algo in _ALGO_KEYS:
+        if algo not in op:
+            if not create_missing:
+                continue
+            op[algo] = {}
+        slot = op[algo]
+        if not isinstance(slot, dict):
+            raise SCGOValidationError(slot_type_error.format(algo=algo))
+        apply(out, algo, slot)
+    return out
+
+
+def _surface_configs_agree(
+    a: SurfaceSystemConfig | None, b: SurfaceSystemConfig | None
+) -> bool:
+    """True when two surface configs are compatible (either unset, or equal)."""
+    return a is None or b is None or a == b
+
+
+def _check_surface_config_coherence(
+    effective_surface_config: SurfaceSystemConfig | None,
+    slot_surface_config: SurfaceSystemConfig | None,
+    where: str,
+) -> None:
+    """Raise when a params-level ``surface_config`` disagrees with the run one."""
+    if not _surface_configs_agree(effective_surface_config, slot_surface_config):
+        raise SCGOValidationError(
+            f"GO/TS coherence error: {where} disagrees with run surface_config."
+        )
+
+
+def _resolve_one_composition(
+    composition: CompositionInput,
+    *,
+    system_type: SystemType,
+    adsorbates: AdsorbatesInput | None,
+    preset_adsorbate_definition: AdsorbateDefinition | None,
+    context: str,
+) -> tuple[AdsorbateDefinition | None, list[Atoms] | None, list[str]]:
+    """Normalize one composition and resolve its adsorbate context.
+
+    Returns ``(adsorbate_definition, adsorbate_fragment_template, full_composition)``.
+    """
+    comp = _as_composition(
+        composition, allow_empty=get_system_policy(system_type).slab_is_search_target
+    )
+    return resolve_adsorbate_run_composition(
+        system_type=system_type,
+        composition=comp,
+        adsorbates=adsorbates,
+        preset_adsorbate_definition=preset_adsorbate_definition,
+        context=context,
+    )
+
+
+def apply_run_context_to_slots(
+    params: dict[str, Any] | None,
+    *,
+    system_type: SystemType | None = None,
+    surface_config: SurfaceSystemConfig | None = None,
+) -> dict[str, Any]:
+    """Fan the run-level system context out to every ``optimizer_params`` slot.
+
+    Applies, in order: ``surface_config`` fan-out with coherence checks (skipped
+    for empty ``params``, which carry no user configuration to reconcile) and
+    ``system_type`` fan-out. Adsorbate context is attached separately by
+    :func:`apply_adsorbate_context`, which run builders call *after* GO/TS
+    coherence validation.
+    """
+    out = (
+        _with_surface_in_optimizers(params, surface_config=surface_config)
+        if params
+        else {}
+    )
+    if system_type is not None:
+        out = _with_system_type_in_optimizer_params(out, system_type=system_type)
+    return out
+
+
+def apply_adsorbate_context(
+    params: dict[str, Any] | None,
+    *,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    adsorbate_fragment_template: Atoms | list[Atoms] | None = None,
+) -> dict[str, Any]:
+    """Attach resolved adsorbate context to GO params, slots included.
+
+    Single entry point shared by every run-context builder (``run_go``,
+    ``run_go_campaign``, ``run_go_ts``, ``run_go_ts_campaign``) so all paths
+    agree on where adsorbate context lives: fanned into each
+    ``optimizer_params`` slot *and* mirrored at the top level (the form
+    :func:`~scgo.utils.run_helpers.prepare_algorithm_kwargs` reads).
+    """
+    out = _with_adsorbate_in_optimizers(
+        params,
+        adsorbate_definition=adsorbate_definition,
+        adsorbate_fragment_template=adsorbate_fragment_template,
+    )
+    return _merge_adsorbate_context_into_params(
+        out,
+        adsorbate_definition=adsorbate_definition,
+        adsorbate_fragment_template=adsorbate_fragment_template,
+    )
 
 
 def _prepare_run_context(
@@ -147,37 +292,26 @@ def _prepare_run_context(
     SystemType,
     dict[str, Any] | None,
     AdsorbateDefinition | None,
-    Atoms | None,
+    list[Atoms] | None,
     list[str],
 ]:
     st = _require_system_type(system_type, context)
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     if params is not None:
         _reject_system_keys(params, context=context, kind="go")
-    policy = get_system_policy(st)
-    allow_empty = policy.slab_is_search_target
-    comp = _as_composition(composition, allow_empty=allow_empty)
     preset_ads = (
         extract_adsorbate_definition_from_params(params)
         if adsorbates is None and params is not None
         else None
     )
-    ads_def, ads_template, full_comp = resolve_adsorbate_run_composition(
+    ads_def, ads_template, full_comp = _resolve_one_composition(
+        composition,
         system_type=st,
-        composition=comp,
         adsorbates=adsorbates,
         preset_adsorbate_definition=preset_ads,
         context=context,
     )
-    params_prep = params or {}
-    if params:
-        params_prep = _with_surface_in_optimizers(params, surface_config=surface_config)
-    if params_prep is not None:
-        params_prep = _with_adsorbate_in_optimizers(
-            params_prep,
-            adsorbate_definition=ads_def,
-            adsorbate_fragment_template=ads_template,
-        )
+    params_prep = apply_run_context_to_slots(params, surface_config=surface_config)
     return st, params_prep, ads_def, ads_template, full_comp
 
 
@@ -196,8 +330,6 @@ def _validate_go_ts_surface_config(
             f"system_type={system_type!r} requires the run surface_config argument "
             "to be a SurfaceSystemConfig."
         )
-    from scgo.system_types import resolve_search_mobile_composition
-
     search_comp = resolve_search_mobile_composition(
         system_type=system_type,
         composition=list(adsorbate_composition),
@@ -211,15 +343,14 @@ def _validate_go_ts_surface_config(
     go_slot = op.get(chosen)
     if not isinstance(go_slot, dict):
         go_slot = {}
-    go_sc = go_slot.get("surface_config")
-    if go_sc is not None and go_sc != surface_config:
-        raise SCGOValidationError(
-            "run surface_config and go_params['optimizer_params']["
-            f"'{chosen}']['surface_config'] disagree."
-        )
+    _check_surface_config_coherence(
+        surface_config,
+        go_slot.get("surface_config"),
+        f"go_params['optimizer_params']['{chosen}']['surface_config']",
+    )
 
 
-def _validate_go_ts_param_coherence(
+def _validate_go_ts_param_coherence(  # noqa: C901
     *,
     go_prepared: dict[str, Any],
     ts_params: dict[str, Any],
@@ -235,15 +366,11 @@ def _validate_go_ts_param_coherence(
                 "GO/TS coherence error: surface system types require "
                 "go_params['surface_config'] or run surface_config=."
             )
-        if (
-            surface_config is not None
-            and go_prepared.get("surface_config") is not None
-            and go_prepared.get("surface_config") != surface_config
-        ):
-            raise SCGOValidationError(
-                "GO/TS coherence error: go_params['surface_config'] disagrees with "
-                "run surface_config."
-            )
+        _check_surface_config_coherence(
+            surface_config,
+            go_prepared.get("surface_config"),
+            "go_params['surface_config']",
+        )
     elif go_surface_config is not None:
         raise SCGOValidationError(
             "GO/TS coherence error: go_params['surface_config'] is set but "
@@ -273,16 +400,11 @@ def _validate_go_ts_param_coherence(
             )
         slot_surface_config = slot.get("surface_config")
         if policy.uses_surface:
-            if (
-                slot_surface_config is not None
-                and surface_config is not None
-                and slot_surface_config != surface_config
-            ):
-                raise SCGOValidationError(
-                    "GO/TS coherence error: "
-                    f"go_params['optimizer_params']['{algo}']['surface_config'] "
-                    "disagrees with run surface_config."
-                )
+            _check_surface_config_coherence(
+                surface_config,
+                slot_surface_config,
+                f"go_params['optimizer_params']['{algo}']['surface_config']",
+            )
         elif slot_surface_config is not None:
             raise SCGOValidationError(
                 "GO/TS coherence error: go_params surface_config is set but "
@@ -296,15 +418,11 @@ def _validate_go_ts_param_coherence(
                 "GO/TS coherence error: surface system types require "
                 "ts_params['surface_config'] or run surface_config=."
             )
-        if (
-            surface_config is not None
-            and ts_params.get("surface_config") is not None
-            and ts_params.get("surface_config") != surface_config
-        ):
-            raise SCGOValidationError(
-                "GO/TS coherence error: ts_params['surface_config'] disagrees with "
-                "run surface_config."
-            )
+        _check_surface_config_coherence(
+            surface_config,
+            ts_params.get("surface_config"),
+            "ts_params['surface_config']",
+        )
     elif ts_surface_config is not None:
         raise SCGOValidationError(
             "GO/TS coherence error: ts_params['surface_config'] is set but "
@@ -328,16 +446,13 @@ def _with_system_type_in_optimizer_params(
     system_type: SystemType,
 ) -> dict[str, Any]:
     """Attach ``system_type`` (and fan-out ``surface_config``) to optimizer slots."""
-    out = copy.deepcopy(params or {})
-    op = out.setdefault("optimizer_params", {})
-    for algo in _ALGO_KEYS:
-        cfg = op.setdefault(algo, {})
-        cfg["system_type"] = system_type
-    # Add surface_config to all optimizer slots if it's in params
-    if "surface_config" in out:
-        for algo in _ALGO_KEYS:
-            op.setdefault(algo, {})["surface_config"] = out["surface_config"]
-    return out
+
+    def _apply(out: dict[str, Any], algo: str, slot: dict[str, Any]) -> None:
+        slot["system_type"] = system_type
+        if "surface_config" in out:
+            slot["surface_config"] = out["surface_config"]
+
+    return _with_each_algo_slot(params, _apply, create_missing=True)
 
 
 def _coerce_ts_for_runner(
@@ -437,12 +552,12 @@ def _default_go_ts_output_path(
     )
     path = (p / f"{stem}_{_calculator_slug_from_go_params(go_params)}").resolve()
     if output_root is None:
-        _LOGGER.info("No output_dir provided; using default campaign root %s", path)
+        logger.info("No output_dir provided; using default campaign root %s", path)
     return path
 
 
 def _log_completion(kind: str, *, elapsed_s: float, details: str) -> None:
-    _LOGGER.info("%s completed in %.2f s (%s)", kind, elapsed_s, details)
+    logger.info("%s completed in %.2f s (%s)", kind, elapsed_s, details)
 
 
 def _as_int_seed(label: str, value: Any) -> int:
@@ -602,7 +717,7 @@ def _prepare_run_go_context(
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=params)
     eff_params = _with_system_type_in_optimizer_params(params_prep, system_type=st)
-    eff_params = _merge_adsorbate_context_into_params(
+    eff_params = apply_adsorbate_context(
         eff_params,
         adsorbate_definition=ads_def,
         adsorbate_fragment_template=ads_temp,
@@ -647,41 +762,32 @@ def _prepare_run_go_campaign_context(
     validate_system_type_settings(system_type=st, surface_config=surface_config)
     if params is not None:
         _reject_system_keys(params, context="run_go_campaign")
-    params_prep = (
-        _with_surface_in_optimizers(params, surface_config=surface_config)
-        if params
-        else None
-    )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=params)
-    eff_params = _with_system_type_in_optimizer_params(params_prep, system_type=st)
     preset_ads_def = (
-        extract_adsorbate_definition_from_params(eff_params)
-        if adsorbates is None
-        else None
+        extract_adsorbate_definition_from_params(params) if adsorbates is None else None
     )
     full_compositions: list[list[str]] = []
     ads_def: AdsorbateDefinition | None = None
     ads_temp: list[Atoms] | Atoms | None = None
     for composition_item in _as_composition_list(compositions):
-        comp = _as_composition(composition_item)
-        ads_def, ads_temp, full_comp = resolve_adsorbate_run_composition(
+        ads_def, ads_temp, full_comp = _resolve_one_composition(
+            composition_item,
             system_type=st,
-            composition=comp,
             adsorbates=adsorbates,
             preset_adsorbate_definition=preset_ads_def,
             context="run_go_campaign",
         )
         full_compositions.append(full_comp)
-        if ads_def is not None:
-            eff_params["adsorbate_definition"] = ads_def
-        if ads_temp is not None:
-            eff_params["adsorbate_fragment_template"] = ads_temp
-    if adsorbates is not None or preset_ads_def is not None:
-        eff_params = _with_adsorbate_in_optimizers(
-            eff_params,
-            adsorbate_definition=eff_params.get("adsorbate_definition"),
-            adsorbate_fragment_template=eff_params.get("adsorbate_fragment_template"),
-        )
+    eff_params = apply_run_context_to_slots(
+        params,
+        system_type=st,
+        surface_config=surface_config,
+    )
+    eff_params = apply_adsorbate_context(
+        eff_params,
+        adsorbate_definition=ads_def,
+        adsorbate_fragment_template=ads_temp,
+    )
     out_path = _resolved_path(output_dir)
     campaign_root = (
         str(Path(out_path).expanduser().resolve())
@@ -741,14 +847,12 @@ def _prepare_run_go_ts_context(
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
     go_prep = _with_surface_in_optimizers(go_mat, surface_config=surface_config)
-    policy = get_system_policy(st)
-    core_comp = _as_composition(composition, allow_empty=policy.slab_is_search_target)
     preset_ads = (
         extract_adsorbate_definition_from_params(go_mat) if adsorbates is None else None
     )
-    ads_def, ads_temp, comp = resolve_adsorbate_run_composition(
+    ads_def, ads_temp, comp = _resolve_one_composition(
+        composition,
         system_type=st,
-        composition=core_comp,
         adsorbates=adsorbates,
         preset_adsorbate_definition=preset_ads,
         context=context_name,
@@ -766,7 +870,7 @@ def _prepare_run_go_ts_context(
         adsorbate_composition=comp,
     )
     go_prep = _with_system_type_in_optimizer_params(go_prep, system_type=st)
-    go_local = _merge_adsorbate_context_into_params(
+    go_local = apply_adsorbate_context(
         go_prep,
         adsorbate_definition=ads_def,
         adsorbate_fragment_template=ads_temp,

@@ -1,8 +1,8 @@
+"""Mutation that translates adsorbate atoms parallel to the slab surface."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutation that translates adsorbate atoms parallel to the slab surface."""
 
 import numpy as np
 from ase import Atoms
@@ -56,7 +56,7 @@ class InPlaneSlideMutation(OffspringCreator):
         self.descriptor = "InPlaneSlideMutation"
         self.min_inputs = 1
 
-    def _candidate_shift_vectors(self, slab, positions, in_plane):
+    def _candidate_shift_vectors(self, slab, positions, in_plane):  # noqa: C901
         if self.max_displacement <= 1e-12:
             return []
 
@@ -133,11 +133,13 @@ class InPlaneSlideMutation(OffspringCreator):
         return candidate_shifts[:max_candidates]
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the in-plane slide mutation."""
         f = parents[0]
         indi = self.mutate(f)
         return _finalize_mutant(self, f, indi, "mutation: in_plane_slide")
 
     def mutate(self, atoms):
+        """Translate adsorbate atoms parallel to the slab surface."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
         top = atoms[-N:]

@@ -1,8 +1,8 @@
+"""Mutations that permute atom types between groups."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutations that permute atom types between groups."""
 
 import numpy as np
 from ase import Atoms
@@ -67,13 +67,14 @@ class PermutationMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the permutation mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
 
         return _finalize_mutant(self, f, indi, "mutation: permutation")
 
-    def mutate(self, atoms):
+    def mutate(self, atoms):  # noqa: C901
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]

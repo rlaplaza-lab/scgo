@@ -195,7 +195,7 @@ def _core_rms_displacement(
     return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
 
 
-def select_structure_pairs(
+def select_structure_pairs(  # noqa: C901
     minima: list[tuple[float, Atoms]],
     max_pairs: int | None = None,
     energy_gap_threshold: float | None = None,
@@ -581,7 +581,7 @@ def _cluster_ts_candidates_globally(
     return clusters
 
 
-def write_final_unique_ts(
+def write_final_unique_ts(  # noqa: C901
     ts_results: list[dict[str, Any]],
     output_dir: str,
     composition: list[str],
@@ -696,7 +696,7 @@ def write_final_unique_ts(
 
         first_edge = connected_edges[0]
         pair_id = str(first_edge["pair_id"])
-        minima_indices = [
+        rep_minima_indices = [
             int(first_edge["minima_indices"][0]),
             int(first_edge["minima_indices"][1]),
         ]
@@ -724,7 +724,7 @@ def write_final_unique_ts(
             "pair_id": pair_id,
             "ts_energy": float(energy),
             "barrier_height": result.get("barrier_height"),
-            "minima_indices": minima_indices,
+            "minima_indices": rep_minima_indices,
             "connected_edges": connected_edges,
             "connected_minima": connected_minima_sorted,
             "filename": filepath,
@@ -732,7 +732,7 @@ def write_final_unique_ts(
             "_atoms_obj": atoms,
         }
         if minima is not None:
-            i, j = minima_indices
+            i, j = rep_minima_indices
             item["minima_provenance"] = [
                 minima_provenance_dict(minima, i),
                 minima_provenance_dict(minima, j),

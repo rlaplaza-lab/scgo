@@ -7,6 +7,8 @@ import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from scgo.utils.logging import log_debug_v, log_info_v
+
 if TYPE_CHECKING:
     from logging import Logger
 
@@ -66,17 +68,20 @@ class InitDiagnosticsCollector:
 
     @classmethod
     def reset(cls) -> None:
+        """Clear all recorded fallback and placement-failure entries."""
         with cls._lock:
             cls._fallback_records.clear()
             cls._placement_failures.clear()
 
     @classmethod
     def record_fallback(cls, used_strategy: str, from_strategy: str) -> None:
+        """Record a strategy fallback for the population-init summary."""
         with cls._lock:
             cls._fallback_records.append((used_strategy, from_strategy))
 
     @classmethod
     def record_placement_failure(cls, compact_line: str, detail_msg: str) -> None:
+        """Record a candidate placement failure for the summary."""
         with cls._lock:
             cls._placement_failures.append((compact_line, detail_msg))
 
@@ -144,40 +149,41 @@ def log_generation_offspring_summaries(
     attempts: int,
 ) -> None:
     """Log v1 generation crossover/mutation/offspring summaries and v2 per-job detail."""
-    if verbosity >= 1:
-        failures: dict[str, int] = {}
-        mutation_applied = 0
-        for result in job_results:
-            reason = result.get("failure_reason")
-            if reason:
-                failures[str(reason)] = failures.get(str(reason), 0) + 1
-            if result.get("mutation_applied"):
-                mutation_applied += 1
+    failures: dict[str, int] = {}
+    mutation_applied = 0
+    for result in job_results:
+        reason = result.get("failure_reason")
+        if reason:
+            failures[str(reason)] = failures.get(str(reason), 0) + 1
+        if result.get("mutation_applied"):
+            mutation_applied += 1
 
-        if total_jobs > 0:
-            succeeded = total_jobs - sum(failures.values())
-            detail = format_count_summary(failures)
-            crossover_msg = f"Crossover: {succeeded}/{total_jobs} succeeded"
-            if detail:
-                crossover_msg = f"{crossover_msg} ({detail})"
-            logger.info(crossover_msg)
-            logger.info(
-                "Mutation: applied to %d/%d offspring",
-                mutation_applied,
-                total_jobs,
-            )
-        logger.info(
-            "Offspring: created %d/%d (attempts=%d)",
-            created,
-            n_offspring,
-            attempts,
+    if total_jobs > 0:
+        succeeded = total_jobs - sum(failures.values())
+        detail = format_count_summary(failures)
+        crossover_msg = f"Crossover: {succeeded}/{total_jobs} succeeded"
+        if detail:
+            crossover_msg = f"{crossover_msg} ({detail})"
+        log_info_v(logger, crossover_msg, verbosity=verbosity)
+        log_info_v(
+            logger,
+            "Mutation: applied to %d/%d offspring",
+            mutation_applied,
+            total_jobs,
+            verbosity=verbosity,
         )
-
-    if verbosity < 2:
-        return
+    log_info_v(
+        logger,
+        "Offspring: created %d/%d (attempts=%d)",
+        created,
+        n_offspring,
+        attempts,
+        verbosity=verbosity,
+    )
 
     for result in job_results:
-        logger.debug(
+        log_debug_v(
+            logger,
             "%s",
             format_offspring_outcome_line(
                 int(result["index"]) + 1,
@@ -186,6 +192,7 @@ def log_generation_offspring_summaries(
                 mutation_applied=bool(result.get("mutation_applied")),
                 validation_error=result.get("validation_error"),
             ),
+            verbosity=verbosity,
         )
 
 

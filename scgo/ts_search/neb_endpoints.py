@@ -26,16 +26,16 @@ def prepare_neb_endpoints(
     if neb_cfg.surface_config is not None:
         attach_slab_constraints_from_surface_config(react, neb_cfg.surface_config)
         attach_slab_constraints_from_surface_config(prod, neb_cfg.surface_config)
-    validate_kwargs = {
-        "system_type": neb_cfg.system_type,
-        "surface_config": neb_cfg.surface_config,
-        "n_slab": neb_cfg.n_slab,
-        "adsorbate_definition": neb_cfg.adsorbate_definition,
-        "connectivity_factor": neb_cfg.connectivity_factor,
-        "allow_cluster_fragmentation": neb_cfg.allow_cluster_fragmentation,
-        "allow_adsorbate_surface_detachment": neb_cfg.allow_adsorbate_surface_detachment,
-        "enforce_adsorbate_subgraph_integrity": neb_cfg.enforce_adsorbate_subgraph_integrity,
-    }
     for ep in (react, prod):
-        validate_structure_for_system_type(ep, **validate_kwargs)
+        validate_structure_for_system_type(
+            ep,
+            system_type=neb_cfg.system_type,
+            surface_config=neb_cfg.surface_config,
+            n_slab=neb_cfg.n_slab,
+            adsorbate_definition=neb_cfg.adsorbate_definition,
+            connectivity_factor=neb_cfg.connectivity_factor,
+            allow_cluster_fragmentation=neb_cfg.allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=neb_cfg.allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=neb_cfg.enforce_adsorbate_subgraph_integrity,
+        )
     return react, prod

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from ase.calculators.emt import EMT
@@ -22,6 +22,7 @@ from scgo.exceptions import (
 from scgo.param_presets import get_default_params, get_ts_search_params
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
+    GLOptimizerParams,
     SystemType,
     get_system_policy,
     validate_system_type_settings,
@@ -81,12 +82,12 @@ def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
     """
     default_params = get_default_params()
     if params is None:
-        return default_params
+        return cast(dict[str, Any], default_params)
 
-    return deep_merge_dicts(default_params, params)
+    return deep_merge_dicts(cast(dict[str, Any], default_params), params)
 
 
-def initialize_ts_params(
+def initialize_ts_params(  # noqa: C901
     ts_params: dict[str, Any] | None,
     *,
     system_type: SystemType,
@@ -282,6 +283,7 @@ def validate_algorithm_params(
             "recovery_window",
             "early_stopping_niter",
             "batch_size",
+            "relax_batch_target",
             "relaxer",
             "fitness_strategy",
             "diversity_reference_db",
@@ -444,7 +446,7 @@ def resolve_diversity_params(
     return diversity_params
 
 
-def prepare_algorithm_kwargs(
+def prepare_algorithm_kwargs(  # noqa: C901
     algo_params: dict[str, Any],
     params: dict[str, Any],
     composition: list[str],
@@ -463,6 +465,7 @@ def prepare_algorithm_kwargs(
         params: Full top-level parameter dictionary (for fitness strategy and diversity resolution).
         composition: List of atomic symbols.
         chosen_go: Name of chosen algorithm ('simple', 'bh', or 'ga').
+        system_type: System type controlling surface/adsorbate behavior.
 
     Returns:
         Dictionary ready for direct algorithm execution.
@@ -585,7 +588,7 @@ def log_ts_configuration(
             logger.info("TS config: %s=%s", key, coerced_kwargs[key])
 
 
-def log_configuration(
+def log_configuration(  # noqa: C901
     params: dict[str, Any],
     chosen_go: str,
     cluster_formula: str,
@@ -594,7 +597,7 @@ def log_configuration(
     verbosity: int,
     *,
     user_params: dict[str, Any] | None = None,
-    params_base: dict[str, Any] | None = None,
+    params_base: dict[str, Any] | GLOptimizerParams | None = None,
 ) -> None:
     """Log final configuration.
 
@@ -618,7 +621,10 @@ def log_configuration(
         source_label="get_default_params()",
         user_params=user_params,
         merged=params,
-        base=params_base if params_base is not None else get_default_params(),
+        base=cast(
+            dict[str, Any],
+            params_base if params_base is not None else get_default_params(),
+        ),
         verbosity=verbosity,
     )
 

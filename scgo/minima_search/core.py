@@ -12,7 +12,7 @@ import sqlite3
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from ase import Atoms
@@ -42,6 +42,8 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.system_types import (
+    AdsorbateDefinition,
+    SystemType,
     _n_core_mobile_from_adsorbate_definition,
     get_system_policy,
     resolve_mobile_composition,
@@ -120,7 +122,7 @@ def _create_surface_initialized_atoms(
     adsorbate_definition: Any = None,
     adsorbate_fragment_template: Atoms | None = None,
     cluster_adsorbate_config: Any = None,
-    system_type: str | None = None,
+    system_type: SystemType | None = None,
 ) -> Atoms:
     working_config = surface_config
     policy = get_system_policy(system_type) if system_type is not None else None
@@ -267,16 +269,18 @@ def _resolve_n_core_mobile_for_alignment(
     n_core_meta = get_metadata(atoms, "n_core_atoms", None)
     if n_core_meta is not None:
         try:
-            n_core = int(n_core_meta)
+            n_core_parsed = int(n_core_meta)
         except (TypeError, ValueError):
-            n_core = None
+            pass
         else:
-            if n_core >= 0:
-                return n_core
+            if n_core_parsed >= 0:
+                return n_core_parsed
 
     ads_def = global_optimizer_kwargs.get("adsorbate_definition")
     if isinstance(ads_def, dict):
-        n_core = _n_core_mobile_from_adsorbate_definition(ads_def)
+        n_core = _n_core_mobile_from_adsorbate_definition(
+            cast("AdsorbateDefinition", ads_def)
+        )
         if n_core is not None:
             return int(n_core)
     return None
@@ -413,7 +417,7 @@ def _validate_common_run_inputs(
     allow_empty = False
     if isinstance(system_type, str):
         try:
-            policy = get_system_policy(system_type)
+            policy = get_system_policy(cast("SystemType", system_type))
             allow_empty = policy.slab_is_search_target and not policy.has_adsorbate
         except KeyError:
             allow_empty = False
@@ -471,7 +475,7 @@ def _validate_calculator_compatibility(
     return True, "Calculator is compatible"
 
 
-def scgo(
+def scgo(  # noqa: C901
     composition: list[str],
     global_optimizer: str,
     global_optimizer_kwargs: dict[str, Any],
@@ -496,12 +500,14 @@ def scgo(
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
         run_id: Optional run ID.
         clean: Start fresh if True.
+        timing_output_dir: Optional directory to write timing JSON.
+        timing_collector: Optional list collecting per-run timing payloads.
 
     Returns:
         List of (energy, Atoms) for minima.
 
     Raises:
-        ValueError: For invalid parameters.
+        SCGOValidationError: For invalid parameters.
     """
     logger = get_logger(__name__)
 
@@ -555,12 +561,13 @@ def scgo(
         optimizer_kwargs["fitness_strategy"] = ensure_fitness_strategy_resolved(
             optimizer_kwargs["fitness_strategy"]
         )
-    system_type = optimizer_kwargs.get("system_type")
-    if not isinstance(system_type, str):
+    raw_system_type = optimizer_kwargs.get("system_type")
+    if not isinstance(raw_system_type, str):
         raise SCGOValidationError(
             "system_type must be set in global_optimizer_kwargs "
             "(e.g. 'gas_cluster', 'surface_cluster')."
         )
+    system_type = cast("SystemType", raw_system_type)
     policy = get_system_policy(system_type)
     surface_cfg = optimizer_kwargs.get("surface_config")
     validate_system_type_settings(
@@ -571,7 +578,9 @@ def scgo(
     )
     ads_def = optimizer_kwargs.get("adsorbate_definition")
     if isinstance(ads_def, dict) and policy.has_adsorbate:
-        composition = resolve_mobile_composition(composition, ads_def, context="scgo")
+        composition = resolve_mobile_composition(
+            composition, cast("AdsorbateDefinition", ads_def), context="scgo"
+        )
     validate_adsorbate_definition(
         system_type=system_type,
         composition=composition,
@@ -691,7 +700,7 @@ def scgo(
     return all_minima
 
 
-def run_trials(
+def run_trials(  # noqa: C901
     composition: list[str],
     global_optimizer: str,
     global_optimizer_kwargs: dict[str, Any],
@@ -719,9 +728,15 @@ def run_trials(
         rng: Random number generator.
         calculator_for_global_optimization: ASE calculator.
         validate_with_hessian: Whether to validate with Hessian.
+        fmax_threshold: Force convergence threshold for validation relaxation.
+        check_hessian: Whether to verify the Hessian has no imaginary frequencies.
+        imag_freq_threshold: Threshold (cm^-1) above which frequencies are imaginary.
+        validation_n_jobs: Number of parallel jobs for validation relaxation.
+        tag_final_minima: Whether to tag accepted minima in the database.
         verbosity: Verbosity level.
         run_id: Optional run ID.
         clean: Start fresh if True.
+        allow_metadata_mismatch: Allow resuming despite metadata mismatches.
 
     Returns:
         List of (energy, Atoms) for unique minima.
@@ -856,13 +871,15 @@ def run_trials(
         raise SCGOValidationError(
             "system_type must be set in global_optimizer_kwargs for minima dedupe."
         )
-    dedupe_mic = resolve_structure_mic(system_type_for_mic, surface_cfg)
+    dedupe_mic = resolve_structure_mic(
+        cast("SystemType", system_type_for_mic), surface_cfg
+    )
     unique_candidates = filter_unique_minima(
         all_minima_for_filtering,
         n_top=len(composition),
         mic=dedupe_mic,
     )
-    logger.info(f"Found {len(unique_candidates)} unique candidates.")
+    logger.info("Found %d unique candidates.", len(unique_candidates))
 
     if not unique_candidates:
         _write_results_summary(
@@ -943,7 +960,7 @@ def run_trials(
                     if is_valid:
                         validated_minima.append((energy, atoms))
                     else:
-                        logger.info(f"Candidate {i + 1} rejected")
+                        logger.warning("Candidate %d rejected", i + 1)
                 except (OSError, RuntimeError, ValueError, SCGOValidationError) as e:
                     logger.warning(
                         f"Validation failed for candidate {i + 1} (E={energy:.4f} eV): {e}"
@@ -967,8 +984,8 @@ def run_trials(
         final_minima = unique_candidates
 
     best_energy, _ = final_minima[0]
-    logger.info(f"Process complete. Found {len(final_minima)} final unique minima.")
-    logger.info(f"Best potential energy: {best_energy:.4f} eV")
+    logger.info("Process complete. Found %d final unique minima.", len(final_minima))
+    logger.info("Best potential energy: %.4f eV", best_energy)
 
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")
     logger.info(
@@ -1092,7 +1109,7 @@ def run_trials(
             mark_final_minima_in_db(final_minima_info, base_dir=output_dir)
         except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
             # Consider DB tagging a systemic failure -- surface it after logging
-            logger.warning(f"Failed to tag final minima in DB: {e}")
+            logger.warning("Failed to tag final minima in DB: %s", e)
             raise
 
     return final_minima
@@ -1117,7 +1134,7 @@ def _write_results_summary(
     logger = get_logger(__name__)
 
     # Count structures by run_id
-    run_counts = Counter()
+    run_counts: Counter[str] = Counter()
     for _, atoms in final_minima:
         provenance = get_provenance(atoms)
         run_id_from_atoms = provenance.get("run_id", run_id)
@@ -1144,7 +1161,7 @@ def _write_results_summary(
         with open(summary_file, "w") as f:
             json.dump(summary, f, indent=2, cls=RunMetadataJSONEncoder)
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Wrote results summary to {summary_file}")
+            logger.debug("Wrote results summary to %s", summary_file)
     except (OSError, TypeError) as e:
-        logger.warning(f"Failed to write results summary: {e}")
+        logger.warning("Failed to write results summary: %s", e)
         raise

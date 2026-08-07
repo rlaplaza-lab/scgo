@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_NEB_TANGENT_METHOD
 from scgo.exceptions import (
@@ -120,7 +120,7 @@ class NebRunConfig:
         )
 
 
-def coerce_ts_params_to_runner_kwargs(
+def coerce_ts_params_to_runner_kwargs(  # noqa: C901
     ts_params: dict[str, Any] | None,
     *,
     system_type: SystemType,
@@ -139,10 +139,10 @@ def coerce_ts_params_to_runner_kwargs(
         )
 
     calc_name = str(ts_params["calculator"])
-    if system_type not in SystemType.__args__:
+    if system_type not in get_args(SystemType):
         raise SCGOValidationError(
             f"Unsupported system_type={system_type!r}; "
-            f"expected one of {SystemType.__args__!r}."
+            f"expected one of {get_args(SystemType)!r}."
         )
     ts_defaults = get_ts_defaults(system_type)
     use_ts, use_pn = resolve_ts_torchsim_flags(

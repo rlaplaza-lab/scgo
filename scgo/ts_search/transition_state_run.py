@@ -10,7 +10,7 @@ import os
 import sqlite3
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 from scgo.algorithms.ga_common import resolve_neb_mobile_dims
 from scgo.constants import (
@@ -26,6 +26,7 @@ from scgo.surface.constraints import (
 )
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
+    AdsorbateDefinition,
     SystemType,
     _adsorbate_fragment_lengths_from_definition,
     _n_core_mobile_from_adsorbate_definition,
@@ -43,7 +44,11 @@ from scgo.utils.helpers import (
     get_cluster_formula,
     validate_pair_id,
 )
-from scgo.utils.logging import configure_logging, get_logger
+from scgo.utils.logging import (
+    configure_logging,
+    get_logger,
+    log_info_v,
+)
 from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import ensure_rng
@@ -186,7 +191,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
     return kept
 
 
-def _run_serial_neb_search(
+def _run_serial_neb_search(  # noqa: C901
     pairs: list[tuple[int, int]],
     minima: list[tuple[float, Any]],
     *,
@@ -226,8 +231,14 @@ def _run_serial_neb_search(
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
 
-        if verbosity >= 1:
-            logger.info("[%d/%d] Finding TS for pair %s", idx, len(pairs), pair_id)
+        log_info_v(
+            logger,
+            "[%d/%d] Finding TS for pair %s",
+            idx,
+            len(pairs),
+            pair_id,
+            verbosity=verbosity,
+        )
 
         try:
             react_ep, prod_ep = prepare_neb_endpoints(atoms_i, atoms_j, neb_cfg)
@@ -274,7 +285,7 @@ def _run_serial_neb_search(
                 n_images=neb_cfg.neb_n_images,
                 spring_constant=neb_cfg.neb_spring_constant,
                 fmax=neb_cfg.neb_fmax,
-                neb_steps=neb_steps,
+                neb_steps=cast("int", neb_steps),
                 climb=neb_cfg.neb_climb,
                 interpolation_method=neb_cfg.neb_interpolation_method,
                 align_endpoints=neb_cfg.neb_align_endpoints,
@@ -350,7 +361,7 @@ def _warn_on_surface_mobile_indices(
     system_type: SystemType,
     n_slab: int = 0,
 ) -> None:
-    """Log diagnostics when surface minima lack a usable mobile partition.
+    r"""Log diagnostics when surface minima lack a usable mobile partition.
 
     When ``n_slab > 0`` (from ``surface_config``), pair comparison uses the slab
     prefix from the live surface template, not stored ``n_slab_atoms`` metadata.
@@ -447,7 +458,7 @@ def _apply_surface_ts_geometry_gate(
                 break
 
 
-def run_transition_state_search(
+def run_transition_state_search(  # noqa: C901
     composition: list[str],
     system_type: SystemType,
     output_dir: str | Path | None = None,
@@ -557,6 +568,22 @@ def run_transition_state_search(
             constraints are applied to match GO behavior.
         adsorbate_definition: Optional; two-block mobile runs use blockwise NEB alignment
             when ``neb_align_endpoints`` is True.
+        system_type: System type controlling surface/adsorbate behavior.
+        connectivity_factor: Optional connectivity factor override.
+        allow_cluster_fragmentation: Allow splitting cluster fragments during alignment.
+        allow_adsorbate_surface_detachment: Allow adsorbate atoms to detach from the surface.
+        enforce_adsorbate_subgraph_integrity: Enforce adsorbate subgraph integrity in pairs.
+        neb_align_endpoints: Align endpoints before NEB interpolation.
+        neb_perturb_sigma: Optional endpoint perturbation sigma (Å).
+        neb_surface_cell_remap: Enable in-plane lattice-image search (surface).
+        neb_surface_lattice_rotation: Enable global in-plane rotation (surface).
+        neb_surface_max_lattice_shift: Max integer cell index searched in-plane.
+        dedupe_minima: Deduplicate loaded minima before pairing.
+        minima_energy_tolerance: Energy tolerance for minima deduplication (eV).
+        dedupe_ts: Deduplicate found transition states.
+        tag_ts_in_db: Tag transition states in the database on success.
+        ts_energy_tolerance: Energy tolerance for TS deduplication (eV).
+        write_timing_json: Write per-pair timing JSON when True.
 
     Returns:
         List of result dictionaries from :func:`find_transition_state`.
@@ -583,7 +610,7 @@ def run_transition_state_search(
         surface_config=surface_config,
     )
     adsorbate_composition = list(composition)
-    if system_policy.uses_surface:
+    if system_policy.uses_surface and surface_config is not None:
         composition = full_adsorbate_slab_composition(
             adsorbate_composition, surface_config
         )
@@ -632,7 +659,9 @@ def run_transition_state_search(
         adsorbate_composition if system_policy.uses_surface else composition,
         system_type=system_type,
         adsorbate_definition=(
-            adsorbate_definition if isinstance(adsorbate_definition, dict) else None
+            cast("AdsorbateDefinition", adsorbate_definition)
+            if isinstance(adsorbate_definition, dict)
+            else None
         ),
         surface_config=surface_config if system_policy.uses_surface else None,
     )
@@ -667,8 +696,9 @@ def run_transition_state_search(
         logger.error("Failed to locate calculator class %s: %s", calculator_name, e)
         raise SCGOValidationError(f"Cannot initialize calculator: {e}") from e
 
-    if verbosity >= 1:
-        logger.info("Loading minima for composition %s", formula)
+    log_info_v(
+        logger, "Loading minima for composition %s", formula, verbosity=verbosity
+    )
 
     minima_by_formula = load_minima_by_composition(
         str(minima_dir), composition, prefer_final_unique=True
@@ -729,9 +759,14 @@ def run_transition_state_search(
             n_top=dedupe_n_top,
             mic=ts_dedupe_mic,
         )
-        if verbosity >= 1 and len(minima) != original_count:
-            logger.info(
-                f"Deduplicated minima for {formula}: {original_count} -> {len(minima)} unique entries"
+        if len(minima) != original_count:
+            log_info_v(
+                logger,
+                "Deduplicated minima for %s: %d -> %d unique entries",
+                formula,
+                original_count,
+                len(minima),
+                verbosity=verbosity,
             )
 
     if len(minima) < 2:
@@ -739,16 +774,20 @@ def run_transition_state_search(
         cleanup_torch_cuda(logger=logger)
         return []
 
-    if verbosity >= 1:
-        logger.info("Found %d minima for %s", len(minima), formula)
-    if verbosity >= 2 and neb_align_endpoints:
-        logger.info(
+    log_info_v(
+        logger, "Found %d minima for %s", len(minima), formula, verbosity=verbosity
+    )
+    if neb_align_endpoints:
+        log_info_v(
+            logger,
             "NEB endpoint alignment enabled (align=%s, mic=%s, cell_remap=%s, "
             "lattice_rotation=%s)",
             neb_align_endpoints,
             neb_interpolation_mic,
             neb_surface_cell_remap,
             neb_surface_lattice_rotation,
+            verbosity=verbosity,
+            min_verbosity=2,
         )
     _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 
@@ -822,8 +861,12 @@ def run_transition_state_search(
             )
             return []
 
-    if verbosity >= 1:
-        logger.info("Selected %d structure pairs for TS search", len(pairs))
+    log_info_v(
+        logger,
+        "Selected %d structure pairs for TS search",
+        len(pairs),
+        verbosity=verbosity,
+    )
 
     ts_results_root.mkdir(parents=True, exist_ok=True)
     run_id = ensure_run_id(None, verbosity=verbosity, logger=logger)
@@ -977,17 +1020,20 @@ def run_transition_state_search(
         )
 
         if tag_ts_in_db and unique_ts:
-            tag_unique_ts_in_databases(unique_ts, minima, str(minima_dir))
+            tag_unique_ts_in_databases(
+                unique_ts, minima, str(minima_dir), verbosity=verbosity
+            )
 
-    if verbosity >= 1:
-        num_success = sum(1 for r in ts_results if r.get("status") == "success")
-        logger.info(
-            "TS search complete for %s: %d result(s) (%d successful).",
-            formula,
-            len(ts_results),
-            num_success,
-        )
-        logger.info("Results written to: %s", ts_results_root)
+    num_success = sum(1 for r in ts_results if r.get("status") == "success")
+    log_info_v(
+        logger,
+        "TS search complete for %s: %d result(s) (%d successful).",
+        formula,
+        len(ts_results),
+        num_success,
+        verbosity=verbosity,
+    )
+    log_info_v(logger, "Results written to: %s", ts_results_root, verbosity=verbosity)
 
     cleanup_torch_cuda(logger=logger)
 
@@ -1048,11 +1094,12 @@ def integrate_ts_to_database(
                 minima_idx_1=int(minima_idx_1),
                 minima_idx_2=int(minima_idx_2),
                 db_file=minima_database_file,
-                pair_id=pair_id,
+                pair_id=cast("str", pair_id),
                 barrier_height=float(barrier),
                 endpoint_provenance=result.get("minima_provenance"),
                 canonical_ts=False,
                 neb_converged=bool(result.get("neb_converged", False)),
+                verbosity=verbosity,
             )
 
             if success:
@@ -1099,9 +1146,12 @@ def run_transition_state_campaign(
 
     ts_kwargs = ts_kwargs or {}
     campaign_results: dict[str, list[dict[str, Any]]] = {}
-    ads_def = ts_kwargs.get("adsorbate_definition")
-    if not isinstance(ads_def, dict):
-        ads_def = None
+    raw_ads_def = ts_kwargs.get("adsorbate_definition")
+    ads_def: AdsorbateDefinition | None = (
+        cast("AdsorbateDefinition", raw_ads_def)
+        if isinstance(raw_ads_def, dict)
+        else None
+    )
     surface_cfg = ts_kwargs.get("surface_config")
     if not isinstance(surface_cfg, SurfaceSystemConfig):
         surface_cfg = None
@@ -1118,8 +1168,9 @@ def run_transition_state_campaign(
             if output_dir is not None
             else None
         )
-        if verbosity >= 1:
-            logger.info("Running TS search campaign for %s", path_key)
+        log_info_v(
+            logger, "Running TS search campaign for %s", path_key, verbosity=verbosity
+        )
 
         results = run_transition_state_search(
             composition,

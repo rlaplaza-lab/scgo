@@ -41,7 +41,7 @@ def _validate_combined(
     )
 
 
-def relax_metal_cluster_with_adsorbate(
+def relax_metal_cluster_with_adsorbate(  # noqa: C901
     core: Atoms,
     calculator: Calculator,
     fragment_template: Atoms,

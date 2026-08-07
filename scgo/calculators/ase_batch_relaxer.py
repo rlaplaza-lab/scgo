@@ -34,6 +34,7 @@ class AseBatchRelaxer:
         *,
         steps: int | None = None,
     ) -> list[tuple[float, Atoms]]:
+        """Relax a batch of structures, returning relaxed Atoms."""
         n_steps = self.max_steps if steps is None else steps
         results: list[tuple[float, Atoms]] = []
         for atoms in batch:

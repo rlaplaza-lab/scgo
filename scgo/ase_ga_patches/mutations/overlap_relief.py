@@ -1,8 +1,8 @@
+"""Mutation that resolves steric clashes with bounded geometric sweeps."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutation that resolves steric clashes with bounded geometric sweeps."""
 
 import numpy as np
 from ase import Atoms
@@ -54,13 +54,15 @@ class OverlapReliefMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the overlap-relief mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
 
         return _finalize_mutant(self, f, indi, "mutation: overlap_relief")
 
-    def mutate(self, atoms):
+    def mutate(self, atoms):  # noqa: C901
+        """Resolve steric clashes with bounded geometric sweeps."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
         top = atoms[-N:]

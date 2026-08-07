@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
-from scipy.spatial.distance import pdist
+from scipy.spatial.distance import cdist, pdist
 
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
@@ -21,23 +21,25 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 
-_SORTED_DIST_FP_INFO_KEY = "_scgo_sorted_dist_fp"
 
+def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarray]:
+    """Calculates a dictionary of sorted interatomic distances for an Atoms object.
 
-def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
-    """Build a content key that invalidates when geometry/composition changes."""
-    positions = np.ascontiguousarray(atoms.get_positions(), dtype=np.float64)
-    numbers = np.ascontiguousarray(atoms.get_atomic_numbers(), dtype=np.int32)
-    key: tuple = (hash(positions.tobytes()), hash(numbers.tobytes()), bool(mic))
-    if mic or np.any(atoms.get_pbc()):
-        cell = np.ascontiguousarray(atoms.get_cell().array, dtype=np.float64)
-        pbc = tuple(bool(x) for x in atoms.get_pbc())
-        key = (*key, hash(cell.tobytes()), pbc)
-    return key
+    This utility method is used to generate a structural fingerprint of a cluster
+    by calculating all *same-species* interatomic distances for each element type
+    and sorting them. This matches :func:`ase.ga.standard_comparators.get_sorted_dist_list`
+    exactly; hetero-atomic distances are deliberately excluded (see
+    :func:`get_sorted_hetero_dist_list` for the opt-in complement).
 
+    Args:
+        atoms: The Atoms object for which to calculate the distances.
+        mic: Whether to use the minimum image convention for periodic systems.
+            Defaults to False.
 
-def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
-    """Compute unsorted-element fingerprints without consulting the cache."""
+    Returns:
+        A dictionary where keys are atomic numbers (integers) and values are
+        sorted 1D numpy arrays of interatomic distances for that element type.
+    """
     numbers = atoms.numbers
     unique_types = set(numbers)
     pair_cor: dict[int, np.ndarray] = {}
@@ -68,40 +70,46 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
     return pair_cor
 
 
-def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarray]:
-    """Calculates a dictionary of sorted interatomic distances for an Atoms object.
+def get_sorted_hetero_dist_list(
+    atoms: Atoms, mic: bool = False
+) -> dict[tuple[int, int], np.ndarray]:
+    """Sorted distances for every unordered *hetero*-atomic element pair.
 
-    This utility method is used to generate a structural fingerprint of a cluster
-    by calculating all interatomic distances for each element type and sorting them.
-
-    Results are cached on ``atoms.info`` under ``_scgo_sorted_dist_fp`` and
-    invalidated when positions, numbers, or (for MIC) cell/PBC change.
+    Complements :func:`get_sorted_dist_list`, which (following ASE) only records
+    same-species distances and therefore cannot distinguish arrangements that
+    differ solely in cross-species geometry (e.g. an O adsorbate atop vs bridge
+    on an otherwise identical Pt cluster).
 
     Args:
-        atoms: The Atoms object for which to calculate the distances.
+        atoms: The Atoms object to fingerprint.
         mic: Whether to use the minimum image convention for periodic systems.
-            Defaults to False.
 
     Returns:
-        A dictionary where keys are atomic numbers (integers) and values are
-        sorted 1D numpy arrays of interatomic distances for that element type.
+        Dictionary keyed by ``(Z_a, Z_b)`` with ``Z_a < Z_b``, mapping to the
+        sorted 1D array of all A–B distances. Empty when the structure is
+        single-element.
     """
-    content_key = _sorted_dist_content_key(atoms, mic=mic)
-    cached = atoms.info.get(_SORTED_DIST_FP_INFO_KEY)
-    if (
-        isinstance(cached, dict)
-        and cached.get("content_key") == content_key
-        and cached.get("mic") == bool(mic)
-        and isinstance(cached.get("pair_cor"), dict)
-    ):
-        return cached["pair_cor"]
+    numbers = atoms.numbers
+    unique_types = sorted({int(n) for n in numbers})
+    if len(unique_types) < 2:
+        return {}
 
-    pair_cor = _compute_sorted_dist_list(atoms, mic=mic)
-    atoms.info[_SORTED_DIST_FP_INFO_KEY] = {
-        "content_key": content_key,
-        "mic": bool(mic),
-        "pair_cor": pair_cor,
-    }
+    all_d: np.ndarray | None = atoms.get_all_distances(mic=True) if mic else None
+    positions = atoms.get_positions()
+
+    pair_cor: dict[tuple[int, int], np.ndarray] = {}
+    for idx_a, z_a in enumerate(unique_types):
+        i_a = np.flatnonzero(numbers == z_a)
+        for z_b in unique_types[idx_a + 1 :]:
+            i_b = np.flatnonzero(numbers == z_b)
+            if i_a.size == 0 or i_b.size == 0:
+                pair_cor[(z_a, z_b)] = np.array([])
+                continue
+            if all_d is not None:
+                d = all_d[np.ix_(i_a, i_b)].ravel()
+            else:
+                d = cdist(positions[i_a], positions[i_b]).ravel()
+            pair_cor[(z_a, z_b)] = np.sort(d)
     return pair_cor
 
 
@@ -125,6 +133,26 @@ def get_mobile_atom_indices(atoms: Atoms) -> np.ndarray:
     if mobile.size == 0:
         return np.arange(n_atoms, dtype=int)
     return mobile
+
+
+def _consensus_n_slab_metadata(a1: Atoms, a2: Atoms) -> int | None:
+    """Return a shared ``n_slab_atoms`` value from ``info["metadata"]``, else ``None``.
+
+    Both structures must agree on the stored slab-atom count and the count must
+    describe a non-empty mobile (adsorbate) region for the fallback to apply.
+    """
+    meta1 = a1.info.get("metadata", {})
+    meta2 = a2.info.get("metadata", {})
+    n1 = meta1.get("n_slab_atoms")
+    n2 = meta2.get("n_slab_atoms")
+    if n1 is None or n2 is None:
+        return None
+    if int(n1) != int(n2):
+        return None
+    n = int(n1)
+    if n <= 0 or n >= len(a1):
+        return None
+    return n
 
 
 def get_shared_mobile_atom_indices(
@@ -161,12 +189,56 @@ def get_shared_mobile_atom_indices(
             )
         return mobile
 
+    # Metadata fallback: loaded surface minima carry ``n_slab_atoms`` without
+    # FixAtoms constraints, so scope the comparison to the adsorbate region.
+    if not any(
+        isinstance(c, FixAtoms) for c in getattr(a1, "constraints", ())
+    ) and not any(isinstance(c, FixAtoms) for c in getattr(a2, "constraints", ())):
+        meta_n = _consensus_n_slab_metadata(a1, a2)
+        if meta_n is not None:
+            mobile = np.arange(meta_n, len(a1), dtype=int)
+            if mobile.size == 0:
+                raise SCGOValidationError(
+                    "No mobile atoms after applying n_slab_atoms metadata partition."
+                )
+            return mobile
+
     idx1 = get_mobile_atom_indices(a1)
     idx2 = get_mobile_atom_indices(a2)
     shared = np.intersect1d(idx1, idx2, assume_unique=False)
     if shared.size == 0:
         raise SCGOValidationError("No shared mobile atoms across endpoints.")
     return shared.astype(int, copy=False)
+
+
+def _compare_distance_lists(c1: np.ndarray, c2: np.ndarray) -> tuple[float, float]:
+    """Relative cumulative and absolute maximum difference of two sorted lists.
+
+    Args:
+        c1: Sorted distances of the first structure (ångström).
+        c2: Sorted distances of the second structure (ångström).
+
+    Returns:
+        ``(relative_cumulative_difference, max_absolute_difference)``. The first
+        entry is ``sum|c1 - c2| / sum(c1)`` (dimensionless), the second is in
+        ångström. Both are 0 for empty or degenerate lists.
+
+    Raises:
+        SCGOValidationError: If the lists have different lengths.
+    """
+    if len(c1) != len(c2):
+        # This should not happen if compositions are the same
+        raise SCGOValidationError("Mismatch in number of distances being compared.")
+
+    if len(c1) == 0:
+        return (0.0, 0.0)
+
+    total_dist_sum = float(np.sum(c1))
+    if total_dist_sum <= 1e-10:  # Use epsilon for floating-point comparison
+        return (0.0, 0.0)
+
+    d = np.abs(c1 - c2)
+    return (float(np.sum(d)) / total_dist_sum, float(np.max(d)))
 
 
 class PureInteratomicDistanceComparator:
@@ -178,12 +250,15 @@ class PureInteratomicDistanceComparator:
     cluster geometries are structurally equivalent.
 
     Args:
-        n_top: The number of atoms from the top of the Atoms object to include
+        n_top: The number of atoms from the end of the Atoms object to include
             in the comparison. If None or 0, all atoms are used. Defaults to None.
-        tol: The tolerance for the cumulative structural difference (eq. 2 in
-            the reference paper). Defaults to `DEFAULT_COMPARATOR_TOL`.
-        pair_cor_max: The tolerance for the maximum single interatomic distance
-            difference (eq. 3 in the reference paper). Defaults to `DEFAULT_PAIR_COR_MAX`.
+        tol: Tolerance for the *cumulative* structural difference (eq. 2 in the
+            reference paper). This is a dimensionless, population-weighted sum of
+            relative distance deviations, not a length. Defaults to
+            `DEFAULT_COMPARATOR_TOL`.
+        pair_cor_max: Tolerance for the largest single interatomic distance
+            difference (eq. 3 in the reference paper), in **ångström**. Defaults
+            to `DEFAULT_PAIR_COR_MAX`.
         dE: A placeholder for API consistency with other ASE comparators; it is
             not used in this implementation. Defaults to `DEFAULT_ENERGY_TOLERANCE`.
         mic: Whether to use the minimum image convention when calculating
@@ -191,6 +266,12 @@ class PureInteratomicDistanceComparator:
             has PBC (does not auto-enable MIC from ``atoms.pbc``). Set True for
             adsorbates on periodic slabs via
             :func:`scgo.system_types.resolve_structure_mic`.
+        include_hetero_pairs: When True, also compare sorted distances for every
+            unordered hetero-atomic element pair. ASE's reference comparator only
+            uses same-species distances and therefore cannot distinguish e.g. an
+            adsorbate atop vs bridge on an otherwise identical host. Defaults to
+            False to stay bug-for-bug compatible with the ASE GA comparator;
+            enabling it can only make the comparison stricter.
     """
 
     def __init__(
@@ -200,12 +281,14 @@ class PureInteratomicDistanceComparator:
         pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
         dE: float = DEFAULT_ENERGY_TOLERANCE,
         mic: bool = False,
+        include_hetero_pairs: bool = False,
     ):
         self.tol = tol
         self.pair_cor_max = pair_cor_max
         self.dE = dE  # Not used, but kept for API consistency
         self.n_top = n_top or 0
         self.mic = mic
+        self.include_hetero_pairs = bool(include_hetero_pairs)
 
     def looks_like(self, a1: Atoms, a2: Atoms) -> bool:
         """Determines if two structures are structurally similar.
@@ -223,18 +306,24 @@ class PureInteratomicDistanceComparator:
         """
         cum_diff, max_diff = self.get_differences(a1, a2)
 
+        return self.is_similar(cum_diff, max_diff)
+
+    def is_similar(self, cum_diff: float, max_diff: float) -> bool:
+        """Apply the similarity tolerances to a ``get_differences`` result."""
         return cum_diff < self.tol and max_diff < self.pair_cor_max
 
     def get_differences(self, a1: Atoms, a2: Atoms) -> tuple[float, float]:
-        """Calculates the cumulative and maximum structural differences between two
-        Atoms objects based on their sorted interatomic distances.
+        """Return the cumulative and maximum structural difference of two structures.
+
+        Both values are derived from the sorted interatomic distance lists.
 
         Args:
             a1: The first Atoms object.
             a2: The second Atoms object.
 
         Returns:
-            A tuple containing (cumulative_difference, max_difference).
+            A tuple containing (cumulative_difference, max_difference). The
+            cumulative value is dimensionless; the maximum is in ångström.
 
         Raises:
             ValueError: If the two Atoms objects do not have the same number of atoms.
@@ -267,38 +356,30 @@ class PureInteratomicDistanceComparator:
         p1 = get_sorted_dist_list(a1, mic=self.mic)
         p2 = get_sorted_dist_list(a2, mic=self.mic)
         numbers = a1.numbers
+        n_atoms = float(len(numbers))
         total_cum_diff = 0.0
         max_diff = 0.0
 
         for n in p1:
-            c1 = p1[n]
-            c2 = p2[n]
+            weight = float(np.sum(numbers == n)) / n_atoms
+            cum_for_type, max_for_type = _compare_distance_lists(p1[n], p2[n])
+            total_cum_diff += cum_for_type * weight
+            max_diff = max(max_diff, max_for_type)
 
-            if len(c1) != len(c2):
-                # This should not happen if compositions are the same
-                raise SCGOValidationError(
-                    "Mismatch in number of distances being compared."
-                )
-
-            if len(c1) == 0:
-                continue
-
-            total_dist_sum = np.sum(c1)
-            if total_dist_sum <= 1e-10:  # Use epsilon for floating-point comparison
-                continue
-
-            d = np.abs(c1 - c2)
-            cum_diff_for_type = np.sum(d)
-            max_diff_for_type = np.max(d)
-
-            max_diff = max(max_diff, max_diff_for_type)
-
-            num_atoms_of_type = float(np.sum(numbers == n))  # Vectorized operation
-            total_cum_diff += (
-                cum_diff_for_type
-                / total_dist_sum
-                * num_atoms_of_type
-                / float(len(numbers))
-            )
+        if self.include_hetero_pairs:
+            h1 = get_sorted_hetero_dist_list(a1, mic=self.mic)
+            h2 = get_sorted_hetero_dist_list(a2, mic=self.mic)
+            for key, c1 in h1.items():
+                z_a, z_b = key
+                # Weighted like the homo-atomic terms: fraction of atoms taking
+                # part in the pair. Hetero terms are added on top of the
+                # same-species weights (which already sum to 1), so enabling
+                # them can only tighten the cumulative criterion.
+                weight = (
+                    float(np.sum(numbers == z_a)) + float(np.sum(numbers == z_b))
+                ) / n_atoms
+                cum_for_pair, max_for_pair = _compare_distance_lists(c1, h2[key])
+                total_cum_diff += cum_for_pair * weight
+                max_diff = max(max_diff, max_for_pair)
 
         return (total_cum_diff, max_diff)

@@ -7,9 +7,10 @@ local minimizations, with Metropolis acceptance criteria.
 
 from __future__ import annotations
 
+import functools
 import os
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from ase import Atoms
@@ -60,7 +61,12 @@ from scgo.utils.helpers import (
     extract_minima_from_database,
     perform_local_relaxation,
 )
-from scgo.utils.logging import get_logger, should_show_progress
+from scgo.utils.logging import (
+    get_logger,
+    log_debug_v,
+    log_info_v,
+    should_show_progress,
+)
 from scgo.utils.timing_report import (
     build_timing_payload,
     log_timing_summary,
@@ -76,7 +82,7 @@ from scgo.utils.validation import (
 )
 
 
-def _move_atoms(
+def _move_atoms(  # noqa: C901
     atoms: Atoms,
     dr: float,
     move_fraction: float = 0.3,
@@ -137,8 +143,9 @@ def _move_atoms(
         and adsorbate_move_fraction is not None
         and bool(ads_set)
     )
-    ads_dr_eff = float(adsorbate_dr) if use_split else 0.0
-    ads_frac_eff = float(adsorbate_move_fraction) if use_split else 0.0
+    # ``use_split`` is only True when both adsorbate overrides are set.
+    ads_dr_eff = float(cast("float", adsorbate_dr)) if use_split else 0.0
+    ads_frac_eff = float(cast("float", adsorbate_move_fraction)) if use_split else 0.0
     core_indices = [i for i in movable_indices if int(i) not in ads_set]
     ads_indices = [i for i in movable_indices if int(i) in ads_set]
 
@@ -243,7 +250,7 @@ def _move_atoms(
     return atoms_new, f"Moved_atoms: [{moved_indices_str}]"
 
 
-def bh_go(
+def bh_go(  # noqa: C901
     atoms: Atoms,
     output_dir: str,
     niter: int = 100,
@@ -321,6 +328,18 @@ def bh_go(
             Required when fitness_strategy="diversity".
         diversity_max_references: Maximum number of reference structures to load.
         diversity_update_interval: Iterations between reference updates.
+        surface_config: Optional slab + adsorbate configuration for surface GA runs.
+        n_slab: Number of fixed slab atoms; when > 0, indicates a surface run.
+        system_type: ``gas_cluster`` or ``gas_cluster_adsorbate``; selects the run policy.
+        adsorbate_definition: Adsorbate partition/symbols for adsorbate-aware GA runs.
+        cluster_adsorbate_config: Optional placement/validation config for the fragment.
+        connectivity_factor: Optional connectivity radius factor for adsorbate integrity.
+        allow_cluster_fragmentation: Allow the core cluster to fragment during mutation.
+        allow_adsorbate_surface_detachment: Allow adsorbate to detach from the surface.
+        enforce_adsorbate_subgraph_integrity: Keep adsorbate subgraph connectivity intact.
+        freeze_adsorbate_internal_geometry: Freeze internal adsorbate geometry during relaxation.
+        adsorbate_fragment_template: Optional fragment geometry for hierarchical layout.
+        db_enable_expression_indexes: Enable SQLite expression indexes on the results DB.
 
     Returns:
         List of (energy, Atoms) tuples for local minima found. If deduplicate=True (default),
@@ -328,8 +347,8 @@ def bh_go(
         non-low_energy strategies, or by energy (lowest first) for low_energy.
 
     Raises:
-        TypeError: If atoms is not an Atoms object or niter is not an integer.
-        ValueError: If calculator is not attached or parameters are invalid.
+        SCGOValidationError: If atoms is not an Atoms object or niter is not an integer.
+        SCGOValidationError: If calculator is not attached or parameters are invalid.
     """
     validate_atoms(atoms)
     validate_integer("niter", niter)
@@ -366,7 +385,9 @@ def bh_go(
         system_type,
     )
 
-    def _run_metadata_extras() -> dict[str, int | str]:
+    def _run_metadata_extras() -> dict[str, Any]:
+        # dict[str, Any] (not int | str) so ** expansion matches add_metadata's
+        # typed run_id / generation parameters.
         return ga_run_metadata_extras(
             surface_config,
             n_slab,
@@ -574,11 +595,15 @@ def bh_go(
         )
         set_fitness_in_atoms(a_current, fitness_current, fitness_strategy)
 
-        if verbosity >= 1:
-            logger.info(
-                f"Starting Basin Hopping with fitness_strategy='{fitness_strategy}' "
-                f"(initial energy: {e_current:.4f} eV, fitness: {fitness_current:.4f})"
-            )
+        log_info_v(
+            logger,
+            "Starting Basin Hopping with fitness_strategy='%s' "
+            "(initial energy: %.4f eV, fitness: %.4f)",
+            fitness_strategy,
+            e_current,
+            fitness_current,
+            verbosity=verbosity,
+        )
 
         iteration_iterator = range(niter)
         if verbosity >= 1:
@@ -621,8 +646,8 @@ def bh_go(
 
             t_ins0 = perf_counter()
             database_retry(
-                lambda _t=a_trial, _d=desc: da.add_unrelaxed_candidate(
-                    _t, description=_d
+                functools.partial(
+                    da.add_unrelaxed_candidate, a_trial, description=desc
                 ),
                 max_retries=5,
                 initial_delay=0.2,
@@ -669,7 +694,7 @@ def bh_go(
 
             t_w0 = perf_counter()
             database_retry(
-                lambda _t=a_trial: da.add_relaxed_step(_t),
+                functools.partial(da.add_relaxed_step, a_trial),
                 max_retries=5,
                 initial_delay=0.2,
                 backoff_factor=2.0,
@@ -694,23 +719,30 @@ def bh_go(
             if fitness_trial > fitness_current:
                 # Better fitness - always accept
                 accept = True
-                if verbosity >= 2:
-                    logger.debug(
-                        f"Iteration {iteration}: Accepting (fitness improved: "
-                        f"{fitness_current:.4f} → {fitness_trial:.4f})"
-                    )
+                log_debug_v(
+                    logger,
+                    "Iteration %d: Accepting (fitness improved: %.4f → %.4f)",
+                    iteration,
+                    fitness_current,
+                    fitness_trial,
+                    verbosity=verbosity,
+                )
             elif temperature > 0.0:
                 # Metropolis acceptance based on fitness difference
                 fitness_diff = fitness_trial - fitness_current
                 acceptance_prob = np.exp(fitness_diff / temperature)
                 accept = rng.random() < acceptance_prob
 
-                if verbosity >= 2:
-                    logger.debug(
-                        f"Iteration {iteration}: Metropolis test "
-                        f"(fitness_diff: {fitness_diff:.4f}, "
-                        f"acceptance_prob: {acceptance_prob:.4f}, accept: {accept})"
-                    )
+                log_debug_v(
+                    logger,
+                    "Iteration %d: Metropolis test "
+                    "(fitness_diff: %.4f, acceptance_prob: %.4f, accept: %s)",
+                    iteration,
+                    fitness_diff,
+                    acceptance_prob,
+                    accept,
+                    verbosity=verbosity,
+                )
 
             if accept:
                 profile_counters["accepted"] += 1
@@ -725,10 +757,12 @@ def bh_go(
                     and iteration % diversity_update_interval == 0
                 ):
                     diversity_scorer.add_reference(a_trial)
-                    if verbosity >= 2:
-                        logger.debug(
-                            f"Updated reference structures (total: {len(diversity_scorer)})"
-                        )
+                    log_debug_v(
+                        logger,
+                        "Updated reference structures (total: %d)",
+                        len(diversity_scorer),
+                        verbosity=verbosity,
+                    )
 
             if per_iteration is not None:
                 per_iteration.append(
@@ -784,8 +818,14 @@ def bh_go(
 
         # Sort by fitness (highest first) for non-default strategies
         if fitness_strategy != FitnessStrategy.LOW_ENERGY:
+
+            def _fitness_sort_key(item: tuple[float, Atoms]) -> float:
+                # ``default`` is not None, so the result is always a float.
+                value = get_fitness_from_atoms(item[1], default=-float("inf"))
+                return -float("inf") if value is None else value
+
             unique_minima.sort(
-                key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
+                key=_fitness_sort_key,
                 reverse=True,  # Higher fitness first
             )
             logger.info(

@@ -67,7 +67,9 @@ def _warmup_ase_spacegroup_cache() -> None:
         return
     with _ASE_SPACEGROUP_WARMUP_LOCK:
         if _ASE_SPACEGROUP_WARMED:
-            return
+            # Double-checked locking: another thread may have warmed the cache
+            # while this one waited for the lock. mypy cannot model that.
+            return  # type: ignore[unreachable]
         try:
             # 225 is used by FCC/octahedral template generation.
             Spacegroup(225)
@@ -283,6 +285,8 @@ def _place_cluster_above_slab(
         config: Surface system configuration.
         cluster_atomic_numbers: Atomic numbers of cluster atoms. If provided,
             used to calculate covalent radii for connectivity-based placement.
+        prefer_surface_normal: When True, prefer a rotation whose normal aligns
+            with the surface normal.
     """
     rotation = (
         _near_surface_rotation_matrix(rng, axis)
@@ -335,7 +339,7 @@ def _place_cluster_above_slab(
     return translated_positions
 
 
-def create_deposited_cluster(
+def create_deposited_cluster(  # noqa: C901
     composition: Sequence[str],
     slab: Atoms,
     blmin: dict,
@@ -359,6 +363,7 @@ def create_deposited_cluster(
     slab_top = slab_surface_extreme(slab, axis, upper=True)
 
     for _ in range(config.max_placement_attempts):
+        cluster_seed: Atoms | None
         if adsorbate_definition is None:
             cluster_seed = create_initial_cluster(
                 list(composition),
@@ -483,7 +488,7 @@ def create_deposited_cluster(
     return None
 
 
-def create_deposited_cluster_batch(
+def create_deposited_cluster_batch(  # noqa: C901
     composition: Sequence[str],
     slab: Atoms,
     blmin: dict,

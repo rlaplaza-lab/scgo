@@ -182,7 +182,7 @@ def filter_by_metadata(
     ]
 
 
-def mark_final_minima_in_db(
+def mark_final_minima_in_db(  # noqa: C901
     final_minima_info: list[dict],
     base_dir: str | Path,
     db_paths: list[str | Path] | None = None,
@@ -330,7 +330,7 @@ def mark_final_minima_in_db(
             json.JSONDecodeError,
             ValueError,
         ) as e:
-            logger.warning(f"mark_final_minima_in_db: failed for {db_path}: {e}")
+            logger.warning("mark_final_minima_in_db: failed for %s: %s", db_path, e)
             continue
 
     return {

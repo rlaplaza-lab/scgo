@@ -8,6 +8,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.exceptions import SCGODependencyError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
@@ -18,7 +19,7 @@ _MISSING_UPET_MSG = (
 
 
 class UPET(Calculator):
-    """ASE calculator wrapping UPET checkpoints via ``upet.calculator.UPETCalculator``.
+    r"""ASE calculator wrapping UPET checkpoints via ``upet.calculator.UPETCalculator``.
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
     is a UPET model identifier (e.g. ``\"pet-mad-s\"``); ``version`` selects the
@@ -39,7 +40,7 @@ class UPET(Calculator):
         try:
             from upet.calculator import UPETCalculator
         except ImportError as e:
-            raise ImportError(_MISSING_UPET_MSG) from e
+            raise SCGODependencyError(_MISSING_UPET_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UPET")
 
@@ -76,6 +77,7 @@ class UPET(Calculator):
         properties: list[str] | None = None,
         system_changes: list[str] = all_changes,
     ) -> None:
+        """Compute energy/forces for an Atoms object using the UPET model."""
         if properties is None:
             properties = self.implemented_properties
         super().calculate(atoms, properties, system_changes)
@@ -111,9 +113,9 @@ def try_extract_torchsim_model_from_upet_calculator(
     live model, or ``None`` if extraction fails (caller falls back to reload).
     """
     try:
-        import metatomic_torchsim._neighbors as _mt_neighbors  # type: ignore
+        import metatomic_torchsim._neighbors as _mt_neighbors
         import torch
-        from metatomic_torchsim import MetatomicModel  # type: ignore
+        from metatomic_torchsim import MetatomicModel
     except ImportError:
         return None
 

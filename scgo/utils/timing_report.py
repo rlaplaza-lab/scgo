@@ -25,7 +25,7 @@ from scgo.exceptions import (
 from scgo.utils.logging import get_logger
 from scgo.utils.ts_provenance import ts_output_provenance
 
-_logger = get_logger(__name__)
+logger = get_logger(__name__)
 
 TIMING_JSON_FILENAME = "timing.json"
 GO_TS_TIMING_JSON_FILENAME = "go_ts_timing.json"
@@ -112,6 +112,7 @@ def write_timing_file(
     *,
     filename: str | None = None,
 ) -> str:
+    """Write a timing payload as JSON under ``output_dir``."""
     name = filename if filename is not None else TIMING_JSON_FILENAME
     path = os.path.join(output_dir, name)
     os.makedirs(output_dir, exist_ok=True)
@@ -128,11 +129,12 @@ def read_timing_file(path: str) -> dict[str, Any] | None:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        _logger.warning("Failed to read timing file %s: %s", path, exc)
+        logger.warning("Failed to read timing file %s: %s", path, exc)
         return None
 
 
 def resolve_run_timing_path(run_dir: str) -> str:
+    """Return the path to ``timing.json`` inside a run directory."""
     return os.path.join(run_dir, TIMING_JSON_FILENAME)
 
 
@@ -189,6 +191,7 @@ def write_run_timing_file(
     *,
     run_id: str | None = None,
 ) -> str:
+    """Write a timing payload to the run directory's ``timing.json``."""
     if run_id is not None:
         payload = build_run_timing_document(run_id=run_id, payload=payload)
     return write_timing_file(run_dir, payload)

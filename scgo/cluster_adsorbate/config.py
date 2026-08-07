@@ -102,7 +102,7 @@ class ClusterAdsorbateConfig:
         return self.height_max
 
     def __post_init__(self) -> None:
-        validate_positive("height_min", self.height_min, strict=True)
+        """Validate height bounds and normalize the configuration after init."""
         validate_positive("height_max", self.height_max, strict=True)
         if self.height_max < self.height_min:
             raise SCGOValidationError("height_max must be >= height_min")

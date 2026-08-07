@@ -24,14 +24,9 @@ This module is intentionally thin: the actual implementations live in
 :mod:`scgo.runner_composition` (composition parsing), :mod:`scgo.runner_params`
 (param merging/allowlisting/coherence and context dataclasses),
 :mod:`scgo.runner_go` (GO trials/campaigns), and :mod:`scgo.runner_ts`
-(TS and GO+TS pipelines). A small number of private helpers are re-exported
-here solely so tests can ``monkeypatch.setattr("scgo.runner_api.<name>", ...)``
-(e.g. ``run_trials``, ``get_calculator_class``, ``_run_go_trials``,
-``_run_go_campaign_compositions``, ``_ts_search``, ``_ts_campaign``,
-``_run_go_ts_pipeline``). ``scgo.runner_go`` and ``scgo.runner_ts`` call back
-into this module (via function-local imports, to avoid a top-level import
-cycle) specifically so that patching those attributes here is honored
-regardless of which module physically defines the calling code.
+(TS and GO+TS pipelines). Imports flow one way only
+(``runner_api -> runner_go``/``runner_ts -> ...``), so the runner import graph
+is acyclic and each helper is called through the module that defines it.
 """
 
 from __future__ import annotations
@@ -43,8 +38,6 @@ from time import perf_counter
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
-from scgo.minima_search import run_trials as run_trials
-from scgo.param_presets import get_default_params as get_default_params
 from scgo.exceptions import SCGOValidationError
 from scgo.runner_composition import (
     CompositionInput,
@@ -54,20 +47,22 @@ from scgo.runner_composition import (
 )
 from scgo.runner_go import (
     ScgoMinimaAlgorithm as ScgoMinimaAlgorithm,
+)
+from scgo.runner_go import (
     _run_go_campaign_compositions,
     _run_go_trials,
     select_scgo_minima_algorithm,
 )
-from scgo.runner_params import RunGOCampaignContext, RunGOContext, resolve_workflow_seed
 from scgo.runner_params import (
+    RunGOCampaignContext,
+    RunGOContext,
     _log_completion,
     _log_validation_error,
     _prepare_run_go_campaign_context,
     _prepare_run_go_context,
+    resolve_workflow_seed,
 )
 from scgo.runner_ts import (
-    _run_go_ts_pipeline as _run_go_ts_pipeline,
-    _run_one_element_go_ts_pipeline as _run_one_element_go_ts_pipeline,
     log_go_ts_summary,
     run_go_ts,
     run_go_ts_campaign,
@@ -76,16 +71,9 @@ from scgo.runner_ts import (
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import AdsorbatesInput, SystemType
-from scgo.ts_search.transition_state_run import (
-    run_transition_state_campaign as _ts_campaign,  # noqa: F401
-)
-from scgo.ts_search.transition_state_run import (
-    run_transition_state_search as _ts_search,  # noqa: F401
-)
 from scgo.utils.logging import get_logger
-from scgo.utils.run_helpers import get_calculator_class as get_calculator_class
 
-_LOGGER = get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _execute_run_go(context: RunGOContext) -> list[tuple[float, Atoms]]:

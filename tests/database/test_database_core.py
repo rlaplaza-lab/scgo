@@ -184,7 +184,7 @@ class TestDatabaseSetupAndFlow:
             )
 
             # Expect the database to raise an assertion when adding an invalid atom set
-            with pytest.raises(AssertionError):
+            with pytest.raises(SCGOValidationError):
                 da.add_relaxed_step(invalid_atoms)
 
             # Ensure retrieving candidates still returns a valid list
@@ -231,7 +231,7 @@ class TestDatabaseSetupAndFlow:
             _,
         ):
             if should_raise:
-                with pytest.raises(AssertionError):
+                with pytest.raises(SCGOValidationError):
                     da.add_relaxed_step(candidate)
                 return
 

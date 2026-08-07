@@ -84,7 +84,7 @@ logger: Logger = get_logger(__name__)
 
 ICOSAHEDRON_SHELL_TO_ATOMS: dict[int, int] = {1: 1, 2: 13, 3: 55, 4: 147, 5: 309}
 
-_TEMPLATE_REGISTRY = {}
+_TEMPLATE_REGISTRY: dict[str, dict[str, Callable[..., Any]]] = {}
 _VALID_TEMPLATE_TYPES_CACHE: dict[int, tuple[str, ...]] = {}
 _VALID_TEMPLATE_TYPES_INFLIGHT: dict[int, Event] = {}
 _VALID_TEMPLATE_TYPES_LOCK = Lock()
@@ -136,7 +136,7 @@ def _get_ase_lattice_constant(symbol: str) -> float:
     """Lattice constant for ASE cluster builders (rescaled afterward anyway)."""
     ref = reference_states[atomic_numbers[symbol]]
     if ref is not None and "a" in ref:
-        return float(ref["a"])
+        return float(cast(float, ref["a"]))
     return _get_typical_bond_length([symbol]) * np.sqrt(2.0)
 
 
@@ -264,7 +264,7 @@ def _find_octahedron_params(n_atoms: int) -> tuple[int, int] | None:
     return best_params
 
 
-def remove_atoms_from_vertices(
+def remove_atoms_from_vertices(  # noqa: C901
     cluster: Atoms,
     n_remove: int,
     target_composition: list[str] | None = None,
@@ -489,7 +489,7 @@ def remove_atoms_from_vertices(
     return current
 
 
-def grow_template_via_facets(
+def grow_template_via_facets(  # noqa: C901
     seed_atoms: Atoms,
     target_composition: list[str],
     placement_radius_scaling: float,
@@ -1137,7 +1137,7 @@ def _generate_ase_template_from_registry(
     """
     config = _TEMPLATE_REGISTRY.get(template_name)
     if config is None:
-        logger.warning(f"{template_name.capitalize()} template not registered")
+        logger.warning("%s template not registered", template_name.capitalize())
         return None
 
     find_params = cast(Callable[[int], Any], config["find_params"])
@@ -1244,6 +1244,7 @@ def generate_tetrahedron(
         composition: List of element symbols (cycled to match n_atoms)
         n_atoms: Target number of atoms (must be 4)
         rng: Optional random number generator for reproducibility
+        connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
 
     Returns:
         Atoms object with tetrahedral structure, or None if generation fails
@@ -1292,6 +1293,7 @@ def generate_cube(
         composition: List of element symbols (cycled to match n_atoms)
         n_atoms: Target number of atoms (must be a perfect cube: n³)
         rng: Optional random number generator for reproducibility
+        connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
 
     Returns:
         Atoms object with cubic structure, or None if generation fails
@@ -1345,6 +1347,7 @@ def generate_cuboctahedron(
         composition: List of element symbols (cycled to match n_atoms)
         n_atoms: Target number of atoms (12 or 13 for perfect structures)
         rng: Optional random number generator for reproducibility
+        connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
 
     Returns:
         Atoms object with cuboctahedral structure, or None if generation fails
@@ -1398,6 +1401,7 @@ def generate_truncated_octahedron(
         composition: List of element symbols (cycled to match n_atoms)
         n_atoms: Target number of atoms (must be 24)
         rng: Optional random number generator for reproducibility
+        connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
 
     Returns:
         Atoms object with truncated octahedral structure, or None if generation fails
@@ -1478,6 +1482,7 @@ def generate_template_structure(
             - "cuboctahedron": Cuboctahedral structure
             - "truncated_octahedron": Truncated octahedral structure
         rng: Optional random number generator
+        connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
 
     Returns:
         Atoms object with template structure, or None if generation fails
@@ -1504,7 +1509,7 @@ def generate_template_structure(
 
     gen_func = _TEMPLATE_GENERATORS.get(template_type)
     if gen_func is None:
-        logger.warning(f"Unknown template type: {template_type}")
+        logger.warning("Unknown template type: %s", template_type)
         return None
     return gen_func(composition, n_atoms, rng, connectivity_factor)
 
@@ -1575,7 +1580,7 @@ def _find_valid_template_types(n_atoms: int) -> list[str]:
     return list(computed) if computed is not None else []
 
 
-def _generate_template_with_atom_adjustment(
+def _generate_template_with_atom_adjustment(  # noqa: C901
     base_template_type: str,
     base_n_atoms: int,
     target_n_atoms: int,
@@ -1771,7 +1776,7 @@ def _validate_and_add_template(
         return False
 
 
-def generate_template_matches(
+def generate_template_matches(  # noqa: C901
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,

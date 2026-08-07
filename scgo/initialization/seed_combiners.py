@@ -102,9 +102,11 @@ def combine_seeds(
         seed_symbols = base_seed_to_add.get_chemical_symbols()
         existing_symbols = combined_atoms.get_chemical_symbols()
 
-        seed_avg_radius = np.mean([get_covalent_radius(sym) for sym in seed_symbols])
-        existing_avg_radius = np.mean(
-            [get_covalent_radius(sym) for sym in existing_symbols]
+        seed_avg_radius = float(
+            np.mean([get_covalent_radius(sym) for sym in seed_symbols])
+        )
+        existing_avg_radius = float(
+            np.mean([get_covalent_radius(sym) for sym in existing_symbols])
         )
         # Use shared bond distance calculation for consistency
         bond_distance, _, max_connectivity_distance = compute_bond_distance_params(

@@ -52,7 +52,9 @@ def restore_rigid_adsorbate_fragments(
     """
     core_symbols = adsorbate_definition.get("core_symbols", [])
     if not isinstance(core_symbols, list):
-        return
+        # Defensive: TypedDict declares list[str], but user-supplied dicts are
+        # not validated at runtime, so keep the guard.
+        return  # type: ignore[unreachable]
     lengths = parse_positive_fragment_lengths(
         adsorbate_definition.get("adsorbate_fragment_lengths", [])
     )

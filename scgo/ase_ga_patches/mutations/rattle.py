@@ -1,8 +1,8 @@
+"""Rattle-style mutations that perturb atomic positions locally."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Rattle-style mutations that perturb atomic positions locally."""
 
 import numpy as np
 from ase import Atoms
@@ -17,7 +17,9 @@ __all__ = ["AnisotropicRattleMutation", "RattleMutation"]
 
 
 class RattleMutation(OffspringCreator):
-    """An implementation of the rattle mutation as described in:
+    """An implementation of the rattle mutation.
+
+    As described in:
 
     R.L. Johnston Dalton Transactions, Vol. 22,
     No. 22. (2003), pp. 4193-4207
@@ -185,13 +187,15 @@ class AnisotropicRattleMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the anisotropic rattle mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
 
         return _finalize_mutant(self, f, indi, "mutation: anisotropic_rattle")
 
-    def mutate(self, atoms):
+    def mutate(self, atoms):  # noqa: C901
+        """Perturb positions of top atoms with anisotropic noise."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
         atoms = atoms[-N:]

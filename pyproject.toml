@@ -67,6 +67,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "psutil>=7.0.0",
     "ruff==0.14.0",
+    "mypy>=1.10",
     "pre-commit>=3.0.0",
 ]
 
@@ -99,26 +100,48 @@ select = [
     "SIM", # simplify
     "PERF", # performance
     "PIE", # flake8-pie
+    "D",  # pydocstyle: docstring conventions
 ]
 ignore = [
     "E501",  # line too long, handled by ruff format
-    "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
-    "PERF401", # manual lists are fine
-    "UP046",  # Keep current generic class style used across the codebase.
+    "D107",  # __init__ docstrings are omitted where the class docstring covers params
 ]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "scgo/__init__.py" = ["E402"]  # set PYTORCH_CUDA_ALLOC_CONF before torch/torch_sim and scgo imports
 "scgo/calculators/mace_helpers.py" = ["E402"]  # patch torch.load before mace/e3nn import
-# PEP 695 ``type CompositionInput = ...`` after imports confuses isort's import-block span (I001).
-"scgo/runner_api.py" = ["I001"]
-"tests/**/*" = ["B011"]
-"scgo/ase_ga_patches/*" = ["B011", "E402"]
-"benchmark/*" = ["E501", "T201", "SIM108", "C408", "PERF401"]  # scripts: prints, dict builders, nested grid loops
+"tests/**/*" = ["D"]
+"scgo/ase_ga_patches/*" = ["E402"]
+"scgo/_version.py" = ["D100"]
+"benchmark/*" = ["E501", "T201", "SIM108", "C408", "PERF401", "D"]  # scripts: prints, dict builders, nested grid loops
+".github/scripts/**/*" = ["D"]  # CI helper scripts, not public API
+"examples/**/*" = ["D"]  # runnable example scripts, not public API
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+# Known untyped third-party dependencies: keep their import errors quiet while
+# still catching genuine import-not-found for packages that should be present.
+module = [
+    "ase_ga.*",
+    "fairchem.*",
+    "tqdm.*",
+    "upet.*",
+]
+ignore_missing_imports = true

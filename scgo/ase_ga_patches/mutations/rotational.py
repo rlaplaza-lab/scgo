@@ -1,8 +1,8 @@
+"""Mutation that applies random rotations to multi-atom moieties."""
+
 # fmt: off
 
 from __future__ import annotations
-
-"""Mutation that applies random rotations to multi-atom moieties."""
 
 import numpy as np
 from ase_ga.offspring_creator import OffspringCreator
@@ -29,9 +29,9 @@ __all__ = ["RotationalMutation"]
 
 
 class RotationalMutation(OffspringCreator):
-    """Mutates a candidate by applying random rotations
-    to multi-atom moieties in the structure (atoms with
-    the same tag are considered part of one such moiety).
+    """Mutates a candidate by applying random rotations to multi-atom moieties.
+
+    Atoms with the same tag are considered part of one such moiety.
 
     Only performs whole-molecule rotations, no internal
     rotations.
@@ -93,6 +93,7 @@ class RotationalMutation(OffspringCreator):
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
+        """Build a mutant from parents via the rotational mutation."""
         f = parents[0]
 
         indi = self.mutate(f)
@@ -179,7 +180,7 @@ class RotationalMutation(OffspringCreator):
             new_positions[indices[tag]] = np.dot(rotation, (moiety - center).T).T + center
         return new_positions
 
-    def mutate(self, atoms):
+    def mutate(self, atoms):  # noqa: C901
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]

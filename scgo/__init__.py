@@ -25,6 +25,8 @@ from scgo.cluster_adsorbate import (
 
 # Database
 from scgo.database import (
+    DatabaseMigrationError,
+    DatabaseSetupError,
     SCGODatabaseManager,
     load_previous_run_results,
     load_reference_structures,
@@ -33,6 +35,7 @@ from scgo.database import (
 from scgo.exceptions import (
     SCGOConfigurationError,
     SCGODatabaseError,
+    SCGODependencyError,
     SCGOError,
     SCGOFileError,
     SCGONotImplementedError,
@@ -120,6 +123,9 @@ __all__ = [
     "SCGODatabaseError",
     "SCGONotImplementedError",
     "SCGOFileError",
+    "SCGODependencyError",
+    "DatabaseSetupError",
+    "DatabaseMigrationError",
     # Algorithms (for advanced users)
     "bh_go",
     "ga_go",

@@ -1,3 +1,5 @@
+"""Helper utilities for constructing and inspecting ASE Atoms objects."""
+
 from __future__ import annotations
 
 from typing import Any

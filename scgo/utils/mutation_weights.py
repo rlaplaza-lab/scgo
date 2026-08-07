@@ -238,6 +238,12 @@ def get_adaptive_mutation_config(
         current_generation: Current GA generation number.
         total_generations: Total number of generations.
         use_adaptive: If False, returns default/static configuration.
+        generations_without_improvement: Consecutive stagnant generations so far.
+        stagnation_trigger: Generations without improvement before boosting.
+        stagnation_full_trigger: Generations before full stagnation burst.
+        recovery_window: Generations over which recovery is tracked.
+        aggressive_burst_multiplier: Multiplier applied during a burst.
+        max_mutation_probability: Upper bound on mutation probability.
 
     Returns:
         Dictionary containing:

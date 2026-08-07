@@ -66,6 +66,10 @@ class CalculatorKwargs(TypedDict, total=False):
     model_name: str
     device: str
     dtype: str
+    default_dtype: str
+    task_name: str
+    version: str
+    checkpoint_path: str | None
 
 
 class OptimizerSlotParams(TypedDict, total=False):
@@ -96,6 +100,7 @@ class OptimizerSlotParams(TypedDict, total=False):
     n_jobs_population_init: NotRequired[int]
     n_jobs_offspring: NotRequired[int]
     batch_size: NotRequired[int | None]
+    relax_batch_target: NotRequired[int | str | None]
     relaxer: NotRequired[Any]
     energy_tolerance: NotRequired[float]
     comparator_tol: NotRequired[float]
@@ -132,6 +137,7 @@ class GLOptimizerParams(TypedDict, total=False):
     freeze_adsorbate_internal_geometry: bool
     seed: NotRequired[int | None]
     tag_final_minima: bool
+    validation_n_jobs: NotRequired[int]
 
 
 class TSParams(TypedDict, total=False):
@@ -181,6 +187,25 @@ class SystemConfig(TypedDict, total=False):
 
 AdsorbatesInput = Atoms | list[Atoms]
 AdsorbateFragmentInput = Atoms | list[Atoms]
+
+#: Accepted top-level keys of a GO ``params`` / ``go_params`` dict.
+GO_PARAM_KEYS: frozenset[str] = frozenset(GLOptimizerParams.__annotations__)
+#: Accepted top-level keys of a flat ``ts_params`` dict.
+TS_PARAM_KEYS: frozenset[str] = frozenset(TSParams.__annotations__)
+#: Accepted keys of one ``optimizer_params`` slot.
+OPTIMIZER_SLOT_KEYS: frozenset[str] = frozenset(OptimizerSlotParams.__annotations__)
+
+
+def validate_param_keys(
+    params: dict[str, Any], allowed: frozenset[str], *, label: str = "parameter"
+) -> None:
+    """Raise :class:`SCGOValidationError` for keys outside ``allowed``."""
+    unexpected_keys = set(params.keys()) - allowed
+    if unexpected_keys:
+        raise SCGOValidationError(
+            f"Unexpected {label} keys: {sorted(unexpected_keys)}. "
+            f"Expected keys: {sorted(allowed)}"
+        )
 
 
 @dataclass(frozen=True)
@@ -336,7 +361,6 @@ def resolve_connectivity_factor(
     surface_config: SurfaceSystemConfig | None = None,
 ) -> float:
     """Resolve structure connectivity factor from explicit value or configs."""
-
     if connectivity_factor is not None:
         return float(connectivity_factor)
     if cluster_adsorbate_config is not None:
@@ -373,6 +397,7 @@ def validate_system_type_settings(
 
 
 def uses_surface(system_type: SystemType) -> bool:
+    """Return whether the system type searches a surface."""
     return get_system_policy(system_type).uses_surface
 
 
@@ -465,7 +490,9 @@ def _n_core_mobile_from_adsorbate_definition(
         return None
     cr = adsorbate_definition.get("core_symbols", [])
     if not isinstance(cr, list):
-        return None
+        # Defensive: TypedDict declares list[str], but user-supplied dicts are
+        # not validated at runtime, so keep the guard.
+        return None  # type: ignore[unreachable]
     return len(cr)
 
 
@@ -489,7 +516,7 @@ def _adsorbate_fragment_lengths_from_definition(
     return [int(x) for x in raw]
 
 
-def validate_structure_for_system_type(
+def validate_structure_for_system_type(  # noqa: C901
     atoms: Atoms,
     *,
     system_type: SystemType,
@@ -676,6 +703,7 @@ def resolve_mobile_composition(
 def extract_adsorbate_definition_from_params(
     params: dict[str, Any] | None,
 ) -> AdsorbateDefinition | None:
+    """Extract the adsorbate definition from flat or nested params."""
     if not params:
         return None
     top = params.get("adsorbate_definition")
@@ -905,6 +933,7 @@ def resolve_adsorbate_fragments(
 def normalize_adsorbates_input(
     adsorbates: AdsorbatesInput | None, *, context: str
 ) -> list[Atoms]:
+    """Validate and normalize raw adsorbate inputs into a list of Atoms."""
     prefix = f"{context}: " if context else ""
     if adsorbates is None:
         raise SCGOValidationError(
@@ -952,6 +981,7 @@ def _validate_input_adsorbate_fragments_connected(
 
 
 def flatten_adsorbate_symbols(adsorbates: list[Atoms]) -> list[str]:
+    """Flatten per-fragment chemical symbols into a single list."""
     symbols: list[str] = []
     for frag in adsorbates:
         symbols.extend([str(s) for s in frag.get_chemical_symbols()])
@@ -959,6 +989,7 @@ def flatten_adsorbate_symbols(adsorbates: list[Atoms]) -> list[str]:
 
 
 def combine_adsorbates_to_template(adsorbates: list[Atoms]) -> Atoms:
+    """Combine adsorbate fragments into one template Atoms object."""
     if not adsorbates:
         raise SCGOValidationError("adsorbates must contain at least one fragment")
     combined = adsorbates[0].copy()
@@ -974,6 +1005,7 @@ def build_adsorbate_definition_from_inputs(
     adsorbates: AdsorbatesInput | None,
     context: str,
 ) -> tuple[AdsorbateDefinition | None, list[Atoms] | None, list[str]]:
+    """Build an adsorbate definition from user inputs for a system type."""
     from scgo.cluster_adsorbate.feasibility import (
         validate_adsorbate_placement_feasibility,
     )

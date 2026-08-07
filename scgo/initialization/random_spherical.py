@@ -8,6 +8,7 @@ strategies that operate on the current cluster geometry.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Callable
 
 import numpy as np
 from ase import Atom, Atoms
@@ -323,7 +324,7 @@ def _growth_order_by_composition_balance(
 
 
 # Growth order strategy dispatch table
-_GROWTH_ORDER_STRATEGIES = {
+_GROWTH_ORDER_STRATEGIES: dict[int, Callable[..., list[str]]] = {
     0: _growth_order_random,
     1: _growth_order_by_element,
     2: _growth_order_alternating,
@@ -454,7 +455,7 @@ def _apply_growth_order_strategy(
     return strategy_func(atoms_to_add, rng)
 
 
-def random_spherical(
+def random_spherical(  # noqa: C901
     composition: list[str],
     cell_side: float,
     rng: np.random.Generator,
@@ -661,6 +662,7 @@ def grow_from_seed(
             object.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold.
+        blmin_ratio: Optional minimum-bond-length ratio override used for clash checks.
         rng: Optional numpy random number generator.
 
     Returns:
@@ -778,6 +780,7 @@ def _add_atoms_to_cluster_iteratively(
         placement_radius_scaling: Scaling for placement radius.
         rng: Random number generator.
         connectivity_factor: Factor for connectivity threshold.
+        steric_floor: Optional minimum allowed steric clearance between atoms.
 
     Returns:
         A new Atoms object with all atoms added, or None if addition failed
@@ -840,7 +843,7 @@ def _add_atoms_to_cluster_iteratively(
     )
 
 
-def _add_atoms_single_mode(
+def _add_atoms_single_mode(  # noqa: C901
     new_atoms: Atoms,
     atoms_to_add: list[str],
     radii_to_add: dict[str, float],
@@ -1034,7 +1037,7 @@ def _add_atoms_single_mode(
 
             # Get current composition state
             remaining_atoms = atoms_to_add[atom_idx:]
-            remaining_counts = get_composition_counts(remaining_atoms)
+            remaining_counts: dict[str, int] = get_composition_counts(remaining_atoms)
 
             diagnostics = get_structure_diagnostics(
                 new_atoms, min_distance_factor, connectivity_factor, use_mic=False
@@ -1101,7 +1104,7 @@ def _add_atoms_single_mode(
     return new_atoms
 
 
-def _add_atoms_batch_mode(
+def _add_atoms_batch_mode(  # noqa: C901
     new_atoms: Atoms,
     atoms_to_add: list[str],
     radii_to_add: dict[str, float],
