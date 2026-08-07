@@ -773,6 +773,30 @@ class TestDiscovery:
         db_files = discovery.find_databases(db_filename="*.db", use_cache=False)
         assert db_files
 
+    def test_empty_result_is_not_cached(self, tmp_path):
+        """A miss recorded before the DB exists must not be cached.
+
+        GO writes its database mid-run and TS reads it back in the same
+        process, so caching an empty result would pin the stale answer and
+        make TS report zero minima.
+        """
+        discovery = DatabaseDiscovery(tmp_path)
+
+        # Queried before any run has written a database.
+        assert discovery.find_databases() == []
+        assert discovery._cache == {}, "empty results must not be cached"
+
+        run_dir = tmp_path / "run_20260204_120000"
+        run_dir.mkdir(parents=True)
+        atoms = Atoms("Pt3")
+        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
+        close_data_connection(da)
+        del da
+
+        # The same discovery instance must now observe the new database.
+        db_files = discovery.find_databases()
+        assert any(Path(str(f)).name == "ga_go.db" for f in db_files)
+
 
 class TestRobustness:
     """Robustness, concurrency, and retry behavior."""

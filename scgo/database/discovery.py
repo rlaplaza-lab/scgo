@@ -97,7 +97,11 @@ class DatabaseDiscovery:
                 "Filtered non-SCGO DBs: %d -> %d databases", orig_count, len(db_files)
             )
 
-        if use_cache:
+        # Never cache empty results: databases are written while a run is in
+        # progress (GO writes its DB, then TS reads it back in the same
+        # process). Caching a miss recorded before the DB existed would pin
+        # that stale answer for the rest of the process.
+        if use_cache and db_files:
             self._cache[cache_key] = db_files
 
         return db_files
