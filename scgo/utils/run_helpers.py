@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+from functools import cache
 from typing import Any, cast
 
 import numpy as np
@@ -38,14 +39,10 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
 
-_CALCULATORS_CACHE: dict[str, Any] | None = None
 
-
+@cache
 def _get_calculators() -> dict[str, Any]:
     """ASE calculator registry; MLIP entries are None if extras are not installed."""
-    global _CALCULATORS_CACHE
-    if _CALCULATORS_CACHE is not None:
-        return _CALCULATORS_CACHE
     calcs: dict[str, Any] = {"EMT": EMT}
     try:
         from scgo.calculators.mace_helpers import MACE
@@ -65,7 +62,6 @@ def _get_calculators() -> dict[str, Any]:
         calcs["UPET"] = UPET
     except ImportError:
         calcs["UPET"] = None
-    _CALCULATORS_CACHE = calcs
     return calcs
 
 
@@ -384,9 +380,13 @@ def _resolve_fitness_strategy(
         ValueError: If fitness strategy is invalid.
     """
     top_level_fitness_strategy = params.get("fitness_strategy", "low_energy")
-    return resolve_fitness_strategy(
-        algo_params.get("fitness_strategy"),
-        inherit_from=top_level_fitness_strategy,
+    # ``inherit_from`` is always a concrete strategy, so the result is never None.
+    return cast(
+        str,
+        resolve_fitness_strategy(
+            algo_params.get("fitness_strategy"),
+            inherit_from=top_level_fitness_strategy,
+        ),
     )
 
 

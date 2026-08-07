@@ -46,6 +46,21 @@ def test_ts_defaults_match_system_policy_align_and_mic(system_type):
     )
 
 
+def test_ts_defaults_keys_match_system_type_policies():
+    """`TS_DEFAULTS_BY_SYSTEM_TYPE` keys must match `SYSTEM_TYPE_POLICIES`."""
+    assert set(TS_DEFAULTS_BY_SYSTEM_TYPE) == set(SYSTEM_TYPE_POLICIES)
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_ts_defaults_fmax_matches_shared_constant(system_type):
+    """Force-convergence thresholds are shared, not per system type."""
+    defaults = get_ts_defaults(system_type)
+    shared = float(param_presets_module._TS_NEB_FMAX)
+    assert float(defaults["neb_fmax"]) == shared
+    assert float(defaults["torchsim_fmax"]) == shared
+    assert float(defaults["neb_fmax"]) == float(defaults["torchsim_fmax"])
+
+
 @pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
 def test_get_ts_search_params_seeds_from_per_system_defaults(system_type):
     """Each system type's preset reflects its `get_ts_defaults` block."""

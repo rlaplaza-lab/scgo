@@ -89,6 +89,27 @@ class UPET(Calculator):
         self.results = self._inner.results
 
 
+def disable_metatomic_nvalchemiops() -> None:
+    """Disable nvalchemiops CUDA NL (fails on non-cubic gas-phase cells)."""
+    try:
+        import metatomic_torchsim._neighbors as _mt_neighbors
+    except ImportError:
+        return
+    _mt_neighbors.HAS_NVALCHEMIOPS = False
+
+
+def infer_upet_model_name_from_calculator(calculator: Calculator) -> str | None:
+    """Return the UPET model identifier from an ASE calculator, if known."""
+    model_name = getattr(calculator, "model_name", None)
+    if isinstance(model_name, str) and model_name:
+        return model_name
+    name = getattr(calculator, "name", "") or ""
+    if name.startswith("UPET-"):
+        suffix = name.removeprefix("UPET-").split("-v")[0]
+        return suffix or None
+    return None
+
+
 def _unwrap_metatomic_ase_calculator(calc: object) -> object | None:
     """Return the innermost Metatomic ASE calculator, unwrapping symmetrizers."""
     current: object | None = calc
@@ -113,19 +134,16 @@ def try_extract_torchsim_model_from_upet_calculator(
     live model, or ``None`` if extraction fails (caller falls back to reload).
     """
     try:
-        import metatomic_torchsim._neighbors as _mt_neighbors
         import torch
         from metatomic_torchsim import MetatomicModel
     except ImportError:
         return None
 
-    # nvalchemiops CUDA NL can fail for non-cubic gas-phase cells; match
-    # torchsim_helpers._load_default_upet_model.
-    _mt_neighbors.HAS_NVALCHEMIOPS = False
+    disable_metatomic_nvalchemiops()
 
     inner = getattr(calculator, "_inner", None)
     if inner is None:
-        inner = calculator
+        return None
 
     ase_calc = getattr(inner, "calculator", None)
     if ase_calc is None:

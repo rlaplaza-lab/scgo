@@ -16,9 +16,9 @@ from ase.optimize import LBFGS
 from ase.optimize.optimize import Optimizer
 
 from scgo.database import HPC_DATABASE_EXCEPTIONS, close_data_connection, setup_database
-from scgo.database.metadata import persist_provenance
-from scgo.database.sync import database_retry
+from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from scgo.utils.helpers import (
     extract_minima_from_database,
     perform_local_relaxation,
@@ -86,7 +86,7 @@ def simple_go(
     atoms.calc = None
     da = setup_database(
         output_dir,
-        "bh_go.db",
+        "simple_go.db",
         atoms,
         initial_candidate=atoms,
         remove_existing=clean,
@@ -99,9 +99,7 @@ def simple_go(
     try:
         a_optimized = database_retry(
             da.get_an_unrelaxed_candidate,
-            max_retries=5,
-            initial_delay=0.2,
-            backoff_factor=2.0,
+            config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
         perform_local_relaxation(
@@ -113,21 +111,17 @@ def simple_go(
         )
 
         if run_id is not None and a_optimized is not None:
-            persist_provenance(a_optimized, run_id=run_id)
+            set_tags(a_optimized, run_id=run_id)
 
         database_retry(
             lambda: da.add_relaxed_step(a_optimized),
-            max_retries=5,
-            initial_delay=0.2,
-            backoff_factor=2.0,
+            config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
 
         all_candidates = database_retry(
             da.get_all_relaxed_candidates,
-            max_retries=5,
-            initial_delay=0.2,
-            backoff_factor=2.0,
+            config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
         all_minima = extract_minima_from_database(all_candidates)

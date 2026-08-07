@@ -16,7 +16,8 @@ from scgo.database import (
     extract_minima_from_database_file,
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run
-from scgo.database.metadata import add_metadata
+from scgo.metadata.atoms import set_tags
+from scgo.metadata.provenance import output_json_provenance
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
     validate_stored_slab_adsorbate_metadata,
@@ -25,7 +26,6 @@ from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.helpers import copy_atoms, get_cluster_formula, validate_pair_id
 from scgo.utils.logging import get_logger
-from scgo.utils.ts_provenance import ts_output_provenance
 
 from .transition_state import (
     _permute_atoms_block_to_match,
@@ -120,7 +120,7 @@ def load_minima_by_composition(
 
             for energy, atoms in minima:
                 atoms_copy = copy_atoms(atoms)
-                add_metadata(
+                set_tags(
                     atoms_copy,
                     run_id=run_id,
                     source_db=os.path.basename(db_file),
@@ -202,7 +202,8 @@ def select_structure_pairs(  # noqa: C901
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
     similarity_pair_cor_max: float = 0.1,
     surface_aware: bool = False,
-    use_mic: bool | None = None,
+    *,
+    use_mic: bool,
     n_slab: int | None = None,
     max_endpoint_mismatch: float | None = None,
     adsorbate_aware: bool = False,
@@ -227,8 +228,7 @@ def select_structure_pairs(  # noqa: C901
         similarity_pair_cor_max: Maximum single distance difference tolerance.
             Default 0.1 Å (tighter than GA to ensure truly distinct structures).
         surface_aware: Use slightly looser scoring scales (slab / periodic systems).
-        use_mic: MIC for distance/similarity geometry. Defaults to ``surface_aware``
-            when omitted (backward compatible).
+        use_mic: MIC for distance/similarity geometry.
         n_slab: When set (from ``SurfaceSystemConfig.slab``), structural comparison
             uses only atoms ``n_slab:`` so pair selection ignores frozen slab motion.
         max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``.
@@ -241,7 +241,7 @@ def select_structure_pairs(  # noqa: C901
         List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
     """
     logger = get_logger(__name__)
-    mic = bool(surface_aware) if use_mic is None else bool(use_mic)
+    mic = bool(use_mic)
 
     if len(minima) < 2:
         logger.info("Only %d minima, need at least 2 to pair", len(minima))
@@ -472,7 +472,7 @@ def save_transition_state_results(
 
     formula = get_cluster_formula(composition)
 
-    summary = ts_output_provenance(extra=run_context or {})
+    summary = output_json_provenance(extra=run_context or {})
     summary.update(
         {
             "composition": composition,
@@ -643,7 +643,7 @@ def write_final_unique_ts(  # noqa: C901
     if not candidates:
         # Write empty summary
         summary_path = os.path.join(final_dir, "final_unique_ts_summary.json")
-        empty_data: dict[str, Any] = ts_output_provenance(extra=run_context or {})
+        empty_data: dict[str, Any] = output_json_provenance(extra=run_context or {})
         empty_data.update({"formula": formula, "unique_ts": []})
         if minima_base_dir is not None:
             empty_data["minima_base_dir"] = minima_base_dir
@@ -746,7 +746,7 @@ def write_final_unique_ts(  # noqa: C901
         serializable_summary.append(serial_item)
 
     summary_path = os.path.join(final_dir, "final_unique_ts_summary.json")
-    summary_data: dict[str, Any] = ts_output_provenance(extra=run_context or {})
+    summary_data: dict[str, Any] = output_json_provenance(extra=run_context or {})
     summary_data.update({"formula": formula, "unique_ts": serializable_summary})
     if minima_base_dir is not None:
         summary_data["minima_base_dir"] = minima_base_dir

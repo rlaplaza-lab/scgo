@@ -8,7 +8,7 @@ from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_mutation_operators
-from scgo.ase_ga_patches.standardmutations import MirrorMutation, OverlapReliefMutation
+from scgo.ase_ga_patches.mutations import MirrorMutation, OverlapReliefMutation
 from scgo.cluster_adsorbate.rigid import restore_rigid_adsorbate_fragments
 
 

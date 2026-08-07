@@ -14,13 +14,13 @@ from typing import Any, cast
 from ase import Atoms
 
 from scgo.database import get_connection
-from scgo.database.metadata import add_metadata, get_metadata, persist_provenance
-from scgo.database.sync import database_retry
+from scgo.database.sync import PRESET_TS_NETWORK, database_retry
+from scgo.metadata.atoms import get_tag, set_tags
+from scgo.metadata.provenance import output_json_provenance
 from scgo.ts_search.transition_state import minima_provenance_dict
 from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import get_logger, log_exception_v
-from scgo.utils.ts_provenance import ts_output_provenance
 
 logger = get_logger(__name__)
 
@@ -37,41 +37,30 @@ def _stamp_ts_metadata(
     canonical_ts: bool,
     endpoint_provenance: list[dict[str, Any]] | None,
 ) -> None:
-    """Stamp TS annotations into ``info["metadata"]`` and (for ASE DB) ``key_value_pairs``."""
-    md_payload: dict[str, Any] = {
+    """Stamp TS annotations into structure tags (``key_value_pairs``).
+
+    Non-scalars and ASE-ambiguous strings are handled by :func:`set_tags`.
+    """
+    tags: dict[str, Any] = {
+        "source": "ts_search",
+        "connects": [minima_idx_1, minima_idx_2],
+        "pair_id": pair_id,
         "potential_energy": ts_energy,
         "ts_connects_minima": f"{minima_idx_1}_{minima_idx_2}",
         "ts_pair_id": pair_id,
         "ts_barrier_height": barrier_height,
         "is_transition_state": True,
         "ts_neb_converged": neb_converged,
+        "raw_score": -float(ts_energy),
     }
     if canonical_ts:
-        md_payload["final_unique_ts"] = True
-
-    add_metadata(
-        ts_atoms,
-        source="ts_search",
-        connects=[minima_idx_1, minima_idx_2],
-        pair_id=pair_id,
-        **md_payload,
-    )
+        tags["final_unique_ts"] = True
 
     if endpoint_provenance is not None:
-        provenance_copy = [dict(p) for p in endpoint_provenance]
-        add_metadata(ts_atoms, ts_endpoint_provenance=provenance_copy)
-        ts_atoms.info.setdefault("key_value_pairs", {})[
-            "ts_endpoint_provenance_json"
-        ] = json.dumps(provenance_copy)
+        tags["ts_endpoint_provenance_json"] = [dict(p) for p in endpoint_provenance]
 
+    set_tags(ts_atoms, **tags)
     ts_atoms.info.setdefault("data", {})
-    # Mirror query-critical fields into key_value_pairs for ASE DB persistence.
-    kvp = ts_atoms.info.setdefault("key_value_pairs", {})
-    kvp["is_transition_state"] = True
-    kvp["ts_neb_converged"] = neb_converged
-    if canonical_ts:
-        kvp["final_unique_ts"] = True
-    kvp["raw_score"] = -float(ts_energy)
 
 
 def add_ts_to_database(
@@ -145,9 +134,9 @@ def add_ts_to_database(
                 endpoint_provenance=endpoint_provenance,
             )
 
-            run_id_src = get_metadata(ts_atoms, "run_id")
+            run_id_src = get_tag(ts_atoms, "run_id")
             if run_id_src is not None:
-                persist_provenance(ts_atoms, run_id=run_id_src)
+                set_tags(ts_atoms, run_id=run_id_src)
 
             def _add() -> bool:
                 ts_db_atoms = ts_atoms.copy()
@@ -160,9 +149,7 @@ def add_ts_to_database(
 
             database_retry(
                 _add,
-                max_retries=5,
-                initial_delay=0.05,
-                backoff_factor=2.0,
+                config=PRESET_TS_NETWORK,
                 exception_types=(sqlite3.OperationalError, OSError),
             )
 
@@ -211,7 +198,7 @@ def tag_unique_ts_in_databases(  # noqa: C901
     def _get_min_id(idx: int, key: str):
         if not (0 <= idx < len(minima)):
             return None
-        return get_metadata(minima[idx][1], key)
+        return get_tag(minima[idx][1], key)
 
     for item in unique_ts:
         ts_energy = item.get("ts_energy")
@@ -257,9 +244,9 @@ def tag_unique_ts_in_databases(  # noqa: C901
                 if atoms_for_db is not None:
                     run_id_src = _get_min_id(i, "run_id") or _get_min_id(j, "run_id")
                     if run_id_src is not None:
-                        add_metadata(atoms_for_db, run_id=run_id_src)
+                        set_tags(atoms_for_db, run_id=run_id_src)
 
-                    add_metadata(
+                    set_tags(
                         atoms_for_db,
                         connects=[i, j],
                         minima_source_db=[src_db_i, src_db_j],
@@ -334,7 +321,7 @@ def save_ts_network_metadata(
 
     formula = get_cluster_formula(composition)
 
-    network: dict[str, Any] = ts_output_provenance(extra=run_context or {})
+    network: dict[str, Any] = output_json_provenance(extra=run_context or {})
     network.update(
         {
             "composition": composition,

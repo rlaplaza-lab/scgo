@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from scgo.ase_ga_patches.standardmutations import (
+from scgo.ase_ga_patches.mutations import (
     CustomPermutationMutation,
     RattleMutation,
 )

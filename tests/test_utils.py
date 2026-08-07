@@ -13,6 +13,9 @@ from ase.calculators.emt import EMT
 
 import tests.constants as _tc
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
+from scgo.metadata.atoms import get_tag, set_tags
+from scgo.metadata.db_stamp import is_scgo_db
+from scgo.metadata.run_dir import get_run_directories, load_run_dir_record
 
 # Re-exported for `from tests.test_utils import ...` (single source: _tc).
 REPRODUCIBILITY_RTOL = _tc.REPRODUCIBILITY_RTOL
@@ -420,20 +423,14 @@ def create_test_atoms(
     # Set up test environment
     setup_test_atoms(atoms, cell_size=cell_size, pbc=pbc)
 
-    # Add metadata if provided
+    # Stamp structure tags if provided
     if raw_score is not None or trial is not None:
-        if not hasattr(atoms, "info") or atoms.info is None:
-            atoms.info = {}
-
+        kwargs = {}
         if raw_score is not None:
-            from scgo.database.metadata import add_metadata
-
-            add_metadata(atoms, raw_score=raw_score)
-
+            kwargs["raw_score"] = raw_score
         if trial is not None:
-            if "provenance" not in atoms.info:
-                atoms.info["provenance"] = {}
-            atoms.info["provenance"]["trial_id"] = trial
+            kwargs["trial_id"] = trial
+        set_tags(atoms, **kwargs)
 
     return atoms
 
@@ -591,9 +588,9 @@ def mark_test_minima_as_final(db_path: Path | str) -> None:
         for row in conn.select(relaxed=1):
             conn.update(row.id, final_unique_minimum=1, final_rank=1)
 
-    from scgo.database.schema import stamp_scgo_database
+    from scgo.metadata.db_stamp import stamp_db
 
-    stamp_scgo_database(db_path)
+    stamp_db(db_path)
 
 
 def create_ga_comparator(n_top: int):
@@ -865,19 +862,11 @@ def assert_pt_o_distance_reasonable(
 
 
 def assert_run_id_persisted(atoms: Atoms, expected_run_id: str) -> None:
-    """Assert `run_id` is persisted in the canonical location.
-
-    The canonical storage location is ``Atoms.info["key_value_pairs"]["run_id"]``.
-    A missing/incorrect key_value_pairs entry fails the test (a write to the
-    wrong place must not pass). ``metadata.run_id`` is recorded as a secondary,
-    informational check: if present it must also match, but its absence does not
-    fail the test.
-    """
-    kv_run = atoms.info.get("key_value_pairs", {}).get("run_id")
+    """Assert ``run_id`` is present in ``atoms.info['key_value_pairs']``."""
+    kv_run = get_tag(atoms, "run_id")
     assert kv_run == expected_run_id, (
-        f"run_id not persisted in canonical location key_value_pairs.run_id "
-        f"(expected={expected_run_id!r}, got={kv_run!r}); "
-        f"metadata.run_id={atoms.info.get('metadata', {}).get('run_id')!r}"
+        f"run_id not persisted (expected={expected_run_id!r}); "
+        f"key_value_pairs.run_id={kv_run!r}"
     )
 
     md_run = atoms.info.get("metadata", {}).get("run_id")
@@ -885,6 +874,172 @@ def assert_run_id_persisted(atoms: Atoms, expected_run_id: str) -> None:
         assert md_run == expected_run_id, (
             f"metadata.run_id {md_run!r} does not match expected {expected_run_id!r}"
         )
+
+
+def assert_e2e_output_db(
+    output_dir: Path | str, *, expect_final_tag: bool = False
+) -> list[Path]:
+    """Assert GO/TS wrote at least one ASE database under ``output_dir``."""
+    root = Path(output_dir)
+    db_files = list(root.glob("**/*.db"))
+    assert db_files, f"No database files found under {root}"
+    if expect_final_tag:
+        assert_db_final_row(str(db_files[0]), None, expect_final_id=True)
+    return db_files
+
+
+def assert_e2e_run_artifacts(
+    output_dir: Path | str,
+    *,
+    atoms: Atoms | None = None,
+) -> None:
+    """Assert run-dir metadata.json and at least one SCGO-stamped ``*.db``.
+
+    Searches recursively so ``run_go_ts`` campaign roots (``*_searches/run_*``)
+    are covered. When *atoms* carries a ``run_id`` tag, require that id to match
+    a loaded run-dir record under *output_dir*.
+    """
+    root = Path(output_dir)
+    run_dirs = get_run_directories(root)
+    if not run_dirs:
+        # Campaign roots nest runs under {path_key}_searches/.
+        run_dirs = []
+        for searches in root.glob("*_searches"):
+            if searches.is_dir():
+                run_dirs.extend(get_run_directories(searches))
+    if not run_dirs:
+        # Last resort: any run_* with metadata.json under the tree.
+        for meta in root.glob("**/run_*/metadata.json"):
+            run_dirs.append(str(meta.parent))
+        run_dirs = sorted(set(run_dirs))
+    assert run_dirs, f"No run_* directories with metadata.json under {root}"
+    records = []
+    for run_dir in run_dirs:
+        record = load_run_dir_record(run_dir)
+        assert record is not None, f"Failed to load run-dir record from {run_dir}"
+        records.append(record)
+
+    db_files = assert_e2e_output_db(root)
+    assert any(is_scgo_db(p) for p in db_files), (
+        f"No SCGO-stamped database under {root}; found {db_files}"
+    )
+
+    if atoms is None:
+        return
+    run_id = get_tag(atoms, "run_id")
+    if run_id is None:
+        return
+    assert any(r.run_id == run_id for r in records), (
+        f"atoms run_id={run_id!r} not found in run-dir records under {root}"
+    )
+
+
+def assert_e2e_minima_list(
+    minima: list[tuple[float, Atoms]],
+    *,
+    expected_n_atoms: int,
+    output_dir: Path | str | None = None,
+    expect_final_tag: bool = False,
+    expect_xyz_export: bool = False,
+) -> Atoms:
+    """Strict bars for a ``run_go`` minima list."""
+    assert minima, "Expected at least one minimum"
+    assert all(np.isfinite(energy) for energy, _atoms in minima)
+    _energy, best = minima[0]
+    assert len(best) == expected_n_atoms, (
+        f"Expected {expected_n_atoms} atoms, got {len(best)}"
+    )
+    if output_dir is not None:
+        root = Path(output_dir)
+        assert_e2e_run_artifacts(root, atoms=best)
+        if expect_final_tag:
+            assert_db_final_row(
+                str(assert_e2e_output_db(root)[0]), None, expect_final_id=True
+            )
+        if expect_xyz_export:
+            xyz_files = list((root / "final_unique_minima").glob("*.xyz"))
+            assert xyz_files, (
+                f"No XYZ minima exported under {root / 'final_unique_minima'}"
+            )
+    return best
+
+
+def assert_e2e_go_ts_summary(
+    summary: dict[str, Any],
+    *,
+    expected_formula: str,
+    expected_mobile_atoms: int,
+    output_dir: Path | str | None = None,
+    surface_config=None,
+    n_core_mobile: int | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    connectivity_factor: float | None = None,
+    check_supported_binding: bool = False,
+    require_ts_candidates: bool = False,
+    expect_zero_ts: bool = False,
+    barrier_range: tuple[float, float] | None = None,
+    require_interior_ts: bool = True,
+) -> Atoms:
+    """Strict bars for a public ``run_go_ts`` summary dict."""
+    assert isinstance(summary, dict)
+    for key in (
+        "formula",
+        "minima_by_formula",
+        "ts_results",
+        "ts_total_count",
+        "ts_success_count",
+    ):
+        assert key in summary, f"Missing summary key {key!r}"
+
+    assert summary["formula"] == expected_formula
+    minima = summary["minima_by_formula"][expected_formula]
+    n_slab = len(surface_config.slab) if surface_config is not None else 0
+    best = assert_e2e_minima_list(
+        minima,
+        expected_n_atoms=n_slab + expected_mobile_atoms,
+        output_dir=output_dir,
+        expect_final_tag=False,
+    )
+
+    if check_supported_binding:
+        assert surface_config is not None
+        assert_supported_cluster_binding(
+            best,
+            surface_config,
+            n_core_mobile=n_core_mobile,
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+            connectivity_factor=connectivity_factor,
+        )
+
+    ts_results = summary.get("ts_results") or []
+    if expect_zero_ts:
+        assert summary["ts_total_count"] == 0
+        assert summary["ts_success_count"] == 0
+        assert ts_results == []
+        return best
+
+    assert summary["ts_total_count"] >= 0
+    if require_ts_candidates:
+        assert summary["ts_total_count"] >= 1
+        assert ts_results, "Expected TS result dicts"
+
+    for result in ts_results:
+        assert isinstance(result, dict)
+        assert "pair_id" in result
+        assert "status" in result
+        if result.get("status") != "success":
+            continue
+        if barrier_range is not None:
+            assert_ts_result_valid(
+                result,
+                barrier_range=barrier_range,
+                require_interior_ts=require_interior_ts,
+            )
+        else:
+            barrier = result.get("barrier_height")
+            assert barrier is not None
+            assert np.isfinite(float(barrier))
+    return best
 
 
 def assert_db_final_row(db_path, expected_run_id, expect_final_id=True):

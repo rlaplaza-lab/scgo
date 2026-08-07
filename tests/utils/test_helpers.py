@@ -10,6 +10,7 @@ from ase.constraints import FixAtoms
 
 from scgo.constants import PENALTY_ENERGY
 from scgo.exceptions import SCGORuntimeError
+from scgo.metadata.atoms import compute_final_id, ensure_final_id, get_tags
 from scgo.utils.helpers import (
     _assign_penalty_energy,
     auto_niter,
@@ -18,22 +19,19 @@ from scgo.utils.helpers import (
     auto_population_size,
     canonicalize_relaxed_for_storage,
     canonicalize_storage_frame,
-    compute_final_id,
-    ensure_final_id,
     ensure_float64_forces,
     filter_unique_minima,
     get_cluster_formula,
     get_ordered_formula,
-    get_provenance,
     get_system_path_key,
     perform_local_relaxation,
 )
 
 
-def test_get_provenance_reads_provenance_dict():
+def test_get_tags_reads_key_value_pairs():
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
-    atoms.info = {"provenance": {"run_id": "run_test_abc"}}
-    assert get_provenance(atoms)["run_id"] == "run_test_abc"
+    atoms.info = {"key_value_pairs": {"run_id": "run_test_abc"}}
+    assert get_tags(atoms)["run_id"] == "run_test_abc"
 
 
 class TestFilterUniqueMinima:
@@ -48,8 +46,7 @@ class TestFilterUniqueMinima:
         """Test filtering of single minimum."""
         atoms = Atoms("Pt", positions=[[0, 0, 0]])
         atoms.info = {
-            "key_value_pairs": {"raw_score": 1.0},
-            "provenance": {"run_id": "run_test_1"},
+            "key_value_pairs": {"raw_score": 1.0, "run_id": "run_test_1"},
         }
 
         result = filter_unique_minima([(1.0, atoms)], n_top=1)
@@ -60,14 +57,12 @@ class TestFilterUniqueMinima:
         # Create atoms with required metadata
         atoms1 = Atoms("Pt", positions=[[0, 0, 0]])
         atoms1.info = {
-            "key_value_pairs": {"raw_score": 1.0},
-            "provenance": {"run_id": "run_test_1"},
+            "key_value_pairs": {"raw_score": 1.0, "run_id": "run_test_1"},
         }
 
         atoms2 = Atoms("Pt", positions=[[1, 1, 1]])  # Different position
         atoms2.info = {
-            "key_value_pairs": {"raw_score": 2.0},
-            "provenance": {"run_id": "run_test_1"},
+            "key_value_pairs": {"raw_score": 2.0, "run_id": "run_test_1"},
         }
 
         # Should return both since they have different positions

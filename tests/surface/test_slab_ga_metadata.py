@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
-
 from ase import Atoms
 
 from scgo.algorithms.ga_common import slab_ga_metadata_extras
-from scgo.database.metadata import add_metadata
+from scgo.metadata.atoms import get_tag, set_tags
 from scgo.surface.config import SurfaceSystemConfig
 
 
@@ -22,7 +20,7 @@ def test_slab_ga_metadata_extras_empty_without_surface() -> None:
     }
 
 
-def test_slab_ga_metadata_extras_and_add_metadata(pt_slab_small) -> None:
+def test_slab_ga_metadata_extras_and_set_tags(pt_slab_small) -> None:
     slab = pt_slab_small
     cfg = SurfaceSystemConfig(slab=slab)
     n_slab = len(slab)
@@ -34,9 +32,10 @@ def test_slab_ga_metadata_extras_and_add_metadata(pt_slab_small) -> None:
     )
     combined = slab + ads
     extra = slab_ga_metadata_extras(cfg, n_slab, "surface_cluster_adsorbate")
-    add_metadata(combined, run_id="run_test", **extra)
-    meta = combined.info["metadata"]
-    assert meta["n_slab_atoms"] == n_slab
-    assert meta["system_type"] == "surface_cluster_adsorbate"
-    assert json.loads(meta["slab_chemical_symbols_json"]) == slab.get_chemical_symbols()
-    assert meta["run_id"] == "run_test"
+    set_tags(combined, run_id="run_test", **extra)
+    assert get_tag(combined, "n_slab_atoms") == n_slab
+    assert get_tag(combined, "system_type") == "surface_cluster_adsorbate"
+    assert (
+        get_tag(combined, "slab_chemical_symbols_json") == slab.get_chemical_symbols()
+    )
+    assert get_tag(combined, "run_id") == "run_test"

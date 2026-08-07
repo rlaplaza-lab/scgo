@@ -38,6 +38,7 @@ from time import perf_counter
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
+from scgo import runner_go
 from scgo.exceptions import SCGOValidationError
 from scgo.runner_composition import (
     CompositionInput,
@@ -45,14 +46,7 @@ from scgo.runner_composition import (
     build_two_element_compositions,
     parse_composition_arg,
 )
-from scgo.runner_go import (
-    ScgoMinimaAlgorithm as ScgoMinimaAlgorithm,
-)
-from scgo.runner_go import (
-    _run_go_campaign_compositions,
-    _run_go_trials,
-    select_scgo_minima_algorithm,
-)
+from scgo.runner_go import select_scgo_minima_algorithm
 from scgo.runner_params import (
     RunGOCampaignContext,
     RunGOContext,
@@ -77,7 +71,7 @@ logger = get_logger(__name__)
 
 
 def _execute_run_go(context: RunGOContext) -> list[tuple[float, Atoms]]:
-    return _run_go_trials(
+    return runner_go._run_go_trials(
         context.composition,
         context.system_type,
         params=context.params,
@@ -87,7 +81,6 @@ def _execute_run_go(context: RunGOContext) -> list[tuple[float, Atoms]]:
         clean=context.clean,
         output_dir=context.output_dir,
         calculator_for_global_optimization=context.calculator_for_global_optimization,
-        params_already_merged=True,
     )
 
 
@@ -137,7 +130,7 @@ def run_go(
 def _execute_run_go_campaign(
     context: RunGOCampaignContext,
 ) -> dict[str, list[tuple[float, Atoms]]]:
-    return _run_go_campaign_compositions(
+    return runner_go._run_go_campaign_compositions(
         context.compositions,
         context.system_type,
         params=context.params,
@@ -146,7 +139,6 @@ def _execute_run_go_campaign(
         run_id=context.run_id,
         clean=context.clean,
         output_dir=context.output_dir,
-        params_already_merged=True,
     )
 
 

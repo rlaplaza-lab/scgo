@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import numpy as np
 from ase import Atoms
 
 from scgo.cluster_adsorbate.validation import validate_adsorbate_fragment_integrity
-from scgo.database.metadata import get_metadata
 from scgo.exceptions import (
     SCGOValidationError,
 )
@@ -21,11 +21,18 @@ from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
+from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.utils.combine_atoms import top_layer_indices
 
 # Small slack below nominal slab top (numerical / structural roughness).
 _BINDING_PENETRATION_TOLERANCE_A = 0.1
+
+
+def _symbols_tag_list(value: object) -> list[str]:
+    """Normalize a chemical-symbols tag (JSON string or already-decoded list)."""
+    decoded: Any = json.loads(value) if isinstance(value, str) else value
+    return [str(x) for x in decoded]
 
 
 def validate_surface_config_slab_prefix(
@@ -65,14 +72,14 @@ def validate_stored_slab_adsorbate_metadata(atoms: Atoms) -> None:
     Older databases may only have ``n_slab_atoms`` / ``system_type`` without
     ``slab_chemical_symbols_json``; in that case only ``len(atoms) >= n_slab`` is checked.
     """
-    if get_metadata(atoms, "system_type") not in {
+    if get_tag(atoms, "system_type") not in {
         "surface_cluster",
         "surface_cluster_adsorbate",
         "surface",
         "surface_adsorbate",
     }:
         return
-    n_meta = int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
+    n_meta = int(get_tag(atoms, "n_slab_atoms", 0) or 0)
     if n_meta <= 0:
         raise SCGOValidationError(
             "surface_* structures require n_slab_atoms > 0 in metadata"
@@ -82,10 +89,10 @@ def validate_stored_slab_adsorbate_metadata(atoms: Atoms) -> None:
             "Slab metadata expects at least "
             f"{n_meta} atoms (n_slab_atoms), got len(atoms)={len(atoms)}"
         )
-    js = get_metadata(atoms, "slab_chemical_symbols_json", None)
+    js = get_tag(atoms, "slab_chemical_symbols_json", None)
     if js is None:
         return
-    expected = json.loads(js)
+    expected = _symbols_tag_list(js)
     got = atoms.get_chemical_symbols()[:n_meta]
     if list(expected) != got:
         raise SCGOValidationError(
@@ -100,19 +107,19 @@ def validate_stored_mobile_partition_metadata(atoms: Atoms) -> None:
     For ``surface_cluster_adsorbate``, the mobile region follows the slab prefix.
     For ``gas_cluster_adsorbate``, the full structure is mobile.
     """
-    st = get_metadata(atoms, "system_type")
+    st = get_tag(atoms, "system_type")
     if st not in {
         "gas_cluster_adsorbate",
         "surface_cluster_adsorbate",
         "surface_adsorbate",
     }:
         return
-    n_core = int(get_metadata(atoms, "n_core_atoms", 0) or 0)
-    n_ads = int(get_metadata(atoms, "n_adsorbate_fragment_atoms", 0) or 0)
+    n_core = int(get_tag(atoms, "n_core_atoms", 0) or 0)
+    n_ads = int(get_tag(atoms, "n_adsorbate_fragment_atoms", 0) or 0)
     if n_core == 0 and n_ads == 0:
         return
     n_slab = (
-        int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
+        int(get_tag(atoms, "n_slab_atoms", 0) or 0)
         if st in {"surface_cluster_adsorbate", "surface_adsorbate"}
         else 0
     )
@@ -122,12 +129,12 @@ def validate_stored_mobile_partition_metadata(atoms: Atoms) -> None:
             "Mobile region shorter than n_core_atoms + n_adsorbate_fragment_atoms: "
             f"len(mobile)={len(mobile)}, n_core={n_core}, n_ads={n_ads}"
         )
-    core_js = get_metadata(atoms, "core_chemical_symbols_json", None)
-    ads_js = get_metadata(atoms, "adsorbate_fragment_chemical_symbols_json", None)
+    core_js = get_tag(atoms, "core_chemical_symbols_json", None)
+    ads_js = get_tag(atoms, "adsorbate_fragment_chemical_symbols_json", None)
     if core_js is None or ads_js is None:
         return
-    core_exp = json.loads(core_js)
-    ads_exp = json.loads(ads_js)
+    core_exp = _symbols_tag_list(core_js)
+    ads_exp = _symbols_tag_list(ads_js)
     if mobile[:n_core] != list(core_exp):
         raise SCGOValidationError(
             "Loaded structure disagrees with stored core_chemical_symbols_json for the "

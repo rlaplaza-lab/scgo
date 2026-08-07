@@ -2,8 +2,8 @@ import pytest
 from ase import Atoms
 
 from scgo.ase_ga_patches.population import Population
-from scgo.database.metadata import add_metadata
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from tests.test_utils import create_paired_rngs
 
 
@@ -24,7 +24,7 @@ def _make_candidate(symbols, raw_score, confid, relax_id):
     a.set_cell([10.0, 10.0, 10.0])
     a.set_pbc(False)
     # Add metadata used by get_raw_score
-    add_metadata(a, raw_score=raw_score)
+    set_tags(a, raw_score=raw_score)
     a.info["confid"] = confid
     a.info["relax_id"] = relax_id
     return a
@@ -132,14 +132,14 @@ def test_looks_like_counts_population_duplicates():
 
 def test_write_log_uses_incremental_max_generation(tmp_path):
     """The log records the highest generation without rescanning ``all_cand``."""
-    from scgo.database.metadata import add_metadata as _add_metadata
+    from scgo.metadata.atoms import set_tags as _set_tags
 
     candidates = []
     for i in range(4):
         cand = _make_candidate(
             ["Pt", "Pt"], raw_score=-float(i), confid=i, relax_id=i + 1
         )
-        _add_metadata(cand, generation=i)
+        _set_tags(cand, generation=i)
         candidates.append(cand)
 
     logfile = tmp_path / "population.log"
@@ -151,7 +151,7 @@ def test_write_log_uses_incremental_max_generation(tmp_path):
     assert line.split(":")[-2].strip() == "3"
 
     newer = _make_candidate(["Pt", "Pt"], raw_score=-9.0, confid=99, relax_id=99)
-    _add_metadata(newer, generation=7)
+    _set_tags(newer, generation=7)
     pop.update(new_cand=[newer])
     assert pop._max_gen == 7
     assert logfile.read_text().strip().splitlines()[-1].split(":")[-2].strip() == "7"

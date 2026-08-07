@@ -309,9 +309,9 @@ def test_database(tmp_path):
             gaid=3,
         )
 
-    from scgo.database.schema import stamp_scgo_database
+    from scgo.metadata.db_stamp import stamp_db
 
-    stamp_scgo_database(db_path)
+    stamp_db(db_path)
     return str(db_path)
 
 

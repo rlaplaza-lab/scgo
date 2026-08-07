@@ -125,6 +125,11 @@ def _optimizer_write_timing_json_enabled(params: dict[str, Any]) -> bool:
     return False
 
 
+def _copy_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a deep copy of params or an empty dict when params is None."""
+    return copy.deepcopy(params) if params is not None else {}
+
+
 def _default_optimizer_system_type(algo: str) -> SystemType | None:
     global _DEFAULT_GO_PARAMS
     if _DEFAULT_GO_PARAMS is None:
@@ -435,7 +440,7 @@ def _merge_adsorbate_context_into_params(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Attach adsorbate/surface init context for :func:`_run_go_trials` / GA."""
-    out = copy.deepcopy(base) if base is not None else {}
+    out = _copy_params(base)
     out.update({k: v for k, v in kwargs.items() if v is not None})
     return out
 
@@ -601,10 +606,10 @@ def resolve_workflow_seed(
 
 
 def _with_surface_in_optimizers(
-    go_params: dict[str, Any], *, surface_config: SurfaceSystemConfig | None
+    go_params: dict[str, Any] | None, *, surface_config: SurfaceSystemConfig | None
 ) -> dict[str, Any]:
     """Copy ``go_params``; fan out explicit run ``surface_config`` to optimizer slots."""
-    out = copy.deepcopy(go_params)
+    out = _copy_params(go_params)
     if surface_config is not None:
         if out.get("surface_config") is None:
             out["surface_config"] = surface_config
@@ -640,7 +645,7 @@ def _with_adsorbate_in_optimizers(
     adsorbate_fragment_template: Any | None = None,
 ) -> dict[str, Any]:
     """Copy ``go_params``; fan out derived adsorbate context to optimizer slots."""
-    out = copy.deepcopy(go_params) if go_params is not None else {}
+    out = _copy_params(go_params)
     cluster_adsorbate_config = out.get("cluster_adsorbate_config")
 
     # If any adsorbate param is set, distribute to all optimizer slots

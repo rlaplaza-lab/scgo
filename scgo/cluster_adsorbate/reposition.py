@@ -8,7 +8,7 @@ from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close_two_sets
 from numpy.random import Generator
 
-from scgo.ase_ga_patches.standardmutations import _ensure_rng
+from scgo.ase_ga_patches.mutations import _ensure_rng
 from scgo.cluster_adsorbate.config import (
     ClusterAdsorbateConfig,
     resolve_cluster_adsorbate_config,

@@ -15,11 +15,11 @@ from ase import Atoms
 
 from scgo.database.connection import get_connection
 from scgo.database.registry import get_registry
-from scgo.database.schema import clear_scgo_database_cache, is_scgo_database
 from scgo.database.streaming import relaxed_rows_where_clause
+from scgo.metadata.db_stamp import clear_db_stamp_cache, is_scgo_db
+from scgo.metadata.run_dir import load_run_dir_record, resolve_run_id_from_db_path
 from scgo.utils.helpers import get_cluster_formula, get_composition_counts
 from scgo.utils.logging import get_logger, log_trace
-from scgo.utils.run_tracking import load_run_metadata, resolve_run_id_from_db_path
 
 logger = get_logger(__name__)
 
@@ -28,7 +28,7 @@ _discovery_by_base: dict[str, DatabaseDiscovery] = {}
 
 def _filter_scgo_databases(db_files: list[Path]) -> list[Path]:
     """Keep only databases marked as SCGO."""
-    return [p for p in db_files if is_scgo_database(p)]
+    return [p for p in db_files if is_scgo_db(p)]
 
 
 class DatabaseDiscovery:
@@ -99,7 +99,11 @@ class DatabaseDiscovery:
                 "Filtered non-SCGO DBs: %d -> %d databases", orig_count, len(db_files)
             )
 
-        if use_cache:
+        # Never cache empty results: databases are written while a run is in
+        # progress (GO writes its DB, then TS reads it back in the same
+        # process). Caching a miss recorded before the DB existed would pin
+        # that stale answer for the rest of the process.
+        if use_cache and db_files:
             self._cache[cache_key] = db_files
 
         return db_files
@@ -107,7 +111,7 @@ class DatabaseDiscovery:
     def clear_cache(self) -> None:
         """Clear discovery caches after filesystem changes."""
         self._cache.clear()
-        clear_scgo_database_cache()
+        clear_db_stamp_cache()
         logger.debug("Cleared database discovery caches")
 
     def _build_cache_key(
@@ -173,10 +177,8 @@ class DatabaseDiscovery:
                 )
                 if run_id:
                     if run_id not in run_formula_cache:
-                        metadata = load_run_metadata(str(self.base_dir / run_id))
-                        run_formula_cache[run_id] = (
-                            metadata.formula if metadata else None
-                        )
+                        record = load_run_dir_record(str(self.base_dir / run_id))
+                        run_formula_cache[run_id] = record.formula if record else None
                     known_formula = run_formula_cache[run_id]
                     if known_formula is not None:
                         if known_formula == target_formula:
@@ -216,20 +218,6 @@ def _get_discovery(base_dir: str | Path) -> DatabaseDiscovery:
     return _discovery_by_base[key]
 
 
-def _glob_run_database_paths(
-    base_dir: str,
-    db_filename: str | None = None,
-) -> list[Path]:
-    """Filesystem fallback when registry-backed discovery returns nothing."""
-    pattern_name = db_filename if db_filename else "*.db"
-    return sorted(
-        Path(p)
-        for p in glob.glob(
-            os.path.join(base_dir, "run_*", pattern_name), recursive=False
-        )
-    )
-
-
 def list_discovered_db_paths_with_run(
     base_dir: str | Path,
     *,
@@ -250,8 +238,6 @@ def list_discovered_db_paths_with_run(
         use_cache=use_cache,
         db_filename=filename_pattern,
     )
-    if not db_paths:
-        db_paths = _filter_scgo_databases(_glob_run_database_paths(base_s, db_filename))
 
     out: list[tuple[str, str]] = []
     for db_path in db_paths:

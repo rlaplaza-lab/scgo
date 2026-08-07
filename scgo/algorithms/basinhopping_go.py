@@ -36,9 +36,9 @@ from scgo.constants import (
     DEFAULT_PAIR_COR_MAX,
 )
 from scgo.database import HPC_DATABASE_EXCEPTIONS, setup_database
-from scgo.database.metadata import add_metadata, persist_provenance
-from scgo.database.sync import database_retry
+from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
@@ -386,7 +386,7 @@ def bh_go(  # noqa: C901
     )
 
     def _run_metadata_extras() -> dict[str, Any]:
-        # dict[str, Any] (not int | str) so ** expansion matches add_metadata's
+        # dict[str, Any] (not int | str) so ** expansion matches set_tags'
         # typed run_id / generation parameters.
         return ga_run_metadata_extras(
             surface_config,
@@ -526,9 +526,7 @@ def bh_go(  # noqa: C901
 
         a_current = database_retry(
             da.get_an_unrelaxed_candidate,
-            max_retries=5,
-            initial_delay=0.2,
-            backoff_factor=2.0,
+            config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
         if surface_mode and surface_config is not None:
@@ -568,20 +566,18 @@ def bh_go(  # noqa: C901
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
         )
-        add_metadata(
+        set_tags(
             a_current,
             **_run_metadata_extras(),
         )
 
         if run_id is not None:
-            persist_provenance(a_current, run_id=run_id)
+            set_tags(a_current, run_id=run_id)
 
         t_db0 = perf_counter()
         database_retry(
             lambda: da.add_relaxed_step(a_current),
-            max_retries=5,
-            initial_delay=0.2,
-            backoff_factor=2.0,
+            config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
         profile_timings["initial_relaxed_write_s"] = perf_counter() - t_db0
@@ -642,16 +638,14 @@ def bh_go(  # noqa: C901
                     adsorbate_definition=adsorbate_definition,
                 )
             if run_id is not None:
-                persist_provenance(a_trial, run_id=run_id)
+                set_tags(a_trial, run_id=run_id)
 
             t_ins0 = perf_counter()
             database_retry(
                 functools.partial(
                     da.add_unrelaxed_candidate, a_trial, description=desc
                 ),
-                max_retries=5,
-                initial_delay=0.2,
-                backoff_factor=2.0,
+                config=PRESET_HPC,
                 exception_types=HPC_DATABASE_EXCEPTIONS,
             )
             dt_ins = perf_counter() - t_ins0
@@ -685,19 +679,17 @@ def bh_go(  # noqa: C901
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                 enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             )
-            add_metadata(
+            set_tags(
                 a_trial,
                 **_run_metadata_extras(),
             )
             if run_id is not None:
-                persist_provenance(a_trial, run_id=run_id)
+                set_tags(a_trial, run_id=run_id)
 
             t_w0 = perf_counter()
             database_retry(
                 functools.partial(da.add_relaxed_step, a_trial),
-                max_retries=5,
-                initial_delay=0.2,
-                backoff_factor=2.0,
+                config=PRESET_HPC,
                 exception_types=HPC_DATABASE_EXCEPTIONS,
             )
             dt_w = perf_counter() - t_w0
@@ -778,9 +770,7 @@ def bh_go(  # noqa: C901
 
         all_candidates = database_retry(
             da.get_all_relaxed_candidates,
-            max_retries=5,
-            initial_delay=0.2,
-            backoff_factor=2.0,
+            config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
         all_minima = extract_minima_from_database(all_candidates)

@@ -29,11 +29,11 @@ from ase.build import bulk
 from ase.constraints import FixAtoms as ASEFixAtoms
 
 from scgo.calculators.torch_device import resolve_torch_device
-from scgo.database.metadata import update_metadata
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
+from scgo.metadata.atoms import set_tags
 from scgo.utils.helpers import copy_atoms, ensure_float64_forces
 from scgo.utils.logging import get_logger
 
@@ -172,8 +172,8 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
     ``RuntimeError`` inside ``torch.isin`` (device mismatch). The fix aligns
     ``atom_idx`` with ``self.atom_idx`` before the ``isin`` call.
 
-    Phase 5: remove once TorchSim fixes CPU/CUDA ``atom_idx`` handling in
-    constraints (see CHANGELOG maintainer notes for related leave-alone shims).
+    Remove once TorchSim fixes CPU/CUDA ``atom_idx`` handling in constraints
+    (see CHANGELOG maintainer notes for related upstream workarounds).
     """
     from torch_sim.constraints import AtomConstraint
 
@@ -208,34 +208,7 @@ def _register_torchsim_warning_filters() -> None:
         category=UserWarning,
         module=r"warp\._src\.torch",
     )
-    # Defense-in-depth: older SCGO used optimize(max_steps=0) for single-point
-    # evals; torch_sim warns (and logs) on that path. Prefer ts.static now, but
-    # keep this filter so any residual max_steps=0 call stays quiet in production.
-    warnings.filterwarnings(
-        "ignore",
-        message=r"All systems have reached the maximum number of steps: 0\.?",
-        category=UserWarning,
-    )
-    _install_torchsim_max_steps_zero_log_filter()
     _TORCHSIM_WARNINGS_REGISTERED = True
-
-
-class _TorchSimMaxStepsZeroLogFilter(logging.Filter):
-    """Drop torch_sim's ``max_steps: 0`` WARNING (single-point optimize leftover)."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return "All systems have reached the maximum number of steps: 0" not in msg
-
-
-def _install_torchsim_max_steps_zero_log_filter() -> None:
-    """Attach a log filter so torch_sim's logger.warning for max_steps=0 is silent."""
-    runners_logger = logging.getLogger("torch_sim.runners")
-    if any(
-        isinstance(f, _TorchSimMaxStepsZeroLogFilter) for f in runners_logger.filters
-    ):
-        return
-    runners_logger.addFilter(_TorchSimMaxStepsZeroLogFilter())
 
 
 def build_torchsim_fixatoms_from_ase_batch(
@@ -396,13 +369,14 @@ def _load_default_upet_model(
     compute_stress: bool = False,
 ):
     """Create a TorchSim MetatomicModel for UPET checkpoints."""
-    import metatomic_torchsim._neighbors as _mt_neighbors
     from metatomic_torchsim import MetatomicModel
     from upet import get_upet
 
+    from scgo.calculators.upet_helpers import disable_metatomic_nvalchemiops
+
     # nvalchemiops CUDA NL can fail for non-cubic gas-phase cells (float max_neighbors
     # in metatomic-torchsim); vesin handles these systems reliably.
-    _mt_neighbors.HAS_NVALCHEMIOPS = False
+    disable_metatomic_nvalchemiops()
 
     if upet_checkpoint_path:
         atomistic = get_upet(checkpoint_path=upet_checkpoint_path)
@@ -422,22 +396,31 @@ def _load_default_upet_model(
     )
 
 
+def _coerce_step_count(val: Any) -> int | None:
+    """Convert a scalar/tensor step count to int, or None on failure."""
+    try:
+        if hasattr(val, "detach"):
+            val = val.detach().cpu()
+        if hasattr(val, "item"):
+            return int(val.item())
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def _steps_taken_from_optimize_state(state: Any) -> int | None:
-    """Best-effort extraction of optimizer steps from a TorchSim state object."""
-    for attr in ("n_steps", "step", "steps"):
+    """Extract optimizer steps from a TorchSim state when available.
+
+    FIRE ``OptimState`` does not expose a step count (the runner keeps a local
+    counter). Prefer ``n_iter`` (BFGS/LBFGS), then ``n_steps``.
+    """
+    for attr in ("n_iter", "n_steps"):
         val = getattr(state, attr, None)
         if val is None:
             continue
-        try:
-            if hasattr(val, "detach"):
-                val = val.detach().cpu()
-            if hasattr(val, "max"):
-                return int(val.max().item())
-            if hasattr(val, "__len__") and len(val) > 0:
-                return int(max(int(v) for v in val))
-            return int(val)
-        except (TypeError, ValueError):
-            continue
+        steps = _coerce_step_count(val)
+        if steps is not None:
+            return steps
     return None
 
 
@@ -472,13 +455,11 @@ def build_torchsim_relaxer(  # noqa: C901
 
     if is_uma_like_calculator(calculator):
         from scgo.calculators.uma_helpers import (
+            infer_uma_model_name_from_calculator,
             try_extract_torchsim_model_from_uma_calculator,
         )
 
-        model_name = getattr(calculator, "model_name", None)
-        calc_name = getattr(calculator, "name", "") or ""
-        if model_name is None and calc_name.startswith("UMA-"):
-            model_name = calc_name.removeprefix("UMA-")
+        model_name = infer_uma_model_name_from_calculator(calculator)
         if not model_name:
             raise SCGOValidationError(
                 "Cannot infer UMA model_name from calculator for TorchSim relaxer."
@@ -501,13 +482,11 @@ def build_torchsim_relaxer(  # noqa: C901
             calculator._inner = None
     elif is_upet_like_calculator(calculator):
         from scgo.calculators.upet_helpers import (
+            infer_upet_model_name_from_calculator,
             try_extract_torchsim_model_from_upet_calculator,
         )
 
-        model_name = getattr(calculator, "model_name", None)
-        calc_name = getattr(calculator, "name", "") or ""
-        if model_name is None and calc_name.startswith("UPET-"):
-            model_name = calc_name.removeprefix("UPET-").split("-v")[0]
+        model_name = infer_upet_model_name_from_calculator(calculator)
         if not model_name and not getattr(calculator, "checkpoint_path", None):
             raise SCGOValidationError(
                 "Cannot infer UPET model_name from calculator for TorchSim relaxer."
@@ -1012,7 +991,7 @@ class TorchSimBatchRelaxer:
             energy = float(energy_t.detach().cpu().reshape(-1)[0])
 
             # Isolate nested info so raw_score writes cannot corrupt caller atoms
-            # (ASE Atoms.copy() shares key_value_pairs / metadata dicts).
+            # (ASE Atoms.copy() shares key_value_pairs dicts).
             out = copy_atoms(atoms_seq[idx])
             if self._uses_metatomic_model():
                 _restore_ase_cell_from_reference(out, reference_atoms[idx])
@@ -1029,8 +1008,7 @@ class TorchSimBatchRelaxer:
             elif "forces" in out.arrays or out.calc is not None:
                 ensure_float64_forces(out)
 
-            out.info.setdefault("key_value_pairs", {})
-            update_metadata(
+            set_tags(
                 out,
                 potential_energy=energy,
                 raw_score=-energy,
@@ -1165,15 +1143,13 @@ class TorchSimBatchRelaxer:
             elif "forces" in relaxed.arrays or relaxed.calc is not None:
                 ensure_float64_forces(relaxed)
 
-            relaxed.info.setdefault("key_value_pairs", {})
-
-            update_metadata(
+            set_tags(
                 relaxed,
                 potential_energy=energy,
                 raw_score=-energy,
             )
             if batch_steps is not None:
-                update_metadata(relaxed, relaxation_steps=batch_steps)
+                set_tags(relaxed, relaxation_steps=batch_steps)
             results.append((energy, relaxed))
         return results
 

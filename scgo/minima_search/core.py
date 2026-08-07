@@ -22,11 +22,6 @@ from ase_ga.utilities import get_all_atom_types
 
 from scgo.algorithms import bh_go, ga_go, simple_go
 from scgo.database import SCGODatabaseManager
-from scgo.database.metadata import (
-    add_metadata,
-    get_metadata,
-    mark_final_minima_in_db,
-)
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -34,6 +29,14 @@ from scgo.exceptions import (
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
+from scgo.metadata.atoms import ensure_final_id, get_tag, get_tags, set_tags
+from scgo.metadata.persist import mark_final_minima_in_db
+from scgo.metadata.provenance import output_json_provenance
+from scgo.metadata.run_dir import (
+    RunDirJSONEncoder,
+    ensure_run_id,
+    save_run_dir_record,
+)
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
 from scgo.surface.partition import prepare_slab_search_surface_config
@@ -51,33 +54,22 @@ from scgo.system_types import (
     validate_adsorbate_definition,
     validate_system_type_settings,
 )
-from scgo.utils.fitness_strategies import ensure_fitness_strategy_resolved
+from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
     adsorbate_primary_cell_shift,
     apply_primary_cell_shift,
     canonicalize_storage_frame,
     ensure_directory_exists,
-    ensure_final_id,
     filter_dict_keys,
     filter_unique_minima,
     get_cluster_formula,
-    get_provenance,
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import create_child_rng
-from scgo.utils.run_tracking import (
-    RunMetadataJSONEncoder,
-    ensure_run_id,
-    save_run_metadata,
-)
-from scgo.utils.ts_provenance import ts_output_provenance
 from scgo.utils.validation import validate_composition
-
-# Default required calculator methods
-_DEFAULT_REQUIRED_METHODS = ["get_potential_energy", "get_forces"]
 
 _SURFACE_SYSTEM_TYPES = frozenset(
     {
@@ -221,8 +213,8 @@ def _create_gas_cluster_adsorbate_initial_atoms(
 
 def _is_slab_surface_minimum(atoms: Atoms) -> tuple[bool, int]:
     """Return whether ``atoms`` is a slab surface minimum and its ``n_slab_atoms``."""
-    system_type = get_metadata(atoms, "system_type")
-    n_slab = int(get_metadata(atoms, "n_slab_atoms", 0) or 0)
+    system_type = get_tag(atoms, "system_type")
+    n_slab = int(get_tag(atoms, "n_slab_atoms", 0) or 0)
     if system_type in _SURFACE_SYSTEM_TYPES and n_slab > 0:
         return True, n_slab
     return False, n_slab
@@ -266,7 +258,7 @@ def _resolve_n_core_mobile_for_alignment(
     global_optimizer_kwargs: dict[str, Any],
 ) -> int | None:
     """Resolve core mobile count for surface PBC final-write alignment."""
-    n_core_meta = get_metadata(atoms, "n_core_atoms", None)
+    n_core_meta = get_tag(atoms, "n_core_atoms", None)
     if n_core_meta is not None:
         try:
             n_core_parsed = int(n_core_meta)
@@ -423,12 +415,6 @@ def _validate_common_run_inputs(
             allow_empty = False
     validate_composition(composition, allow_empty=allow_empty, allow_tuple=False)
 
-    if not isinstance(global_optimizer, str):
-        raise SCGOValidationError("global_optimizer must be a string")
-
-    if not isinstance(global_optimizer_kwargs, dict):
-        raise SCGOValidationError("global_optimizer_kwargs must be a dictionary")
-
     if require_system_type and not isinstance(
         global_optimizer_kwargs.get("system_type"), str
     ):
@@ -447,35 +433,7 @@ def _validate_common_run_inputs(
         raise SCGOValidationError("verbosity must be one of 0, 1, 2, or 3")
 
 
-def _validate_calculator_compatibility(
-    calculator: Calculator,
-    required_methods: list[str] | None = None,
-) -> tuple[bool, str]:
-    """Validate calculator has required methods and returns expected types.
-
-    Args:
-        calculator: ASE calculator instance
-        required_methods: List of method names to check (default: ["get_potential_energy", "get_forces"])
-
-    Returns:
-        tuple: (is_valid, error_message)
-    """
-    required_methods = required_methods or _DEFAULT_REQUIRED_METHODS
-
-    missing_methods = [
-        method_name
-        for method_name in required_methods
-        if not hasattr(calculator, method_name)
-        or not callable(getattr(calculator, method_name))
-    ]
-
-    if missing_methods:
-        return False, f"Calculator missing required methods: {missing_methods}"
-
-    return True, "Calculator is compatible"
-
-
-def scgo(  # noqa: C901
+def scgo(
     composition: list[str],
     global_optimizer: str,
     global_optimizer_kwargs: dict[str, Any],
@@ -528,18 +486,6 @@ def scgo(  # noqa: C901
     if hasattr(calculator_for_global_optimization, "directory"):
         calculator_for_global_optimization.directory = output_dir
 
-    is_valid, error_msg = _validate_calculator_compatibility(
-        calculator_for_global_optimization
-    )
-    if not is_valid:
-        calc_type = type(calculator_for_global_optimization).__name__
-        calc_module = type(calculator_for_global_optimization).__module__
-        raise SCGOValidationError(
-            f"Calculator validation failed: {error_msg}. "
-            f"Calculator type: {calc_type} (from {calc_module}). "
-            f"Ensure the calculator implements get_potential_energy() and get_forces() methods."
-        )
-
     # Filter keys handled at scgo/run_trials level so **optimizer_kwargs cannot
     # override explicit run_id/clean.
     optimizer_name_lower = global_optimizer.lower()
@@ -558,8 +504,8 @@ def scgo(  # noqa: C901
     if timing_collector is not None:
         timing_kwargs["timing_collector"] = timing_collector
     if "fitness_strategy" in optimizer_kwargs:
-        optimizer_kwargs["fitness_strategy"] = ensure_fitness_strategy_resolved(
-            optimizer_kwargs["fitness_strategy"]
+        optimizer_kwargs["fitness_strategy"] = resolve_fitness_strategy(
+            optimizer_kwargs["fitness_strategy"], allow_none=False
         )
     raw_system_type = optimizer_kwargs.get("system_type")
     if not isinstance(raw_system_type, str):
@@ -695,7 +641,7 @@ def scgo(  # noqa: C901
         return []
 
     for _, atoms_obj in all_minima:
-        add_metadata(atoms_obj, run_id=run_id)
+        set_tags(atoms_obj, run_id=run_id)
 
     return all_minima
 
@@ -794,10 +740,10 @@ def run_trials(  # noqa: C901
         if calculator_for_global_optimization
         else None,
     }
-    save_run_metadata(
+    save_run_dir_record(
         run_output_dir,
         run_id,
-        metadata={
+        record={
             "composition": composition,
             "formula": composition_str,
             "params": params,
@@ -1023,7 +969,7 @@ def run_trials(  # noqa: C901
     final_minima_info: list[dict] = []
     written_xyz: set[Path] = set()
     for i, (_energy, atoms) in enumerate(final_minima):
-        provenance = get_provenance(atoms)
+        provenance = get_tags(atoms)
         atoms_run_id = provenance.get("run_id", run_id)
 
         filename = f"{path_key}_minimum_{i + 1:02d}_{atoms_run_id}.xyz"
@@ -1034,8 +980,8 @@ def run_trials(  # noqa: C901
 
         atoms_clean = atoms.copy()
         atoms_clean.calc = None
-        n_slab_meta = get_metadata(atoms_clean, "n_slab_atoms", 0) or 0
-        system_type = get_metadata(atoms_clean, "system_type")
+        n_slab_meta = get_tag(atoms_clean, "n_slab_atoms", 0) or 0
+        system_type = get_tag(atoms_clean, "system_type")
         try:
             validate_stored_slab_adsorbate_metadata(atoms_clean)
             validate_stored_mobile_partition_metadata(atoms_clean)
@@ -1136,11 +1082,11 @@ def _write_results_summary(
     # Count structures by run_id
     run_counts: Counter[str] = Counter()
     for _, atoms in final_minima:
-        provenance = get_provenance(atoms)
+        provenance = get_tags(atoms)
         run_id_from_atoms = provenance.get("run_id", run_id)
         run_counts[run_id_from_atoms] += 1
 
-    summary = ts_output_provenance()
+    summary = output_json_provenance()
     timing_relpath = f"{run_id}/timing.json" if run_id else None
     if run_id and not os.path.isfile(os.path.join(output_dir, run_id, "timing.json")):
         timing_relpath = None
@@ -1159,7 +1105,7 @@ def _write_results_summary(
     summary_file = os.path.join(output_dir, "results_summary.json")
     try:
         with open(summary_file, "w") as f:
-            json.dump(summary, f, indent=2, cls=RunMetadataJSONEncoder)
+            json.dump(summary, f, indent=2, cls=RunDirJSONEncoder)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Wrote results summary to %s", summary_file)
     except (OSError, TypeError) as e:

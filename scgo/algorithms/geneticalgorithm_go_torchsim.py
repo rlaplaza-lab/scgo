@@ -70,18 +70,13 @@ from scgo.database import (
     database_retry,
     setup_database,
 )
-from scgo.database.metadata import (
-    add_metadata,
-    filter_by_metadata,
-    get_metadata,
-    update_metadata,
-)
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization import compute_cell_side
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.initialization.steric_scoring import build_blmin_threshold_matrix
+from scgo.metadata.atoms import filter_by_tags, get_tag, get_tags, set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.system_types import (
@@ -134,8 +129,7 @@ def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
     """Resolve worker count from initialization-style semantics."""
     if n_tasks <= 1:
         return 1
-    requested = resolve_n_jobs_to_workers(n_jobs)
-    return max(1, min(requested, n_tasks))
+    return min(resolve_n_jobs_to_workers(n_jobs), n_tasks)
 
 
 def _sorted_unrelaxed_gaids(da: DataConnection) -> list[int]:
@@ -492,14 +486,12 @@ def _torchsim_prepare_relaxed_copy(
     surface_config: SurfaceSystemConfig | None,
     n_slab: int,
     *,
-    surface_mode: bool = False,
+    surface_mode: bool,
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
 ) -> Atoms:
     """Copy candidate and attach slab constraints before TorchSim relaxation."""
-    if surface_config is not None and n_slab > 0 and not surface_mode:
-        surface_mode = True
     c = cand.copy()
     if freeze_adsorbate_internal_geometry:
         enforce_frozen_adsorbate_geometry(
@@ -549,7 +541,96 @@ def _record_relax_batch_steps(
         )
 
 
-def _relax_unrelaxed_candidates(  # noqa: C901
+def _write_relaxed_candidate(
+    da: DataConnection,
+    original: Atoms,
+    relaxed: Atoms,
+    energy: float,
+    *,
+    n_slab: int,
+    composition: list[str] | None,
+    adsorbate_definition: AdsorbateDefinition | None,
+    system_type: SystemType,
+    surface_mode: bool,
+    surface_config: SurfaceSystemConfig | None,
+    connectivity_factor: float | None,
+    allow_cluster_fragmentation: bool,
+    allow_adsorbate_surface_detachment: bool,
+    enforce_adsorbate_subgraph_integrity: bool,
+    generation: int | None = None,
+    run_id: str | None = None,
+) -> str | None:
+    """Write a single relaxed candidate to the database.
+
+    Returns the validation error string when the structure is disconnected,
+    or ``None`` when it is eligible for GA evolution.
+    """
+    original.set_cell(relaxed.get_cell(), scale_atoms=True)
+    original.set_pbc(relaxed.get_pbc())
+    original.set_positions(relaxed.get_positions())
+
+    if composition is not None:
+        maybe_apply_mobile_core_ads_tags(
+            original,
+            n_slab,
+            composition,
+            adsorbate_definition,
+            system_type,
+        )
+    validation_error = validate_structure_for_ga_storage(
+        original,
+        surface_mode=surface_mode,
+        n_slab=n_slab,
+        system_type=system_type,
+        surface_config=surface_config,
+        adsorbate_definition=adsorbate_definition,
+        connectivity_factor=connectivity_factor,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+    )
+
+    if "forces" in relaxed.arrays:
+        original.arrays["forces"] = relaxed.arrays["forces"].copy()
+
+    set_tags(
+        original,
+        **(get_tags(relaxed) or {"potential_energy": energy, "raw_score": -energy}),
+    )
+    set_tags(
+        original,
+        ga_eligible=(validation_error is None),
+    )
+    if validation_error is not None:
+        set_tags(
+            original,
+            ga_ineligible_reason=validation_error,
+        )
+
+    comp_meta = list(composition) if composition is not None else []
+    extra = ga_run_metadata_extras(
+        surface_config,
+        n_slab,
+        system_type,
+        comp_meta,
+        adsorbate_definition=adsorbate_definition,
+    )
+    if generation is not None:
+        set_tags(
+            original,
+            generation=generation,
+            run_id=run_id,
+            **extra,
+        )
+    elif run_id is not None:
+        set_tags(original, run_id=run_id, **extra)
+
+    original.calc = SinglePointCalculator(original, energy=energy)
+    da.add_relaxed_step(original)
+    return validation_error
+
+
+def _relax_unrelaxed_candidates(
     da: DataConnection,
     relaxer: BatchRelaxer,
     *,
@@ -653,28 +734,23 @@ def _relax_unrelaxed_candidates(  # noqa: C901
             for idx, (original, (energy, relaxed)) in enumerate(
                 zip(batch, relaxed_results, strict=True)
             ):
-                original.set_cell(relaxed.get_cell(), scale_atoms=True)
-                original.set_pbc(relaxed.get_pbc())
-                original.set_positions(relaxed.get_positions())
-                if composition is not None:
-                    maybe_apply_mobile_core_ads_tags(
-                        original,
-                        n_slab,
-                        composition,
-                        adsorbate_definition,
-                        system_type,
-                    )
-                validation_error = validate_structure_for_ga_storage(
+                validation_error = _write_relaxed_candidate(
+                    da,
                     original,
-                    surface_mode=surface_mode,
+                    relaxed,
+                    energy,
                     n_slab=n_slab,
-                    system_type=system_type,
-                    surface_config=surface_config,
+                    composition=composition,
                     adsorbate_definition=adsorbate_definition,
+                    system_type=system_type,
+                    surface_mode=surface_mode,
+                    surface_config=surface_config,
                     connectivity_factor=connectivity_factor,
                     allow_cluster_fragmentation=allow_cluster_fragmentation,
                     allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                     enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    generation=generation,
+                    run_id=run_id,
                 )
                 if validation_error is not None:
                     ineligible_count += 1
@@ -688,55 +764,7 @@ def _relax_unrelaxed_candidates(  # noqa: C901
                         len(batch),
                         validation_error,
                     )
-
-                # Copy forces if available (already converted to float64 by relaxer)
-                if "forces" in relaxed.arrays:
-                    original.arrays["forces"] = relaxed.arrays["forces"].copy()
-
-                original.info.setdefault("key_value_pairs", {})
-                update_metadata(
-                    original,
-                    **relaxed.info.get(
-                        "key_value_pairs",
-                        {"potential_energy": energy, "raw_score": -energy},
-                    ),
-                )
-                update_metadata(
-                    original,
-                    ga_eligible=(validation_error is None),
-                )
-                original.info.setdefault("key_value_pairs", {})["ga_eligible"] = (
-                    validation_error is None
-                )
-                if validation_error is not None:
-                    update_metadata(
-                        original,
-                        ga_ineligible_reason=validation_error,
-                    )
-                    original.info.setdefault("key_value_pairs", {})[
-                        "ga_ineligible_reason"
-                    ] = validation_error
-                comp_meta = list(composition) if composition is not None else []
-                extra = ga_run_metadata_extras(
-                    surface_config,
-                    n_slab,
-                    system_type,
-                    comp_meta,
-                    adsorbate_definition=adsorbate_definition,
-                )
-                if generation is not None:
-                    add_metadata(
-                        original,
-                        generation=generation,
-                        run_id=run_id,
-                        **extra,
-                    )
-                elif run_id is not None:
-                    add_metadata(original, run_id=run_id, **extra)
-
-                original.calc = SinglePointCalculator(original, energy=energy)
-                da.add_relaxed_step(original)
-                if validation_error is None:
+                else:
                     successful_count += 1
 
     t0 = perf_counter()
@@ -1246,7 +1274,6 @@ def ga_go(  # noqa: C901
         inserted_initial_population: list[Atoms] = []
 
         def _insert_unrelaxed(cand):
-            cand.info.setdefault("key_value_pairs", {})
             cand.info.setdefault("data", {})
             gaid = da.c.write(
                 cand,
@@ -1319,27 +1346,23 @@ def ga_go(  # noqa: C901
                 for original, (energy, relaxed) in zip(
                     batch, relaxed_results, strict=True
                 ):
-                    original.set_cell(relaxed.get_cell(), scale_atoms=True)
-                    original.set_pbc(relaxed.get_pbc())
-                    original.set_positions(relaxed.get_positions())
-                    maybe_apply_mobile_core_ads_tags(
+                    validation_error = _write_relaxed_candidate(
+                        da,
                         original,
-                        n_slab,
-                        composition,
-                        adsorbate_definition,
-                        system_type,
-                    )
-                    validation_error = validate_structure_for_ga_storage(
-                        original,
-                        surface_mode=surface_mode,
+                        relaxed,
+                        energy,
                         n_slab=n_slab,
-                        system_type=system_type,
-                        surface_config=surface_config,
+                        composition=composition,
                         adsorbate_definition=adsorbate_definition,
+                        system_type=system_type,
+                        surface_mode=surface_mode,
+                        surface_config=surface_config,
                         connectivity_factor=connectivity_factor,
                         allow_cluster_fragmentation=allow_cluster_fragmentation,
                         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                         enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                        generation=0,
+                        run_id=run_id,
                     )
                     if validation_error is not None:
                         initial_ineligible_relaxed_count += 1
@@ -1347,48 +1370,6 @@ def ga_go(  # noqa: C901
                             "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
                             validation_error,
                         )
-
-                    # Copy forces if available
-                    if "forces" in relaxed.arrays:
-                        original.arrays["forces"] = relaxed.arrays["forces"].copy()
-
-                    original.info.setdefault("key_value_pairs", {})
-                    update_metadata(
-                        original,
-                        **relaxed.info.get(
-                            "key_value_pairs",
-                            {"potential_energy": energy, "raw_score": -energy},
-                        ),
-                    )
-                    update_metadata(
-                        original,
-                        ga_eligible=(validation_error is None),
-                    )
-                    original.info.setdefault("key_value_pairs", {})["ga_eligible"] = (
-                        validation_error is None
-                    )
-                    if validation_error is not None:
-                        update_metadata(
-                            original,
-                            ga_ineligible_reason=validation_error,
-                        )
-                        original.info.setdefault("key_value_pairs", {})[
-                            "ga_ineligible_reason"
-                        ] = validation_error
-                    add_metadata(
-                        original,
-                        generation=0,
-                        run_id=run_id,
-                        **ga_run_metadata_extras(
-                            surface_config,
-                            n_slab,
-                            system_type,
-                            composition,
-                            adsorbate_definition=adsorbate_definition,
-                        ),
-                    )
-                    original.calc = SinglePointCalculator(original, energy=energy)
-                    da.add_relaxed_step(original)
 
         # Process starting population in batches (only candidates inserted above).
         batch_size_internal = batch_size or len(inserted_initial_population)
@@ -1966,11 +1947,11 @@ def ga_go(  # noqa: C901
             operation_name="get_final_all_relaxed_candidates",
         )
         if run_id is not None:
-            all_candidates = filter_by_metadata(all_candidates, run_id=run_id)
+            all_candidates = filter_by_tags(all_candidates, run_id=run_id)
         all_candidates = [
             cand
             for cand in all_candidates
-            if bool(get_metadata(cand, "ga_eligible", default=True))
+            if bool(get_tag(cand, "ga_eligible", default=True))
         ]
         all_minima = extract_minima_from_database(all_candidates)
 

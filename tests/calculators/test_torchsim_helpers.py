@@ -26,6 +26,54 @@ def test_infer_mace_model_name_from_calculator():
     assert infer_mace_model_name_from_calculator(calc) == "mace_matpes_0"
 
 
+def test_infer_uma_model_name_from_calculator():
+    from types import SimpleNamespace
+
+    from ase.calculators.calculator import Calculator
+
+    from scgo.calculators.uma_helpers import infer_uma_model_name_from_calculator
+
+    class FakeUma(Calculator):
+        implemented_properties: list[str] = []
+
+        def __init__(self, model_name: str) -> None:
+            super().__init__()
+            self.model_name = model_name
+
+    calc = FakeUma("uma-s-1p2")
+    assert infer_uma_model_name_from_calculator(calc) == "uma-s-1p2"
+    # ASE Calculator.name is a read-only property; name-prefix fallback uses
+    # duck-typed objects (e.g. mocks) that expose a string name.
+    assert (
+        infer_uma_model_name_from_calculator(SimpleNamespace(name="UMA-uma-s-1p2"))
+        == "uma-s-1p2"
+    )
+
+
+def test_infer_upet_model_name_from_calculator():
+    from types import SimpleNamespace
+
+    from ase.calculators.calculator import Calculator
+
+    from scgo.calculators.upet_helpers import infer_upet_model_name_from_calculator
+
+    class FakeUpet(Calculator):
+        implemented_properties: list[str] = []
+
+        def __init__(self, model_name: str) -> None:
+            super().__init__()
+            self.model_name = model_name
+
+    calc = FakeUpet("pet-mad-s")
+    assert infer_upet_model_name_from_calculator(calc) == "pet-mad-s"
+    assert (
+        infer_upet_model_name_from_calculator(
+            SimpleNamespace(name="UPET-pet-mad-s-v1.5.0")
+        )
+        == "pet-mad-s"
+    )
+
+
 @pytest.mark.requires_mace
 def test_try_extract_torchsim_model_from_mace_calculator():
     from unittest.mock import MagicMock
@@ -547,39 +595,6 @@ def test_relax_batch_steps_zero_routes_to_static(monkeypatch):
     assert np.allclose(out.get_positions(), [[0.0, 0.0, 0.0]])
     assert "forces" in out.arrays
     assert relaxer.last_batch_relax_steps == [0]
-
-
-def test_torchsim_max_steps_zero_log_filter_suppresses_spam():
-    """Production captureWarnings must not surface torch_sim max_steps:0 noise."""
-    import logging
-
-    from scgo.calculators.torchsim_helpers import (
-        _register_torchsim_warning_filters,
-        _TorchSimMaxStepsZeroLogFilter,
-    )
-
-    _register_torchsim_warning_filters()
-    filt = _TorchSimMaxStepsZeroLogFilter()
-    record_zero = logging.LogRecord(
-        name="torch_sim.runners",
-        level=logging.WARNING,
-        pathname="",
-        lineno=0,
-        msg="All systems have reached the maximum number of steps: 0.",
-        args=(),
-        exc_info=None,
-    )
-    record_other = logging.LogRecord(
-        name="torch_sim.runners",
-        level=logging.WARNING,
-        pathname="",
-        lineno=0,
-        msg="All systems have reached the maximum number of steps: 100.",
-        args=(),
-        exc_info=None,
-    )
-    assert filt.filter(record_zero) is False
-    assert filt.filter(record_other) is True
 
 
 def test_static_autobatcher_disabled_by_default():

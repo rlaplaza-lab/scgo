@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- :mod:`scgo.metadata` package for structure tags, run-dir records, DB stamps,
+  and output-JSON provenance (separate schemas under one namespace).
+
+### Changed
+
+- Structure tags live only in ASE ``key_value_pairs`` via ``set_tags`` /
+  ``get_tag`` / ``get_tags`` / ``filter_by_tags``; remove the old
+  ``atoms.info["metadata"]`` / ``provenance`` bags, ``add_metadata`` /
+  ``get_metadata`` / ``update_metadata`` / ``filter_by_metadata``, and
+  ``persist_provenance``.
+- Move DB stamp helpers from ``scgo.database.schema`` to
+  ``scgo.metadata.db_stamp`` (e.g. ``stamp_db``, ``is_scgo_db``,
+  ``CURRENT_DB_SCHEMA_VERSION``); final-minima SQL tagging to
+  ``scgo.metadata.persist``; run-dir tracking from ``utils.run_tracking`` to
+  ``scgo.metadata.run_dir``; output-JSON provenance from ``utils.ts_provenance``
+  to ``scgo.metadata.provenance``.
+- ``simple`` optimizer writes ``simple_go.db`` (was incorrectly ``bh_go.db``);
+  discovery still matches ``*.db``.
+- Remove surface/cluster height cross-aliases (``height_*`` /
+  ``adsorption_height_*``); each config keeps only its canonical names.
+- Slim ``runner_api`` to the public run surface; tests patch definition modules.
+- Per-shape ``generate_*`` template helpers are private; public API is
+  ``generate_template_structure``.
+- Import mutations from ``scgo.ase_ga_patches.mutations`` (``standardmutations``
+  re-export removed).
+- Candidate discovery prefers component path keys; packed ASE stems
+  (e.g. ``H2O2Pt5_searches``) and pure-metal formulas still parse.
+- Drop TorchSim ``max_steps=0`` warning/log filters (single-point uses
+  ``ts.static``).
+- Deduplicate UPET ``HAS_NVALCHEMIOPS`` disable into
+  ``disable_metatomic_nvalchemiops``; extract UMA/UPET model-name infer helpers
+  mirroring MACE; collapse ``retry_on_lock`` onto ``database_retry`` (drop
+  unused ``PRESET_CONSERVATIVE``); DRY connection pragma apply; share
+  ``_assign_penalty_energy`` in ``SCGODataConnection.add_relaxed_step``;
+  simplify TorchSim step extraction; remove ASE Spacegroup deposition warmup.
+- Drop package-level re-export of rigid adsorbate helpers (import from
+  ``scgo.cluster_adsorbate.rigid``; avoids a ``system_types``/``surface`` cycle);
+  drop duplicate GO ``rng`` validation and centralize seed fallback in
+  ``_resolve_go_seed``; move TS defaults / ``SystemPolicy`` consistency checks
+  into tests (no import-time assert); calculator registry uses
+  ``functools.cache``.
+- Kaggle GPU example suite shares stricter e2e artifact bars (run metadata,
+  SCGO DB stamp) and requires TS candidates for surface cluster-bearing
+  example cases (gas cases keep soft TS bars at CI budgets).
+
+### Maintainer notes
+
+- Temporary workarounds for upstream bugs (remove once fixed upstream):
+  - TorchSim constraint device patch
+    (``_patch_torchsim_constraint_device_mismatch``): pinned
+    ``torch-sim-atomistic==0.6.0`` still does bare ``torch.isin`` with no
+    CPU/CUDA ``atom_idx`` align in ``AtomConstraint.select_sub_constraint``.
+  - ``HAS_NVALCHEMIOPS = False`` (``disable_metatomic_nvalchemiops``):
+    metatomic-torchsim nvalchemiops CUDA NL still fails on non-cubic
+    gas-phase cells; vesin path is the reliable fallback.
+  - Kaggle/CI ``vesin==0.6.0`` force-install: ``metatomic-torchsim`` 0.1.4
+    still declares ``vesin<0.6`` but needs ``NeighborList(skin=...)`` from
+    0.6.0.
+  - ``pytest.ini`` ``filterwarnings``: dependency noise (torch.jit / MACE /
+    nvalchemiops alias / warp ``.grad`` / ASE EMT·NEB coincidences / e3nn);
+    drop entries individually when upstream stops emitting them.
+- Timing ``"trials"`` guard rejects legacy multi-trial ``timing.json`` shapes
+  (intentional API protection, not an upstream workaround).
+- ``select_structure_pairs(..., *, use_mic: bool)`` is required (no
+  ``None``→``surface_aware`` default); pass ``use_mic=resolve_neb_mic(...)``.
+- Low-level ``run_transition_state_search``: omitted ``energy_gap_threshold`` /
+  ``neb_n_images`` / ``neb_climb`` resolve from TS presets (not the old
+  hardcoded ``1.0`` / ``3`` / ``False``).
+- ``scgo.runner_api`` no longer re-exports internals (``run_trials``,
+  ``_run_go_trials``, etc.); import from definition modules.
+- ``_run_go_trials`` / ``_run_go_campaign_compositions`` expect
+  already-initialized params (``params_already_merged`` removed; merge lives
+  in ``runner_params``).
+
 ## 0.6.5
 
 ### Added
@@ -44,11 +122,11 @@
 
 ### Maintainer notes
 
-- Upstream shims still required (Phase 5 — do not remove until triggers fire):
+- Temporary workarounds for upstream bugs still in place at this release:
   TorchSim constraint device patch; ``HAS_NVALCHEMIOPS = False``; Kaggle
-  ``vesin`` force-install; ``max_steps=0`` warning filters; ``standardmutations``
-  re-export; ``pytest.ini`` filters. Timing ``"trials"`` guard is intentional
-  API protection, not an upstream shim.
+  ``vesin`` force-install; ``max_steps=0`` warning filters;
+  ``standardmutations`` re-export; ``pytest.ini`` filters. Timing ``"trials"``
+  guard is intentional API protection, not an upstream workaround.
 
 ## 0.6.4
 

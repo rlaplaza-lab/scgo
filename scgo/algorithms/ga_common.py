@@ -6,7 +6,6 @@ implementations to reduce duplication.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import typing
@@ -28,8 +27,7 @@ from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
 )
-from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
-from scgo.ase_ga_patches.standardmutations import (
+from scgo.ase_ga_patches.mutations import (
     AnisotropicRattleMutation,
     BreathingMutation,
     CustomPermutationMutation,
@@ -41,6 +39,7 @@ from scgo.ase_ga_patches.standardmutations import (
     RotationalMutation,
     ShellSwapMutation,
 )
+from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
@@ -48,15 +47,15 @@ from scgo.constants import (
     DEFAULT_PAIR_COR_MAX,
 )
 
-# Prefer metadata reader for raw_score and other fields
+# Prefer tag reader for raw_score and other fields
 from scgo.database import SCGODatabaseManager
-from scgo.database.metadata import get_metadata
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
+from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import (
     create_deposited_cluster,
@@ -74,7 +73,10 @@ from scgo.system_types import (
 )
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.diversity_scorer import DiversityScorer
-from scgo.utils.fitness_strategies import FitnessStrategy, get_fitness_from_atoms
+from scgo.utils.fitness_strategies import (
+    FitnessStrategy,
+    get_fitness_from_atoms,
+)
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import (
@@ -100,15 +102,31 @@ if typing.TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _copy_adsorbate_fragment_template(
+    fragment_template: AdsorbateFragmentInput | None,
+) -> AdsorbateFragmentInput | None:
+    """Clone an adsorbate fragment template without duplicating the caller state."""
+    if isinstance(fragment_template, list):
+        return [frag.copy() for frag in fragment_template]
+    if fragment_template is not None:
+        return fragment_template.copy()
+    return None
+
+
+def _rng_or_default(rng: Generator | None) -> Generator:
+    """Return the provided RNG or create a fresh one when absent."""
+    return rng if rng is not None else np.random.default_rng()
+
+
 def slab_ga_metadata_extras(
     surface_config: SurfaceSystemConfig | None, n_slab: int, system_type: SystemType
-) -> dict[str, int | str]:
-    """Extra metadata for slab+adsorbate GA (atom order: slab indices 0..n_slab-1)."""
-    metadata: dict[str, int | str] = {"system_type": system_type}
+) -> dict[str, int | str | list[str]]:
+    """Extra tags for slab+adsorbate GA (atom order: slab indices 0..n_slab-1)."""
+    metadata: dict[str, int | str | list[str]] = {"system_type": system_type}
     if uses_surface(system_type) and surface_config is not None and n_slab > 0:
         metadata["n_slab_atoms"] = n_slab
-        metadata["slab_chemical_symbols_json"] = json.dumps(
-            list(surface_config.slab.get_chemical_symbols())
+        metadata["slab_chemical_symbols_json"] = list(
+            surface_config.slab.get_chemical_symbols()
         )
         if get_system_policy(system_type).slab_is_search_target:
             from scgo.surface.partition import resolve_slab_search_partition
@@ -123,7 +141,7 @@ def adsorbate_partition_metadata(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None,
-) -> dict[str, int | str]:
+) -> dict[str, int | str | list[str] | list[int]]:
     """Store core vs adsorbate mobile prefix for has_adsorbate system types (GA DB round-trip)."""
     if not get_system_policy(system_type).has_adsorbate:
         return {}
@@ -143,9 +161,9 @@ def adsorbate_partition_metadata(
         "n_core_atoms": n_core,
         "n_adsorbate_fragment_atoms": n_ads,
         "n_adsorbate_fragments": len(fragment_lengths),
-        "core_chemical_symbols_json": json.dumps(core_list),
-        "adsorbate_fragment_chemical_symbols_json": json.dumps(ads_list),
-        "adsorbate_fragment_lengths_json": json.dumps(fragment_lengths),
+        "core_chemical_symbols_json": list(core_list),
+        "adsorbate_fragment_chemical_symbols_json": list(ads_list),
+        "adsorbate_fragment_lengths_json": list(fragment_lengths),
     }
 
 
@@ -155,45 +173,15 @@ def ga_run_metadata_extras(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None = None,
-) -> dict[str, int | str]:
+) -> dict[str, int | str | list[str] | list[int]]:
     """Slab + optional core/adsorbate mobile partition for GA written structures."""
-    out = slab_ga_metadata_extras(surface_config, n_slab, system_type)
+    out: dict[str, int | str | list[str] | list[int]] = dict(
+        slab_ga_metadata_extras(surface_config, n_slab, system_type)
+    )
     out.update(
         adsorbate_partition_metadata(system_type, composition, adsorbate_definition)
     )
     return out
-
-
-def canonicalize_and_validate_for_storage(
-    atoms: Atoms,
-    *,
-    surface_mode: bool,
-    n_slab: int,
-    system_type: SystemType,
-    surface_config: SurfaceSystemConfig | None,
-    adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: float | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
-) -> None:
-    """Canonicalize then validate; raises on validation failure."""
-    canonicalize_relaxed_for_storage(
-        atoms,
-        surface_mode=surface_mode,
-        n_slab=n_slab,
-    )
-    validate_structure_for_system_type(
-        atoms,
-        system_type=system_type,
-        surface_config=surface_config,
-        n_slab=n_slab if surface_mode else None,
-        adsorbate_definition=adsorbate_definition,
-        connectivity_factor=connectivity_factor,
-        allow_cluster_fragmentation=allow_cluster_fragmentation,
-        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-    )
 
 
 def validate_structure_for_ga_storage(
@@ -221,12 +209,16 @@ def validate_structure_for_ga_storage(
     post-relax checks see the same canonical frame.
     """
     try:
-        canonicalize_and_validate_for_storage(
+        canonicalize_relaxed_for_storage(
             atoms,
             surface_mode=surface_mode,
             n_slab=n_slab,
+        )
+        validate_structure_for_system_type(
+            atoms,
             system_type=system_type,
             surface_config=surface_config,
+            n_slab=n_slab if surface_mode else None,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
@@ -598,7 +590,7 @@ class ClusterStartGenerator(StartGenerator):
                 atoms = build_hierarchical_core_fragment_cluster(
                     self.composition,
                     self.adsorbate_definition,
-                    self.rng or np.random.default_rng(),
+                    _rng_or_default(self.rng),
                     self.previous_search_glob,
                     self.adsorbate_fragment_template,
                     self.cluster_adsorbate_config,
@@ -612,7 +604,7 @@ class ClusterStartGenerator(StartGenerator):
                         "ClusterStartGenerator: hierarchical gas seed could not be placed; "
                         "increase max_hierarchical_attempts or relax ClusterAdsorbateConfig."
                     )
-                site_type = atoms.info.get("adsorbate_site_type")
+                site_type = get_tag(atoms, "adsorbate_site_type")
                 if (
                     isinstance(site_type, str)
                     and site_type in self._batch_site_type_counts
@@ -624,7 +616,7 @@ class ClusterStartGenerator(StartGenerator):
                 atoms = create_initial_cluster(
                     self.composition,
                     vacuum=self.vacuum,
-                    rng=self.rng or np.random.default_rng(),
+                    rng=_rng_or_default(self.rng),
                     previous_search_glob=self.previous_search_glob,
                     mode=self.mode,
                 )
@@ -666,12 +658,8 @@ class SurfaceClusterStartGenerator(StartGenerator):
         self.previous_search_glob = previous_search_glob
         self.n_jobs = n_jobs
         self.adsorbate_definition = adsorbate_definition
-        self.adsorbate_fragment_template = (
-            [frag.copy() for frag in adsorbate_fragment_template]
-            if isinstance(adsorbate_fragment_template, list)
-            else adsorbate_fragment_template.copy()
-            if adsorbate_fragment_template is not None
-            else None
+        self.adsorbate_fragment_template = _copy_adsorbate_fragment_template(
+            adsorbate_fragment_template
         )
         self.cluster_adsorbate_config = cluster_adsorbate_config
         self._batch_site_type_counts: dict[str, int] = {
@@ -717,7 +705,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 self.composition,
                 self.slab,
                 self.blmin,
-                self.rng or np.random.default_rng(),
+                _rng_or_default(self.rng),
                 self.surface_config,
                 previous_search_glob=self.previous_search_glob,
                 adsorbate_definition=self.adsorbate_definition,
@@ -730,7 +718,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                     "SurfaceClusterStartGenerator could not place a valid structure; "
                     "increase max_placement_attempts or height range."
                 )
-            site_type = atoms.info.get("adsorbate_site_type")
+            site_type = get_tag(atoms, "adsorbate_site_type")
             if isinstance(site_type, str) and site_type in self._batch_site_type_counts:
                 self._batch_site_type_counts[site_type] += 1
 
@@ -931,16 +919,17 @@ def _effective_operator_weight(  # noqa: C901
     if name in operator_weights:
         return float(operator_weights[name])
 
-    if name == "fragment_reposition":
+    if name in ("fragment_reposition", "rotational"):
         rotational_weight = float(operator_weights.get("rotational", 0.0))
         if rotational_weight <= 0.0:
             return 0.0
+        if name == "fragment_reposition":
+            if "fragment_reposition" in name_map:
+                return rotational_weight * 0.45
+            return 0.0
         if "fragment_reposition" in name_map:
-            return rotational_weight * 0.45
+            return rotational_weight * 0.55
         return 0.0
-
-    if name == "rotational" and "fragment_reposition" in name_map:
-        return float(operator_weights.get("rotational", 0.0)) * 0.55
 
     partition_specs: dict[str, tuple[str, float]] = {
         "flattening_core": ("flattening", 0.65),
@@ -1431,11 +1420,14 @@ def update_early_stopping_state_unified(
             return best_value, generations_without_improvement, False
 
         current_best_fitness: float = max(
-            typing.cast(
-                float,
-                get_fitness_from_atoms(atoms_obj, default=-float("inf")),
-            )
-            for atoms_obj in population.pop
+            (
+                typing.cast(
+                    float,
+                    get_fitness_from_atoms(atoms_obj, default=-float("inf")),
+                )
+                for atoms_obj in population.pop
+            ),
+            default=-float("inf"),
         )
 
         if best_value is None or current_best_fitness > best_value:
@@ -1448,9 +1440,7 @@ def update_early_stopping_state_unified(
     if len(population.pop) == 0:
         return best_value, generations_without_improvement, False
 
-    current_best_energy = -float(
-        get_metadata(population.pop[0], "raw_score", default=0.0)
-    )
+    current_best_energy = -float(get_tag(population.pop[0], "raw_score", default=0.0))
 
     if best_value is None or current_best_energy < best_value:
         return current_best_energy, 0, False

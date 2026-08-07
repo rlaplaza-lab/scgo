@@ -35,14 +35,7 @@ from .random_spherical import (
 )
 from .seed_combiners import combine_and_grow, combine_seeds
 from .templates import (
-    generate_cube,
-    generate_cuboctahedron,
-    generate_decahedron,
-    generate_icosahedron,
-    generate_octahedron,
     generate_template_structure,
-    generate_tetrahedron,
-    generate_truncated_octahedron,
     get_nearest_magic_number,
     is_near_magic_number,
 )
@@ -65,13 +58,6 @@ __all__ = [
     "get_vdw_radius",
     "get_structure_diagnostics",
     # Template functions
-    "generate_icosahedron",
-    "generate_decahedron",
-    "generate_octahedron",
-    "generate_tetrahedron",
-    "generate_cube",
-    "generate_cuboctahedron",
-    "generate_truncated_octahedron",
     "generate_template_structure",
     "get_nearest_magic_number",
     "is_near_magic_number",

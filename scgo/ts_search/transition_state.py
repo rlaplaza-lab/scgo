@@ -29,8 +29,9 @@ from scgo.constants import (
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_PAIR_COR_MAX,
 )
-from scgo.database.metadata import get_metadata, update_metadata
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
+from scgo.metadata.atoms import get_tag, set_tags
+from scgo.metadata.provenance import is_cuda_oom_error, output_json_provenance
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.comparators import (
     PureInteratomicDistanceComparator,
@@ -56,7 +57,6 @@ from scgo.utils.torchsim_policy import (
     is_uma_like_calculator,
     is_upet_like_calculator,
 )
-from scgo.utils.ts_provenance import is_cuda_oom_error, ts_output_provenance
 from scgo.utils.validation import validate_atoms, validate_calculator_attached
 
 if TYPE_CHECKING:
@@ -100,14 +100,14 @@ def attach_singlepoint_from_relax_output(
             forces = relaxed_atoms.get_forces()
     if forces is not None and getattr(forces, "size", 0) > 0:
         atoms.calc = SinglePointCalculator(atoms, energy=energy_f, forces=forces)
-        update_metadata(atoms, potential_energy=energy_f, raw_score=-energy_f)
+        set_tags(atoms, potential_energy=energy_f, raw_score=-energy_f)
         return
     if require_forces:
         raise SCGORuntimeError(
             "TorchSim did not return forces. Ensure the model is loaded with compute_forces=True."
         )
     atoms.calc = SinglePointCalculator(atoms, energy=energy_f)
-    update_metadata(atoms, potential_energy=energy_f, raw_score=-energy_f)
+    set_tags(atoms, potential_energy=energy_f, raw_score=-energy_f)
 
 
 def _image_potential_energy(atoms: Atoms) -> float:
@@ -121,7 +121,7 @@ def _image_potential_energy(atoms: Atoms) -> float:
     """
     with contextlib.suppress(AttributeError, NotImplementedError, RuntimeError):
         return float(atoms.get_potential_energy())
-    stored = get_metadata(atoms, "potential_energy", default=None)
+    stored = get_tag(atoms, "potential_energy", default=None)
     if stored is not None:
         return float(stored)
     extracted = extract_energy_from_atoms(atoms)
@@ -1482,14 +1482,14 @@ def minima_provenance_dict(minima: list, idx: int) -> dict[str, Any]:
 
     energy, atoms = minima[idx]
     return {
-        "run_id": get_metadata(atoms, "run_id"),
-        "source_db": get_metadata(atoms, "source_db"),
-        "source_db_relpath": get_metadata(atoms, "source_db_relpath"),
-        "systems_row_id": get_metadata(atoms, "systems_row_id"),
-        "confid": get_metadata(atoms, "confid"),
-        "gaid": get_metadata(atoms, "gaid"),
-        "unique_id": get_metadata(atoms, "unique_id"),
-        "final_id": get_metadata(atoms, "final_id"),
+        "run_id": get_tag(atoms, "run_id"),
+        "source_db": get_tag(atoms, "source_db"),
+        "source_db_relpath": get_tag(atoms, "source_db_relpath"),
+        "systems_row_id": get_tag(atoms, "systems_row_id"),
+        "confid": get_tag(atoms, "confid"),
+        "gaid": get_tag(atoms, "gaid"),
+        "unique_id": get_tag(atoms, "unique_id"),
+        "final_id": get_tag(atoms, "final_id"),
         "energy": float(energy) if energy is not None else None,
     }
 
@@ -2059,7 +2059,7 @@ def save_neb_result(
     extra["neb_backend"] = (
         "torchsim" if result.get("use_torchsim") else result.get("neb_backend", "ase")
     )
-    metadata = ts_output_provenance(extra=extra)
+    metadata = output_json_provenance(extra=extra)
     metadata.update(
         {
             "pair_id": result["pair_id"],

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
-
 from ase import Atoms
 from numpy.random import default_rng
 
 from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
+from scgo.metadata.atoms import get_tag
 
 
 def _oh() -> Atoms:
@@ -37,8 +36,7 @@ def test_two_oh_fragments_record_site_types_json() -> None:
         max_placement_attempts=600,
     )
     assert out is not None
-    raw = out.info.get("adsorbate_site_types_json")
-    assert raw is not None
-    site_types = json.loads(raw)
+    site_types = get_tag(out, "adsorbate_site_types_json")
+    assert site_types is not None
     assert len(site_types) == 2
     assert all(isinstance(x, str) for x in site_types)

@@ -16,6 +16,22 @@ Fast CI (every PR): `pytest tests/ -m "not slow and not integration"`
 
 Slow CI (every PR): `pytest tests/ -m "slow and not benchmark"` with `SCGO_BATCH_TEST_SAMPLES=15`
 
+## Primary integration contract
+
+**CPU EMT (all six `system_type`s):** [`tests/integration/test_run_go_e2e.py`](integration/test_run_go_e2e.py)
+
+Parametrized public `run_go` / `run_go_ts` matrix plus tagging and H₂ negative-control cases. Shared strict bars live in [`test_utils.py`](test_utils.py) (`assert_e2e_minima_list`, `assert_e2e_go_ts_summary`, `assert_e2e_run_artifacts`):
+
+- Finite energies and expected atom counts (slab + mobile)
+- Database written and SCGO-stamped; `run_*/metadata.json` present
+- Final tagging / XYZ when requested
+- Supported surface deposits: `assert_supported_cluster_binding` (+ fragment lengths)
+- TS: candidate counts when required; `assert_ts_result_valid` / finite barriers on success; explicit zero-TS negative control
+
+**GPU MACE (all six `system_type`s):** [`tests/integration/test_gpu_examples_integration.py`](integration/test_gpu_examples_integration.py) — same assertion helpers, example-shaped budgets.
+
+**API wiring (mocked, fast):** [`tests/integration/test_run_api.py`](integration/test_run_api.py) — validation, coherence errors, 6-type optimizer wiring matrix.
+
 ## Physics helpers
 
 Shared assertions live in [`test_utils.py`](test_utils.py):
@@ -60,7 +76,10 @@ pytest tests/ -m "not slow and not integration"
 # Slow subset
 SCGO_BATCH_TEST_SAMPLES=15 pytest tests/ -m "slow and not benchmark"
 
-# New physics reference tests only
+# CPU EMT 6-type e2e only
+pytest tests/integration/test_run_go_e2e.py -v
+
+# Physics reference tests
 pytest tests/physics/test_reference_emt.py -v
 ```
 
@@ -82,9 +101,15 @@ GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 
 The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. Kaggle may mount that dataset as either `scgo-src.tar.gz` or an extracted tree under `/kaggle/input/scgocisrc/`. **Pip installs (MACE/UPET/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI. The kernel requests a **Tesla T4** GPU (`machine_shape: NvidiaTeslaT4`). Kaggle may assign a P100 otherwise; its sm_60 architecture is incompatible with the cu124 PyTorch wheels used here.
 
-Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all six `system_type` values from `examples/`).
+Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all six `system_type` values from `examples/`). Shared e2e bars require run-dir `metadata.json`, SCGO-stamped `*.db`, and (for surface cluster / surface cluster+adsorbate) at least one TS candidate. Gas cases keep soft TS bars at CI budgets.
 
-UPET GPU smoke coverage: `tests/integration/test_gpu_upet_smoke.py`.
+UPET GPU smoke coverage: `tests/integration/test_gpu_upet_smoke.py` (same artifact bars on the short gas GO smoke).
+
+To exercise a PR branch on Kaggle:
+
+```bash
+gh workflow run kaggle-gpu.yml -f ref=<branch>
+```
 
 ### Stricter GPU suite invariants
 

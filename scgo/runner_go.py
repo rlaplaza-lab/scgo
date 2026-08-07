@@ -15,14 +15,14 @@ import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
 from scgo.exceptions import SCGOError, SCGOValidationError
+from scgo.metadata.run_dir import ensure_run_id
 from scgo.minima_search import run_trials
-from scgo.param_presets import get_default_params
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     GO_PARAM_KEYS,
@@ -49,15 +49,45 @@ from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
-    initialize_params,
     log_configuration,
     prepare_algorithm_kwargs,
     validate_algorithm_params,
 )
-from scgo.utils.run_tracking import ensure_run_id
 from scgo.utils.validation import validate_composition
 
 ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
+
+
+def _validate_optimizer_rng(params: dict[str, Any]) -> None:
+    for algo in ("bh", "ga"):
+        algo_params = params["optimizer_params"].get(algo, {})
+        if "rng" in algo_params:
+            raise SCGOValidationError(
+                f'"rng" should not be in params["optimizer_params"]["{algo}"]. '
+                f'Use the "seed" parameter instead.'
+            )
+
+
+def _prepare_go_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    params = copy.deepcopy(params or {})
+    _validate_optimizer_rng(params)
+    return params
+
+
+def _resolve_go_seed(seed: int | None, params: dict[str, Any]) -> int | None:
+    """Prefer explicit ``seed`` arg; fall back to ``params['seed']``; coerce to int.
+
+    Kept local to avoid a circular import with :mod:`scgo.runner_params`
+    (which imports :func:`select_scgo_minima_algorithm` from this module).
+    Public GO/TS entrypoints use :func:`scgo.runner_params.resolve_workflow_seed`.
+    """
+    raw = seed if seed is not None else params.get("seed")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as e:
+        raise SCGOValidationError(f"seed must be int-like, got {raw!r}") from e
 
 
 def select_scgo_minima_algorithm(
@@ -90,8 +120,6 @@ def _run_go_trials(
     clean: bool = False,
     output_dir: str | Path | None = None,
     calculator_for_global_optimization: Calculator | None = None,
-    *,
-    params_already_merged: bool = False,
 ) -> list[tuple[float, Atoms]]:
     """Run global optimization for a composition; return unique minima sorted by energy."""
     configure_logging(verbosity)
@@ -101,28 +129,13 @@ def _run_go_trials(
     allow_empty_comp = policy.slab_is_search_target and not policy.has_adsorbate
     validate_composition(composition, allow_empty=allow_empty_comp, allow_tuple=False)
 
-    # Initialize and merge params with defaults
-    if not params_already_merged:
-        params = initialize_params(params)
-    else:
-        params = copy.deepcopy(params or {})
+    params = _prepare_go_params(params)
 
     # Validate calculator availability
     calculator_name = params.get("calculator", "MACE")
     _ = get_calculator_class(calculator_name)
 
-    # Validate params structure - rng should not be in optimizer_params
-    for algo in ["bh", "ga"]:
-        algo_params = params["optimizer_params"].get(algo, {})
-        if "rng" in algo_params:
-            raise SCGOValidationError(
-                f'"rng" should not be in params["optimizer_params"]["{algo}"]. '
-                f'Use the "seed" parameter instead.'
-            )
-
-    # Prefer explicit function seed arg; fall back to params["seed"] if provided
-    if seed is None:
-        seed = params.get("seed", None)
+    seed = _resolve_go_seed(seed, params)
 
     # Convert seed to generator at API boundary
     rng = ensure_rng(seed)
@@ -164,9 +177,6 @@ def _run_go_trials(
     # Extract algorithm-specific parameters without mutation
     algo_params = params["optimizer_params"].get(chosen_go, {})
 
-    user_params = None if params_already_merged else params
-    params_base = None if params_already_merged else get_default_params()
-
     # Validate algorithm-specific parameters
     validate_algorithm_params(algo_params, chosen_go, verbosity)
 
@@ -193,8 +203,8 @@ def _run_go_trials(
         n_atoms=n_atoms,
         global_optimizer_kwargs=global_optimizer_kwargs,
         verbosity=verbosity,
-        user_params=user_params,
-        params_base=params_base,
+        user_params=None,
+        params_base=None,
     )
 
     final_unique_minima = run_trials(
@@ -232,43 +242,25 @@ def _run_go_campaign_compositions(  # noqa: C901
     run_id: str | None = None,
     clean: bool = False,
     output_dir: str | Path | None = None,
-    *,
-    params_already_merged: bool = False,
 ) -> dict[str, list[tuple[float, Atoms]]]:
     """Run optimizations for an iterable of compositions; return mapping formula->minima."""
-    if params_already_merged:
-        params = copy.deepcopy(params or {})
-    else:
-        params = initialize_params(params)
-    configure_logging(verbosity)
+    compositions_list = list(compositions)
+    if not compositions_list:
+        raise SCGOValidationError("compositions iterable must not be empty")
 
-    # Validate params structure early: "rng" must not be present inside
-    # optimizer-specific params. Raise ValueError so callers get immediate
-    # feedback instead of having the error swallowed during campaign
-    # iteration.
-    for algo in ["bh", "ga"]:
-        algo_params = params["optimizer_params"].get(algo, {})
-        if "rng" in algo_params:
-            raise SCGOValidationError(
-                f'"rng" should not be in params["optimizer_params"]["{algo}"]. '
-                f'Use the "seed" parameter instead.'
-            )
+    params = _prepare_go_params(params)
+    configure_logging(verbosity)
     logger = get_logger(__name__)
 
     # Generate run_id once at campaign start if not provided
     run_id = ensure_run_id(run_id, verbosity=verbosity, logger=logger)
 
-    # Prefer explicit function seed arg; fall back to params["seed"] if provided
-    if seed is None:
-        seed = params.get("seed", None)
+    seed = _resolve_go_seed(seed, params)
 
     # Convert seed to generator at API boundary
     rng = ensure_rng(seed)
 
     all_results = {}
-    compositions_list = list(compositions)
-    if not compositions_list:
-        raise SCGOValidationError("compositions iterable must not be empty")
     num_compositions = len(compositions_list)
     logger.info("Starting campaign for %d compositions.", num_compositions)
 
@@ -311,7 +303,6 @@ def _run_go_campaign_compositions(  # noqa: C901
                 clean=clean,
                 output_dir=trial_output_dir_str,
                 calculator_for_global_optimization=calculator_for_global_optimization,
-                params_already_merged=True,
             )
             # Always add results (possibly empty) so the API returns a key for each
             # requested composition; this makes the function predictable for

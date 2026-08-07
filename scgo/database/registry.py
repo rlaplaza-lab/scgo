@@ -31,7 +31,7 @@ class DatabaseRegistry:
         db_path: Path,
         composition: list[str] | None = None,
         run_id: str | None = None,
-        metadata: dict | None = None,
+        extra: dict | None = None,
     ) -> None:
         """Register a database in the index.
 
@@ -39,7 +39,7 @@ class DatabaseRegistry:
             db_path: Path to database file
             composition: Composition (e.g., ["Pt", "Pt"])
             run_id: Run identifier
-            metadata: Additional metadata to store
+            extra: Additional registry fields to store
         """
         # Build database entry
         db_path_resolved = db_path.resolve()
@@ -60,7 +60,7 @@ class DatabaseRegistry:
             "composition": composition or [],
             "composition_str": self._make_composition_key(composition or []),
             "run_id": run_id,
-            "metadata": metadata or {},
+            "extra": extra or {},
         }
 
         self._data["databases"][db_key] = entry

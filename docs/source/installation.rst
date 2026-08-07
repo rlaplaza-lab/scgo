@@ -56,8 +56,8 @@ the same parent usually write different ``*.db`` files. Prefer one output
 directory (or scratch) per job when sharing a filesystem.
 
 SQLite defaults to WAL off (fewer ``-wal``/``-shm`` issues on Lustre/GPFS/NFS).
-Discovery may write ``.scgo_db_registry.json`` / ``.scgo_db_registry.lock`` at the
-``*_searches`` root. If ``flock`` is unreliable, avoid concurrent registry updates.
+Database discovery uses an **in-process** registry with a filesystem glob
+fallback; it does not write ``.scgo_db_registry.json`` on disk.
 
 Set ``SCGO_LOCAL_DEV=1`` or ``configure_logging(..., hpc_mode=False)`` for noisier
 local logs.

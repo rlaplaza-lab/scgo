@@ -27,31 +27,32 @@ from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import (
     RetryConfig,
     SCGODatabaseManager,
-    add_metadata,
     close_data_connection,
     database_retry,
     database_transaction,
-    filter_by_metadata,
     get_connection,
-    get_metadata,
     setup_database,
-    update_metadata,
 )
 from scgo.database.discovery import DatabaseDiscovery
 from scgo.database.health import check_database_health, get_database_statistics
-from scgo.database.metadata import get_all_metadata
 from scgo.database.registry import DatabaseRegistry
-from scgo.database.schema import (
-    ensure_schema_version,
-    get_schema_version,
-    set_schema_version,
-)
 from scgo.database.streaming import (
     count_database_structures,
     iter_database_minima,
     iter_databases_minima,
 )
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import (
+    filter_by_tags,
+    get_tag,
+    get_tags,
+    set_tags,
+)
+from scgo.metadata.db_stamp import (
+    ensure_db_schema_version,
+    get_db_schema_version,
+    set_db_schema_version,
+)
 from tests.test_utils import assert_run_id_persisted, create_test_atoms
 
 
@@ -281,7 +282,8 @@ class TestDatabaseSetupAndFlow:
 
     def test_add_relaxed_step_persists_final_id(self, tmp_path):
         """Relaxed rows must carry final_id for mark_final_minima_in_db matching."""
-        from scgo.utils.helpers import ensure_final_id, extract_energy_from_atoms
+        from scgo.metadata.atoms import ensure_final_id
+        from scgo.utils.helpers import extract_energy_from_atoms
 
         with _setup_test_db(
             tmp_path, "test.db", Atoms("Pt2"), initial_candidate=None
@@ -368,30 +370,16 @@ class TestDatabaseSetupAndFlow:
             except AssertionError:
                 continue
 
-        assert matched, (
-            "No relaxed candidates had run_id stored in metadata/key_value_pairs"
-        )
+        assert matched, "No relaxed candidates had run_id stored in key_value_pairs"
 
-    def test_add_metadata_logs_once_per_generation_and_trace_per_candidate(
-        self, caplog
-    ):
-        """Ensure debug metadata log is emitted once per generation and
-        the per-candidate message is trace-level.
-        """
-        import logging
-
-        from scgo.database import metadata as metadata_mod
-        from scgo.utils.logging import TRACE
-
-        # Reset per-module cache and enable trace logging for the test
-        from scgo.utils.logging import TRACE as _TRACE
-
-        metadata_mod._debug_logged_generations.clear()
-        # Ensure the root logger allows trace-level
+    def test_set_tags_emits_trace_per_call(self, caplog):
+        """Each set_tags call emits a TRACE record (no per-generation debug cache)."""
         import logging as _logging
 
-        _logging.getLogger().setLevel(_TRACE)
-        caplog.set_level(_TRACE)
+        from scgo.utils.logging import TRACE
+
+        _logging.getLogger().setLevel(TRACE)
+        caplog.set_level(TRACE)
         caplog.clear()
 
         from ase import Atoms
@@ -399,22 +387,15 @@ class TestDatabaseSetupAndFlow:
         a1 = Atoms("Pt", positions=[[0, 0, 0]])
         a2 = Atoms("Pt", positions=[[0, 0, 0]])
 
-        add_metadata(a1, generation=7, run_id="run_x", raw_score=-1.0)
-        add_metadata(a2, generation=7, run_id="run_x", raw_score=-2.0)
+        set_tags(a1, generation=7, run_id="run_x", raw_score=-1.0)
+        set_tags(a2, generation=7, run_id="run_x", raw_score=-2.0)
 
-        debug_msgs = [
-            r
-            for r in caplog.records
-            if r.levelno == logging.DEBUG
-            and "Added metadata to atoms" in r.getMessage()
-        ]
         trace_msgs = [
             r
             for r in caplog.records
-            if r.levelno == TRACE and "Added metadata to atoms" in r.getMessage()
+            if r.levelno == TRACE and "Set tags on atoms" in r.getMessage()
         ]
 
-        assert len(debug_msgs) == 1
         assert len(trace_msgs) == 2
 
 
@@ -553,69 +534,69 @@ class TestTransactions:
 class TestSchemaVersioning:
     """Schema versioning and migration."""
 
-    def test_get_set_schema_version(self, tmp_path, pt2_atoms):
+    def test_get_set_db_schema_version(self, tmp_path, pt2_atoms):
         with _setup_test_db(
             tmp_path, "test.db", pt2_atoms, initial_candidate=pt2_atoms
         ) as (_da, _db_path):
             pass
 
         with get_connection(tmp_path / "test.db") as db:
-            version = get_schema_version(db)
+            version = get_db_schema_version(db)
             assert version >= 0
 
-            set_schema_version(db, 5)
-            assert get_schema_version(db) == 5
+            set_db_schema_version(db, 5)
+            assert get_db_schema_version(db) == 5
 
-    def test_ensure_schema_version(self, tmp_path, pt2_atoms):
+    def test_ensure_db_schema_version(self, tmp_path, pt2_atoms):
         with _setup_test_db(
             tmp_path, "test.db", pt2_atoms, initial_candidate=pt2_atoms
         ) as (_da, _db_path):
             pass
 
         with get_connection(tmp_path / "test.db") as db:
-            ensure_schema_version(db)
-            assert get_schema_version(db) >= 1
+            ensure_db_schema_version(db)
+            assert get_db_schema_version(db) >= 1
 
 
 class TestMetadataManagement:
     """Metadata helper functions."""
 
-    def test_add_get_metadata(self):
+    def test_set_get_tag(self):
         atoms = Atoms("Pt3")
-        add_metadata(
+        set_tags(
             atoms,
             run_id="run_20260204_120000",
             generation=5,
             fitness=0.95,
         )
 
-        assert get_metadata(atoms, "run_id") == "run_20260204_120000"
-        assert get_metadata(atoms, "generation") == 5
-        assert get_metadata(atoms, "fitness") == pytest.approx(0.95)
+        assert get_tag(atoms, "run_id") == "run_20260204_120000"
+        assert get_tag(atoms, "generation") == 5
+        assert get_tag(atoms, "fitness") == pytest.approx(0.95)
 
-    def test_get_all_metadata(self):
+    def test_get_tags(self):
         atoms = Atoms("Pt3")
-        add_metadata(atoms, run_id="test")
+        set_tags(atoms, run_id="test")
 
-        all_meta = get_all_metadata(atoms)
+        all_meta = get_tags(atoms)
         assert "run_id" in all_meta
 
-    def test_update_metadata(self):
+    def test_set_tags_merges_keys(self):
         atoms = Atoms("Pt3")
-        add_metadata(atoms, run_id="test")
-        update_metadata(atoms, generation=10)
+        set_tags(atoms, run_id="test")
+        set_tags(atoms, generation=10)
 
-        assert get_metadata(atoms, "generation") == 10
-        assert get_metadata(atoms, "run_id") == "test"
+        assert get_tag(atoms, "generation") == 10
+        assert get_tag(atoms, "run_id") == "test"
 
-    def test_filter_by_metadata(self):
+    def test_filter_by_tags(self):
         atoms_list = []
         for i in range(5):
             atoms = Atoms("Pt3")
-            add_metadata(atoms, run_id=f"run_{i % 2}")
+            set_tags(atoms, run_id=f"run_{i % 2}")
             atoms_list.append(atoms)
 
-        filtered = filter_by_metadata(atoms_list, run_id="run_0")
+        filtered = filter_by_tags(atoms_list, run_id="run_0")
         assert len(filtered) == 3
 
 
@@ -692,8 +673,7 @@ class TestFilesystemSync:
 
         result = database_retry(
             flaky_operation,
-            max_retries=5,
-            initial_delay=0.01,
+            config=RetryConfig(max_retries=5, initial_delay=0.01),
             exception_types=(OSError,),
         )
         assert result == "success"
@@ -792,6 +772,30 @@ class TestDiscovery:
         discovery = DatabaseDiscovery(tmp_path)
         db_files = discovery.find_databases(db_filename="*.db", use_cache=False)
         assert db_files
+
+    def test_empty_result_is_not_cached(self, tmp_path):
+        """A miss recorded before the DB exists must not be cached.
+
+        GO writes its database mid-run and TS reads it back in the same
+        process, so caching an empty result would pin the stale answer and
+        make TS report zero minima.
+        """
+        discovery = DatabaseDiscovery(tmp_path)
+
+        # Queried before any run has written a database.
+        assert discovery.find_databases() == []
+        assert discovery._cache == {}, "empty results must not be cached"
+
+        run_dir = tmp_path / "run_20260204_120000"
+        run_dir.mkdir(parents=True)
+        atoms = Atoms("Pt3")
+        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
+        close_data_connection(da)
+        del da
+
+        # The same discovery instance must now observe the new database.
+        db_files = discovery.find_databases()
+        assert any(Path(str(f)).name == "ga_go.db" for f in db_files)
 
 
 class TestRobustness:
@@ -976,9 +980,9 @@ class TestDatabaseStreaming:
         for i in range(10):
             a = atoms.copy()
             a.positions += rng.random((3, 3)) * 0.1
-            from scgo.database.metadata import add_metadata
+            from scgo.metadata.atoms import set_tags
 
-            add_metadata(a, raw_score=-30.0 - i)
+            set_tags(a, raw_score=-30.0 - i)
             a.info["data"] = {"tag": f"test_{i}"}
             da.add_relaxed_step(a)
 
@@ -1035,9 +1039,9 @@ class TestDatabaseStreaming:
         for i in range(3):
             a = atoms.copy()
             a.positions += rng.random((2, 3)) * 0.1
-            from scgo.database.metadata import add_metadata
+            from scgo.metadata.atoms import set_tags
 
-            add_metadata(a, raw_score=-10.0 - i)
+            set_tags(a, raw_score=-10.0 - i)
             a.info["data"] = {"tag": f"test_{i}"}
             da.add_relaxed_step(a)
 
@@ -1084,9 +1088,9 @@ class TestDatabaseStreaming:
             for j in range(3):
                 a = atoms.copy()
                 a.positions += rng.random((2, 3)) * 0.1
-                from scgo.database.metadata import add_metadata
+                from scgo.metadata.atoms import set_tags
 
-                add_metadata(a, raw_score=-10.0 - j)
+                set_tags(a, raw_score=-10.0 - j)
                 a.info["data"] = {"tag": f"test_{j}"}
                 da.add_relaxed_step(a)
 
@@ -1108,9 +1112,9 @@ class TestDatabaseStreaming:
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
         da = setup_database(tmp_path, "test_zero.db", atoms, initial_candidate=atoms)
         a = atoms.copy()
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
 
-        add_metadata(a, raw_score=-10.0)
+        set_tags(a, raw_score=-10.0)
         a.info["data"] = {"tag": "test"}
         da.add_relaxed_step(a)
         close_data_connection(da)
@@ -1318,7 +1322,7 @@ class TestDatabaseManagerCaching:
     def test_load_reference_structures_uses_datetime_run_id(self, tmp_path, rng):
         """Reference structures inherit run_id from parent run_* directory."""
         from scgo.database.helpers import load_reference_structures
-        from scgo.database.metadata import get_metadata
+        from scgo.metadata.atoms import get_tag
 
         run_id = "run_20250124_143022_123456"
         run_dir = tmp_path / run_id
@@ -1340,7 +1344,7 @@ class TestDatabaseManagerCaching:
             base_dir=tmp_path,
         )
         assert len(refs) == 1
-        assert get_metadata(refs[0], "run_id") == run_id
+        assert get_tag(refs[0], "run_id") == run_id
 
     def test_diversity_references_caching(self, tmp_path, rng):
         """Test diversity reference loading with caching."""
@@ -1370,12 +1374,12 @@ class TestDatabaseManagerCaching:
             max_structures=20,
         )
 
-        from scgo.database.metadata import get_metadata
+        from scgo.metadata.atoms import get_tag
 
         assert len(refs1) > 0
         assert all(isinstance(a, Atoms) for a in refs1)
         # Ensure only final-unique-minimum tagged structures were loaded
-        assert all(get_metadata(a, "final_unique_minimum", False) for a in refs1)
+        assert all(get_tag(a, "final_unique_minimum", False) for a in refs1)
 
         refs2 = manager.load_reference_structures(
             "run_*/ref_*.db",

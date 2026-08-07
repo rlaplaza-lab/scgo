@@ -18,6 +18,7 @@ from typing import Any
 
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.run_dir import get_run_directories, get_run_id_from_dir
 from scgo.runner_composition import CompositionInput, _as_composition_list
 from scgo.runner_go import _run_go_trials
 from scgo.runner_params import (
@@ -54,8 +55,10 @@ from scgo.system_types import (
     validate_system_type_settings,
 )
 from scgo.ts_search.transition_state_run import (
-    run_transition_state_campaign,
-    run_transition_state_search,
+    run_transition_state_campaign as _ts_campaign,
+)
+from scgo.ts_search.transition_state_run import (
+    run_transition_state_search as _ts_search,
 )
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
@@ -66,7 +69,6 @@ from scgo.utils.run_helpers import (
     initialize_ts_params,
     log_ts_configuration,
 )
-from scgo.utils.run_tracking import get_run_directories, get_run_id_from_dir
 from scgo.utils.timing_report import (
     GO_TS_TIMING_JSON_FILENAME,
     build_timing_payload,
@@ -158,7 +160,6 @@ def _run_go_ts_pipeline(
             verbosity=verbosity,
             output_dir=str(searches_dir),
             calculator_for_global_optimization=calculator_for_global_optimization,
-            params_already_merged=True,
         )
     finally:
         go_wall_s = perf_counter() - go_t0
@@ -192,7 +193,7 @@ def _run_go_ts_pipeline(
         surface_config=surface_cfg,
     )
 
-    ts_results = run_transition_state_search(
+    ts_results = _ts_search(
         composition,
         output_dir=output_path,
         seed=seed,
@@ -515,7 +516,7 @@ def run_ts_search(
         base=context.ts_base,
     )
     t0 = perf_counter()
-    results = run_transition_state_search(
+    results = _ts_search(
         context.composition,
         output_dir=context.output_dir,
         searches_dir=context.searches_dir,
@@ -592,7 +593,7 @@ def run_ts_campaign(
     t0 = perf_counter()
     if ads_def:
         ts_kwargs["adsorbate_definition"] = ads_def
-    campaign = run_transition_state_campaign(
+    campaign = _ts_campaign(
         full_compositions,
         st,
         output_dir=out_path,

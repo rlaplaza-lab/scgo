@@ -41,8 +41,9 @@ class RetryConfig:
 
 
 PRESET_AGGRESSIVE = RetryConfig(max_retries=5, initial_delay=0.1, backoff_factor=2.0)
-PRESET_CONSERVATIVE = RetryConfig(max_retries=3, initial_delay=0.5, backoff_factor=1.5)
 PRESET_DEFAULT = RetryConfig(max_retries=3, initial_delay=0.2, backoff_factor=2.0)
+PRESET_HPC = RetryConfig(max_retries=5, initial_delay=0.2, backoff_factor=2.0)
+PRESET_TS_NETWORK = RetryConfig(max_retries=5, initial_delay=0.05, backoff_factor=2.0)
 
 
 def database_retry(
@@ -52,9 +53,6 @@ def database_retry(
     log_level: str = "debug",
     *,
     exception_types: tuple[type[BaseException], ...] | None = None,
-    max_retries: int | None = None,
-    initial_delay: float | None = None,
-    backoff_factor: float | None = None,
 ) -> Any:
     """Run ``operation`` with exponential backoff on transient errors.
 
@@ -65,21 +63,8 @@ def database_retry(
     When ``exception_types`` is set (e.g. :data:`HPC_DATABASE_EXCEPTIONS`), those
     exception types are retried without the SQLite message filter — matching the
     historical behavior when callers pass ``exception_types`` explicitly (e.g. BH/simple).
-
-    Optional ``max_retries`` / ``initial_delay`` / ``backoff_factor`` override
-    fields on ``config`` (or :data:`PRESET_DEFAULT`) for call-site compatibility.
     """
-    base = config or PRESET_DEFAULT
-    effective_config = RetryConfig(
-        max_retries=max_retries if max_retries is not None else base.max_retries,
-        initial_delay=(
-            initial_delay if initial_delay is not None else base.initial_delay
-        ),
-        max_delay=base.max_delay,
-        backoff_factor=(
-            backoff_factor if backoff_factor is not None else base.backoff_factor
-        ),
-    )
+    effective_config = config or PRESET_DEFAULT
     n_retries = effective_config.max_retries
 
     log_methods = {
@@ -141,34 +126,23 @@ def retry_on_lock(
     operation_name: str = "database operation",
     log_retries: bool = True,
 ) -> Callable[[F], F]:
-    """Decorator to retry callable on sqlite locked/readonly OperationalError."""
-    effective_config = config or PRESET_CONSERVATIVE
+    """Decorator to retry callable on transient SQLite / I/O errors.
+
+    Thin wrapper around :func:`database_retry` preserving the decorator API used
+    by connection open. Defaults to :data:`PRESET_AGGRESSIVE`.
+    """
+    effective_config = config or PRESET_AGGRESSIVE
+    log_level = "warning" if log_retries else "debug"
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            for attempt in range(effective_config.max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except sqlite3.OperationalError as e:
-                    if not is_retryable_error(e):
-                        raise
-
-                    if attempt < effective_config.max_retries - 1:
-                        delay = effective_config.get_delay(attempt)
-                        if log_retries:
-                            logger.warning(
-                                f"{operation_name}: database locked, retrying in {delay:.2f}s "
-                                f"(attempt {attempt + 1}/{effective_config.max_retries})"
-                            )
-                        time.sleep(delay)
-                    else:
-                        if log_retries:
-                            logger.error(
-                                f"{operation_name}: database locked after {effective_config.max_retries} attempts"
-                            )
-                        raise
-            raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
+            return database_retry(
+                lambda: func(*args, **kwargs),
+                config=effective_config,
+                operation_name=operation_name,
+                log_level=log_level,
+            )
 
         return wrapper
 

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from tests.test_utils import assert_e2e_minima_list
+
 pytest.importorskip("upet")
 pytest.importorskip("metatomic_torchsim")
 pytest.importorskip("torch_sim")
@@ -14,7 +16,6 @@ pytest.importorskip("torch_sim")
 import numpy as np
 
 from tests.test_utils import (
-    assert_minima_lists_equal,
     validate_structure_with_diagnostics,
 )
 
@@ -113,24 +114,8 @@ def test_upet_run_go_gpu_smoke(tmp_path: Path):
         output_dir=tmp_path / "upet_go",
         verbosity=0,
     )
-    assert results
-    assert all(isinstance(e, float) for e, _ in results)
-    assert all(np.isfinite(e) for e, _ in results)
-    # Energies should be well-formed (finite and mutually comparable).
-    assert len({round(e, 6) for e, _ in results}) >= 1
-    # Each GO minimum must be a connected, clash-free Pt4 cluster.
-    for _energy, atoms in results:
-        assert len(atoms) == 4
-        validate_structure_with_diagnostics(atoms, context="upet GO Pt4")
-
-    # Same-seed determinism: a second identical run must yield element-identical
-    # GO minima (UPET forward passes are deterministic for a fixed seed).
-    results2 = run_go(
-        ["Pt"] * 4,
-        params=params,
-        seed=42,
-        system_type="gas_cluster",
-        output_dir=tmp_path / "upet_go_repeat",
-        verbosity=0,
+    assert_e2e_minima_list(
+        results,
+        expected_n_atoms=4,
+        output_dir=tmp_path / "upet_go",
     )
-    assert_minima_lists_equal(results, results2, rtol=1e-5, atol=1e-6)

@@ -55,6 +55,7 @@ def validate_and_resolve_run_context(
         cluster_adsorbate_config=cluster_adsorbate_config,
         surface_config=surface_config,
     )
+
     policy = get_system_policy(system_type)
     strategy_arg = str(fitness_strategy) if fitness_strategy is not None else None
     resolved_fitness = FitnessStrategy(ensure_fitness_strategy_resolved(strategy_arg))

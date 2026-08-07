@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-from scgo.exceptions import SCGOValidationError
-
 """Implementation of a population for maintaining a GA population and
 proposing structures to pair.
 """
@@ -18,7 +16,8 @@ from ase.db.core import now
 if TYPE_CHECKING:
     from ase import Atoms
 
-from scgo.database.metadata import get_metadata
+from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import get_tag
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
@@ -28,11 +27,11 @@ from scgo.utils.fitness_strategies import (
 
 
 def _raw_score(a):
-    """Return GA raw_score from SCGO metadata or ASE ``key_value_pairs``."""
-    raw = get_metadata(a, "raw_score", default=None)
+    """Return GA raw_score from structure tags."""
+    raw = get_tag(a, "raw_score", default=None)
     if raw is None:
         raise SCGOValidationError(
-            "Population candidate missing raw_score in metadata or key_value_pairs",
+            "Population candidate missing raw_score in key_value_pairs",
         )
     return float(raw)
 
@@ -131,7 +130,7 @@ class Population:
         generation the maximum is reported as unknown.
         """
         for cand in candidates:
-            gen = get_metadata(cand, "generation", default=None)
+            gen = get_tag(cand, "generation", default=None)
             if gen is None:
                 self._all_have_generation = False
                 continue
@@ -149,7 +148,7 @@ class Population:
         return [
             cand
             for cand in candidates
-            if get_metadata(cand, "run_id", default=None) == self.run_id
+            if get_tag(cand, "run_id", default=None) == self.run_id
         ]
 
     def _filter_candidates_by_ga_eligibility(self, candidates):
@@ -157,7 +156,7 @@ class Population:
         return [
             cand
             for cand in candidates
-            if bool(get_metadata(cand, "ga_eligible", default=True))
+            if bool(get_tag(cand, "ga_eligible", default=True))
         ]
 
     def _get_all_relaxed_candidates(self, *, only_new=False, use_extinct=False):
@@ -256,7 +255,7 @@ class Population:
                     if c.info["relax_id"] in gens[gen]]
 
         all_candidates = [c for c in self.all_cand
-                          if get_metadata(c, "generation", default=float("inf")) <= gen]
+                          if get_tag(c, "generation", default=float("inf")) <= gen]
         cands = [all_candidates[0]]
         for b in all_candidates:
             if b not in cands:

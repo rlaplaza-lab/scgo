@@ -22,9 +22,9 @@ def test_xyz_file_format_validation(tmp_path, pt2_with_calc):
     """Test that XYZ files are written in correct format."""
     # Use fixture
     atoms = pt2_with_calc.copy()
-    from scgo.database.metadata import add_metadata
+    from scgo.metadata.atoms import set_tags
 
-    add_metadata(atoms, raw_score=-10.0, run_id="run_20250124_143022_123456")
+    set_tags(atoms, raw_score=-10.0, run_id="run_20250124_143022_123456")
 
     # Write XYZ file
     xyz_path = tmp_path / "test.xyz"
@@ -52,9 +52,9 @@ def test_xyz_file_format_validation(tmp_path, pt2_with_calc):
 def test_xyz_file_energy_comment_format(tmp_path, pt3_with_calc):
     """Test that XYZ files can be written and read correctly."""
     atoms = pt3_with_calc.copy()
-    from scgo.database.metadata import add_metadata
+    from scgo.metadata.atoms import set_tags
 
-    add_metadata(atoms, raw_score=-15.5)
+    set_tags(atoms, raw_score=-15.5)
 
     xyz_path = tmp_path / "test_energy.xyz"
     write(str(xyz_path), atoms, format="xyz")
@@ -72,8 +72,8 @@ def test_xyz_file_energy_comment_format(tmp_path, pt3_with_calc):
 def test_xyz_file_provenance_tracking(tmp_path, pt2_with_calc):
     """Test that XYZ files include provenance information."""
     atoms = pt2_with_calc.copy()
-    atoms.info["key_value_pairs"] = {"raw_score": -10.0}
-    atoms.info["provenance"] = {
+    atoms.info["key_value_pairs"] = {
+        "raw_score": -10.0,
         "run_id": "run_20250124_143022_123456",
         "optimizer": "bh",
     }
@@ -115,7 +115,7 @@ def test_directory_structure_creation(tmp_path, rng):
     assert os.path.exists(output_dir)
 
     # Find run directory (auto-generated run_id)
-    from scgo.utils.run_tracking import get_run_directories
+    from scgo.metadata.run_dir import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
@@ -182,7 +182,7 @@ def test_database_file_creation_and_format(tmp_path, rng):
     )
 
     # Check BH database (new structure: run_*/)
-    from scgo.utils.run_tracking import get_run_directories
+    from scgo.metadata.run_dir import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
@@ -221,7 +221,7 @@ def test_ga_database_file_creation(tmp_path, rng):
     )
 
     # Check GA database (new structure: run_*/)
-    from scgo.utils.run_tracking import get_run_directories
+    from scgo.metadata.run_dir import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
@@ -291,7 +291,7 @@ def test_multiple_xyz_files_generation(tmp_path):
             raw_score=-10.0 - i,
             trial=1,
         )
-        atoms.info.setdefault("provenance", {})["minimum_id"] = i + 1
+        atoms.info.setdefault("key_value_pairs", {})["minimum_id"] = i + 1
         structures.append(atoms)
 
     # Write multiple XYZ files
@@ -319,9 +319,9 @@ def test_xyz_file_with_bimetallic_clusters(tmp_path, au2pt2_atoms):
     """Test XYZ file generation for bimetallic clusters."""
     atoms = au2pt2_atoms.copy()
     atoms.calc = EMT()
-    from scgo.database.metadata import add_metadata
+    from scgo.metadata.atoms import set_tags
 
-    add_metadata(atoms, raw_score=-20.0)
+    set_tags(atoms, raw_score=-20.0)
 
     xyz_path = tmp_path / "test_bimetallic.xyz"
     write(str(xyz_path), atoms, format="xyz")
@@ -355,7 +355,7 @@ def test_database_file_size_validation(tmp_path, rng):
     )
 
     # Check database file size (new structure: run_*/)
-    from scgo.utils.run_tracking import get_run_directories
+    from scgo.metadata.run_dir import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
@@ -391,7 +391,7 @@ def test_output_directory_permissions(tmp_path, rng):
     # Check that directories are writable
     assert os.access(output_dir, os.W_OK)
     # Check permissions (new structure: run_*/)
-    from scgo.utils.run_tracking import get_run_directories
+    from scgo.metadata.run_dir import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0
@@ -404,9 +404,9 @@ def test_xyz_file_encoding(tmp_path):
     """Test that XYZ files are written with correct encoding."""
     atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
     atoms.calc = EMT()
-    from scgo.database.metadata import add_metadata
+    from scgo.metadata.atoms import set_tags
 
-    add_metadata(atoms, raw_score=-10.0)
+    set_tags(atoms, raw_score=-10.0)
 
     xyz_path = tmp_path / "test_encoding.xyz"
     write(str(xyz_path), atoms, format="xyz")
@@ -442,7 +442,7 @@ def test_empty_results_handling(tmp_path, rng):
 
     # Directory structure should still be created (new structure: run_*/)
     assert os.path.exists(output_dir)
-    from scgo.utils.run_tracking import get_run_directories
+    from scgo.metadata.run_dir import get_run_directories
 
     run_dirs = get_run_directories(output_dir)
     assert len(run_dirs) > 0, "Expected at least one run directory"
@@ -457,7 +457,7 @@ def test_empty_results_handling(tmp_path, rng):
 
 def test_final_xyz_is_canonicalized_before_write(tmp_path, rng, monkeypatch):
     """Final minima export should use canonical storage-frame normalization."""
-    from scgo.database.metadata import add_metadata
+    from scgo.metadata.atoms import set_tags
     from scgo.minima_search import core as core_mod
 
     atoms = Atoms(
@@ -466,7 +466,7 @@ def test_final_xyz_is_canonicalized_before_write(tmp_path, rng, monkeypatch):
         cell=[10.0, 10.0, 10.0],
         pbc=False,
     )
-    add_metadata(atoms, raw_score=-1.0, run_id="run_test")
+    set_tags(atoms, raw_score=-1.0, run_id="run_test")
 
     def fake_scgo(**kwargs):
         return [(-1.0, atoms.copy())]

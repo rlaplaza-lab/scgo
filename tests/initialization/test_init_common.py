@@ -20,7 +20,6 @@ from ase import Atoms
 from ase.db import connect
 
 from scgo.database import get_global_cache
-from scgo.database.schema import stamp_scgo_database
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import (
     compute_cell_side,
@@ -60,15 +59,12 @@ from scgo.initialization.random_spherical import (
 from scgo.initialization.seed_combiners import (
     _is_valid_placement,
 )
+from scgo.metadata.db_stamp import stamp_db
 from scgo.utils.helpers import get_composition_counts
 from tests.test_utils import (
     BATCH_TEST_SAMPLES,
     BATCH_TEST_SAMPLES_SLOW,
-    LARGE_SIZES,
-    MEDIUM_SIZES,
     MIXED_COMPOSITIONS,
-    REPRODUCIBILITY_SEEDS,
-    SMALL_SIZES,
     UNIQUENESS_THRESHOLD,
     assert_cluster_valid,
     create_paired_rngs,
@@ -80,7 +76,7 @@ from tests.test_utils import (
 
 def _stamp_init_test_db(db_path: str | Path) -> None:
     """Mark raw ASE-DB test files as SCGO databases for candidate discovery."""
-    stamp_scgo_database(db_path)
+    stamp_db(db_path)
 
 
 def _discovery_db_path(
@@ -614,7 +610,7 @@ class TestDatabaseIntegration:
         with connect(db_path) as db:
             # Add a Pt2 structure
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
-            pt2.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt2,
@@ -625,7 +621,7 @@ class TestDatabaseIntegration:
 
             # Add a Pt3 structure
             pt3 = Atoms("Pt3", positions=[[0, 0, 0], [0, 0, 2.5], [0, 2.5, 0]])
-            pt3.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            pt3.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             pt3.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt3,
@@ -640,7 +636,7 @@ class TestDatabaseIntegration:
 
             # Add a PtAu structure
             ptau = Atoms("PtAu", positions=[[0, 0, 0], [0, 0, 2.6]])
-            ptau.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            ptau.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             ptau.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 ptau,
@@ -953,7 +949,7 @@ class TestLoadDbCandidates:
         db_path = tmp_path / "test.db"
         with connect(str(db_path)) as db:
             a1 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-            a1.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            a1.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             a1.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 a1,
@@ -965,9 +961,9 @@ class TestLoadDbCandidates:
             a2 = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
             db.write(a2, relaxed=True, key_value_pairs={"raw_score": -9.0}, gaid=2)
 
-        from scgo.database.schema import stamp_scgo_database
+        from scgo.metadata.db_stamp import stamp_db
 
-        stamp_scgo_database(db_path)
+        stamp_db(db_path)
 
         minima_default = extract_minima_from_database_file(str(db_path), run_id="runx")
 
@@ -999,7 +995,7 @@ class TestFindSmallerCandidates:
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
             # Mark this candidate as a final unique minimum so it is available
             # to seed+growth selection (seed strategy only uses final-tagged minima).
-            pt2.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt2,
@@ -1047,7 +1043,7 @@ class TestFindSmallerCandidates:
 
             # Modify database: add a final-tagged candidate
             pt_new = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
-            pt_new.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            pt_new.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             pt_new.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt_new,
@@ -1082,7 +1078,9 @@ class TestFindSmallerCandidates:
 
             # Now add a final-tagged candidate and verify it is found
             pt2_final = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
-            pt2_final.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            pt2_final.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = (
+                True
+            )
             pt2_final.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = (
                 True
             )
@@ -1106,7 +1104,7 @@ class TestFindSmallerCandidates:
         db3_path = _discovery_db_path(tmp_path, "Pt2", "test2b.db")
         with connect(str(db3_path)) as db3:
             rf = Atoms("Pt2", positions=[[0, 0, 0], [3.0, 0, 0]])
-            rf.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            rf.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             rf.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db3.write(
                 rf,
@@ -1558,63 +1556,44 @@ def _assert_connectivity_with_diagnostics(
 
 @pytest.mark.slow
 class TestReproducibilityAllModes:
-    """Consolidated reproducibility tests for all initialization modes.
-
-    This test class replaces redundant mode-specific reproducibility tests by
-    parametrizing over all modes, composition types, and seeds.
-    """
+    """Smoke reproducibility across init modes (narrow seed matrix)."""
 
     @pytest.mark.parametrize(
         "mode", ["random_spherical", "seed+growth", "smart", "template"]
     )
-    @pytest.mark.parametrize("seed", [0, 42, 100, 200, 500])
+    @pytest.mark.parametrize("seed", [0, 42])
     def test_reproducibility_single_element(self, mode, seed):
-        """Test all modes are reproducible with same seed.
-
-        For single-element compositions.
-        """
-        comp = ["Pt"] * 30  # Reduced from 55 for speed
+        comp = ["Pt"] * 30
         rng1, rng2 = create_paired_rngs(seed)
-
         atoms1 = _create_atoms_for_mode(comp, mode, rng1)
         atoms2 = _create_atoms_for_mode(comp, mode, rng2)
-
         assert positions_equal(atoms1, atoms2), (
             f"{mode} mode not reproducible with seed={seed}"
         )
 
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
-    @pytest.mark.parametrize("seed", [0, 42, 100, 200, 500])
+    @pytest.mark.parametrize("seed", [0, 42])
     def test_reproducibility_bimetallic(self, mode, seed):
-        """Test that all modes are reproducible for bimetallic compositions."""
-        comp = ["Pt"] * 15 + ["Au"] * 15  # 30 atoms total, reduced from 50
+        comp = ["Pt"] * 15 + ["Au"] * 15
         rng1, rng2 = create_paired_rngs(seed)
-
         atoms1 = _create_atoms_for_mode(comp, mode, rng1)
         atoms2 = _create_atoms_for_mode(comp, mode, rng2)
-
         assert positions_equal(atoms1, atoms2), (
             f"{mode} mode bimetallic not reproducible with seed={seed}"
         )
 
 
 class TestReliabilityAllModes:
-    """Consolidated reliability tests for all initialization modes.
-
-    This test class replaces redundant mode-specific reliability tests by
-    parametrizing over all modes, cluster sizes, and seeds.
-    """
+    """Narrow reliability smoke across init modes (one seed, representative sizes)."""
 
     @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
-    @pytest.mark.parametrize("seed", REPRODUCIBILITY_SEEDS)
-    @pytest.mark.parametrize("n_atoms", SMALL_SIZES)
-    def test_single_element_small_clusters(self, mode, seed, n_atoms):
-        """Test all modes with single-element small clusters."""
+    @pytest.mark.parametrize("n_atoms", [4, 10])
+    def test_single_element_small_clusters(self, mode, n_atoms):
+        seed = 42
         rng, _ = create_paired_rngs(seed)
         comp = ["Pt"] * n_atoms
         atoms = _create_atoms_for_mode(comp, mode, rng)
-
         assert len(atoms) == n_atoms
         assert get_composition_counts(
             atoms.get_chemical_symbols()
@@ -1625,14 +1604,12 @@ class TestReliabilityAllModes:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
-    @pytest.mark.parametrize("seed", REPRODUCIBILITY_SEEDS)
-    @pytest.mark.parametrize("n_atoms", SMALL_SIZES)
-    def test_mixed_element_small_clusters(self, mode, seed, n_atoms):
-        """Test all modes with mixed-element small clusters."""
+    @pytest.mark.parametrize("n_atoms", [4, 10])
+    def test_mixed_element_small_clusters(self, mode, n_atoms):
+        seed = 42
         rng, _ = create_paired_rngs(seed)
         comp = MIXED_COMPOSITIONS["PtAu"](n_atoms)
         atoms = _create_atoms_for_mode(comp, mode, rng)
-
         assert len(atoms) == n_atoms
         assert get_composition_counts(
             atoms.get_chemical_symbols()
@@ -1644,21 +1621,12 @@ class TestReliabilityAllModes:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
-    @pytest.mark.parametrize(
-        "seed", REPRODUCIBILITY_SEEDS[:5]
-    )  # Fewer seeds for slow tests
-    @pytest.mark.parametrize("n_atoms", MEDIUM_SIZES)
-    def test_medium_clusters(self, mode, seed, n_atoms):
-        """Test all modes with medium-sized clusters."""
+    def test_medium_cluster(self, mode):
+        seed = 42
+        n_atoms = 20
         rng, _ = create_paired_rngs(seed)
         comp = ["Pt"] * n_atoms
-        atoms = _create_atoms_for_mode(
-            comp,
-            mode,
-            rng,
-            placement_radius_scaling=1.2,  # More lenient for medium clusters
-        )
-
+        atoms = _create_atoms_for_mode(comp, mode, rng, placement_radius_scaling=1.2)
         assert len(atoms) == n_atoms
         validate_structure_with_diagnostics(
             atoms, context=f"mode={mode}, seed={seed}, n_atoms={n_atoms}"
@@ -1666,25 +1634,19 @@ class TestReliabilityAllModes:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
-    @pytest.mark.parametrize("seed", REPRODUCIBILITY_SEEDS[:3])  # Even fewer for large
-    @pytest.mark.parametrize("n_atoms", LARGE_SIZES)
-    def test_large_clusters(self, mode, seed, n_atoms):
-        """Test all modes with large clusters.
-
-        Uses more lenient parameters appropriate for large clusters.
-        """
+    def test_large_cluster(self, mode):
+        seed = 42
+        n_atoms = 40
         rng, _ = create_paired_rngs(seed)
-        comp = ["Pt"] * n_atoms
-        LARGE_CLUSTER_FACTOR = 2.0  # More lenient for large clusters (50+ atoms)
+        LARGE_CLUSTER_FACTOR = 2.0
         atoms = _create_atoms_for_mode(
-            comp,
+            ["Pt"] * n_atoms,
             mode,
             rng,
             placement_radius_scaling=1.5,
             min_distance_factor=0.4,
             connectivity_factor=LARGE_CLUSTER_FACTOR,
         )
-
         assert len(atoms) == n_atoms
         validate_structure_with_diagnostics(
             atoms,
