@@ -12,7 +12,6 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -121,14 +120,6 @@ class _SeedSamplingLogCollector:
             len(records),
             ", ".join(parts),
         )
-
-
-class InitStrategy(Enum):
-    """Initialization strategies used by allocation and generation logic."""
-
-    TEMPLATE = "template"
-    SEED_GROWTH = "seed+growth"
-    RANDOM_SPHERICAL = "random_spherical"
 
 
 def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) -> float:

@@ -24,9 +24,8 @@ This module is intentionally thin: the actual implementations live in
 :mod:`scgo.runner_composition` (composition parsing), :mod:`scgo.runner_params`
 (param merging/allowlisting/coherence and context dataclasses),
 :mod:`scgo.runner_go` (GO trials/campaigns), and :mod:`scgo.runner_ts`
-(TS and GO+TS pipelines). Everything that was previously importable from
-``scgo.runner_api`` remains importable from here, including private helpers
-used by tests via ``monkeypatch.setattr("scgo.runner_api.<name>", ...)``
+(TS and GO+TS pipelines). A small number of private helpers are re-exported
+here solely so tests can ``monkeypatch.setattr("scgo.runner_api.<name>", ...)``
 (e.g. ``run_trials``, ``get_calculator_class``, ``_run_go_trials``,
 ``_run_go_campaign_compositions``, ``_ts_search``, ``_ts_campaign``,
 ``_run_go_ts_pipeline``). ``scgo.runner_go`` and ``scgo.runner_ts`` call back
@@ -44,11 +43,6 @@ from time import perf_counter
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
-# Re-exported purely so callers/tests can `from scgo.runner_api import <name>`
-# and `monkeypatch.setattr("scgo.runner_api.<name>", ...)`; the redundant
-# `as <name>` aliases mark these as intentional re-exports (not unused
-# imports) for the linter, since this module's own code does not call them
-# directly.
 from scgo.minima_search import run_trials as run_trials
 from scgo.param_presets import get_default_params as get_default_params
 from scgo.exceptions import SCGOValidationError
@@ -58,81 +52,27 @@ from scgo.runner_composition import (
     build_two_element_compositions,
     parse_composition_arg,
 )
-from scgo.runner_composition import _as_composition as _as_composition
-from scgo.runner_composition import _as_composition_list as _as_composition_list
-from scgo.runner_composition import _compact_formula_error as _compact_formula_error
-from scgo.runner_composition import (
-    _parse_lowercase_single_element as _parse_lowercase_single_element,
-)
 from scgo.runner_go import (
+    ScgoMinimaAlgorithm as ScgoMinimaAlgorithm,
     _run_go_campaign_compositions,
     _run_go_trials,
     select_scgo_minima_algorithm,
 )
-from scgo.runner_go import ScgoMinimaAlgorithm as ScgoMinimaAlgorithm
 from scgo.runner_params import RunGOCampaignContext, RunGOContext, resolve_workflow_seed
-from scgo.runner_params import RunGOTSContext as RunGOTSContext
-from scgo.runner_params import RunTSContext as RunTSContext
-from scgo.runner_params import _ALGO_KEYS as _ALGO_KEYS
-from scgo.runner_params import _DEFAULT_GO_PARAMS as _DEFAULT_GO_PARAMS
-from scgo.runner_params import _as_int_seed as _as_int_seed
-from scgo.runner_params import (
-    _calculator_slug_from_go_params as _calculator_slug_from_go_params,
-)
-from scgo.runner_params import _coerce_ts_for_runner as _coerce_ts_for_runner
-from scgo.runner_params import _default_go_ts_output_path as _default_go_ts_output_path
-from scgo.runner_params import (
-    _default_optimizer_system_type as _default_optimizer_system_type,
-)
 from scgo.runner_params import (
     _log_completion,
     _log_validation_error,
     _prepare_run_go_campaign_context,
     _prepare_run_go_context,
 )
-from scgo.runner_params import (
-    _merge_adsorbate_context_into_params as _merge_adsorbate_context_into_params,
-)
-from scgo.runner_params import (
-    _optimizer_write_timing_json_enabled as _optimizer_write_timing_json_enabled,
-)
-from scgo.runner_params import _prepare_run_context as _prepare_run_context
-from scgo.runner_params import _prepare_run_go_ts_context as _prepare_run_go_ts_context
-from scgo.runner_params import (
-    _prepare_run_ts_search_context as _prepare_run_ts_search_context,
-)
-from scgo.runner_params import _reject_system_keys as _reject_system_keys
-from scgo.runner_params import _require_system_type as _require_system_type
-from scgo.runner_params import _resolve_go_params as _resolve_go_params
-from scgo.runner_params import _resolve_go_ts_params as _resolve_go_ts_params
-from scgo.runner_params import _resolve_ts_params as _resolve_ts_params
-from scgo.runner_params import _resolved_path as _resolved_path
-from scgo.runner_params import (
-    _validate_go_ts_param_coherence as _validate_go_ts_param_coherence,
-)
-from scgo.runner_params import (
-    _validate_go_ts_surface_config as _validate_go_ts_surface_config,
-)
-from scgo.runner_params import (
-    _with_adsorbate_in_optimizers as _with_adsorbate_in_optimizers,
-)
-from scgo.runner_params import (
-    _with_surface_in_optimizers as _with_surface_in_optimizers,
-)
-from scgo.runner_params import (
-    _with_system_type_in_optimizer_params as _with_system_type_in_optimizer_params,
-)
 from scgo.runner_ts import (
+    _run_go_ts_pipeline as _run_go_ts_pipeline,
+    _run_one_element_go_ts_pipeline as _run_one_element_go_ts_pipeline,
     log_go_ts_summary,
     run_go_ts,
     run_go_ts_campaign,
     run_ts_campaign,
     run_ts_search,
-)
-from scgo.runner_ts import _execute_run_go_ts as _execute_run_go_ts
-from scgo.runner_ts import _run_go_ts_pipeline as _run_go_ts_pipeline
-from scgo.runner_ts import (
-    _run_one_element_go_ts_pipeline as _run_one_element_go_ts_pipeline,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import AdsorbatesInput, SystemType
