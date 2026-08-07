@@ -945,8 +945,9 @@ def run_transition_state_search(
         str(run_dir),
         run_id,
         record={
+            "path_key": path_key_formula,
             "composition": list(composition),
-            "formula": formula,
+            "formula": formula or path_key_formula,
             "params": run_context,
         },
     )
@@ -1073,6 +1074,7 @@ def run_transition_state_search(
         minima=minima,
         minima_base_dir=str(minima_dir),
         run_context=run_context,
+        path_key=path_key_formula,
     )
 
     if dedupe_ts or tag_ts_in_db:

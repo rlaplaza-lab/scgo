@@ -37,6 +37,7 @@ from scgo.utils.output_paths import (
     resolve_go_searches_dir,
 )
 from scgo.utils.path_keys import resolve_run_path_key
+from scgo.utils.phase_logging import log_phase_header
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
@@ -158,7 +159,8 @@ def _run_go_trials(
     chosen_go = select_scgo_minima_algorithm(n_atoms, system_type)
     if chosen_go == "simple":
         logger.info(
-            f"Selected simple optimization for {n_atoms}-atom cluster (trivial structure)"
+            "Selected simple optimization for %d-atom cluster (trivial structure)",
+            n_atoms,
         )
     elif chosen_go == "bh":
         logger.info(
@@ -297,16 +299,11 @@ def _run_go_campaign_compositions(
         path_key = resolve_run_path_key(
             composition, system_type=system_type, params=params
         )
-        log_info_v(logger, "\n%s", "=" * 60, verbosity=verbosity)
-        log_info_v(
+        log_phase_header(
             logger,
-            "Running minima search for %s (%d/%d)",
-            path_key,
-            i + 1,
-            num_compositions,
+            f"Running minima search for {path_key} ({i + 1}/{num_compositions})",
             verbosity=verbosity,
         )
-        log_info_v(logger, "%s", "=" * 60, verbosity=verbosity)
 
         comp_seed = int(rng.integers(0, 2**63 - 1))
         trial_output_dir = resolve_go_campaign_searches_dir(output_dir, path_key)

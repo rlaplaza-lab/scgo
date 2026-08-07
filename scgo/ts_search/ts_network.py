@@ -21,6 +21,7 @@ from scgo.ts_search.transition_state import minima_provenance_dict
 from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import get_logger
+from scgo.utils.path_keys import resolve_run_path_key
 
 logger = get_logger(__name__)
 
@@ -305,15 +306,28 @@ def save_ts_network_metadata(
     minima: list | None = None,
     minima_base_dir: str | None = None,
     run_context: dict[str, Any] | None = None,
+    path_key: str | None = None,
 ) -> str:
-    """Write ``ts_network_metadata.json`` (edges, barriers, optional provenance)."""
+    """Write ``ts_network_metadata.json`` (edges, barriers, optional provenance).
+
+    ``path_key`` is the component-aware directory identity; when omitted it is
+    derived from ``composition`` and ``run_context['system_type']``. For
+    slab-target runs (empty ``composition``) ``formula`` falls back to it so it
+    is never empty.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
-    formula = get_cluster_formula(composition)
+    resolved_path_key = path_key or resolve_run_path_key(
+        composition,
+        system_type=(run_context or {}).get("system_type"),
+        params=run_context,
+    )
+    formula = get_cluster_formula(composition) or resolved_path_key
 
     network: dict[str, Any] = output_json_provenance(extra=run_context or {})
     network.update(
         {
+            "path_key": resolved_path_key,
             "composition": composition,
             "formula": formula,
             "num_minima": minima_count,

@@ -27,8 +27,10 @@ Final-minima SQL tagging
 Output-JSON provenance header
 -----------------------------
 
-Shared header for ``metadata.json``, NEB/TS summaries, and timing files
-(``schema_version`` = 3).
+Shared header for ``metadata.json``, NEB/TS summaries, timing files, and
+cluster-adsorbate relaxed-structure ``info`` dicts (``schema_version`` = 4). This
+is the single output-JSON version; there is no separate timing or cluster-adsorbate
+schema key.
 
 .. automodule:: scgo.metadata.provenance
    :members:

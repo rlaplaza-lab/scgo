@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.utils.logging import get_logger
 from scgo.utils.timing_report import (
-    RUN_TIMING_SCHEMA_VERSION,
     build_run_timing_document,
     build_timing_payload,
     cpu_non_relax_seconds_from_timings,
@@ -50,7 +50,9 @@ def test_build_timing_payload_includes_schema_and_run_id():
         run_id="run_test",
     )
     assert doc["run_id"] == "run_test"
-    assert doc["timing_schema_version"] == RUN_TIMING_SCHEMA_VERSION
+    # Single output-JSON schema version; no separate timing schema key.
+    assert doc["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
+    assert "timing_schema_version" not in doc
     assert doc["created_at"].endswith("Z")
 
 

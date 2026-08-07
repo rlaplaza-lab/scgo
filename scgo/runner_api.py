@@ -48,6 +48,7 @@ from scgo.runner_params import (
     _log_validation_error,
     _prepare_run_go_campaign_context,
     _prepare_run_go_context,
+    format_completion_details,
 )
 from scgo.runner_ts import (
     log_go_ts_summary,
@@ -115,7 +116,10 @@ def run_go(
         _log_completion(
             "run_go",
             elapsed_s=perf_counter() - t0,
-            details=f"minima={len(minima)} output_dir={context.output_summary_dir}",
+            details=format_completion_details(
+                minima=len(minima),
+                output_dir=context.output_summary_dir,
+            ),
         )
     return minima
 
@@ -177,7 +181,11 @@ def run_go_campaign(
         _log_completion(
             "run_go_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(campaign)} output_dir={context.output_summary_dir}",
+            details=format_completion_details(
+                compositions=len(campaign),
+                minima=sum(len(v) for v in campaign.values()),
+                output_dir=context.output_summary_dir,
+            ),
         )
     return campaign
 

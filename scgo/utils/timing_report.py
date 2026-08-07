@@ -29,7 +29,6 @@ logger = get_logger(__name__)
 
 TIMING_JSON_FILENAME = "timing.json"
 GO_TS_TIMING_JSON_FILENAME = "go_ts_timing.json"
-RUN_TIMING_SCHEMA_VERSION = 1
 
 _DB_IO_SUM_KEYS: tuple[str, ...] = (
     "db_read_s",
@@ -160,10 +159,13 @@ def build_timing_payload(
     run_id: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a structured timing document with provenance header and schema version."""
+    """Build a structured timing document with the shared provenance header.
+
+    The header's ``schema_version`` is the single output-JSON version; there is
+    no separate timing schema key.
+    """
     payload: dict[str, Any] = {
         **output_json_provenance(),
-        "timing_schema_version": RUN_TIMING_SCHEMA_VERSION,
         "backend": backend,
         "timings_s": timings_s,
     }

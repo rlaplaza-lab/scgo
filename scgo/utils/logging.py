@@ -38,6 +38,32 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+DEFAULT_LOG_FORMAT = "%(message)s"
+FULL_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_FORMAT_ENV_VAR = "SCGO_LOG_FORMAT"
+
+
+def resolve_log_format(format_string: str | None = None) -> str:
+    """Resolve the console log format.
+
+    Precedence: an explicit ``format_string`` wins; otherwise ``SCGO_LOG_FORMAT``
+    selects a named preset (``full`` → :data:`FULL_LOG_FORMAT`, ``plain`` →
+    :data:`DEFAULT_LOG_FORMAT`) or is used verbatim as a ``%``-style format
+    string; otherwise the default ``"%(message)s"`` is used.
+    """
+    if format_string is not None:
+        return format_string
+    env = os.environ.get(LOG_FORMAT_ENV_VAR, "").strip()
+    if not env:
+        return DEFAULT_LOG_FORMAT
+    preset = env.lower()
+    if preset == "full":
+        return FULL_LOG_FORMAT
+    if preset in ("plain", "default", "message"):
+        return DEFAULT_LOG_FORMAT
+    return env
+
+
 def configure_logging(
     verbosity: int = 1,
     format_string: str | None = None,
@@ -52,7 +78,11 @@ def configure_logging(
 
     Args:
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
-        format_string: Custom format string. If None, uses default format.
+        format_string: Custom ``%``-style format string. When ``None``, the
+            ``SCGO_LOG_FORMAT`` environment variable is consulted
+            (``full`` gives ``"%(asctime)s %(levelname)s %(name)s: %(message)s"``,
+            ``plain`` gives the default ``"%(message)s"``, and any other value is
+            used verbatim). Defaults to ``"%(message)s"``.
         hpc_mode: If True, suppresses more third-party logs (default when None,
             unless ``SCGO_LOCAL_DEV=1``). If False, only WARNING+ for most libs.
     """
@@ -75,10 +105,7 @@ def configure_logging(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
 
-    if format_string is None:
-        format_string = "%(message)s"
-
-    formatter = logging.Formatter(format_string)
+    formatter = logging.Formatter(resolve_log_format(format_string))
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 

@@ -22,10 +22,7 @@ from scgo.cluster_adsorbate.constraints import attach_fix_bond_lengths
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
-from scgo.metadata.provenance import (
-    OUTPUT_JSON_SCHEMA_VERSION,
-    output_json_provenance,
-)
+from scgo.metadata.provenance import output_json_provenance
 from scgo.utils.rng_helpers import ensure_rng_or_create
 
 
@@ -157,29 +154,30 @@ def relax_metal_cluster_with_adsorbate(
         "bond_lengths": bond_lengths,
     }
     calc_obj = combined.calc
-    info["output_provenance"] = output_json_provenance(
-        extra={
-            "cluster_adsorbate_schema_version": OUTPUT_JSON_SCHEMA_VERSION,
-            "formula": combined.get_chemical_formula(),
-            "n_core": n_core,
-            "n_frag": n_frag,
-            "calculator_class": (
-                calc_obj.__class__.__name__ if calc_obj is not None else None
-            ),
-            "placement": {
-                "anchor_index": anchor_index,
-                "bond_axis": list(bond_axis) if bond_axis is not None else None,
-                "preplaced": preplaced is not None,
-            },
-            "relax": {
-                "optimizer": optimizer.__name__,
-                "fmax": fmax,
-                "steps": steps,
-                "fix_core": fix_core,
-                "bond_pairs": [list(p) for p in bond_pairs],
-            },
-            "config": asdict(config),
-        }
+    info.update(
+        output_json_provenance(
+            extra={
+                "formula": combined.get_chemical_formula(),
+                "n_core": n_core,
+                "n_frag": n_frag,
+                "calculator_class": (
+                    calc_obj.__class__.__name__ if calc_obj is not None else None
+                ),
+                "placement": {
+                    "anchor_index": anchor_index,
+                    "bond_axis": list(bond_axis) if bond_axis is not None else None,
+                    "preplaced": preplaced is not None,
+                },
+                "relax": {
+                    "optimizer": optimizer.__name__,
+                    "fmax": fmax,
+                    "steps": steps,
+                    "fix_core": fix_core,
+                    "bond_pairs": [list(p) for p in bond_pairs],
+                },
+                "config": asdict(config),
+            }
+        )
     )
     sym = combined.get_chemical_symbols()
     if (

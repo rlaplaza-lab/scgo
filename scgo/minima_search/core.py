@@ -708,6 +708,9 @@ def run_trials(
         system_type=system_type_for_path,
         params=global_optimizer_kwargs,
     )
+    # Slab-target runs have an empty composition (and thus empty chemical
+    # formula); fall back to the directory identity so ``formula`` is never empty.
+    metadata_formula = composition_str or path_key
 
     # Save run metadata (include formula and run parameters for traceability)
     gok_for_metadata = _sanitize_global_optimizer_kwargs_for_metadata(
@@ -727,8 +730,9 @@ def run_trials(
         run_output_dir,
         run_id,
         record={
+            "path_key": path_key,
             "composition": composition,
-            "formula": composition_str,
+            "formula": metadata_formula,
             "params": params,
         },
     )

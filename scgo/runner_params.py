@@ -36,7 +36,12 @@ from scgo.system_types import (
     validate_system_type_settings,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.output_paths import resolve_go_searches_dir
+from scgo.utils.output_paths import (
+    calculator_slug_from_go_params,
+    formula_searches_dir,
+    resolve_campaign_root_from_args,
+    resolve_go_searches_dir,
+)
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.run_helpers import initialize_params, initialize_ts_params
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
@@ -412,10 +417,8 @@ def _resolve_go_ts_params(
 
 
 def _calculator_slug_from_go_params(go_params: dict[str, Any] | None) -> str:
-    c = str((go_params or {}).get("calculator", "MACE")).strip().upper()
-    if c in ("MACE", "UMA"):
-        return c.lower()
-    return c.lower() or "calc"
+    """Delegate to :func:`scgo.utils.output_paths.calculator_slug_from_go_params`."""
+    return calculator_slug_from_go_params(go_params)
 
 
 def _default_go_ts_output_path(
@@ -428,8 +431,6 @@ def _default_go_ts_output_path(
     adsorbate_definition: AdsorbateDefinition | None = None,
     surface_config: SurfaceSystemConfig | None = None,
 ) -> Path:
-    root = output_root if output_root is not None else Path.cwd() / "scgo_runs"
-    p = Path(root).expanduser().resolve()
     stem = output_stem or resolve_run_path_key(
         composition,
         system_type=system_type,
@@ -437,7 +438,13 @@ def _default_go_ts_output_path(
         surface_config=surface_config,
         params=go_params,
     )
-    path = (p / f"{stem}_{_calculator_slug_from_go_params(go_params)}").resolve()
+    path = resolve_campaign_root_from_args(
+        None,
+        output_root=output_root,
+        output_stem=stem,
+        path_key=stem,
+        calc_slug=calculator_slug_from_go_params(go_params),
+    )
     if output_root is None:
         logger.info("No output_dir provided; using default campaign root %s", path)
     return path
@@ -445,6 +452,31 @@ def _default_go_ts_output_path(
 
 def _log_completion(kind: str, *, elapsed_s: float, details: str) -> None:
     logger.info("%s completed in %.2f s (%s)", kind, elapsed_s, details)
+
+
+def format_completion_details(
+    *,
+    compositions: int | None = None,
+    minima: int | None = None,
+    successful_nebs: tuple[int, int] | None = None,
+    output_dir: str | Path | None = None,
+) -> str:
+    """Build a uniform ``details=`` string for :func:`_log_completion`.
+
+    Fields are always rendered in the same order (``compositions``, ``minima``,
+    ``successful_nebs``, ``output_dir``) and omitted when not applicable.
+    """
+    parts: list[str] = []
+    if compositions is not None:
+        parts.append(f"compositions={compositions}")
+    if minima is not None:
+        parts.append(f"minima={minima}")
+    if successful_nebs is not None:
+        ok, total = successful_nebs
+        parts.append(f"successful_nebs={ok}/{total}")
+    if output_dir is not None:
+        parts.append(f"output_dir={output_dir}")
+    return " ".join(parts)
 
 
 def _as_int_seed(label: str, value: Any) -> int:
@@ -617,7 +649,14 @@ def _prepare_run_go_context(
         surface_config=surface_config,
         params=eff_params,
     )
-    searches_dir = str(resolve_go_searches_dir(output_dir, path_key))
+    # ``run_go``'s ``output_dir`` *is* the ``{path_key}_searches`` directory; the
+    # shared campaign root is its parent.
+    campaign_root = resolve_campaign_root_from_args(output_dir, path_key=path_key)
+    searches_dir = str(
+        resolve_go_searches_dir(output_dir, path_key)
+        if output_dir is not None
+        else formula_searches_dir(campaign_root, path_key)
+    )
     return RunGOContext(
         composition=comp,
         system_type=st,
@@ -681,21 +720,15 @@ def _prepare_run_go_campaign_context(
             adsorbate_fragment_template=eff_params.get("adsorbate_fragment_template"),
         )
     out_path = _resolved_path(output_dir)
-    campaign_root = (
-        str(Path(out_path).expanduser().resolve())
-        if out_path is not None
-        else str(
-            resolve_go_searches_dir(
-                None,
-                resolve_run_path_key(
-                    full_compositions[0],
-                    system_type=st,
-                    adsorbate_definition=ads_def,
-                    surface_config=surface_config,
-                    params=eff_params,
-                ),
-            ).parent
-        )
+    campaign_path_key = resolve_run_path_key(
+        full_compositions[0],
+        system_type=st,
+        adsorbate_definition=ads_def,
+        surface_config=surface_config,
+        params=eff_params,
+    )
+    campaign_root = str(
+        resolve_campaign_root_from_args(output_dir, path_key=campaign_path_key)
     )
     return RunGOCampaignContext(
         compositions=full_compositions,

@@ -496,10 +496,12 @@ def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
         system_type="gas_cluster",
     )
     assert len(calls) == 2
+    # Unified sibling layout: each composition runs against the shared campaign
+    # root (no ``{path_key}_campaign/`` wrapper).
     assert calls[0][0] == ["Pt", "Pt"]
-    assert calls[0][1] == root / "Pt2_campaign"
+    assert calls[0][1] == root
     assert calls[1][0] == ["Au", "Au"]
-    assert calls[1][1] == root / "Au2_campaign"
+    assert calls[1][1] == root
 
 
 def test_run_go_ts_campaign_requires_system_type():

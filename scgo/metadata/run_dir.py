@@ -27,10 +27,15 @@ class RunDirJSONEncoder(json.JSONEncoder):
 
 @dataclass
 class RunDirRecord:
-    """Per-run params/composition snapshot written to ``metadata.json``."""
+    """Per-run params/composition snapshot written to ``metadata.json``.
+
+    ``path_key`` is the component-aware directory identity (see
+    :func:`scgo.utils.path_keys.resolve_run_path_key`). The single run timestamp
+    is the provenance header's ``created_at``; this record carries no timestamp.
+    """
 
     run_id: str
-    timestamp: str
+    path_key: str | None = None
     composition: list[str] | None = None
     formula: str | None = None
     params: dict[str, Any] | None = None
@@ -41,10 +46,15 @@ class RunDirRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RunDirRecord:
-        """Create record from dictionary (ignores provenance header keys)."""
+        """Create record from a ``metadata.json`` payload.
+
+        Raises:
+            KeyError: when ``run_id`` or ``path_key`` is missing.
+            TypeError: when ``data`` is not a mapping.
+        """
         return cls(
             run_id=data["run_id"],
-            timestamp=data["timestamp"],
+            path_key=data["path_key"],
             composition=data.get("composition"),
             formula=data.get("formula"),
             params=data.get("params"),
@@ -85,7 +95,12 @@ def save_run_dir_record(
     run_id: str,
     record: dict[str, Any] | None = None,
 ) -> None:
-    """Save run directory record to ``metadata.json``."""
+    """Save run directory record to ``metadata.json``.
+
+    ``record`` should carry ``path_key`` (the component-aware directory
+    identity); it is required for the record to be readable back via
+    :func:`load_run_dir_record`.
+    """
     os.makedirs(run_dir, exist_ok=True)
 
     composition = record.get("composition") if record else None
@@ -95,7 +110,7 @@ def save_run_dir_record(
 
     record_obj = RunDirRecord(
         run_id=run_id,
-        timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        path_key=record.get("path_key") if record else None,
         composition=composition,
         formula=formula,
         params=record.get("params") if record else None,
@@ -109,7 +124,12 @@ def save_run_dir_record(
 
 
 def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
-    """Load run directory record from ``metadata.json``."""
+    """Load run directory record from ``metadata.json``.
+
+    Returns ``None`` only when the file is missing or is not parseable JSON.
+    Schema violations (missing ``run_id`` / ``path_key``) propagate from
+    :meth:`RunDirRecord.from_dict`.
+    """
     metadata_file = os.path.join(run_dir, "metadata.json")
     if not os.path.exists(metadata_file):
         return None
@@ -117,10 +137,12 @@ def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
     try:
         with open(metadata_file) as f:
             data = json.load(f)
-        return RunDirRecord.from_dict(data)
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logger.warning("Failed to load run dir record from %s: %s", metadata_file, e)
+    except FileNotFoundError:
         return None
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to parse run dir record %s: %s", metadata_file, e)
+        return None
+    return RunDirRecord.from_dict(data)
 
 
 def get_run_directories(base_output_dir: str) -> list[str]:

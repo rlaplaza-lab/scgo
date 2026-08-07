@@ -36,6 +36,7 @@ from scgo.runner_params import (
     _validate_go_ts_surface_config,
     _with_surface_in_optimizers,
     _with_system_type_in_optimizer_params,
+    format_completion_details,
     resolve_run_path_key,
     resolve_workflow_seed,
 )
@@ -58,7 +59,11 @@ from scgo.ts_search.transition_state_run import (
 )
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
-from scgo.utils.output_paths import resolve_go_ts_pipeline_paths
+from scgo.utils.output_paths import (
+    calculator_slug_from_go_params,
+    resolve_campaign_root_from_args,
+    resolve_go_ts_pipeline_paths,
+)
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
@@ -122,7 +127,7 @@ def _run_go_ts_pipeline(
         params=go_params,
     )
     output_path = (
-        Path(output_dir).expanduser().resolve()
+        resolve_campaign_root_from_args(output_dir, path_key=path_key)
         if output_dir is not None
         else _default_go_ts_output_path(
             composition,
@@ -425,15 +430,23 @@ def run_go_ts_campaign(
         system_type=st,
         surface_config=surface_config,
     )
-    parent = _resolved_path(output_dir) or _default_go_ts_output_path(
-        full_compositions[0],
-        go_params=go_mat,
-        output_stem=output_stem or "go_ts_campaign",
+    campaign_root = resolve_campaign_root_from_args(
+        output_dir,
         output_root=output_root,
-        system_type=st,
-        adsorbate_definition=ads_def,
-        surface_config=surface_config,
+        output_stem=output_stem or "go_ts_campaign",
+        path_key=resolve_run_path_key(
+            full_compositions[0],
+            system_type=st,
+            adsorbate_definition=ads_def,
+            surface_config=surface_config,
+            params=go_local,
+        ),
+        calc_slug=calculator_slug_from_go_params(go_mat),
     )
+    if output_dir is None and output_root is None:
+        logger.info(
+            "No output_dir provided; using default campaign root %s", campaign_root
+        )
     out: dict[str, dict[str, Any]] = {}
     t0 = perf_counter()
     for comp in full_compositions:
@@ -451,7 +464,10 @@ def run_go_ts_campaign(
             ts_kwargs=ts_kwargs,
             seed=eff_seed,
             verbosity=verbosity,
-            output_dir=parent / f"{path_key}_campaign",
+            # Sibling layout, same as ``run_go_ts``: the campaign root is shared
+            # and each composition gets ``{root}/{path_key}_searches`` +
+            # ``{root}/{path_key}_ts_results``.
+            output_dir=campaign_root,
             adsorbate_definition=ads_def,
         )
         out[path_key] = _execute_run_go_ts(context)
@@ -461,7 +477,11 @@ def run_go_ts_campaign(
         _log_completion(
             "run_go_ts_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(out)} successful_nebs={ok}/{total}",
+            details=format_completion_details(
+                compositions=len(out),
+                successful_nebs=(ok, total),
+                output_dir=campaign_root,
+            ),
         )
     return out
 
@@ -526,7 +546,10 @@ def run_ts_search(
         _log_completion(
             "run_ts_search",
             elapsed_s=perf_counter() - t0,
-            details=f"successful_nebs={ok}/{len(results)} output_dir={context.output_dir}",
+            details=format_completion_details(
+                successful_nebs=(ok, len(results)),
+                output_dir=context.output_dir,
+            ),
         )
     return results
 
@@ -603,7 +626,11 @@ def run_ts_campaign(
         _log_completion(
             "run_ts_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(campaign)} successful_nebs={ok}/{total}",
+            details=format_completion_details(
+                compositions=len(campaign),
+                successful_nebs=(ok, total),
+                output_dir=out_path,
+            ),
         )
     return campaign
 

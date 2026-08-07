@@ -97,10 +97,11 @@ def test_oh_relax_reports_connected_structure_emt() -> None:
     assert info["structure_ok_initial"] is True
     assert info["structure_ok_final"] is True
     assert "oh_distance" in info
-    prov = info["output_provenance"]
-    assert prov["cluster_adsorbate_schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
-    assert prov["calculator_class"] == "EMT"
-    assert prov["n_frag"] == 2
+    # Provenance is flattened into ``info`` (no nested ``output_provenance``).
+    assert "output_provenance" not in info
+    assert info["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
+    assert info["calculator_class"] == "EMT"
+    assert info["n_frag"] == 2
     assert_pt_o_distance_reasonable(relaxed, pt_idx=0, o_idx=2)
 
 

@@ -1,8 +1,16 @@
-"""Campaign output directory layout for global optimization and TS search."""
+"""Campaign output directory layout for global optimization and TS search.
+
+Every runner resolves a single **campaign root**. GO artifacts live in
+``{root}/{path_key}_searches/`` and TS artifacts in
+``{root}/{path_key}_ts_results/`` as siblings.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+_ROOT_SUFFIXES: tuple[str, ...] = ("_searches", "_ts_results")
 
 
 def formula_searches_dir(root: str | Path, formula: str) -> Path:
@@ -15,21 +23,58 @@ def formula_ts_results_dir(root: str | Path, formula: str) -> Path:
     return Path(root) / f"{formula}_ts_results"
 
 
+def calculator_slug_from_go_params(go_params: dict[str, Any] | None) -> str:
+    """Return the lowercase calculator slug used in default campaign-root names."""
+    c = str((go_params or {}).get("calculator", "MACE")).strip().upper()
+    if c in ("MACE", "UMA"):
+        return c.lower()
+    return c.lower() or "calc"
+
+
+def resolve_campaign_root_from_args(
+    output_dir: str | Path | None,
+    *,
+    output_root: str | Path | None = None,
+    output_stem: str | None = None,
+    path_key: str,
+    calc_slug: str | None = None,
+) -> Path:
+    """Resolve the single campaign root shared by every runner.
+
+    Resolution order:
+
+    - ``output_dir`` given: a ``*_searches`` / ``*_ts_results`` path resolves to
+      its parent; anything else is the campaign root itself.
+    - ``output_root`` or ``output_stem`` given: build the ``go_ts``-style default
+      ``{output_root or ./scgo_runs}/{output_stem or path_key}_{calc_slug}``.
+    - neither: the current working directory.
+    """
+    if output_dir is not None:
+        candidate = Path(output_dir).expanduser().resolve()
+        if candidate.name.endswith(_ROOT_SUFFIXES):
+            return candidate.parent
+        return candidate
+    if output_root is not None or output_stem is not None:
+        base = (
+            Path(output_root).expanduser().resolve()
+            if output_root is not None
+            else (Path.cwd() / "scgo_runs").resolve()
+        )
+        stem = output_stem or path_key
+        slug = calc_slug or calculator_slug_from_go_params(None)
+        return (base / f"{stem}_{slug}").resolve()
+    return Path.cwd().resolve()
+
+
 def resolve_campaign_root(
     output_dir: str | Path | None,
 ) -> Path:
-    """Resolve campaign root from ``output_dir``.
+    """Resolve campaign root from ``output_dir`` alone (discovery entry point).
 
-    When ``output_dir`` is ``None``, use the current working directory.
-    When ``output_dir`` ends with ``_searches``, use its parent as the
-    campaign root. Otherwise treat ``output_dir`` as the campaign root.
+    Thin wrapper over :func:`resolve_campaign_root_from_args` for callers that
+    have no ``path_key`` / ``output_root`` / ``output_stem`` context.
     """
-    if output_dir is None:
-        return Path.cwd().resolve()
-    candidate = Path(output_dir).expanduser().resolve()
-    if candidate.name.endswith("_searches"):
-        return candidate.parent
-    return candidate
+    return resolve_campaign_root_from_args(output_dir, path_key="")
 
 
 def resolve_minima_dir(
@@ -66,17 +111,17 @@ def resolve_ts_campaign_paths(
     if explicit_searches is not None:
         campaign_root = explicit_searches.parent
         minima_dir = explicit_searches
-    elif output_dir is not None:
-        candidate = Path(output_dir).expanduser().resolve()
-        if candidate.name.endswith("_searches"):
-            minima_dir = candidate
-            campaign_root = candidate.parent
-        else:
-            campaign_root = candidate
-            minima_dir = formula_searches_dir(campaign_root, path_key_formula)
     else:
-        campaign_root = Path.cwd().resolve()
-        minima_dir = formula_searches_dir(campaign_root, path_key_formula)
+        campaign_root = resolve_campaign_root_from_args(
+            output_dir, path_key=path_key_formula
+        )
+        candidate = (
+            Path(output_dir).expanduser().resolve() if output_dir is not None else None
+        )
+        if candidate is not None and candidate.name.endswith("_searches"):
+            minima_dir = candidate
+        else:
+            minima_dir = formula_searches_dir(campaign_root, path_key_formula)
 
     ts_results_root = formula_ts_results_dir(campaign_root, path_key_formula)
     return campaign_root, minima_dir, ts_results_root
