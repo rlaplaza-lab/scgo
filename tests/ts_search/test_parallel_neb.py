@@ -1054,9 +1054,7 @@ def test_parallel_neb_falls_back_to_bare_step_for_plain_optimizer(
 # ---------------------------------------------------------------------------
 
 
-def test_parallel_neb_force_calls_match_batch_participations(
-    cu3_triangle, cu3_linear
-):
+def test_parallel_neb_force_calls_match_batch_participations(cu3_triangle, cu3_linear):
     """B2: each band counts exactly one force call per batch it participates in."""
     relaxer = _SteppingCountingRelaxer()
     images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
@@ -1091,9 +1089,7 @@ def test_parallel_neb_does_not_double_count_force_calls(cu3_triangle, cu3_linear
     assert neb.get_force_calls() == before
 
 
-def test_serial_torchsim_neb_still_counts_its_own_force_calls(
-    cu3_triangle, cu3_linear
-):
+def test_serial_torchsim_neb_still_counts_its_own_force_calls(cu3_triangle, cu3_linear):
     """The serial fallback keeps owning force_calls (no ParallelNEBBatch)."""
     relaxer = _CountingFakeRelaxer()
     images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")

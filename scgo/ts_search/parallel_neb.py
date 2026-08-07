@@ -174,7 +174,6 @@ class ParallelNEBBatch:
         else:
             optimizer.step()
 
-
     def run_optimization(
         self,
         fmax: float = 0.05,
