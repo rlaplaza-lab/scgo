@@ -19,6 +19,9 @@ from scgo.constants import (
     DEFAULT_NEB_TANGENT_METHOD,
 )
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.provenance import is_cuda_oom_error
+from scgo.metadata.run_dir import ensure_run_id, save_run_dir_record
+from scgo.param_presets import get_ts_defaults
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
@@ -48,7 +51,6 @@ from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import cleanup_torch_cuda, get_calculator_class
-from scgo.utils.run_tracking import ensure_run_id, save_run_metadata
 from scgo.utils.timing_report import (
     build_timing_payload,
     log_timing_summary,
@@ -56,7 +58,6 @@ from scgo.utils.timing_report import (
     write_timing_file,
 )
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
-from scgo.utils.ts_provenance import is_cuda_oom_error
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 from scgo.utils.validation import validate_composition
 
@@ -456,14 +457,14 @@ def run_transition_state_search(
     seed: int | None = None,
     verbosity: int = 1,
     max_pairs: int | None = None,
-    energy_gap_threshold: float | None = 1.0,
+    energy_gap_threshold: float | None = None,
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
     similarity_pair_cor_max: float = 0.1,
-    neb_n_images: int = 3,
+    neb_n_images: int | None = None,
     neb_spring_constant: float = 0.1,
     neb_fmax: float = 0.20,
     neb_steps: int | str = "auto",
-    neb_climb: bool = False,
+    neb_climb: bool | None = None,
     neb_interpolation_method: str = "idpp",
     neb_align_endpoints: bool = True,
     neb_perturb_sigma: float = 0.0,
@@ -502,9 +503,10 @@ def run_transition_state_search(
     TorchSim NEB for every system type; bare gas uses 5 images; adsorbates use
     7 images, climb, and ``energy_gap_threshold=0.75``. Signature ``neb_fmax``
     matches those presets; ``use_parallel_neb`` defaults to ``True`` whenever
-    TorchSim is enabled (``None`` → on with TorchSim, off without). Other knobs
-    (image count, climb, energy gap) still use a minimal low-level fallback
-    when calling this function directly without presets.
+    TorchSim is enabled (``None`` → on with TorchSim, off without). When
+    ``neb_n_images``, ``neb_climb``, or ``energy_gap_threshold`` are omitted
+    (``None``), values are taken from :func:`~scgo.param_presets.get_ts_defaults`
+    and the same adsorbate-aware gap rule as ``get_ts_search_params``.
 
     Args:
         composition: List of atomic symbols for the mobile region. For high-level
@@ -526,16 +528,18 @@ def run_transition_state_search(
         verbosity: Logging verbosity (0=quiet, 1=normal, 2=debug, 3=trace). Default 1.
         max_pairs: Maximum number of structure pairs to evaluate. If None, evaluates all pairs.
         energy_gap_threshold: Only pair structures with energy gap below this threshold (eV).
-            Low-level default ``1.0``; presets use ``2.0`` (bare) / ``0.75`` (adsorbate).
+            ``None`` selects the system-aware preset (``2.0`` bare / ``0.75`` adsorbate).
+            Pass ``float("inf")`` to disable the gap filter.
         similarity_tolerance: Cumulative difference tolerance for structure comparison.
         similarity_pair_cor_max: Maximum single distance difference tolerance for similarity.
-        neb_n_images: Number of intermediate NEB images. Low-level default ``3``;
-            presets use ``5`` (bare) / ``7`` (adsorbate).
+        neb_n_images: Number of intermediate NEB images. ``None`` selects the
+            system-aware preset (``5`` bare / ``7`` adsorbate).
         neb_spring_constant: Spring constant for NEB band (eV/Ų). Default 0.1.
         neb_fmax: Maximum force convergence for NEB (eV/Å). Default 0.20
             (shared across system types; same as presets).
         neb_steps: Maximum NEB optimization steps. Default 'auto' (resolved with auto_niter_ts).
-        neb_climb: Use climbing image NEB for better TS convergence. Default False.
+        neb_climb: Use climbing image NEB for better TS convergence. ``None``
+            selects the system-aware preset (``False`` bare / ``True`` adsorbate).
         neb_interpolation_method: Path interpolation method ('idpp' or 'linear'). Default 'idpp'.
         neb_interpolation_mic: If True, use minimum-image convention for NEB path
             interpolation. Use for periodic cells (e.g. slabs). Default False.
@@ -573,6 +577,13 @@ def run_transition_state_search(
     )
 
     system_policy = get_system_policy(system_type)
+    ts_defaults = get_ts_defaults(system_type)
+    if neb_n_images is None:
+        neb_n_images = int(ts_defaults["neb_n_images"])
+    if neb_climb is None:
+        neb_climb = bool(ts_defaults["neb_climb"])
+    if energy_gap_threshold is None:
+        energy_gap_threshold = 0.75 if system_policy.has_adsorbate else 2.0
     validate_composition(
         composition,
         allow_empty=system_policy.slab_is_search_target
@@ -830,10 +841,10 @@ def run_transition_state_search(
     run_dir = ts_results_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    save_run_metadata(
+    save_run_dir_record(
         str(run_dir),
         run_id,
-        metadata={
+        record={
             "composition": list(composition),
             "formula": formula,
             "params": run_context,

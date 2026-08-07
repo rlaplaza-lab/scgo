@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import pytest
 from ase import Atoms
 
@@ -31,7 +30,7 @@ from scgo.system_types import (
     build_adsorbate_definition_from_inputs,
     get_system_policy,
 )
-from tests.test_utils import assert_supported_cluster_binding
+from tests.test_utils import assert_e2e_go_ts_summary
 
 SEED = 42
 
@@ -84,6 +83,7 @@ class GpuExampleCase:
     n_core_mobile: int = 5
     adsorbate_fragment_lengths: list[int] | None = None
     check_supported_binding: bool = True
+    require_ts_candidates: bool = False
 
 
 def _graphite_config() -> SurfaceSystemConfig:
@@ -112,8 +112,10 @@ GPU_EXAMPLE_CASES = [
     # example_pt5_gas.py: NITER=10, POPULATION_SIZE=50, MAX_PAIRS=15
     GpuExampleCase(
         system_type="gas_cluster",
-        ga_overrides={"niter": 3, "population_size": 7},
+        ga_overrides={"niter": 4, "population_size": 10},
         ts_overrides={"max_pairs": 2, "neb_steps": 70},
+        # Gas CI budgets often leave TS with no on-disk pairs (prefer_final load);
+        # surface cluster cases keep require_ts_candidates=True.
     ),
     # example_pt5_graphite.py: NITER=6, POPULATION_SIZE=24, MAX_PAIRS=10
     GpuExampleCase(
@@ -122,6 +124,7 @@ GPU_EXAMPLE_CASES = [
         connectivity_factor=CONNECTIVITY,
         ga_overrides={"niter": 2, "population_size": 6},
         ts_overrides={"max_pairs": 2, "neb_steps": 90},
+        require_ts_candidates=True,
     ),
     # example_pt5_oh_gas.py: NITER=8, POPULATION_SIZE=40, MAX_PAIRS=12
     GpuExampleCase(
@@ -129,7 +132,7 @@ GPU_EXAMPLE_CASES = [
         adsorbates=_adsorbates_oh(n=1),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
-        ga_overrides={"niter": 3, "population_size": 6},
+        ga_overrides={"niter": 4, "population_size": 8},
         ts_overrides={"max_pairs": 2, "neb_steps": 70},
         expected_mobile_atoms=7,
         adsorbate_fragment_lengths=[2],
@@ -146,6 +149,7 @@ GPU_EXAMPLE_CASES = [
         extra_ts={"energy_gap_threshold": 1.0},
         expected_mobile_atoms=9,
         adsorbate_fragment_lengths=[2, 2],
+        require_ts_candidates=True,
     ),
     # example_defected_graphite.py: NITER=4, POP=16, MAX_PAIRS=4
     GpuExampleCase(
@@ -249,48 +253,19 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
         log_summary=False,
     )
 
-    assert isinstance(summary, dict)
-    for key in (
-        "formula",
-        "minima_by_formula",
-        "ts_results",
-        "ts_total_count",
-        "ts_success_count",
-    ):
-        assert key in summary
-
-    expected_formula = _expected_formula(case)
-    assert summary["formula"] == expected_formula
-    minima = summary["minima_by_formula"][expected_formula]
-    assert len(minima) >= 1
-    assert all(np.isfinite(energy) for energy, _atoms in minima)
-
-    db_files = list(output_dir.glob("**/*.db"))
-    assert db_files, "No database files found after run_go_ts"
-
-    _energy, best = minima[0]
-    n_slab = len(case.surface_config.slab) if case.surface_config is not None else 0
-    assert len(best) == n_slab + case.expected_mobile_atoms
-
-    if (
-        case.surface_config is not None
-        and case.check_supported_binding
-        and get_system_policy(case.system_type).needs_supported_deposit_validation
-    ):
-        assert_supported_cluster_binding(
-            best,
-            case.surface_config,
-            n_core_mobile=case.n_core_mobile,
-            adsorbate_fragment_lengths=case.adsorbate_fragment_lengths,
-            connectivity_factor=go_params["connectivity_factor"],
-        )
-
-    assert summary["ts_total_count"] >= 0
-    for result in summary["ts_results"]:
-        assert isinstance(result, dict)
-        assert "pair_id" in result
-        assert "status" in result
-        if result.get("status") == "success":
-            barrier = result.get("barrier_height")
-            assert barrier is not None
-            assert np.isfinite(float(barrier))
+    assert_e2e_go_ts_summary(
+        summary,
+        expected_formula=_expected_formula(case),
+        expected_mobile_atoms=case.expected_mobile_atoms,
+        output_dir=output_dir,
+        surface_config=case.surface_config,
+        n_core_mobile=case.n_core_mobile,
+        adsorbate_fragment_lengths=case.adsorbate_fragment_lengths,
+        connectivity_factor=go_params.get("connectivity_factor"),
+        check_supported_binding=(
+            case.check_supported_binding
+            and case.surface_config is not None
+            and get_system_policy(case.system_type).needs_supported_deposit_validation
+        ),
+        require_ts_candidates=case.require_ts_candidates,
+    )

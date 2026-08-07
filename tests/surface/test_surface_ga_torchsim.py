@@ -7,7 +7,7 @@ from ase.calculators.emt import EMT
 
 from scgo.algorithms import ga_go
 from scgo.database import get_connection
-from scgo.database.metadata import get_metadata
+from scgo.metadata.atoms import get_tag
 
 
 class PartiallyDisconnectingRelaxer:
@@ -62,12 +62,12 @@ def test_ga_go_disconnected_rows_persist_but_are_ineligible(
     assert isinstance(minima, list)
     assert len(minima) >= 1
     for _energy, atoms in minima:
-        assert bool(get_metadata(atoms, "ga_eligible", default=True))
+        assert bool(get_tag(atoms, "ga_eligible", default=True))
 
     with get_connection(str(out / "ga_go.db")) as da:
         rows = da.get_all_relaxed_candidates()
     assert rows
-    assert any(not bool(get_metadata(row, "ga_eligible", default=True)) for row in rows)
+    assert any(not bool(get_tag(row, "ga_eligible", default=True)) for row in rows)
 
 
 @pytest.mark.requires_mace

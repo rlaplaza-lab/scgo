@@ -33,7 +33,7 @@ def test_setup_diversity_scorer_uses_base_dir(tmp_path, rng):
         a.info["key_value_pairs"] = {"raw_score": -30.0 - i}
         a.info["data"] = {"tag": f"test_{i}"}
         if i == 0:
-            a.info.setdefault("metadata", {})["final_unique_minimum"] = True
+            a.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             a.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
         da.add_relaxed_step(a)
 

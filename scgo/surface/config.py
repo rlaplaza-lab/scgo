@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
 
 from ase import Atoms
 
@@ -13,7 +12,6 @@ from scgo.exceptions import (
 )
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.pbc import normalize_slab_pbc
-from scgo.utils.config_aliases import _UNSET, resolve_aliased_float
 from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_positive
 
@@ -35,7 +33,7 @@ def validate_surface_name(name: str) -> str:
     return cleaned
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class SurfaceSystemConfig:
     """Describe a fixed slab plus a movable adsorbate cluster for GA.
 
@@ -47,8 +45,6 @@ class SurfaceSystemConfig:
     identical slab ``FixAtoms`` policy as local relaxation.
     At runtime, :func:`scgo.surface.validation.validate_surface_config_slab_prefix`
     checks that combined systems still begin with ``slab``'s symbols in order.
-
-    Height may be set via ``adsorption_height_*`` or alias ``height_*``.
 
     **Slab motion during local relaxation** (three common modes; ``L`` is the
     number of distinct slab coordinate layers along ``surface_normal_axis``):
@@ -74,88 +70,23 @@ class SurfaceSystemConfig:
     """
 
     slab: Atoms
-    name: str
-    adsorption_height_min: float
-    adsorption_height_max: float
-    surface_normal_axis: int
-    fix_all_slab_atoms: bool
-    n_fix_bottom_slab_layers: int | None
-    n_relax_top_slab_layers: int | None
-    comparator_use_mic: bool
-    cluster_init_vacuum: float
-    init_mode: str
-    max_placement_attempts: int
-    structure_connectivity_factor: float
-
-    def __init__(
-        self,
-        slab: Atoms,
-        *,
-        name: str = DEFAULT_SURFACE_NAME,
-        adsorption_height_min: Any = _UNSET,
-        adsorption_height_max: Any = _UNSET,
-        height_min: Any = _UNSET,
-        height_max: Any = _UNSET,
-        surface_normal_axis: int = 2,
-        fix_all_slab_atoms: bool = True,
-        n_fix_bottom_slab_layers: int | None = None,
-        n_relax_top_slab_layers: int | None = None,
-        comparator_use_mic: bool = True,
-        cluster_init_vacuum: float = 8.0,
-        init_mode: str = "smart",
-        max_placement_attempts: int = 200,
-        structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
-    ) -> None:
-        object.__setattr__(self, "slab", slab)
-        object.__setattr__(self, "name", validate_surface_name(name))
-        object.__setattr__(
-            self,
-            "adsorption_height_min",
-            resolve_aliased_float(
-                "adsorption_height_min",
-                adsorption_height_min,
-                "height_min",
-                height_min,
-                1.2,
-            ),
-        )
-        object.__setattr__(
-            self,
-            "adsorption_height_max",
-            resolve_aliased_float(
-                "adsorption_height_max",
-                adsorption_height_max,
-                "height_max",
-                height_max,
-                3.0,
-            ),
-        )
-        object.__setattr__(self, "surface_normal_axis", surface_normal_axis)
-        object.__setattr__(self, "fix_all_slab_atoms", fix_all_slab_atoms)
-        object.__setattr__(self, "n_fix_bottom_slab_layers", n_fix_bottom_slab_layers)
-        object.__setattr__(self, "n_relax_top_slab_layers", n_relax_top_slab_layers)
-        object.__setattr__(self, "comparator_use_mic", comparator_use_mic)
-        object.__setattr__(self, "cluster_init_vacuum", cluster_init_vacuum)
-        object.__setattr__(self, "init_mode", init_mode)
-        object.__setattr__(self, "max_placement_attempts", max_placement_attempts)
-        object.__setattr__(
-            self, "structure_connectivity_factor", structure_connectivity_factor
-        )
-        self.__post_init__()
-
-    @property
-    def height_min(self) -> float:
-        """Alias for :attr:`adsorption_height_min`."""
-        return self.adsorption_height_min
-
-    @property
-    def height_max(self) -> float:
-        """Alias for :attr:`adsorption_height_max`."""
-        return self.adsorption_height_max
+    name: str = DEFAULT_SURFACE_NAME
+    adsorption_height_min: float = 1.2
+    adsorption_height_max: float = 3.0
+    surface_normal_axis: int = 2
+    fix_all_slab_atoms: bool = True
+    n_fix_bottom_slab_layers: int | None = None
+    n_relax_top_slab_layers: int | None = None
+    comparator_use_mic: bool = True
+    cluster_init_vacuum: float = 8.0
+    init_mode: str = "smart"
+    max_placement_attempts: int = 200
+    structure_connectivity_factor: float = CONNECTIVITY_FACTOR
 
     def __post_init__(self) -> None:
         # Copy slab so post-init pbc adjustments do not mutate a shared Atoms.
         object.__setattr__(self, "slab", self.slab.copy())
+        object.__setattr__(self, "name", validate_surface_name(self.name))
         slab = self.slab
         if self.surface_normal_axis not in (0, 1, 2):
             raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")

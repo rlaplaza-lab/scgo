@@ -13,14 +13,10 @@ from scgo.constants import (
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_PAIR_COR_MAX,
 )
-from scgo.exceptions import (
-    SCGORuntimeError,
-    SCGOValidationError,
-)
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
-    SYSTEM_TYPE_POLICIES,
     GLOptimizerParams,
     SystemType,
     get_system_policy,
@@ -81,7 +77,7 @@ _TS_NEB_FMAX: float = 0.20
 # `neb_interpolation_mic` coherent with `SystemPolicy.neb_disable_alignment` /
 # `neb_force_mic` (an import-time assertion below guards against drift). Other
 # knobs (n_images, steps, climb, pairing gates, ...) are independent per type.
-# ``neb_fmax`` / ``torchsim_fmax`` are always ``_TS_NEB_FMAX`` (asserted below).
+# ``neb_fmax`` / ``torchsim_fmax`` are always ``_TS_NEB_FMAX`` (enforced in tests).
 _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_align_endpoints": True,
     "neb_interpolation_mic": False,
@@ -161,55 +157,6 @@ TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "surface": dict(_SURFACE_TS_NEB_DEFAULTS),
     "surface_adsorbate": dict(_SURFACE_ADSORBATE_TS_NEB_DEFAULTS),
 }
-
-
-def _assert_ts_defaults_match_system_policies() -> None:
-    """Guard against drift between TS defaults and ``SystemPolicy`` flags."""
-    missing = set(SYSTEM_TYPE_POLICIES) - set(TS_DEFAULTS_BY_SYSTEM_TYPE)
-    extra = set(TS_DEFAULTS_BY_SYSTEM_TYPE) - set(SYSTEM_TYPE_POLICIES)
-    if missing or extra:
-        raise SCGORuntimeError(
-            "TS_DEFAULTS_BY_SYSTEM_TYPE keys must match SYSTEM_TYPE_POLICIES "
-            f"(missing={sorted(missing)!r}, extra={sorted(extra)!r})."
-        )
-    for st, defaults in TS_DEFAULTS_BY_SYSTEM_TYPE.items():
-        policy = SYSTEM_TYPE_POLICIES[st]
-        expected_align = not policy.neb_disable_alignment
-        if defaults["neb_align_endpoints"] is not expected_align:
-            raise SCGORuntimeError(
-                f'TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]["neb_align_endpoints"]='
-                f"{defaults['neb_align_endpoints']!r} disagrees with "
-                f"SystemPolicy.neb_disable_alignment={policy.neb_disable_alignment!r}."
-            )
-        if defaults["neb_interpolation_mic"] != policy.neb_force_mic:
-            raise SCGORuntimeError(
-                f'TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}]["neb_interpolation_mic"]='
-                f"{defaults['neb_interpolation_mic']!r} disagrees with "
-                f"SystemPolicy.neb_force_mic={policy.neb_force_mic!r}."
-            )
-        for key in ("neb_surface_cell_remap", "neb_surface_lattice_rotation"):
-            if defaults.get(key, False) != getattr(policy, key):
-                raise SCGORuntimeError(
-                    f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}][{key!r}]="
-                    f"{defaults.get(key)!r} disagrees with "
-                    f"SystemPolicy.{key}={getattr(policy, key)!r}."
-                )
-        for key in ("neb_fmax", "torchsim_fmax"):
-            if float(defaults[key]) != float(_TS_NEB_FMAX):
-                raise SCGORuntimeError(
-                    f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}][{key!r}]="
-                    f"{defaults[key]!r} must equal shared _TS_NEB_FMAX="
-                    f"{_TS_NEB_FMAX!r} (force convergence is not per-type)."
-                )
-        if float(defaults["neb_fmax"]) != float(defaults["torchsim_fmax"]):
-            raise SCGORuntimeError(
-                f"TS_DEFAULTS_BY_SYSTEM_TYPE[{st!r}] neb_fmax="
-                f"{defaults['neb_fmax']!r} != torchsim_fmax="
-                f"{defaults['torchsim_fmax']!r}."
-            )
-
-
-_assert_ts_defaults_match_system_policies()
 
 
 @cache

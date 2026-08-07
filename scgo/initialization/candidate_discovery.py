@@ -18,13 +18,13 @@ from ase import Atoms
 
 from scgo.database.cache import get_global_cache
 from scgo.database.helpers import extract_minima_from_database_file
-from scgo.database.metadata import get_metadata as _get_db_metadata
+from scgo.metadata.atoms import get_tag as _get_db_tag
+from scgo.metadata.run_dir import resolve_run_id_from_db_path
 from scgo.utils.helpers import (
     get_cluster_formula,
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.run_tracking import resolve_run_id_from_db_path
 
 from .initialization_config import (
     _COMPOSITION_CACHE_NS,
@@ -137,9 +137,9 @@ def _symbols_from_formula_segment(segment: str) -> list[str] | None:
 def _parse_composition_from_path(path: str) -> list[str] | None:
     """Parse mobile composition from a ``*_searches`` directory path.
 
-    Supports both legacy ASE formulas (``H2O2Pt5_searches``) and component
-    path keys (``Pt5_OH_OH_graphite_searches``). Non-formula tokens such as
-    surface names (``graphite``, ``slab``) are skipped.
+    Accepts component path keys (``Pt5_OH_OH_graphite_searches``) and pure
+    cluster formulas (``Pt5_searches``, ``Au2Pt3_searches``). Non-formula tokens
+    such as surface names (``graphite``, ``slab``) are skipped.
     """
     parts = path.split(os.sep)
     for part in parts:
@@ -294,7 +294,7 @@ def _find_smaller_candidates(
         stale_cache = False
         for entries in cached_entry.values():
             for _energy, atom in entries:
-                if not _get_db_metadata(atom, "final_unique_minimum", False):
+                if not _get_db_tag(atom, "final_unique_minimum", False):
                     stale_cache = True
                     break
             if stale_cache:
@@ -319,7 +319,7 @@ def _find_smaller_candidates(
             continue
 
         for symbols, energy, atoms in entries:
-            if not _get_db_metadata(atoms, "final_unique_minimum", False):
+            if not _get_db_tag(atoms, "final_unique_minimum", False):
                 continue
 
             if len(symbols) >= n_target_atoms:

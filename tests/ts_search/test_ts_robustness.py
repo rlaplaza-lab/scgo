@@ -62,7 +62,7 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
     from ase.calculators.emt import EMT
     from ase_ga.data import DataConnection
 
-    from scgo.database.metadata import add_metadata, update_metadata
+    from scgo.metadata.atoms import set_tags
 
     # Create a minimal mock database directory with a few relaxed minima
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -76,7 +76,7 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
         atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
         atoms1.center(vacuum=5.0)
         atoms1.calc = EMT()
-        add_metadata(atoms1, raw_score=-10.0)
+        set_tags(atoms1, raw_score=-10.0)
         atoms1.info["confid"] = 1
         db.add_unrelaxed_candidate(atoms1, description="Cu2_linear")
 
@@ -84,7 +84,7 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
         atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [1.8, 1.8, 0]])
         atoms2.center(vacuum=5.0)
         atoms2.calc = EMT()
-        add_metadata(atoms2, raw_score=-10.0)
+        set_tags(atoms2, raw_score=-10.0)
         atoms2.info["confid"] = 2
         db.add_unrelaxed_candidate(atoms2, description="Cu2_rotated")
 
@@ -93,7 +93,7 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
         while da.get_number_of_unrelaxed_candidates() > 0:
             a = da.get_an_unrelaxed_candidate()
             a.calc = EMT()
-            update_metadata(a, raw_score=-a.get_potential_energy())
+            set_tags(a, raw_score=-a.get_potential_energy())
             da.add_relaxed_step(a)
 
         mark_test_minima_as_final(db_path)
@@ -156,7 +156,7 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
     from ase.calculators.emt import EMT
     from ase_ga.data import DataConnection
 
-    from scgo.database.metadata import add_metadata, update_metadata
+    from scgo.metadata.atoms import set_tags
 
     with tempfile.TemporaryDirectory() as tmpdir:
         run_dir = Path(tmpdir) / "Cu2_searches" / "run_20260101_120000"
@@ -174,7 +174,7 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
             atoms = Atoms("Cu2", positions=pos)
             atoms.center(vacuum=5.0)
             atoms.calc = EMT()
-            add_metadata(atoms, raw_score=-10.0)
+            set_tags(atoms, raw_score=-10.0)
             atoms.info["confid"] = confid
             db.add_unrelaxed_candidate(atoms, description=f"Cu2_{confid}")
 
@@ -182,7 +182,7 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
         while da.get_number_of_unrelaxed_candidates() > 0:
             a = da.get_an_unrelaxed_candidate()
             a.calc = EMT()
-            update_metadata(a, raw_score=-a.get_potential_energy())
+            set_tags(a, raw_score=-a.get_potential_energy())
             da.add_relaxed_step(a)
 
         mark_test_minima_as_final(db_path)

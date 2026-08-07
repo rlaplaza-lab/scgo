@@ -4,10 +4,10 @@ import sqlite3
 from ase import Atoms
 
 from scgo.database.helpers import setup_database
-from scgo.database.metadata import mark_final_minima_in_db
+from scgo.metadata.atoms import ensure_final_id
+from scgo.metadata.persist import mark_final_minima_in_db
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
-from scgo.utils.helpers import ensure_final_id
 from tests.test_utils import assert_db_final_row
 
 
@@ -64,16 +64,14 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
 
     # Tag only two minima (c1 and c2) as final
     atoms_c1 = Atoms("Pt", positions=[[0, 0, 0]])
-    atoms_c1.info.setdefault("provenance", {})
-    atoms_c1.info["provenance"]["run_id"] = "run_test"
-    atoms_c1.info.setdefault("metadata", {})
-    atoms_c1.info["metadata"]["confid"] = "c1"
+    atoms_c1.info.setdefault("key_value_pairs", {})
+    atoms_c1.info["key_value_pairs"]["run_id"] = "run_test"
+    atoms_c1.info["key_value_pairs"]["confid"] = "c1"
 
     atoms_c2 = Atoms("Pt", positions=[[0, 0, 0]])
-    atoms_c2.info.setdefault("provenance", {})
-    atoms_c2.info["provenance"]["run_id"] = "run_test"
-    atoms_c2.info.setdefault("metadata", {})
-    atoms_c2.info["metadata"]["confid"] = "c2"
+    atoms_c2.info.setdefault("key_value_pairs", {})
+    atoms_c2.info["key_value_pairs"]["run_id"] = "run_test"
+    atoms_c2.info["key_value_pairs"]["confid"] = "c2"
 
     final_info = [
         {
@@ -169,9 +167,8 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
 
     final_info = []
     for rank, (energy, atoms) in enumerate(db_minima, start=1):
-        # extract_minima_from_database_file annotates in-memory provenance only.
-        for key in ("metadata", "provenance", "key_value_pairs"):
-            atoms.info.get(key, {}).pop("run_id", None)
+        # extract_minima_from_database_file may annotate run_id in tags.
+        atoms.info.get("key_value_pairs", {}).pop("run_id", None)
         final_info.append(
             {
                 "atoms": atoms,

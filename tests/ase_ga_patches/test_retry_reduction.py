@@ -22,7 +22,7 @@ from ase_ga.utilities import (
 
 from scgo.algorithms.ga_common import create_mutation_operators
 from scgo.ase_ga_patches.cutandsplicepairing import CutAndSplicePairing
-from scgo.ase_ga_patches.standardmutations import (
+from scgo.ase_ga_patches.mutations import (
     AnisotropicRattleMutation,
     BreathingMutation,
     FlatteningMutation,
@@ -533,7 +533,7 @@ class TestPopulationSelectionCapped:
         from ase_ga.data import DataConnection
 
         from scgo.ase_ga_patches.population import Population
-        from scgo.database.metadata import add_metadata
+        from scgo.metadata.atoms import set_tags
         from tests.test_utils import create_ga_comparator, create_preparedb
 
         db_path = tmp_path / "pop_cap.db"
@@ -543,17 +543,17 @@ class TestPopulationSelectionCapped:
             a = pt3_atoms.copy()
             a.positions += rng.random((3, 3)) * 0.1
             a.calc = EMT()
-            add_metadata(a, raw_score=-10.0 - i)
+            set_tags(a, raw_score=-10.0 - i)
             a.info["confid"] = i
             db.add_unrelaxed_candidate(a, description=f"t_{i}")
 
         da = DataConnection(str(db_path))
         while da.get_number_of_unrelaxed_candidates() > 0:
             a = da.get_an_unrelaxed_candidate()
-            from scgo.database.metadata import get_all_metadata
+            from scgo.metadata.atoms import get_tags
 
             if "key_value_pairs" not in a.info:
-                a.info["key_value_pairs"] = get_all_metadata(a).copy()
+                a.info["key_value_pairs"] = get_tags(a).copy()
             if "raw_score" not in a.info["key_value_pairs"]:
                 a.info["key_value_pairs"]["raw_score"] = -10.0
             da.add_relaxed_step(a)

@@ -8,11 +8,11 @@ from ase import Atoms
 from ase.db import connect
 
 from scgo.database.helpers import extract_minima_from_database_file
-from scgo.database.schema import stamp_scgo_database
 from scgo.initialization.candidate_discovery import (
     _find_smaller_candidates,
     _load_candidates_from_file,
 )
+from scgo.metadata.db_stamp import stamp_db
 
 
 def test_candidate_discovery_matches_extract_minima(tmp_path):
@@ -39,7 +39,7 @@ def test_candidate_discovery_matches_extract_minima(tmp_path):
         non_final = Atoms("Pt2", positions=[[0, 0, 0], [2.7, 0, 0]])
         db.write(non_final, relaxed=True, key_value_pairs={"raw_score": -7.0}, gaid=3)
 
-    stamp_scgo_database(db_path)
+    stamp_db(db_path)
 
     extracted = extract_minima_from_database_file(
         str(db_path), run_id="runx", require_final=False

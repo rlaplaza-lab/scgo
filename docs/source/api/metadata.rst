@@ -1,0 +1,57 @@
+Metadata
+========
+
+Structure tags, run-directory records, DB identity stamps, and output-JSON
+provenance headers. These are **separate schemas** that share a package
+namespace only.
+
+Structure tags (ASE Atoms)
+--------------------------
+
+Per-structure annotations live in ``atoms.info['key_value_pairs']`` (ASE's
+durable SQLite JSON column). Use :mod:`scgo.metadata.atoms` exclusively.
+
+.. automodule:: scgo.metadata.atoms
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Final-minima SQL tagging
+------------------------
+
+.. automodule:: scgo.metadata.persist
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Output-JSON provenance header
+-----------------------------
+
+Shared header for ``metadata.json``, NEB/TS summaries, and timing files
+(``schema_version`` = 3).
+
+.. automodule:: scgo.metadata.provenance
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Run-directory records
+---------------------
+
+``run_*/metadata.json`` params/composition snapshots and run-id helpers.
+
+.. automodule:: scgo.metadata.run_dir
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+SQLite DB stamp
+---------------
+
+The ``scgo_metadata`` table marks SCGO-owned databases (``schema_version`` = 2).
+This integer is **not** the output-JSON header version.
+
+.. automodule:: scgo.metadata.db_stamp
+   :members:
+   :undoc-members:
+   :show-inheritance:

@@ -3,8 +3,7 @@
 This package splits what used to be a single, large ``standardmutations``
 module into one module per mutation family, plus shared helpers
 (``_common.py``, ``_finalize.py``). All public mutation classes are
-re-exported here so that ``scgo.ase_ga_patches.standardmutations`` (which now
-just re-exports from this package) keeps working unchanged.
+re-exported here.
 """
 
 from __future__ import annotations

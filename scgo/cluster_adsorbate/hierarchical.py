@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -20,6 +19,7 @@ from scgo.cluster_adsorbate.sites import get_or_compute_surface_site_candidates
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
+from scgo.metadata.atoms import set_tags
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,8 +30,11 @@ if TYPE_CHECKING:
 
 def _stamp_site_metadata(combined: Atoms, site_types: list[str]) -> None:
     if site_types:
-        combined.info["adsorbate_site_types_json"] = json.dumps(site_types)
-        combined.info["adsorbate_site_type"] = site_types[-1]
+        set_tags(
+            combined,
+            adsorbate_site_types_json=site_types,
+            adsorbate_site_type=site_types[-1],
+        )
 
 
 def build_adsorbate_only_cluster(

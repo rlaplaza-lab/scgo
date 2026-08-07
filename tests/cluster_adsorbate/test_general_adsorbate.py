@@ -104,8 +104,8 @@ def test_relax_water_connected_structure_emt() -> None:
     assert info["structure_ok_final"] is True
     assert info["bond_lengths"] == {}
     assert info["n_frag"] == 3
-    assert "provenance" in info
-    assert info["provenance"]["formula"] == "H2OPt3"
+    assert "output_provenance" in info
+    assert info["output_provenance"]["formula"] == "H2OPt3"
 
 
 def test_attach_fix_bond_lengths_rejects_duplicate() -> None:

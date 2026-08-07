@@ -12,9 +12,9 @@ from ase.optimize import LBFGS
 
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
-from scgo.database.metadata import get_metadata
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
+from scgo.metadata.atoms import get_tag
 from scgo.utils.helpers import perform_local_relaxation
 
 
@@ -39,8 +39,8 @@ def test_single_atom_optimization(tmp_path):
     energy = perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=10)
 
     assert np.isfinite(energy)
-    assert "metadata" in atoms.info
-    assert get_metadata(atoms, "raw_score", default=None) is not None
+    assert "key_value_pairs" in atoms.info
+    assert get_tag(atoms, "raw_score", default=None) is not None
 
 
 def test_linear_cluster_geometry(tmp_path):
@@ -86,8 +86,8 @@ def test_convergence_failure_handling(tmp_path):
 
     # Should assign penalty energy
     assert energy > 1e5  # Large penalty energy
-    assert get_metadata(atoms, "raw_score", default=None) is not None
-    assert get_metadata(atoms, "raw_score", default=0.0) < -1e5
+    assert get_tag(atoms, "raw_score", default=None) is not None
+    assert get_tag(atoms, "raw_score", default=0.0) < -1e5
 
 
 @pytest.mark.slow

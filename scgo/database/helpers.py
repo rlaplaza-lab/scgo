@@ -13,13 +13,10 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-import numpy as np
 from ase import Atoms
-from ase.calculators.singlepoint import SinglePointCalculator
 from ase.db import connect as ase_db_connect
 from ase_ga.data import DataConnection
 
-from scgo.constants import PENALTY_ENERGY
 from scgo.database.connection import (
     _run_sqlite,
     apply_sqlite_pragmas,
@@ -30,26 +27,69 @@ from scgo.database.connection import (
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.database.exceptions import DatabaseSetupError
-from scgo.database.metadata import add_metadata, get_metadata
 from scgo.database.registry import get_registry
-from scgo.database.schema import (
-    is_scgo_database,
-    stamp_scgo_database,
-)
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, database_retry
 from scgo.exceptions import SCGORuntimeError
+from scgo.metadata.atoms import ensure_final_id, get_tag, set_tags
+from scgo.metadata.db_stamp import is_scgo_db, stamp_db
+from scgo.metadata.run_dir import load_run_dir_record, resolve_run_id_from_db_path
 from scgo.utils.helpers import (
+    _assign_penalty_energy,
     ensure_directory_exists,
-    ensure_final_id,
     get_cluster_formula,
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.run_tracking import load_run_metadata, resolve_run_id_from_db_path
 
 logger = get_logger(__name__)
 _MIN_DB_PARALLEL_LOAD_TASKS = 4
+
+
+class SCGODataConnection:
+    """Thin DataConnection wrapper that stamps tags via :mod:`scgo.metadata.atoms`."""
+
+    def __init__(self, da_obj: DataConnection, expected_atomic_numbers: list[int]):
+        self._da = da_obj
+        self._expected_atomic_numbers = expected_atomic_numbers
+
+    def __getattr__(self, name):
+        return getattr(self._da, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        with contextlib.suppress(OSError, RuntimeError, AttributeError):
+            close_data_connection(self._da)
+
+    def add_relaxed_step(self, a, *args, **kwargs):
+        if Counter(int(x) for x in a.get_atomic_numbers()) != Counter(
+            self._expected_atomic_numbers
+        ):
+            raise AssertionError(
+                "Candidate composition does not match database stoichiometry"
+            )
+
+        if get_tag(a, "raw_score") is None:
+            try:
+                energy = a.get_potential_energy()
+                set_tags(a, raw_score=-float(energy))
+            except (AttributeError, RuntimeError, ValueError):
+                logger.warning(
+                    "raw_score missing and energy could not be computed for candidate; "
+                    "assigning PENALTY_ENERGY and continuing."
+                )
+                _assign_penalty_energy(a)
+
+        ensure_final_id(a)
+        return self._da.add_relaxed_step(a, *args, **kwargs)
+
+    def add_unrelaxed_candidate(self, a, *args, **kwargs):
+        # ASE GA requires key_value_pairs to exist before insert.
+        a.info.setdefault("key_value_pairs", {})
+        a.info.setdefault("data", {})
+        return self._da.add_unrelaxed_candidate(a, *args, **kwargs)
 
 
 def _ensure_database_indices(
@@ -184,9 +224,7 @@ def setup_database(
         try:
             database_retry(
                 _remove_db,
-                max_retries=5,
-                initial_delay=0.1,
-                backoff_factor=2.0,
+                config=PRESET_AGGRESSIVE,
                 exception_types=(OSError,),
             )
         except OSError as e:
@@ -255,7 +293,7 @@ def setup_database(
         )
 
         try:
-            stamp_scgo_database(db_file)
+            stamp_db(db_file)
         except (
             sqlite3.DatabaseError,
             sqlite3.OperationalError,
@@ -266,84 +304,7 @@ def setup_database(
 
         _register_database_best_effort(output_dir_str, db_file, atoms_template, run_id)
 
-        class _DBAdapter:
-            def __init__(self, da_obj, expected_atomic_numbers):
-                self._da = da_obj
-                self._expected_atomic_numbers = expected_atomic_numbers
-                self._last_unrelaxed_metadata = None
-
-            def __getattr__(self, name):
-                return getattr(self._da, name)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                with contextlib.suppress(OSError, RuntimeError, AttributeError):
-                    close_data_connection(self._da)
-
-            def add_relaxed_step(self, a, *args, **kwargs):
-                if Counter(int(x) for x in a.get_atomic_numbers()) != Counter(
-                    self._expected_atomic_numbers
-                ):
-                    raise AssertionError(
-                        "Candidate composition does not match database stoichiometry"
-                    )
-
-                if "key_value_pairs" not in a.info:
-                    a.info["key_value_pairs"] = {}
-
-                if "raw_score" not in a.info.get("key_value_pairs", {}):
-                    try:
-                        energy = a.get_potential_energy()
-                        a.info.setdefault("key_value_pairs", {})["raw_score"] = -float(
-                            energy
-                        )
-                    except (AttributeError, RuntimeError, ValueError):
-                        logger.warning(
-                            "raw_score missing and energy could not be computed for candidate; "
-                            "assigning PENALTY_ENERGY and continuing."
-                        )
-                        a.info.setdefault("metadata", {})["potential_energy"] = (
-                            PENALTY_ENERGY
-                        )
-                        a.info.setdefault("key_value_pairs", {})[
-                            "raw_score"
-                        ] = -PENALTY_ENERGY
-                        zero_forces = np.zeros((len(a), 3), dtype=np.float64)
-                        a.calc = SinglePointCalculator(
-                            a, energy=PENALTY_ENERGY, forces=zero_forces
-                        )
-
-                ensure_final_id(a)
-
-                return self._da.add_relaxed_step(a, *args, **kwargs)
-
-            def add_unrelaxed_candidate(self, a, *args, **kwargs):
-                self._last_unrelaxed_metadata = (
-                    a.info.get("metadata", {}).copy() if a.info.get("metadata") else {}
-                )
-
-                prov_src = a.info.get("metadata") or {}
-                kv = a.info.setdefault("key_value_pairs", {})
-                for _k in ("run_id", "trial_id", "confid", "gaid", "id"):
-                    if _k in prov_src and _k not in kv:
-                        kv[_k] = prov_src[_k]
-
-                a.info.setdefault("data", {})
-                return self._da.add_unrelaxed_candidate(a, *args, **kwargs)
-
-            def get_an_unrelaxed_candidate(self, *args, **kwargs):
-                u = self._da.get_an_unrelaxed_candidate(*args, **kwargs)
-                if (
-                    u is not None
-                    and "metadata" not in u.info
-                    and self._last_unrelaxed_metadata
-                ):
-                    u.info["metadata"] = self._last_unrelaxed_metadata.copy()
-                return u
-
-        return _DBAdapter(da, all_atom_numbers)
+        return SCGODataConnection(da, all_atom_numbers)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         logger.error("Failed to open database after all retries: %s", e)
         raise DatabaseSetupError(f"Failed to setup database {db_file}: {e}") from e
@@ -365,7 +326,7 @@ def _extract_structures_from_db(
     if not os.path.exists(db_path):
         return []
 
-    if not is_scgo_database(db_path):
+    if not is_scgo_db(db_path):
         logger.debug("Skipping extract: not an SCGO database %s", db_path)
         return []
 
@@ -386,20 +347,20 @@ def _extract_structures_from_db(
             if empty_log is not None and not out:
                 empty_log()
 
-            metadata_kwargs: dict[str, str] = {
+            tag_kwargs: dict[str, str] = {
                 "run_id": run_id,
                 "source_db": os.path.basename(db_path),
             }
             if source_db_relpath is not None:
-                metadata_kwargs["source_db_relpath"] = source_db_relpath
+                tag_kwargs["source_db_relpath"] = source_db_relpath
             for _, atoms in out:
-                add_metadata(atoms, **metadata_kwargs)
+                set_tags(atoms, **tag_kwargs)
 
             if persist:
                 try:
                     with da.c.managed_connection() as conn:
                         for _, atoms in out:
-                            row_id = get_metadata(atoms, "systems_row_id", None)
+                            row_id = get_tag(atoms, "systems_row_id", None)
                             if row_id is None:
                                 continue
                             row_id = int(row_id)
@@ -417,9 +378,7 @@ def _extract_structures_from_db(
                     ValueError,
                     TypeError,
                 ) as e:
-                    logger.debug(
-                        "Failed to persist provenance to DB %s: %s", db_path, e
-                    )
+                    logger.debug("Failed to persist run_id to DB %s: %s", db_path, e)
 
             return out
 
@@ -516,7 +475,7 @@ def load_previous_run_results(
             by_run.setdefault(run_id, []).append(db_path_str)
         for run_id, db_list in by_run.items():
             run_dir = os.path.join(base_output_dir, run_id)
-            metadata = load_run_metadata(run_dir)
+            metadata = load_run_dir_record(run_dir)
             if composition is not None and metadata and metadata.formula:
                 expected_formula = get_cluster_formula(composition)
                 if metadata.formula != expected_formula:
@@ -623,9 +582,7 @@ def load_reference_structures(
     else:
         root = Path(base_dir) if base_dir is not None else Path.cwd()
         search_glob = str(root / db_glob_pattern)
-    db_files = [
-        p for p in glob.glob(search_glob, recursive=True) if is_scgo_database(p)
-    ]
+    db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_db(p)]
 
     if not db_files:
         logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
@@ -654,7 +611,7 @@ def load_reference_structures(
                         continue
 
                 if len(heap) < max_structures:
-                    add_metadata(
+                    set_tags(
                         atoms,
                         run_id=resolved_run_id,
                         source_db_relpath=os.path.relpath(
@@ -666,7 +623,7 @@ def load_reference_structures(
                     counter += 1
                 elif energy < -heap[0][0]:
                     counter += 1
-                    add_metadata(
+                    set_tags(
                         atoms,
                         run_id=resolved_run_id,
                         source_db_relpath=os.path.relpath(

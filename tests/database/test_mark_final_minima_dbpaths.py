@@ -1,7 +1,7 @@
 from ase import Atoms
 from ase.db import connect
 
-from scgo.database.metadata import mark_final_minima_in_db
+from scgo.metadata.persist import mark_final_minima_in_db
 from tests.database.test_mark_final_minima import _iter_system_kvps
 from tests.test_utils import assert_db_final_row
 
@@ -24,8 +24,7 @@ def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
 
     # Prepare final_minima_info matching the above provenance
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
-    atoms.info.setdefault("provenance", {})
-    atoms.info["provenance"]["run_id"] = "run_ext"
+    atoms.info.setdefault("key_value_pairs", {})["run_id"] = "run_ext"
 
     final_info = [
         {

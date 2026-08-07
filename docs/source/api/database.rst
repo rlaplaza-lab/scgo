@@ -9,6 +9,8 @@ reloading minima from completed ``run_*`` searches. For low-level access,
 :func:`~scgo.database.connection.get_connection` opens a scoped
 :class:`~ase_ga.data.DataConnection` with SCGO PRAGMA settings applied.
 
+Structure tags, DB stamps, and run-dir JSON live in :doc:`metadata`.
+
 .. automodule:: scgo.database
    :members:
    :undoc-members:

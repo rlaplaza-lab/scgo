@@ -9,7 +9,7 @@ from ase_ga.utilities import (
 )
 
 from scgo.algorithms.ga_common import create_mutation_operators
-from scgo.ase_ga_patches.standardmutations import (
+from scgo.ase_ga_patches.mutations import (
     AnisotropicRattleMutation,
     BreathingMutation,
     InPlaneSlideMutation,

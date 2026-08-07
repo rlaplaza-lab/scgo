@@ -9,7 +9,7 @@ from ase.calculators.emt import EMT
 import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms import ga_go
 from scgo.database import get_connection
-from scgo.database.metadata import get_metadata
+from scgo.metadata.atoms import get_tag
 from tests.test_utils import MockRelaxer, assert_serial_parallel_offspring_equal
 
 
@@ -106,7 +106,7 @@ def test_ga_go_offspring_fraction_creates_expected_offspring(
     db_file = outdir / "ga_go.db"
     with get_connection(str(db_file)) as da:
         rows = da.get_all_relaxed_candidates()
-        gen0 = [a for a in rows if get_metadata(a, "generation") == 0]
+        gen0 = [a for a in rows if get_tag(a, "generation") == 0]
 
     unique_confids = {a.info.get("confid") for a in gen0}
     assert len(unique_confids) - population_size == expected_offspring

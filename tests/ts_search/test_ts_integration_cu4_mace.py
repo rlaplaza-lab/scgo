@@ -143,7 +143,7 @@ def test_full_workflow_cu4_mace_database_persistence():
             params=ts_params,
             verbosity=0,
             max_pairs=3,
-            energy_gap_threshold=None,
+            energy_gap_threshold=float("inf"),
             neb_n_images=5,
             neb_fmax=0.1,
             neb_steps=120,
@@ -385,8 +385,7 @@ def test_full_workflow_cu4_mace_database_persistence():
 
                 # Prefer explicit persistent marker written by add_ts_to_database()
                 if kv.get("is_transition_state") and (
-                    r.info.get("metadata", {}).get("ts_pair_id") == pair_id
-                    or r.info.get("provenance", {}).get("pair_id") == pair_id
+                    kv.get("ts_pair_id") == pair_id or kv.get("pair_id") == pair_id
                 ):
                     matched = True
                     ts_entries.append(r)
