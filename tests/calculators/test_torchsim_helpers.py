@@ -26,6 +26,7 @@ def test_infer_mace_model_name_from_calculator():
     assert infer_mace_model_name_from_calculator(calc) == "mace_matpes_0"
 
 
+@pytest.mark.requires_uma
 def test_infer_uma_model_name_from_calculator():
     from types import SimpleNamespace
 
@@ -50,6 +51,7 @@ def test_infer_uma_model_name_from_calculator():
     )
 
 
+@pytest.mark.requires_upet
 def test_infer_upet_model_name_from_calculator():
     from types import SimpleNamespace
 
@@ -88,6 +90,7 @@ def test_try_extract_torchsim_model_from_mace_calculator():
     assert try_extract_torchsim_model_from_mace_calculator(calc) is model
 
 
+@pytest.mark.requires_uma
 def test_try_extract_torchsim_model_from_uma_calculator():
     from types import SimpleNamespace
     from unittest.mock import MagicMock, patch
@@ -117,6 +120,7 @@ def test_try_extract_torchsim_model_from_uma_calculator():
         assert uh.try_extract_torchsim_model_from_uma_calculator(calc_missing) is None
 
 
+@pytest.mark.requires_upet
 def test_try_extract_torchsim_model_from_upet_calculator():
     from types import ModuleType
     from unittest.mock import MagicMock, patch

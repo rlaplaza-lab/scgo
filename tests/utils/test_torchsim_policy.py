@@ -21,6 +21,7 @@ from tests.conftest import skip_uma_in_github_actions
 skip_uma_in_github_actions(allow_module_level=True)
 
 
+@pytest.mark.requires_uma
 def test_is_uma_like_calculator():
     from scgo.calculators.uma_helpers import UMA
 
@@ -28,6 +29,7 @@ def test_is_uma_like_calculator():
     assert is_uma_like_calculator(object.__new__(UMA)) is True
 
 
+@pytest.mark.requires_upet
 def test_is_upet_like_calculator():
     from scgo.calculators.upet_helpers import UPET
 
