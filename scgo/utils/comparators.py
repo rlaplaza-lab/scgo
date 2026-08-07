@@ -20,6 +20,7 @@ from scgo.constants import (
 from scgo.exceptions import (
     SCGOValidationError,
 )
+from scgo.metadata.atoms import get_tag
 
 _SORTED_DIST_FP_INFO_KEY = "_scgo_sorted_dist_fp"
 
@@ -127,6 +128,29 @@ def get_mobile_atom_indices(atoms: Atoms) -> np.ndarray:
     return mobile
 
 
+def _resolve_n_slab_metadata(a1: Atoms, a2: Atoms) -> int | None:
+    """Read a shared ``n_slab_atoms`` partition from structure tags, if present.
+
+    Returns the integer slab count when both structures agree on a positive
+    ``n_slab_atoms`` tag, otherwise ``None`` (caller falls back to constraints).
+    """
+    n1 = get_tag(a1, "n_slab_atoms", None)
+    n2 = get_tag(a2, "n_slab_atoms", None)
+    if n1 is None and n2 is None:
+        return None
+    try:
+        n1_i = int(n1) if n1 is not None else None
+        n2_i = int(n2) if n2 is not None else None
+    except (TypeError, ValueError):
+        return None
+    if n1_i is not None and n2_i is not None and n1_i != n2_i:
+        return None
+    resolved = n1_i if n1_i is not None else n2_i
+    if resolved is None or resolved <= 0:
+        return None
+    return resolved
+
+
 def get_shared_mobile_atom_indices(
     a1: Atoms,
     a2: Atoms,
@@ -140,13 +164,19 @@ def get_shared_mobile_atom_indices(
     authoritative partition for surface workflows and does not require
     ``FixAtoms`` or stored ``n_slab_atoms`` metadata on loaded minima.
 
-    Otherwise uses the intersection of mobile (non-``FixAtoms``) indices, with a
-    metadata fallback when constraints are missing. Raises if the chosen set is empty.
+    When ``n_slab`` is ``None``, a stored ``n_slab_atoms`` tag (from
+    ``key_value_pairs`` metadata on either structure) provides the same
+    surface/adsorbate partition when ``FixAtoms`` constraints are absent.
+    Otherwise the intersection of mobile (non-``FixAtoms``) indices is used.
+    Raises if the chosen set is empty.
     """
     if len(a1) != len(a2):
         raise SCGOValidationError(
             f"The two configurations must have the same number of atoms: {len(a1)} vs {len(a2)}",
         )
+
+    if n_slab is None:
+        n_slab = _resolve_n_slab_metadata(a1, a2)
 
     if n_slab is not None:
         n_slab_i = int(n_slab)

@@ -225,6 +225,7 @@ def test_get_diversity_params_sets_reference_db():
     assert params["diversity_reference_db"] == "Pt*_searches/**/*.db"
 
 
+@pytest.mark.requires_uma
 def test_get_uma_ga_benchmark_params_structure():
     fairchem = pytest.importorskip("fairchem")
     if not hasattr(fairchem, "core"):
