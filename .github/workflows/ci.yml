@@ -152,7 +152,7 @@ jobs:
       - name: Run fast tests (UMA)
         if: matrix.suite == 'uma'
         run: |
-          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_upet and not requires_uma" -v
+          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_upet" -v
 
       - name: Run fast tests (UPET)
         if: matrix.suite == 'upet'
