@@ -43,10 +43,7 @@ ENERGY_SPREAD_DIVISOR = 10.0  # Divisor for adaptive temperature calculation
 
 # Convex hull and geometry
 CONVEX_HULL_PERTURBATION_SCALE = 0.1
-CONVEX_HULL_CACHE_SIZE = 100
 # Cache sizes for initialization caches (tunable via configuration)
-CANDIDATE_CACHE_SIZE = 100
-COMPOSITION_CACHE_SIZE = 100
 CONVEX_HULL_VOLUME_TOLERANCE = 1e-6  # Tolerance for degenerate convex hulls
 
 # Magic numbers and templates
@@ -180,8 +177,6 @@ SMART_FILTERING_PERTURBATION_SCALE = (
 PLACEMENT_RELAXATION_FACTOR = 0.25  # Relaxation factor for placement attempts
 MIN_DISTANCE_THRESHOLD_LOW = 0.4  # Lower threshold for min_distance_factor
 MIN_DISTANCE_THRESHOLD_HIGH = 0.8  # Upper threshold for min_distance_factor
-BOND_DISTANCE_MULTIPLIER_2ATOM = 1.2  # Multiplier for 2-atom bond distances
-BOND_DISTANCE_MULTIPLIER_3ATOM = 3.0  # Multiplier for 3-atom bond distances
 CONNECTIVITY_SUGGESTION_BUFFER = 1.05  # Buffer for connectivity factor suggestions
 
 # Physical and computational

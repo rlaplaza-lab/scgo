@@ -71,16 +71,6 @@ class SlabSearchPartition:
     mobile_slab_indices: tuple[int, ...]
     mobile_slab_symbols: tuple[str, ...]
 
-    @property
-    def n_top_bare(self) -> int:
-        """Trailing mobile count with no adsorbates."""
-        return self.n_mobile_slab
-
-    def n_top_with_adsorbates(self, n_adsorbate: int) -> int:
-        if n_adsorbate < 0:
-            raise SCGOValidationError("n_adsorbate must be >= 0")
-        return self.n_mobile_slab + int(n_adsorbate)
-
 
 def resolve_slab_search_partition(
     config: SurfaceSystemConfig,

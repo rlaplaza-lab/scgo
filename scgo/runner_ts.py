@@ -275,34 +275,6 @@ def _run_go_ts_pipeline(
     }
 
 
-def _run_one_element_go_ts_pipeline(
-    element: str,
-    n_atoms: int,
-    system_type: SystemType,
-    *,
-    go_params: dict[str, Any],
-    ts_kwargs: dict[str, Any],
-    seed: int | None = None,
-    verbosity: int = 1,
-    output_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    """Run one-element GO then TS and return a compact run summary."""
-    if not element or not isinstance(element, str):
-        raise SCGOValidationError("element must be a non-empty string")
-    if n_atoms < 1:
-        raise SCGOValidationError("n_atoms must be >= 1")
-    composition = [element] * n_atoms
-    return _run_go_ts_pipeline(
-        composition,
-        system_type,
-        go_params=go_params,
-        ts_kwargs=ts_kwargs,
-        seed=seed,
-        verbosity=verbosity,
-        output_dir=output_dir,
-    )
-
-
 def _execute_run_go_ts(context: RunGOTSContext) -> dict[str, Any]:
     return _run_go_ts_pipeline(
         context.composition,

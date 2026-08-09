@@ -634,7 +634,6 @@ class TorchSimBatchRelaxer:
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        self._torch = torch
         # Lazy import: only require TorchSim when actually instantiating the relaxer.
         import torch_sim as ts  # type: ignore
 

@@ -107,7 +107,7 @@ def combine_seeds(
             [get_covalent_radius(sym) for sym in existing_symbols]
         )
         # Use shared bond distance calculation for consistency
-        bond_distance, _, max_connectivity_distance = compute_bond_distance_params(
+        bond_distance, _, _ = compute_bond_distance_params(
             max_existing_radius=existing_avg_radius,
             avg_new_radius=seed_avg_radius,
             connectivity_factor=connectivity_factor,

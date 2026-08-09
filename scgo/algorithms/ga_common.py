@@ -564,7 +564,7 @@ class ClusterStartGenerator(StartGenerator):
                     n_jobs=n_jobs,
                 )
 
-    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+    def get_new_candidate(self) -> Atoms:
         """Generate a single new, random cluster candidate.
 
         If population_size was provided, serves candidates from pre-generated batch.
@@ -687,7 +687,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 batch_site_counts=self._batch_site_type_counts,
             )
 
-    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+    def get_new_candidate(self) -> Atoms:
         atoms = None
         if self._candidate_batch is not None and self._candidate_count < len(
             self._candidate_batch
@@ -769,7 +769,7 @@ class SurfaceSlabStartGenerator(StartGenerator):
         atoms.set_positions(pos)
         return atoms
 
-    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+    def get_new_candidate(self) -> Atoms:
         if self._candidate_count < len(self._candidate_batch):
             atoms = self._candidate_batch[self._candidate_count]
             self._candidate_count += 1

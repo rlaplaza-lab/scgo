@@ -416,11 +416,6 @@ def _resolve_go_ts_params(
     return effective_go, effective_ts
 
 
-def _calculator_slug_from_go_params(go_params: dict[str, Any] | None) -> str:
-    """Delegate to :func:`scgo.utils.output_paths.calculator_slug_from_go_params`."""
-    return calculator_slug_from_go_params(go_params)
-
-
 def _default_go_ts_output_path(
     composition: list[str],
     *,

@@ -933,7 +933,7 @@ def place_multi_atom_seed_on_facet(
         # Fallback: arbitrary +x axis when no facet can be identified
         seed_normal = np.array([1.0, 0.0, 0.0])
     else:
-        seed_facet_centroid, seed_facet_normal, _ = seed_facets[0]
+        _, seed_facet_normal, _ = seed_facets[0]
         seed_normal = seed_facet_normal
 
     # Create a copy to work with
