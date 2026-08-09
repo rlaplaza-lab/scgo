@@ -55,7 +55,17 @@ EMT_PT2_BOND_ANG = 2.26
 EMT_PT2_BOND_TOL_ANG = 0.02
 EMT_H2_BARRIER_EV = (2.0, 5.0)
 NN_DISTANCE_BAND = (0.9, 1.3)
-TS_FMAX_CONVERGED = 0.15
+
+# Per-atom force tolerance a converged TS must satisfy. This MUST track the
+# production NEB convergence floor (_TS_NEB_FMAX in scgo.param_presets): the NEB
+# only ever reports ``neb_converged`` when final_fmax is already below that
+# floor, so a stricter bar here would reject every physically-valid saddle the
+# MACE CI-NEB can attain (0.20 eV/A is the soft-MEP floor; tighter values
+# collapse interior saddles to endpoints). Derive it from the source of truth so
+# the two can never drift apart.
+from scgo.param_presets import _TS_NEB_FMAX  # noqa: E402
+
+TS_FMAX_CONVERGED = _TS_NEB_FMAX
 ADSORPTION_HEIGHT_TOLERANCE_ANG = 0.15
 PT_O_DISTANCE_ANG = (1.8, 2.4)
 # EMT barrier for Pt4 tetrahedron <-> planar isomerization (eV).
