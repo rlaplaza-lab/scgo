@@ -318,11 +318,10 @@ def test_database(tmp_path):
 def _needs_initialization_cache_isolation(request: pytest.FixtureRequest) -> bool:
     """Return True when a test is likely to depend on clean initialization caches."""
     node = request.node
-    if node.get_closest_marker("requires_cache_isolation") is not None:
-        return True
-    if node.get_closest_marker("reproducibility") is not None:
-        return True
-    return "reproducibility" in node.nodeid
+    return (
+        node.get_closest_marker("requires_cache_isolation") is not None
+        or node.get_closest_marker("reproducibility") is not None
+    )
 
 
 @pytest.fixture(autouse=True)

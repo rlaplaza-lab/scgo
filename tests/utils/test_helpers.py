@@ -158,6 +158,7 @@ class TestAutoNiter:
         result = auto_niter(composition)
         assert expected_range[0] <= result <= expected_range[1]
 
+    @pytest.mark.reproducibility
     def test_auto_niter_reproducibility(self):
         """Test that auto_niter is reproducible."""
         composition = ["Pt"] * 5
@@ -200,6 +201,7 @@ class TestAutoPopulationSize:
         result = auto_population_size(composition)
         assert expected_range[0] <= result <= expected_range[1]
 
+    @pytest.mark.reproducibility
     def test_auto_population_size_reproducibility(self):
         """Test that auto_population_size is reproducible."""
         composition = ["Pt"] * 5
@@ -241,6 +243,7 @@ class TestAutoNiterLocalRelaxation:
         result = auto_niter_local_relaxation(composition)
         assert expected_range[0] <= result <= expected_range[1]
 
+    @pytest.mark.reproducibility
     def test_auto_niter_local_relaxation_reproducibility(self):
         """Test that auto_niter_local_relaxation is reproducible."""
         composition = ["Pt"] * 5
@@ -289,6 +292,7 @@ class TestAutoNiterTS:
         result = auto_niter_ts(composition)
         assert expected_range[0] <= result <= expected_range[1]
 
+    @pytest.mark.reproducibility
     def test_auto_niter_ts_reproducibility(self):
         composition = ["Pt"] * 6
         result1 = auto_niter_ts(composition)

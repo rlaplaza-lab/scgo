@@ -5,7 +5,9 @@ name: Kaggle GPU tests
 # UMA is intentionally omitted: HuggingFace auth for fairchem weights is not available on Kaggle.
 # The example matrix (tests/integration/test_gpu_examples_integration.py) carries both
 # requires_mace and requires_upet, so each suite selects all 12 cases (6 system types x 2
-# calculators) with its own extra installed — closing the silent-swap gap.
+# calculators). With only its own extra installed, each suite SKIPs the 6 opposite-calculator
+# variants via an importorskip guard rather than erroring — closing the silent-swap gap
+# while keeping independent MACE and UPET coverage.
 
 on:
   workflow_dispatch:

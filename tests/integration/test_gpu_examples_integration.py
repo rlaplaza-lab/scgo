@@ -312,7 +312,14 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
     selectable by each Kaggle suite (which installs only its own extra), so both
     calculators are exercised. The calculator-specific GO preset is chosen inside
     the test, not at import, to stay compatible with the opposite suite.
+
+    Despite carrying both ``requires_mace`` and ``requires_upet`` (so each
+    Kaggle suite selects the whole matrix), only the calculator whose extra is
+    installed in the active kernel can actually run. The guards below skip the
+    opposite calculator's variants instead of erroring on a missing import.
     """
+    pytest.importorskip("torch_sim")
+    pytest.importorskip(case.calculator.lower())  # "mace" or "upet"
     output_dir = tmp_path / f"gpu_{case.calculator}_{case.system_type}"
     go_params = _build_go_params(case)
     summary = run_go_ts(

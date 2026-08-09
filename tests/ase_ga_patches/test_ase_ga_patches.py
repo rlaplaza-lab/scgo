@@ -111,6 +111,7 @@ def test_cutandsplicepairing_incompatible_compositions(pt3_atoms, au2pt2_atoms, 
         pairing.get_new_individual([pt3_atoms, au2pt2_atoms])
 
 
+@pytest.mark.reproducibility
 def test_cutandsplicepairing_rng_reproducibility(pt3_atoms, rng):
     """Test RNG reproducibility in pairing operations."""
     n_top = len(pt3_atoms)
@@ -228,6 +229,7 @@ def test_population_candidate_selection(ga_database, pt3_atoms, rng):
         assert len(population.pop) < 2
 
 
+@pytest.mark.reproducibility
 def test_population_rng_reproducibility(ga_database, pt3_atoms):
     """Test RNG reproducibility in population operations."""
     from ase_ga.data import DataConnection

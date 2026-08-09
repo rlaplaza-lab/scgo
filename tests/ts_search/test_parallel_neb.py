@@ -12,7 +12,7 @@ from scgo.ts_search.parallel_neb import ParallelNEBBatch, _neb_image_dedup_key
 from scgo.ts_search.transition_state import TorchSimNEB, interpolate_path
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 
-pytestmark = pytest.mark.requires_cuda
+pytestmark = [pytest.mark.requires_cuda, pytest.mark.requires_mace]
 
 
 def _gas_neb_cfg(**overrides) -> NebRunConfig:

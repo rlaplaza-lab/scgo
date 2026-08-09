@@ -69,6 +69,7 @@ from tests.test_utils import (
         ),
     ],
 )
+@pytest.mark.reproducibility
 def test_algorithm_reproducibility(tmp_path, algorithm, seed, kwargs):
     comp = ["Pt", "Pt", "Pt"]
 
@@ -481,6 +482,7 @@ def test_rng_state_consistency_across_functions(rng):
     assert not np.allclose(atoms1.get_positions(), atoms2.get_positions())
 
 
+@pytest.mark.reproducibility
 def test_rng_reproducibility_with_same_seed():
     """Test that same seed produces same results across multiple runs."""
     seed = 11111
@@ -520,6 +522,7 @@ def test_rng_different_seeds_different_results(seed1, seed2):
 
 
 @pytest.mark.slow
+@pytest.mark.reproducibility
 def test_database_persistence_reproducibility(tmp_path):
     """Test that database persistence is deterministic across runs."""
     from scgo.database import setup_database
@@ -581,6 +584,7 @@ def test_database_persistence_reproducibility(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.reproducibility
 def test_fixed_seed_exact_reproducibility(tmp_path):
     """Test that fixed seed gives bit-for-bit identical results across runs."""
     comp = ["Pt", "Pt"]

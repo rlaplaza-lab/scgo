@@ -122,6 +122,8 @@ class TestParameterSensitivity:
             assert len(atoms) == 8
             assert_cluster_valid(atoms, comp, check_connectivity=True)
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     @pytest.mark.parametrize("seed", [42, 123, 456, 789, 999])
     def test_reproducibility_with_parameters(self, seed):
         """Test that same parameters with same seed produce same structure."""

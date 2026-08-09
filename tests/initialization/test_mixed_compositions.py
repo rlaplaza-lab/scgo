@@ -92,6 +92,8 @@ def test_different_seeds_produce_diversity(seed):
     assert_cluster_valid(atoms, composition)
 
 
+@pytest.mark.reproducibility
+@pytest.mark.requires_cache_isolation
 def test_reproducibility_same_seed(rng):
     """Same seed produces identical structure and composition."""
     composition = ["Pt", "Au"] * 5

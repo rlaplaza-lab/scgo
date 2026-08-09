@@ -353,6 +353,8 @@ class TestPlaceMultiAtomSeedOnFacet:
         assert len(placed) == 3
         assert placed.get_chemical_symbols() == seed.get_chemical_symbols()
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     def test_reproducibility(self, rng):
         """Test that same RNG produces same placement."""
         seed = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
@@ -494,6 +496,8 @@ class TestGenerateBatchPositionsOnConvexHull:
             assert dist > 0.5  # Not too close
             assert dist < 10.0  # Not too far
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     def test_reproducibility(self, rng):
         """Test that same RNG produces same batch of candidates."""
         atoms = Atoms(
@@ -613,6 +617,8 @@ class TestGeneratePositionsAllFacets:
             assert isinstance(pos, np.ndarray)
             assert pos.shape == (3,)
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     def test_reproducibility_same_rng(self, rng):
         """Same RNG yields identical all-facets positions."""
         atoms = Atoms(

@@ -26,6 +26,7 @@ class TestEnsureRng:
         rng = ensure_rng(0)
         assert isinstance(rng, np.random.Generator)
 
+    @pytest.mark.reproducibility
     def test_reproducibility_same_seed(self):
         rng1 = ensure_rng(42)
         rng2 = ensure_rng(42)
@@ -35,6 +36,7 @@ class TestEnsureRng:
 
         assert nums1 == nums2
 
+    @pytest.mark.reproducibility
     def test_reproducibility_different_seeds(self):
         rng1 = ensure_rng(42)
         rng2 = ensure_rng(123)
@@ -72,6 +74,7 @@ class TestCreateChildRng:
         # Sequences should be different
         assert parent_nums != child_nums
 
+    @pytest.mark.reproducibility
     def test_reproducibility_of_children(self):
         parent1 = np.random.default_rng(42)
         parent2 = np.random.default_rng(42)

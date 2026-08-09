@@ -139,10 +139,15 @@ jobs:
           PY
 
       - name: Audit pytest marker collection
+        # Mirror the exact -m expressions used by the fast/slow run steps below,
+        # one collect-only per suite, so the audit reflects what actually runs.
         run: |
-          python -m pytest tests/ --collect-only -q -m "not slow and not integration"
-          python -m pytest tests/ --collect-only -q -m "slow and not benchmark"
-          python -m pytest tests/ --collect-only -q -m "not slow and not integration and not requires_mace and not requires_upet and not requires_uma"
+          python -m pytest tests/ --collect-only -q -m "not slow and not integration and not requires_upet and not requires_uma"
+          python -m pytest tests/ --collect-only -q -m "not slow and not integration and not requires_mace and not requires_upet"
+          python -m pytest tests/ --collect-only -q -m "not slow and not integration and not requires_mace and not requires_uma"
+          python -m pytest tests/ --collect-only -q -m "slow and not benchmark and not requires_upet and not requires_uma"
+          python -m pytest tests/ --collect-only -q -m "slow and not benchmark and not requires_mace and not requires_upet and not requires_uma"
+          python -m pytest tests/ --collect-only -q -m "slow and not benchmark and not requires_mace and not requires_uma"
 
       - name: Run fast tests
         if: matrix.suite == 'mace'
@@ -152,12 +157,12 @@ jobs:
       - name: Run fast tests (UMA)
         if: matrix.suite == 'uma'
         run: |
-          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_upet" -v
+          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_upet" -v --cov=scgo --cov-report=xml --cov-report=term
 
       - name: Run fast tests (UPET)
         if: matrix.suite == 'upet'
         run: |
-          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_uma" -v
+          pytest tests/ -n 2 -m "not slow and not integration and not requires_mace and not requires_uma" -v --cov=scgo --cov-report=xml --cov-report=term
 
       - name: Run slow tests
         if: matrix.suite == 'mace'
@@ -171,14 +176,14 @@ jobs:
         env:
           SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
-          pytest tests/ -m "slow and not benchmark and not requires_mace and not requires_upet and not requires_uma" -n 2 -v
+          pytest tests/ -m "slow and not benchmark and not requires_mace and not requires_upet and not requires_uma" -n 2 -v --cov=scgo --cov-report=xml --cov-report=term --cov-append
 
       - name: Run slow tests (UPET)
         if: matrix.suite == 'upet'
         env:
           SCGO_BATCH_TEST_SAMPLES: "15"
         run: |
-          pytest tests/ -m "slow and not benchmark and not requires_mace and not requires_uma" -n 2 -v
+          pytest tests/ -m "slow and not benchmark and not requires_mace and not requires_uma" -n 2 -v --cov=scgo --cov-report=xml --cov-report=term --cov-append
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

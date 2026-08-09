@@ -1561,6 +1561,8 @@ class TestReproducibilityAllModes:
     @pytest.mark.parametrize(
         "mode", ["random_spherical", "seed+growth", "smart", "template"]
     )
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     @pytest.mark.parametrize("seed", [0, 42])
     def test_reproducibility_single_element(self, mode, seed):
         comp = ["Pt"] * 30
@@ -1571,6 +1573,8 @@ class TestReproducibilityAllModes:
             f"{mode} mode not reproducible with seed={seed}"
         )
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
     @pytest.mark.parametrize("seed", [0, 42])
     def test_reproducibility_bimetallic(self, mode, seed):
