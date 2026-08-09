@@ -616,6 +616,217 @@ def test_static_autobatcher_disabled_by_default():
     assert relaxer._static_autobatcher_arg(n_structures=50, max_atoms=10) is True
 
 
+class _FakeBinningAutoBatcher:
+    """Records the kwargs ``ts.static`` would receive as its autobatcher."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
+def _stub_static_relaxer(device: str, *, scaler_on_autobatcher=None):
+    """Build a ``TorchSimBatchRelaxer`` skeleton for ``_single_point_batch`` tests."""
+    import torch
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.max_memory_scaler = None
+    relaxer.max_memory_padding = 1.05
+    relaxer.memory_scales_with = "n_atoms_x_density"
+    relaxer.expected_max_atoms = None
+    relaxer.max_steps = 100
+    relaxer.device = torch.device(device)
+    relaxer.dtype = torch.float64
+    relaxer.model = object()
+    relaxer.optimizer = object()
+    relaxer.model_kind = "mace"
+    relaxer.autobatcher = None
+    relaxer.last_batch_relax_steps = []
+    relaxer._runner_kwargs = {"max_steps": 100}
+    if scaler_on_autobatcher is not None:
+        # Mirrors production: the warm probe leaves its scaler on the InFlight
+        # autobatcher instance, not on the relaxer field.
+        autobatcher = type(
+            "_InFlight", (), {"max_memory_scaler": scaler_on_autobatcher}
+        )()
+        relaxer._runner_kwargs["autobatcher"] = autobatcher
+    return relaxer
+
+
+def _install_fake_ts(relaxer, monkeypatch, captured: dict):
+    """Give ``relaxer`` a fake ``torch_sim`` module recording ``static`` kwargs."""
+    import torch
+
+    class _FakeTS:
+        BinningAutoBatcher = _FakeBinningAutoBatcher
+
+        def static(self, **kwargs):
+            captured["autobatcher"] = kwargs["autobatcher"]
+            n = len(kwargs["system"]) if isinstance(kwargs["system"], list) else 1
+            return [
+                {
+                    "potential_energy": torch.tensor([1.5]),
+                    "forces": torch.zeros((1, 3)),
+                }
+                for _ in range(n)
+            ]
+
+    relaxer._ts = _FakeTS()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+    # Keep the developer's on-disk scaler cache out of the assertion: this test
+    # is about which autobatcher ``ts.static`` receives, not cache lookups.
+    monkeypatch.setattr(relaxer, "_apply_cached_memory_scaler", lambda _n: False)
+
+
+def test_single_point_uses_binning_autobatcher_when_scaler_known(monkeypatch):
+    """T2: the NEB force path must bin ``ts.static`` with the cached scaler.
+
+    Without this, the whole fused NEB batch runs as one ``torch.cat`` forward
+    pass and OOMs on a 16 GB GPU. ``ts.static`` only accepts
+    ``BinningAutoBatcher | bool`` — the InFlight batcher used by ``ts.optimize``
+    is rejected — so a fresh binning batcher seeded with the known scaler is the
+    only way to reuse the probe result here.
+    """
+    from ase import Atoms
+
+    relaxer = _stub_static_relaxer("cuda", scaler_on_autobatcher=1234.0)
+    captured: dict = {}
+    _install_fake_ts(relaxer, monkeypatch, captured)
+
+    relaxer.relax_batch([Atoms("H", positions=[[0.0, 0.0, 0.0]])], steps=0)
+
+    batcher = captured["autobatcher"]
+    assert isinstance(batcher, _FakeBinningAutoBatcher)
+    assert batcher.kwargs["max_memory_scaler"] == pytest.approx(1234.0)
+    assert batcher.kwargs["model"] is relaxer.model
+    assert batcher.kwargs["memory_scales_with"] == "n_atoms_x_density"
+
+
+def test_single_point_stays_unbatched_without_a_scaler(monkeypatch):
+    """No known scaler → keep the single-pass behaviour (never probe per call)."""
+    from ase import Atoms
+
+    relaxer = _stub_static_relaxer("cuda")
+    captured: dict = {}
+    _install_fake_ts(relaxer, monkeypatch, captured)
+
+    relaxer.relax_batch([Atoms("H", positions=[[0.0, 0.0, 0.0]])], steps=0)
+    assert captured["autobatcher"] is False
+
+
+def test_single_point_stays_unbatched_on_cpu(monkeypatch):
+    """CPU runs never build a BinningAutoBatcher, even with a known scaler."""
+    from ase import Atoms
+
+    relaxer = _stub_static_relaxer("cpu", scaler_on_autobatcher=1234.0)
+    captured: dict = {}
+    _install_fake_ts(relaxer, monkeypatch, captured)
+
+    relaxer.relax_batch([Atoms("H", positions=[[0.0, 0.0, 0.0]])], steps=0)
+    assert captured["autobatcher"] is False
+
+
+def test_memory_scaler_cache_key_separates_geometry_tags():
+    """T1: gas and surface probes of the same size must not share a cache slot."""
+    import tempfile
+
+    from scgo.calculators.torchsim_helpers import MemoryScalerCache
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache = MemoryScalerCache(cache_dir=tmpdir)
+        common = {
+            "n_atoms": 4000,
+            "model_name": "mace_matpes_0",
+            "memory_scales_with": "n_atoms_x_density",
+            "device": "cuda",
+        }
+        cache.set(**common, geometry_tag="neb-gas_cluster|atoms", value=100.0)
+        cache.set(**common, geometry_tag="neb-surface_cluster|atoms", value=7.0)
+
+        assert cache.get(**common, geometry_tag="neb-gas_cluster|atoms") == 100.0
+        assert cache.get(**common, geometry_tag="neb-surface_cluster|atoms") == 7.0
+        # An untagged (legacy-style) lookup must miss rather than alias either.
+        assert cache.get(**common) is None
+
+
+def test_geometry_tag_records_the_probe_shape():
+    """A tag that outlives its probe must not alias a bulk probe onto a real one."""
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    bulk_probe = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    bulk_probe.geometry_tag = "neb-surface_cluster"
+    bulk_probe.probe_atoms = None
+    bulk_probe.probe_builder = None
+    assert bulk_probe._resolve_geometry_tag() == "neb-surface_cluster|bulk"
+
+    real_probe = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    real_probe.geometry_tag = "neb-surface_cluster"
+    real_probe.probe_atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    real_probe.probe_builder = None
+    assert real_probe._resolve_geometry_tag() == "neb-surface_cluster|atoms"
+
+    untagged = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    untagged.geometry_tag = None
+    untagged.probe_atoms = None
+    untagged.probe_builder = None
+    assert untagged._resolve_geometry_tag() == "default|bulk"
+
+
+def test_probe_atoms_is_used_verbatim_as_the_warm_probe():
+    """T1: the probe must be the real workload geometry, not a dense bulk block.
+
+    torch-sim replicates the probe itself up to ``max_atoms_to_try``, so passing
+    one representative structure measures "how many of these fit", which is
+    exactly what the binning autobatcher needs.
+    """
+    import numpy as np
+    from ase import Atoms
+    from ase.constraints import FixAtoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    slab_like = Atoms(
+        "H4",
+        positions=np.array(
+            [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [2.0, 2.0, 0.0]]
+        ),
+        cell=[8.0, 8.0, 20.0],
+        pbc=True,
+    )
+    slab_like.set_constraint(FixAtoms(indices=[0, 1]))
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.probe_atoms = slab_like
+    relaxer.probe_builder = None
+
+    probe, desc = relaxer._build_probe_atoms(4000)
+    assert len(probe) == 4  # one representative structure, not 4000 atoms
+    assert np.allclose(probe.get_cell(), slab_like.get_cell())
+    assert probe.constraints == []
+    assert probe.calc is None
+    assert "4 atoms/structure" in desc
+
+
+def test_probe_falls_back_to_bulk_dummy_without_probe_atoms():
+    """Backwards compatibility: the GO/cluster path keeps the bulk-Cu dummy."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.probe_atoms = None
+    relaxer.probe_builder = None
+
+    probe, desc = relaxer._build_probe_atoms(64)
+    assert len(probe) == 64
+    assert set(probe.get_chemical_symbols()) == {"Cu"}
+    assert "bulk-Cu" in desc
+
+
 def test_build_torchsim_relaxer_uma_like_sets_fairchem_kind():
     """Factory cascade: UMA-like calc → fairchem model_kind with shared model."""
     from unittest.mock import MagicMock, patch

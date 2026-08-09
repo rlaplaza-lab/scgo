@@ -897,6 +897,15 @@ def run_transition_state_search(
             relaxer_params.setdefault(
                 "max_atoms_to_try", int(parallel_neb_max_batch_atoms)
             )
+        # Probe GPU memory with a *real* structure from this campaign instead of
+        # the dense bulk-Cu dummy: the ``n_atoms_x_density`` metric is geometry
+        # dependent, and slab+vacuum NEB images are far sparser than bulk, so a
+        # bulk-probed scaler does not describe the batches the NEB actually runs.
+        probe_ref = copy_atoms(minima[0][1])
+        probe_ref.calc = None
+        probe_ref.set_constraint()
+        relaxer_params.setdefault("probe_atoms", probe_ref)
+        relaxer_params.setdefault("geometry_tag", f"neb-{system_type}")
         shared_relaxer = TorchSimBatchRelaxer(**relaxer_params)
 
     if needs_idpp_screen:

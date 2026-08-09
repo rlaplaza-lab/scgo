@@ -139,6 +139,10 @@ def coerce_ts_params_to_runner_kwargs(
         # is stable across runs and the autobatcher probe stays capped.
         kwargs["torchsim_params"]["expected_max_atoms"] = int(ts_batch_atoms)
         kwargs["torchsim_params"]["max_atoms_to_try"] = int(ts_batch_atoms)
+    # Namespace the on-disk memory-scaler cache per system type: the
+    # ``n_atoms_x_density`` metric is geometry dependent, so a gas-cluster probe
+    # must never hand its scaler to a slab+vacuum NEB workload of the same size.
+    kwargs["torchsim_params"]["geometry_tag"] = f"neb-{system_type}"
     if str(ts_params.get("calculator", "")).strip().upper() == "UMA":
         ck = ts_params.get("calculator_kwargs", {}) or {}
         model_name = ck.get("model_name")

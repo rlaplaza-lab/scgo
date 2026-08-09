@@ -575,7 +575,8 @@ def test_run_parallel_neb_preserves_batch_oom_error(tmp_path, cu3_triangle, cu3_
 
     minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
     pairs = [(0, 1)]
-    oom = "CUDA out of memory. Tried to allocate 6.43 GiB."
+    # Tagged for the Kaggle runner's real-vs-simulated OOM log scan.
+    oom = "CUDA out of memory [scgo-simulated-failure]. Tried to allocate 6.43 GiB."
 
     class _OomBatch:
         def __init__(self, neb_instances, *args, **kwargs):
@@ -987,66 +988,52 @@ class _SteppingCountingRelaxer(_CountingFakeRelaxer):
 
 
 def test_parallel_neb_step_reuses_batched_forces(cu3_triangle, cu3_linear):
-    """B1: ``FIRE.step`` receives the batched forces, never re-entering get_forces.
+    """B1: stepping must not dispatch an extra unbatched ``relax_batch``.
 
-    Before the fix, ``optimizer.step()`` recomputed the gradient via
-    ``NEBOptimizable.get_gradient`` -> ``neb.get_forces()``. On any stale image
-    that re-enters ``TorchSimNEB.get_forces`` and dispatches an *unbatched*
-    per-band ``relax_batch``, defeating the whole point of the batch runner.
+    ``optimizer.step()`` is called with no forces argument (ASE 3.28 removes
+    ``Optimizer.step(f)``), so FIRE recomputes the gradient via
+    ``NEBOptimizable.get_gradient`` -> ``neb.get_forces()``. That is only safe
+    because every image still carries the SinglePoint results the batch runner
+    just attached, so ``TorchSimNEB.get_forces`` takes its cached-forces fast
+    path instead of re-entering TorchSim per band.
     """
     relaxer = _SteppingCountingRelaxer()
     images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
     neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
 
-    get_forces_calls = {"n": 0}
-    original_get_forces = neb.get_forces
-
-    def counting_get_forces():
-        get_forces_calls["n"] += 1
-        return original_get_forces()
-
-    neb.get_forces = counting_get_forces  # type: ignore[method-assign]
-
     batch = ParallelNEBBatch([neb], relaxer, max_total_steps=3)
-    assert batch._optimizer_accepts_forces is True
     results = batch.run_optimization(fmax=1e-8, max_steps=2)
 
     assert results[0]["steps_taken"] == 2
-    # Exactly one get_forces per optimization step: the batch runner's own call.
-    # A second call per step would mean FIRE recomputed the gradient itself.
-    assert get_forces_calls["n"] == 2, (
-        f"expected one neb.get_forces() per step, got {get_forces_calls['n']}"
-    )
     # step 0 (all images) + step 1 (interiors) + post-loop refresh = 3 batches.
+    # Any per-band re-entry into TorchSim would push this higher.
     assert relaxer.calls == 3, relaxer.batch_sizes
 
 
-def test_parallel_neb_falls_back_to_bare_step_for_plain_optimizer(
-    cu3_triangle, cu3_linear
-):
-    """Optimizers whose ``step()`` takes no forces must still be driven."""
+def test_parallel_neb_never_passes_forces_to_step(cu3_triangle, cu3_linear):
+    """``optimizer.step`` is always called with no arguments (ASE 3.28 ready)."""
 
-    class _NoForcesOptimizer:
-        instances: list[_NoForcesOptimizer] = []
+    class _RecordingOptimizer:
+        instances: list[_RecordingOptimizer] = []
 
         def __init__(self, neb, logfile=None, trajectory=None):
             self.neb = neb
             self.step_args: list[tuple] = []
-            _NoForcesOptimizer.instances.append(self)
+            _RecordingOptimizer.instances.append(self)
 
-        def step(self):
-            self.step_args.append(())
+        def step(self, *args):
+            self.step_args.append(args)
 
+    _RecordingOptimizer.instances.clear()
     relaxer = _SteppingCountingRelaxer()
     images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
     neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
     batch = ParallelNEBBatch(
-        [neb], relaxer, max_total_steps=1, optimizer=_NoForcesOptimizer
+        [neb], relaxer, max_total_steps=1, optimizer=_RecordingOptimizer
     )
-    assert batch._optimizer_accepts_forces is False
     batch.run_optimization(fmax=1e-8, max_steps=1)
-    assert _NoForcesOptimizer.instances
-    assert _NoForcesOptimizer.instances[0].step_args == [()]
+    assert _RecordingOptimizer.instances
+    assert _RecordingOptimizer.instances[0].step_args == [()]
 
 
 # ---------------------------------------------------------------------------
@@ -1349,14 +1336,88 @@ def test_run_parallel_neb_marks_nonfinite_band_failed(
 
 
 # ---------------------------------------------------------------------------
-# B5: one OOM retry per chunk
+# B5: one OOM retry per chunk (driving the real ParallelNEBBatch)
 # ---------------------------------------------------------------------------
+#
+# These tests deliberately do *not* stub ``ParallelNEBBatch.run_optimization``.
+# The retry wrapper only ever sees an exception if the real
+# ``run_optimization`` re-raises CUDA OOM out of ``relaxer.relax_batch`` — a
+# fake that raises from ``run_optimization`` would pass even while the
+# production path swallowed the OOM and silently produced zero saddles (which
+# is exactly the regression this suite exists to catch). So the fault is
+# injected at the ``relax_batch`` boundary and the real class runs.
+
+# Tagged so the Kaggle GPU runner's log scan can tell simulated OOM apart from a
+# real one (see .github/scripts/kaggle_gpu_runner.template.py).
+SIMULATED_OOM = (
+    "CUDA out of memory [scgo-simulated-failure]. Tried to allocate 6.43 GiB."
+)
+
+
+class _OomRelaxer(_CountingFakeRelaxer):
+    """Fake relaxer whose ``relax_batch`` raises CUDA OOM on the first N calls."""
+
+    def __init__(self, *, fail_first: int | None = None) -> None:
+        super().__init__()
+        self.fail_first = fail_first  # None -> always fail
+        self.failures = 0
+
+    def relax_batch(self, atoms_list, steps=0):
+        if self.fail_first is None or self.failures < self.fail_first:
+            self.failures += 1
+            raise RuntimeError(SIMULATED_OOM)
+        return super().relax_batch(atoms_list, steps=steps)
+
+
+def _recording_batch_cls(attempts: list[int]):
+    """Subclass of the real ``ParallelNEBBatch`` that records chunk sizes."""
+
+    class _RecordingBatch(ParallelNEBBatch):
+        def __init__(self, neb_instances, *args, **kwargs):
+            attempts.append(len(neb_instances))
+            super().__init__(neb_instances, *args, **kwargs)
+
+    return _RecordingBatch
+
+
+def test_run_optimization_reraises_cuda_oom(cu3_triangle, cu3_linear):
+    """T3: CUDA OOM must escape ``run_optimization`` instead of failing bands.
+
+    Swallowing it here is what made ``_run_chunk_with_oom_retry`` dead code.
+    """
+    relaxer = _OomRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=2)
+
+    with pytest.raises(RuntimeError, match="out of memory"):
+        batch.run_optimization(fmax=0.05, max_steps=2)
+
+    # The band must not have been quietly marked failed on the way out.
+    assert batch.failed_nebs == {}
+
+
+def test_run_optimization_still_fails_bands_on_non_oom_error(cu3_triangle, cu3_linear):
+    """Non-OOM ``relax_batch`` failures stay contained (bad input, not GPU pressure)."""
+
+    class _BrokenRelaxer(_CountingFakeRelaxer):
+        def relax_batch(self, atoms_list, steps=0):
+            raise RuntimeError("model weights are corrupt")
+
+    relaxer = _BrokenRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=2)
+
+    results = batch.run_optimization(fmax=0.05, max_steps=2)
+    assert "model weights are corrupt" in str(results[0]["error"])
+    assert batch.failed_nebs
 
 
 def test_run_parallel_neb_retries_chunk_once_on_cuda_oom(
     tmp_path, cu3_triangle, cu3_linear
 ):
-    """B5: a CUDA-OOM chunk is re-binned smaller and retried before failing."""
+    """B5: a CUDA-OOM chunk is re-binned smaller and recovers, via the real class."""
     from unittest.mock import MagicMock, patch
 
     from scgo.ts_search.parallel_neb import run_parallel_neb_search
@@ -1369,28 +1430,14 @@ def test_run_parallel_neb_retries_chunk_once_on_cuda_oom(
     ]
     pairs = [(0, 1), (1, 2), (2, 3)]
     attempts: list[int] = []
-
-    class _OomOnceBatch:
-        def __init__(self, neb_instances, *args, **kwargs):
-            self.neb_instances = list(neb_instances)
-            attempts.append(len(self.neb_instances))
-
-        def run_optimization(self, fmax=0.05, max_steps=100):
-            if len(self.neb_instances) == 3:
-                raise RuntimeError("CUDA out of memory. Tried to allocate 6.43 GiB.")
-            return [
-                {
-                    "converged": True,
-                    "final_fmax": 0.01,
-                    "steps_taken": 1,
-                    "error": None,
-                }
-                for _ in self.neb_instances
-            ]
+    relaxer = _OomRelaxer(fail_first=1)
 
     with (
         patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
-        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _OomOnceBatch),
+        patch(
+            "scgo.ts_search.parallel_neb.ParallelNEBBatch",
+            _recording_batch_cls(attempts),
+        ),
         patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
         patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
     ):
@@ -1400,13 +1447,14 @@ def test_run_parallel_neb_retries_chunk_once_on_cuda_oom(
             neb_cfg=_gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
             run_dir=tmp_path,
             rng=None,
-            relaxer=_CountingFakeRelaxer(),
+            relaxer=relaxer,
         )
 
     # First attempt: one 3-band chunk (OOM). Retry: re-binned to smaller chunks.
     assert attempts[0] == 3
     assert len(attempts) > 1, attempts
     assert all(n < 3 for n in attempts[1:]), attempts
+    assert relaxer.failures == 1
     # Every band recovered, so none is marked failed.
     assert all(r.get("error") is None for r in results), [
         r.get("error") for r in results
@@ -1423,18 +1471,9 @@ def test_run_parallel_neb_fails_bands_when_oom_retry_also_fails(
 
     minima = [(0.0, cu3_triangle), (1.0, cu3_linear), (2.0, cu3_triangle)]
     pairs = [(0, 1), (1, 2)]
-    oom = "CUDA out of memory. Tried to allocate 6.43 GiB."
-
-    class _AlwaysOomBatch:
-        def __init__(self, neb_instances, *args, **kwargs):
-            self.neb_instances = list(neb_instances)
-
-        def run_optimization(self, fmax=0.05, max_steps=100):
-            raise RuntimeError(oom)
 
     with (
         patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
-        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _AlwaysOomBatch),
         patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
         patch(
             "scgo.ts_search.parallel_neb._finalize_neb_result",
@@ -1447,19 +1486,64 @@ def test_run_parallel_neb_fails_bands_when_oom_retry_also_fails(
             neb_cfg=_gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
             run_dir=tmp_path,
             rng=None,
-            relaxer=_CountingFakeRelaxer(),
+            relaxer=_OomRelaxer(),
         )
 
     for result in results:
         assert result["status"] == "failed"
-        assert oom in str(result.get("error", ""))
+        assert SIMULATED_OOM in str(result.get("error", ""))
+        assert not result.get("steps_taken")
     finalize_mock.assert_not_called()
 
 
-def test_run_parallel_neb_does_not_retry_non_oom_runtime_errors(
+def test_run_parallel_neb_does_not_retry_non_oom_relax_batch_errors(
     tmp_path, cu3_triangle, cu3_linear
 ):
-    """Only CUDA OOM triggers the retry path; other RuntimeErrors propagate."""
+    """A non-OOM ``relax_batch`` failure fails the bands without re-binning."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear), (2.0, cu3_triangle)]
+    pairs = [(0, 1), (1, 2)]
+    attempts: list[int] = []
+
+    class _BrokenRelaxer(_CountingFakeRelaxer):
+        def relax_batch(self, atoms_list, steps=0):
+            raise RuntimeError("model weights are corrupt")
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb.ParallelNEBBatch",
+            _recording_batch_cls(attempts),
+        ),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb._finalize_neb_result",
+            MagicMock(side_effect=AssertionError("finalize must be skipped")),
+        ),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_BrokenRelaxer(),
+        )
+
+    # Exactly one chunk attempt: no half-budget re-binning for non-OOM errors.
+    assert attempts == [2], attempts
+    for result in results:
+        assert result["status"] == "failed"
+        assert "model weights are corrupt" in str(result.get("error", ""))
+
+
+def test_run_parallel_neb_propagates_non_oom_error_from_run_optimization(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """Wrapper contract: only CUDA OOM is retried; anything else propagates."""
     from unittest.mock import MagicMock, patch
 
     from scgo.ts_search.parallel_neb import run_parallel_neb_search
@@ -1472,14 +1556,14 @@ def test_run_parallel_neb_does_not_retry_non_oom_runtime_errors(
             self.neb_instances = list(neb_instances)
 
         def run_optimization(self, fmax=0.05, max_steps=100):
-            raise RuntimeError("model weights are corrupt")
+            raise RuntimeError("optimizer exploded")
 
     with (
         patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
         patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _BrokenBatch),
         patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
         patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
-        pytest.raises(RuntimeError, match="model weights are corrupt"),
+        pytest.raises(RuntimeError, match="optimizer exploded"),
     ):
         run_parallel_neb_search(
             pairs,

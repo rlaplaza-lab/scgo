@@ -83,6 +83,11 @@ class GpuExampleCase:
     n_core_mobile: int = 5
     adsorbate_fragment_lengths: list[int] | None = None
     check_supported_binding: bool = True
+    # True = "trial of fire": assert_e2e_go_ts_summary then demands at least one
+    # *successful* saddle and rejects any OOM / never-ran band. Only the surface
+    # cluster cases set it; the gas cases keep it False because their reduced CI
+    # budget legitimately leaves no on-disk pairs for the TS stage, and
+    # ``surface_adsorbate`` legitimately reports "No suitable pairs found".
     require_ts_candidates: bool = False
 
 

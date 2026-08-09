@@ -100,7 +100,9 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
 
         # Now patch the TS-finding call to raise a CUDA OOM and patch cleanup
         def fake_find_transition_state(*args, **kwargs):
-            raise RuntimeError("CUDA out of memory. Tried to allocate ...")
+            raise RuntimeError(
+                "CUDA out of memory [scgo-simulated-failure]. Tried to allocate ..."
+            )
 
         monkeypatch.setattr(
             "scgo.ts_search.transition_state_run.find_transition_state",

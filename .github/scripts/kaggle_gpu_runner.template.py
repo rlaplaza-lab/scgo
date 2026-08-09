@@ -25,6 +25,20 @@ SOURCE_ARCHIVE = "scgo-src.tar.gz"
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu124"
 PYPI_INDEX = "https://pypi.org/simple"
 
+# SCGO log phrases that mark a *real* GPU-memory degradation: a fused NEB force
+# batch that ran out of memory, the half-budget retry failing again, or a band
+# dropped without producing a saddle. Generic torch OOM text is deliberately not
+# matched: torch-sim's autobatcher probes memory by triggering OOM on purpose,
+# and the warm probe logs a non-fatal "Memory probing failed" on the way.
+# Unit tests that simulate these paths tag their message with
+# ``SYNTHETIC_FAILURE_TOKEN`` so they can never trip this guard.
+OOM_MARKERS = (
+    "hit cuda oom",
+    "retry still oom",
+    "parallel neb band unusable",
+)
+SYNTHETIC_FAILURE_TOKEN = "scgo-simulated-failure"
+
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -367,6 +381,35 @@ def _assert_cuda_usable(py: list[str]) -> None:
     )
 
 
+def _is_unexpected_oom_line(line: str) -> bool:
+    """True when ``line`` reports a genuine (non-simulated) GPU degradation."""
+    lowered = line.lower()
+    if SYNTHETIC_FAILURE_TOKEN in lowered:
+        return False
+    return any(marker in lowered for marker in OOM_MARKERS)
+
+
+def _run_pytest_streaming(cmd: list[str], env: dict[str, str]) -> tuple[int, list[str]]:
+    """Run pytest, tee its output, and collect unexpected GPU-degradation lines."""
+    oom_lines: list[str] = []
+    with subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    ) as proc:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            if len(oom_lines) < 20 and _is_unexpected_oom_line(line):
+                oom_lines.append(line.rstrip())
+        returncode = proc.wait()
+    return returncode, oom_lines
+
+
 def main() -> int:
     try:
         _log_kaggle_inputs()
@@ -386,6 +429,10 @@ def main() -> int:
         env = os.environ.copy()
         env["SCGO_BATCH_TEST_SAMPLES"] = "15"
         env.setdefault("PYTHONUNBUFFERED", "1")
+        # Reduce allocator fragmentation on the 16 GB T4: the torch OOM
+        # traceback itself recommends this, and the fused NEB force batches are
+        # exactly the large short-lived allocations it helps with.
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
         pytest_cmd = [
             *py,
@@ -403,8 +450,18 @@ def main() -> int:
             "--durations=25",
         ]
         log("+ " + " ".join(pytest_cmd))
-        completed = subprocess.run(pytest_cmd, env=env)
-        return int(completed.returncode)
+        returncode, oom_lines = _run_pytest_streaming(pytest_cmd, env)
+        if oom_lines:
+            log("")
+            log(
+                "SCGO GPU CI: NEB bands were dropped due to GPU memory pressure. "
+                "Green tests are not enough here: this means the transition-state "
+                "stage silently degraded. Failing the job."
+            )
+            for line in oom_lines:
+                log(f"  OOM> {line}")
+            return returncode or 1
+        return int(returncode)
     except Exception:
         log("SCGO Kaggle runner failed:")
         log(traceback.format_exc())
