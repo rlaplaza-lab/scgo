@@ -16,7 +16,6 @@ from scgo.ts_search.transition_state import (
     _align_product_for_neb,
     _align_product_kabsch_to_reactant,
     _align_product_surface_pbc,
-    _inplane_rotation_matrix_3d,
     _lattice_translation_candidates,
     _validate_lattice_compatible_rotation,
     interpolate_path,
@@ -45,7 +44,9 @@ def test_validate_lattice_compatible_rotation_rejects_out_of_plane():
 
 
 def test_inplane_rotation_matrix_preserves_normal_axis():
-    rot = _inplane_rotation_matrix_3d(np.deg2rad(40.0), normal_axis=2)
+    angle = np.deg2rad(40.0)
+    c, s = np.cos(angle), np.sin(angle)
+    rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
     _validate_lattice_compatible_rotation(rot, normal_axis=2)
 
 

@@ -64,26 +64,6 @@ def set_db_schema_version(db: DataConnection, version: int) -> None:
         logger.debug("Set DB schema version to %s", version)
 
 
-def ensure_db_schema_version(db: DataConnection) -> None:
-    """Bump recorded schema version to :data:`CURRENT_DB_SCHEMA_VERSION` when behind."""
-    current_version = get_db_schema_version(db)
-
-    if current_version < CURRENT_DB_SCHEMA_VERSION:
-        logger.info(
-            "Updating database schema stamp from v%s to v%s (no data migration)",
-            current_version,
-            CURRENT_DB_SCHEMA_VERSION,
-        )
-        set_db_schema_version(db, CURRENT_DB_SCHEMA_VERSION)
-    elif current_version > CURRENT_DB_SCHEMA_VERSION:
-        logger.warning(
-            "Database version %s is newer than expected %s — update SCGO to the "
-            "latest version",
-            current_version,
-            CURRENT_DB_SCHEMA_VERSION,
-        )
-
-
 def get_db_stamp(db_path: str | Path) -> dict[str, str]:
     """Return key/value pairs from the ``scgo_metadata`` table, or {}."""
     try:

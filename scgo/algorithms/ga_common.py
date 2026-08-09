@@ -525,7 +525,6 @@ class ClusterStartGenerator(StartGenerator):
                 for _i in range(population_size):
                     placement_metadata: dict[str, str] = {}
                     a = build_hierarchical_core_fragment_cluster(
-                        self.composition,
                         adsorbate_definition,
                         self.rng,
                         self.previous_search_glob,
@@ -587,7 +586,6 @@ class ClusterStartGenerator(StartGenerator):
                 )
 
                 atoms = build_hierarchical_core_fragment_cluster(
-                    self.composition,
                     self.adsorbate_definition,
                     _rng_or_default(self.rng),
                     self.previous_search_glob,

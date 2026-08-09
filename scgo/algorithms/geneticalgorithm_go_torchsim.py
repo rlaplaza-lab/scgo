@@ -131,30 +131,6 @@ def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
     return min(resolve_n_jobs_to_workers(n_jobs), n_tasks)
 
 
-def _sorted_unrelaxed_gaids(da: DataConnection) -> list[int]:
-    """Return unrelaxed configuration IDs in deterministic ascending order.
-
-    Uses a single ``select()`` scan (rows expose ``.relaxed`` / ``.queued`` /
-    ``.gaid`` directly), instead of three separate filtered scans.
-    """
-    candidates = [
-        r.gaid
-        for r in da.c.select()
-        if not (getattr(r, "relaxed", 0) or getattr(r, "queued", 0))
-    ]
-    return sorted(set(candidates))
-
-
-def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
-    """Load the latest trajectory for an unrelaxed configuration ID."""
-    rows = list(da.c.select(gaid=gaid))
-    rows.sort(key=lambda row: row.mtime)
-    atoms = da.get_atoms(rows[-1].id)
-    atoms.info["confid"] = gaid
-    atoms.info.setdefault("data", {})
-    return atoms
-
-
 _PREFILTER_BLMIN_FACTOR = 0.55
 
 

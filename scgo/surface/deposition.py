@@ -446,7 +446,6 @@ def create_deposited_cluster(
                 return combined
             else:
                 cluster_seed = build_hierarchical_core_fragment_cluster(
-                    composition,
                     adsorbate_definition,
                     rng,
                     previous_search_glob,

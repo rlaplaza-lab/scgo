@@ -188,29 +188,6 @@ def iter_database_minima(
         raise
 
 
-def iter_databases_minima(
-    db_paths: list[str | Path],
-    max_structures: int | None = None,
-    **iter_kwargs,
-) -> Generator[tuple[float, Atoms], None, None]:
-    """Iterate over minima from multiple databases."""
-    count = 0
-
-    for db_path in db_paths:
-        if max_structures is not None and count >= max_structures:
-            logger.debug("Reached max_structures limit (%s)", max_structures)
-            break
-
-        for energy, atoms in iter_database_minima(db_path, **iter_kwargs):
-            yield (energy, atoms)
-            count += 1
-
-            if max_structures is not None and count >= max_structures:
-                break
-
-    logger.debug("Streamed %s total structures from %s databases", count, len(db_paths))
-
-
 def count_database_structures(db_path: str | Path) -> int:
     """Count relaxed structures in database without loading them."""
     db_path = Path(db_path)

@@ -109,7 +109,6 @@ def build_adsorbate_only_cluster(
 
 
 def build_hierarchical_core_fragment_cluster(
-    full_composition: Sequence[str],
     adsorbate_definition: AdsorbateDefinition,
     rng: Generator,
     previous_search_glob: str,

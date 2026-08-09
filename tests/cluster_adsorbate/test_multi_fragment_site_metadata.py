@@ -18,14 +18,12 @@ def _oh() -> Atoms:
 
 
 def test_two_oh_fragments_record_site_types_json() -> None:
-    mobile = ["Pt", "Pt", "Pt", "O", "H", "O", "H"]
     ads_def = {
         "core_symbols": ["Pt", "Pt", "Pt"],
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "adsorbate_fragment_lengths": [2, 2],
     }
     out = build_hierarchical_core_fragment_cluster(
-        mobile,
         ads_def,
         default_rng(21),
         "**/*.db",

@@ -172,14 +172,6 @@ class TSParams(TypedDict, total=False):
     system_type: NotRequired[SystemType]
 
 
-class SystemConfig(TypedDict, total=False):
-    """System type plus optional surface and adsorbate settings."""
-
-    system_type: SystemType
-    surface_config: NotRequired[SurfaceSystemConfig]
-    adsorbate_definition: NotRequired[AdsorbateDefinition]
-
-
 AdsorbatesInput = Atoms | list[Atoms]
 AdsorbateFragmentInput = Atoms | list[Atoms]
 

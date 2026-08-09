@@ -374,7 +374,6 @@ def _compute_facet_properties(
 
 
 def _filter_safe_facets_for_placement(
-    atoms: Atoms,
     facet_properties: list[tuple[np.ndarray, np.ndarray, float, tuple[float, float]]],
     bond_distance: float,
     min_connectivity_dist: float | None,
@@ -392,8 +391,6 @@ def _filter_safe_facets_for_placement(
     trial-and-error approaches.
 
     Args:
-        atoms: The Atoms object representing the current cluster structure
-            (unused; geometry is taken from ``positions`` and ``symbols_list``).
         facet_properties: List of (centroid, normal, area, (min_dist, max_dist))
             for each facet.
         bond_distance: Target bond distance for placement.
@@ -594,7 +591,6 @@ def _generate_batch_positions_on_convex_hull(
         ]
         # Filter to safe facets (returns indices in sorted_facet_properties order)
         safe_sorted_indices = _filter_safe_facets_for_placement(
-            atoms,
             sorted_facet_properties,
             bond_distance,
             min_connectivity_dist,
@@ -930,7 +926,6 @@ def place_multi_atom_seed_on_facet(
     target_facet_centroid: np.ndarray,
     target_facet_normal: np.ndarray,
     bond_distance: float,
-    rng: np.random.Generator,
 ) -> Atoms:
     """Place a multi-atom seed so that its largest facet contacts the target facet.
 
@@ -939,7 +934,6 @@ def place_multi_atom_seed_on_facet(
         target_facet_centroid: Centroid of the target facet
         target_facet_normal: Normal vector of the target facet
         bond_distance: Desired bond distance between facets
-        rng: Random number generator for rotation
 
     Returns:
         A copy of the seed with rotated and translated positions

@@ -171,20 +171,6 @@ def _parse_composition_from_path(path: str) -> list[str] | None:
     return None
 
 
-def _could_path_contain_relevant_candidates(
-    path: str, target_counts: Counter[str]
-) -> bool:
-    """Check if a path might contain candidates that are subsets of target."""
-    is_relevant, is_parseable = _path_relevance_status(path, target_counts)
-    if not is_parseable:
-        logger.debug(
-            "Cannot parse composition from path %s; skipping candidate discovery scan",
-            path,
-        )
-        return False
-    return is_relevant
-
-
 def _path_relevance_status(
     path: str,
     target_counts: Counter[str],

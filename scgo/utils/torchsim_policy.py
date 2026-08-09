@@ -22,11 +22,6 @@ from scgo.exceptions import (
 )
 
 
-def mace_torchsim_stack_available() -> bool:
-    """True if ``torch_sim`` (``scgo[mace]``) is importable."""
-    return importlib.util.find_spec("torch_sim") is not None
-
-
 def calculator_name_supports_torchsim_batched_neb(calculator_name: str) -> bool:
     """True if calculator family can run TorchSim NEB when its stack is installed."""
     name = calculator_name.strip().upper()

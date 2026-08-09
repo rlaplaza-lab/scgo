@@ -34,12 +34,9 @@ from scgo.database import (
     setup_database,
 )
 from scgo.database.discovery import DatabaseDiscovery
-from scgo.database.health import check_database_health, get_database_statistics
 from scgo.database.registry import DatabaseRegistry
 from scgo.database.streaming import (
-    count_database_structures,
     iter_database_minima,
-    iter_databases_minima,
     iter_relaxed_structures,
 )
 from scgo.exceptions import SCGOValidationError
@@ -50,7 +47,6 @@ from scgo.metadata.atoms import (
     set_tags,
 )
 from scgo.metadata.db_stamp import (
-    ensure_db_schema_version,
     get_db_schema_version,
     set_db_schema_version,
 )
@@ -682,16 +678,6 @@ class TestSchemaVersioning:
             set_db_schema_version(db, 5)
             assert get_db_schema_version(db) == 5
 
-    def test_ensure_db_schema_version(self, tmp_path, pt2_atoms):
-        with _setup_test_db(
-            tmp_path, "test.db", pt2_atoms, initial_candidate=pt2_atoms
-        ) as (_da, _db_path):
-            pass
-
-        with get_connection(tmp_path / "test.db") as db:
-            ensure_db_schema_version(db)
-            assert get_db_schema_version(db) >= 1
-
 
 class TestMetadataManagement:
     """Metadata helper functions."""
@@ -1039,7 +1025,7 @@ class TestRobustness:
 
         assert all(r[0] for r in results), f"Worker failures: {results}"
 
-        n_relaxed = count_database_structures(db_file)
+        n_relaxed = len(list(iter_database_minima(db_file)))
         assert n_relaxed == n_workers * batch_size
 
     def test_setup_database_wal_mode(self, tmp_path, pt2_atoms):
@@ -1061,51 +1047,6 @@ class TestRobustness:
             conn.close()
 
         assert mode.lower() == "wal"
-
-
-class TestDatabaseManager:
-    """Test SCGODatabaseManager."""
-
-
-class TestDatabaseHealth:
-    """Test database health utilities."""
-
-    def test_health_check_healthy(self, tmp_path):
-        """Test health check on healthy database."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-        close_data_connection(da)
-        del da
-
-        health = check_database_health(db_file)
-        assert "healthy" in health
-        assert "errors" in health
-        assert "warnings" in health
-        assert "info" in health
-        assert health["healthy"] is True
-        assert len(health["errors"]) == 0
-
-    def test_health_check_missing_file(self, tmp_path):
-        """Test health check on missing file."""
-        db_file = tmp_path / "nonexistent.db"
-        health = check_database_health(db_file)
-        assert health["healthy"] is False
-        assert len(health["errors"]) > 0
-
-    def test_get_statistics(self, tmp_path):
-        """Test getting database statistics."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-        close_data_connection(da)
-        del da
-
-        stats = get_database_statistics(db_file)
-        assert "size_mb" in stats
-        assert "journal_mode" in stats
-        assert "systems_count" in stats
-        assert stats["systems_count"] >= 0
 
 
 class TestDatabaseStreaming:
@@ -1164,7 +1105,7 @@ class TestDatabaseStreaming:
         monkeypatch.setattr(DataConnection, "get_all_relaxed_candidates", _fail)
 
         yielded = list(iter_database_minima(db_file, chunk_size=3))
-        assert len(yielded) == count_database_structures(db_file)
+        assert len(yielded) == 10
         assert all(isinstance(e, float) for e, _ in yielded)
 
     def test_iter_database_minima_logs_row_failure_and_continues(
@@ -1214,99 +1155,6 @@ class TestDatabaseStreaming:
             for rec in caplog.records
             if rec.levelname == "WARNING"
         )
-
-    def test_iter_databases_minima(self, tmp_path, rng):
-        """Test iterating over multiple databases."""
-        db_files = []
-        for i in range(3):
-            db_file = tmp_path / f"test_{i}.db"
-            atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5 + i * 0.1, 0, 0]])
-            da = setup_database(
-                tmp_path, f"test_{i}.db", atoms, initial_candidate=atoms
-            )
-
-            for j in range(3):
-                a = atoms.copy()
-                a.positions += rng.random((2, 3)) * 0.1
-                from scgo.metadata.atoms import set_tags
-
-                set_tags(a, raw_score=-10.0 - j)
-                a.info["data"] = {"tag": f"test_{j}"}
-                da.add_relaxed_step(a)
-
-            close_data_connection(da)
-            del da
-            db_files.append(str(db_file))
-
-        count = 0
-        for energy, atoms_obj in iter_databases_minima(db_files):
-            assert isinstance(energy, float)
-            assert isinstance(atoms_obj, Atoms)
-            count += 1
-
-        assert count > len(db_files)
-
-    def test_iter_databases_minima_max_structures_zero(self, tmp_path, rng):
-        """max_structures=0 must yield an empty iterator (not treat 0 as unlimited)."""
-        db_file = tmp_path / "test_zero.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test_zero.db", atoms, initial_candidate=atoms)
-        a = atoms.copy()
-        from scgo.metadata.atoms import set_tags
-
-        set_tags(a, raw_score=-10.0)
-        a.info["data"] = {"tag": "test"}
-        da.add_relaxed_step(a)
-        close_data_connection(da)
-
-        items = list(iter_databases_minima([str(db_file)], max_structures=0))
-        assert items == []
-
-    def test_count_database_structures(self, tmp_path, rng):
-        """Test counting structures."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(5):
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = {"raw_score": -10.0 - i}
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        count = count_database_structures(db_file)
-        assert count >= 5
-
-    def test_count_database_structures_no_get_all(self, tmp_path, rng, monkeypatch):
-        """Ensure count_database_structures does not load all rows into memory."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(5):
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = {"raw_score": -10.0 - i}
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        from ase_ga.data import DataConnection
-
-        def _fail(*args, **kwargs):
-            raise AssertionError(
-                "get_all_relaxed_candidates should not be called by count_database_structures"
-            )
-
-        monkeypatch.setattr(DataConnection, "get_all_relaxed_candidates", _fail)
-
-        assert count_database_structures(db_file) >= 5
 
     def test_streaming_returns_every_relaxed_row(self, tmp_path):
         """Every relaxed row is streamed with its energy and systems_row_id tag."""

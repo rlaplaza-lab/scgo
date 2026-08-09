@@ -54,7 +54,7 @@ def test_resolve_fitness_strategy_inherits_from_top_level():
     )
 
 
-def test_ensure_fitness_strategy_resolved_rejects_none():
+def test_resolve_fitness_strategy_rejects_none_when_not_allowed():
     """Unresolved preset sentinels must fail at algorithm boundaries."""
     with pytest.raises(SCGOValidationError, match="cannot be None"):
         resolve_fitness_strategy(None, allow_none=False)

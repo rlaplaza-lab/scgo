@@ -270,7 +270,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([1, 0, 0])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         assert isinstance(placed, Atoms)
         assert len(placed) == 1
@@ -283,7 +283,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([1, 0, 0])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         assert isinstance(placed, Atoms)
         assert len(placed) == 2
@@ -299,7 +299,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         # Function should handle this gracefully
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         assert isinstance(placed, Atoms)
 
@@ -310,7 +310,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([1, 0, 0])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=100.0, rng=rng
+            seed, target_centroid, target_normal, bond_distance=100.0
         )
         assert isinstance(placed, Atoms)
         # Position should be far from target centroid
@@ -327,7 +327,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         # Should handle gracefully (though this case is unusual)
         try:
             placed = place_multi_atom_seed_on_facet(
-                seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+                seed, target_centroid, target_normal, bond_distance=2.5
             )
             # If it doesn't raise, should return empty Atoms
             assert len(placed) == 0
@@ -344,7 +344,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([0, 0, 1])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=3.0, rng=rng
+            seed, target_centroid, target_normal, bond_distance=3.0
         )
 
         # Check that structure changed
@@ -361,13 +361,11 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_centroid = np.array([5, 0, 0])
         target_normal = np.array([1, 0, 0])
 
-        rng1, rng2 = create_paired_rngs(42)
-
         placed1 = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng1
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         placed2 = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng2
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
 
         # Positions should be identical

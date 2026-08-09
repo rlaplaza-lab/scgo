@@ -676,19 +676,6 @@ def _validate_lattice_compatible_rotation(
         )
 
 
-def _inplane_rotation_matrix_3d(angle: float, normal_axis: int) -> np.ndarray:
-    """Build a 3x3 rotation about the surface normal (right-handed, det=+1)."""
-    plane_axes = [i for i in range(3) if i != normal_axis]
-    c, s = float(np.cos(angle)), float(np.sin(angle))
-    rot2 = np.array([[c, -s], [s, c]], dtype=float)
-    rot = np.eye(3, dtype=float)
-    for i, ia in enumerate(plane_axes):
-        for j, ja in enumerate(plane_axes):
-            rot[ia, ja] = rot2[i, j]
-    _validate_lattice_compatible_rotation(rot, normal_axis)
-    return rot
-
-
 def _lattice_translation_candidates(
     cell: np.ndarray,
     axis_a: int,

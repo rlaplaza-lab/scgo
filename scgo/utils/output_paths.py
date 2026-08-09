@@ -66,21 +66,6 @@ def resolve_campaign_root_from_args(
     return Path.cwd().resolve()
 
 
-def resolve_minima_dir(
-    campaign_root: str | Path,
-    formula: str,
-    *,
-    searches_dir: str | Path | None = None,
-) -> Path:
-    """Return the directory containing GO ``run_*/`` minima databases.
-
-    When ``searches_dir`` is provided, minima are read from that path.
-    """
-    if searches_dir is not None:
-        return Path(searches_dir).expanduser().resolve()
-    return formula_searches_dir(campaign_root, formula)
-
-
 def resolve_ts_campaign_paths(
     output_dir: str | Path | None,
     path_key_formula: str,

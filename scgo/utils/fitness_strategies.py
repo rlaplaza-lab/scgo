@@ -54,11 +54,6 @@ _UNRESOLVED_FITNESS_STRATEGY_MSG = (
 )
 
 
-def ensure_fitness_strategy_resolved(strategy: str | None) -> str:
-    """Require a concrete fitness strategy at algorithm and orchestration boundaries."""
-    return resolve_fitness_strategy(strategy, allow_none=False)
-
-
 def resolve_fitness_strategy(
     strategy: str | None,
     *,

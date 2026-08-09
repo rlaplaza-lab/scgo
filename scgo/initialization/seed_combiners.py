@@ -147,7 +147,6 @@ def combine_seeds(
                 facet_centroid,
                 facet_normal,
                 bond_distance,
-                rng,
             )
 
             if _is_valid_placement(

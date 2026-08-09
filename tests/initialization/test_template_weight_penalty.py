@@ -40,7 +40,6 @@ class TestTemplateWeightNonNegative:
         counts = {template_type: total_candidates}
         weight = _calculate_template_weight(
             template_type,
-            n_atoms=8,
             n_unique_elements=2,
             template_type_counts=counts,
             total_candidates=total_candidates,
@@ -57,7 +56,6 @@ class TestTemplateWeightNonNegative:
         counts = {low_base_type: 1, "icosahedron": 1}
         weight = _calculate_template_weight(
             low_base_type,
-            n_atoms=8,
             n_unique_elements=2,
             template_type_counts=counts,
             total_candidates=2,
@@ -70,7 +68,6 @@ class TestTemplateWeightNonNegative:
         weights = [
             _calculate_template_weight(
                 template_type,
-                n_atoms=8,
                 n_unique_elements=2,
                 template_type_counts=counts,
                 total_candidates=2,
@@ -90,7 +87,6 @@ class TestTemplateWeightNonNegative:
         """Single-element runs keep the unpenalized weight."""
         weight = _calculate_template_weight(
             "cube",
-            n_atoms=8,
             n_unique_elements=1,
             template_type_counts={"cube": 1},
             total_candidates=1,

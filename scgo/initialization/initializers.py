@@ -12,7 +12,6 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -121,14 +120,6 @@ class _SeedSamplingLogCollector:
             len(records),
             ", ".join(parts),
         )
-
-
-class InitStrategy(Enum):
-    """Initialization strategies used by allocation and generation logic."""
-
-    TEMPLATE = "template"
-    SEED_GROWTH = "seed+growth"
-    RANDOM_SPHERICAL = "random_spherical"
 
 
 def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) -> float:
@@ -257,7 +248,6 @@ def _boltzmann_sample(
 
 def _calculate_template_weight(
     template_type: str,
-    n_atoms: int,
     n_unique_elements: int,
     template_type_counts: dict[str, int],
     total_candidates: int,
@@ -271,7 +261,6 @@ def _calculate_template_weight(
 
     Args:
         template_type: Type of template (e.g., "icosahedron")
-        n_atoms: Number of atoms (currently unused; kept for call-site symmetry)
         n_unique_elements: Number of unique elements in composition
         template_type_counts: Dictionary counting occurrences of each template type
         total_candidates: Total number of template candidates
@@ -575,7 +564,6 @@ def _try_template_generation(
     for template_type in template_type_counts:
         template_type_weights[template_type] = _calculate_template_weight(
             template_type,
-            n_atoms,
             n_unique_elements,
             template_type_counts,
             len(template_candidates),

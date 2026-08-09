@@ -12,7 +12,6 @@ from scgo.utils.torchsim_policy import (
     calculator_name_supports_torchsim_batched_neb,
     is_uma_like_calculator,
     is_upet_like_calculator,
-    mace_torchsim_stack_available,
     resolve_ts_torchsim_flags,
 )
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
@@ -80,7 +79,6 @@ def test_resolve_ts_mace_depends_on_torch_sim_importability(
         return real_find_spec(name)
 
     monkeypatch.setattr(importlib.util, "find_spec", fake_spec)
-    assert mace_torchsim_stack_available() is mace_available
 
     if mace_available:
         us, up = resolve_ts_torchsim_flags("MACE", True, True)

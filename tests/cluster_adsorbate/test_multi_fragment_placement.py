@@ -45,7 +45,6 @@ def test_gas_hierarchical_places_two_oh_separately() -> None:
     }
     rng = default_rng(11)
     out = build_hierarchical_core_fragment_cluster(
-        mobile,
         ads_def,
         rng,
         "**/*.db",
@@ -80,14 +79,12 @@ def test_hierarchical_site_core_stays_metal_core(monkeypatch) -> None:
 
     monkeypatch.setattr(hier, "place_fragment_on_cluster", _tracking_place)
 
-    mobile = ["Pt", "Pt", "Pt", "O", "H", "O", "H"]
     ads_def = {
         "core_symbols": ["Pt", "Pt", "Pt"],
         "adsorbate_symbols": ["O", "H", "O", "H"],
         "adsorbate_fragment_lengths": [2, 2],
     }
     out = build_hierarchical_core_fragment_cluster(
-        mobile,
         ads_def,
         default_rng(11),
         "**/*.db",

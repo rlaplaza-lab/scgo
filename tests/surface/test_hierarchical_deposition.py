@@ -223,7 +223,6 @@ def test_surface_deposition_empty_core_on_graphite():
 
 def test_gas_hierarchical_core_fragment_smoke():
     """Gas-phase hierarchical build matches core then fragment symbol order."""
-    mobile = ["Pt", "Pt", "O", "H"]
     ads_def = {
         "core_symbols": ["Pt", "Pt"],
         "adsorbate_symbols": ["O", "H"],
@@ -233,7 +232,6 @@ def test_gas_hierarchical_core_fragment_smoke():
     tmpl = build_default_fragment_template(["O", "H"])
     assert tmpl is not None
     out = build_hierarchical_core_fragment_cluster(
-        mobile,
         ads_def,
         rng,
         "**/*.db",

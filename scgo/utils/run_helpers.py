@@ -212,15 +212,12 @@ def get_calculator_class(calculator_name: str) -> type:
 def validate_algorithm_params(
     algo_params: dict[str, Any],
     chosen_go: str,
-    verbosity: int,
 ) -> None:
     """Validate algorithm-specific parameters.
 
     Args:
         algo_params: Dictionary of algorithm-specific parameters.
         chosen_go: Name of chosen algorithm ('simple', 'bh', or 'ga').
-        verbosity: Logging verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
-            Accepted for call-site symmetry; this function emits no log output.
 
     Raises:
         SCGOValidationError: If ``algo_params`` contains keys that are not

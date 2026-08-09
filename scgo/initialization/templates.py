@@ -771,13 +771,12 @@ def _deduplicate_positions(
     return unique_positions
 
 
-def _validate_n_atoms(n_atoms: int, expected: int | None, template_name: str) -> bool:
+def _validate_n_atoms(n_atoms: int, expected: int | None) -> bool:
     """Validate that n_atoms matches expected value for a template.
 
     Args:
         n_atoms: Number of atoms to validate
         expected: Expected number of atoms (None means no specific requirement)
-        template_name: Name of the template (unused; kept for call-site clarity)
 
     Returns:
         True if n_atoms is positive and matches ``expected``, False otherwise
@@ -823,7 +822,7 @@ def _generate_custom_template(
         Atoms object with template structure, or None if generation fails
     """
     if expected_n_atoms is not None:
-        if not _validate_n_atoms(n_atoms, expected_n_atoms, template_name):
+        if not _validate_n_atoms(n_atoms, expected_n_atoms):
             return None
     elif n_atoms <= 0:
         return None

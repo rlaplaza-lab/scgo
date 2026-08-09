@@ -185,7 +185,7 @@ def _run_go_trials(
     algo_params = params["optimizer_params"].get(chosen_go, {})
 
     # Validate algorithm-specific parameters
-    validate_algorithm_params(algo_params, chosen_go, verbosity)
+    validate_algorithm_params(algo_params, chosen_go)
 
     # Get calculator kwargs if provided
     calculator_kwargs = params.get("calculator_kwargs", {})

@@ -65,7 +65,6 @@ def _gas_pt3_oh_parent() -> tuple[Atoms, list[str], dict, dict]:
     }
     oh = _oh_template()
     built = build_hierarchical_core_fragment_cluster(
-        comp,
         ads,
         np.random.default_rng(101),
         previous_search_glob="**/*.db",

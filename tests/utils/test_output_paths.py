@@ -10,7 +10,6 @@ from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
     resolve_go_ts_pipeline_paths,
-    resolve_minima_dir,
     resolve_ts_campaign_paths,
 )
 
@@ -51,13 +50,6 @@ def test_resolve_ts_campaign_paths_output_dir_is_searches(tmp_path):
     assert campaign == campaign_root.resolve()
     assert minima == searches.resolve()
     assert ts == (campaign_root / "Pt5_ts_results").resolve()
-
-
-def test_resolve_minima_dir_override(tmp_path):
-    searches = tmp_path / "custom" / "Pt5_searches"
-    searches.mkdir(parents=True)
-    got = resolve_minima_dir(tmp_path / "custom", "Pt5", searches_dir=searches)
-    assert got == searches.resolve()
 
 
 def test_resolve_go_searches_dir_explicit(tmp_path):

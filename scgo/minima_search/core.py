@@ -195,7 +195,6 @@ def _create_gas_cluster_adsorbate_initial_atoms(
     )
 
     atoms = build_hierarchical_core_fragment_cluster(
-        composition,
         adsorbate_definition,
         rng,
         previous_search_glob,
@@ -405,7 +404,6 @@ def _require_calculator(calculator: Calculator | None) -> Calculator:
 def _validate_common_run_inputs(
     *,
     composition: list[str],
-    global_optimizer: str,
     global_optimizer_kwargs: dict[str, Any],
     output_dir: str,
     rng: np.random.Generator,
@@ -477,7 +475,6 @@ def scgo(
     """
     _validate_common_run_inputs(
         composition=composition,
-        global_optimizer=global_optimizer,
         global_optimizer_kwargs=global_optimizer_kwargs,
         output_dir=output_dir,
         rng=rng,
@@ -687,7 +684,6 @@ def run_trials(
     """
     _validate_common_run_inputs(
         composition=composition,
-        global_optimizer=global_optimizer,
         global_optimizer_kwargs=global_optimizer_kwargs,
         output_dir=output_dir,
         rng=rng,

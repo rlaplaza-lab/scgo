@@ -105,7 +105,7 @@ def test_validate_algorithm_params_raises_on_unexpected_keys():
     """validate_algorithm_params should fail on unexpected keys."""
     algo_params = {"niter": 10, "unknown_key": 123}
     with pytest.raises(SCGOValidationError, match="Unexpected BH algorithm parameters"):
-        validate_algorithm_params(algo_params, chosen_go="bh", verbosity=1)
+        validate_algorithm_params(algo_params, chosen_go="bh")
 
 
 def test_validate_algorithm_params_accepts_offspring_fraction(caplog):
@@ -113,7 +113,7 @@ def test_validate_algorithm_params_accepts_offspring_fraction(caplog):
     caplog.set_level("WARNING")
     algo_params = {"offspring_fraction": 0.5}
 
-    validate_algorithm_params(algo_params, chosen_go="ga", verbosity=1)
+    validate_algorithm_params(algo_params, chosen_go="ga")
 
     warnings = [rec.message for rec in caplog.records]
     assert not any("Unexpected GA algorithm parameters" in str(msg) for msg in warnings)
@@ -124,7 +124,7 @@ def test_validate_algorithm_params_accepts_surface_config(caplog):
     caplog.set_level("WARNING")
     algo_params = {"surface_config": None}
 
-    validate_algorithm_params(algo_params, chosen_go="ga", verbosity=1)
+    validate_algorithm_params(algo_params, chosen_go="ga")
 
     warnings = [rec.message for rec in caplog.records]
     assert not any("Unexpected GA algorithm parameters" in str(msg) for msg in warnings)
