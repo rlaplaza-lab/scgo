@@ -30,8 +30,10 @@ class MirrorMutation(OffspringCreator):
     """A mirror mutation, as described in
     TO BE PUBLISHED.
 
-    This mutation mirrors half of the cluster in a
-    randomly oriented cutting plane discarding the other half.
+    This mutation mirrors half of the cluster in a cutting plane,
+    discarding the other half. Candidate planes are derived from the
+    structure geometry (outward slab direction, principal axes) and
+    topped up with random directions, then ranked by steric deficit.
 
     Parameters
     ----------
@@ -41,10 +43,11 @@ class MirrorMutation(OffspringCreator):
     n_top: Number of atoms the GA optimizes.
 
     reflect: Defines if the mirrored half is also reflected
-        perpendicular to the mirroring plane.
+        perpendicular to the mirroring plane. Both settings are always
+        evaluated; this one wins among equally ranked candidates.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     """
 

@@ -22,8 +22,10 @@ __all__ = ["FlatteningMutation"]
 
 class FlatteningMutation(OffspringCreator):
     """A mutation that flattens the nanoparticle by projecting the coordinates
-    to a plane that cuts the structure in a random angle.
-    Atoms are then perturbed perpendicular to the plane within a given thickness.
+    onto a plane derived from the structure geometry (outward slab
+    direction, principal axes, and random fill).
+    Offsets along the plane normal are compressed to a target thickness and then
+    pushed back out only as far as needed to satisfy the blmin.
 
     Parameters
     ----------
@@ -33,13 +35,13 @@ class FlatteningMutation(OffspringCreator):
     n_top: Number of atoms the GA optimizes.
 
     thickness_factor: Factor to multiply with the average blmin to determine
-        the thickness of the slab for projection.
+        the target thickness of the flattened structure.
 
     test_dist_to_slab: Whether also the distances to the slab
         should be checked to satisfy the blmin.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     """
 

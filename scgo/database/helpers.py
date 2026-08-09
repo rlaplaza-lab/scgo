@@ -47,7 +47,11 @@ _MIN_DB_PARALLEL_LOAD_TASKS = 4
 
 
 class SCGODataConnection:
-    """Thin DataConnection wrapper that stamps tags via :mod:`scgo.metadata.atoms`."""
+    """Thin DataConnection wrapper that stamps tags via :mod:`scgo.metadata.atoms`.
+
+    ``add_relaxed_step`` additionally enforces the database stoichiometry and
+    guarantees that ``raw_score`` and ``final_id`` tags exist before the write.
+    """
 
     def __init__(self, da_obj: DataConnection, expected_atomic_numbers: list[int]):
         self._da = da_obj
@@ -79,8 +83,8 @@ class SCGODataConnection:
                 set_tags(a, raw_score=-float(energy))
             except (AttributeError, RuntimeError, ValueError):
                 logger.warning(
-                    "raw_score missing and energy could not be computed for candidate; "
-                    "assigning PENALTY_ENERGY and continuing."
+                    "Candidate has no raw_score and its energy could not be "
+                    "computed; assigning PENALTY_ENERGY and continuing"
                 )
                 _assign_penalty_energy(a)
 
@@ -100,7 +104,7 @@ def _ensure_database_indices(
     enable_expression_indexes: bool = True,
     enable_wal_mode: bool = False,
 ) -> None:
-    """Create SQLite indices for performance."""
+    """Apply performance pragmas and create SQLite indices on ``systems``."""
     try:
 
         def _create_indices(conn: sqlite3.Connection) -> None:
@@ -144,7 +148,8 @@ def _ensure_database_indices(
     except sqlite3.OperationalError as e:
         if enable_wal_mode:
             logger.warning(
-                "Failed to enable WAL mode for %s: %s. Continuing with default mode.",
+                "Could not enable WAL mode or create indices for %s: %s "
+                "(continuing with the default journal mode)",
                 db_path,
                 e,
             )
@@ -157,7 +162,12 @@ def _ensure_database_indices(
 def _register_database_best_effort(
     base_dir: str | Path, db_file: str, atoms_template: Atoms | None, run_id: str | None
 ) -> None:
-    """Best-effort register DB in registry (no exceptions)."""
+    """Best-effort registry registration for ``db_file``.
+
+    Expected registry and filesystem errors are logged, not raised. The entry is
+    added to the enclosing ``*_searches`` root when there is one, otherwise to
+    ``base_dir`` itself.
+    """
     comp_list = None
     if atoms_template is not None:
         try:
@@ -206,7 +216,33 @@ def setup_database(
     enable_expression_indexes: bool = True,
     run_id: str | None = None,
 ) -> DataConnection:
-    """Create/open an ASE `DataConnection` for `db_filename` in `output_dir`."""
+    """Create or open the ASE database ``db_filename`` inside ``output_dir``.
+
+    The template structure is written first, then indices are created, the file
+    is stamped as an SCGO database and registered in the registry (both best
+    effort), and the connection is wrapped so writes are validated and tagged.
+
+    Args:
+        output_dir: Directory holding the database file (created if missing)
+        db_filename: Database file name inside ``output_dir``
+        atoms_template: Template structure defining the expected stoichiometry
+        initial_candidate: Optional single unrelaxed starting candidate
+        initial_population: Optional list of unrelaxed starting candidates; when
+            given, ``initial_candidate`` is ignored
+        remove_existing: Delete an existing database file before writing
+        remove_aux_files: Delete leftover ``-shm`` / ``-wal`` / ``-journal`` files
+        enable_wal_mode: Enable SQLite WAL journaling (off by default, since
+            SCGO targets shared HPC filesystems)
+        enable_expression_indexes: Also create JSON expression indices on
+            ``key_value_pairs``
+        run_id: Run identifier stored in the registry entry
+
+    Returns:
+        A :class:`SCGODataConnection` wrapping the ASE ``DataConnection``.
+
+    Raises:
+        DatabaseSetupError: If the database cannot be opened after all retries.
+    """
     output_dir_str = str(output_dir)
     ensure_directory_exists(output_dir_str)
     db_file = os.path.join(output_dir_str, db_filename)
@@ -308,7 +344,7 @@ def setup_database(
 
         return SCGODataConnection(da, all_atom_numbers)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
-        logger.error("Failed to open database after all retries: %s", e)
+        logger.error("Failed to set up database after all retries: %s", e)
         raise DatabaseSetupError(f"Failed to setup database {db_file}: {e}") from e
 
 
@@ -485,7 +521,7 @@ def load_previous_run_results(
             all_db_files.extend((p, run_id) for p in db_list)
 
     if not all_db_files:
-        logger.info("No databases found in %s", base_output_dir)
+        logger.info("No previous-run databases found in %s", base_output_dir)
         return []
 
     if max_workers is None:
@@ -595,7 +631,9 @@ def load_reference_structures(
     db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_db(p)]
 
     if not db_files:
-        logger.warning("No database files found matching pattern: %s", db_glob_pattern)
+        logger.warning(
+            "No SCGO database files found matching pattern: %s", db_glob_pattern
+        )
         return []
 
     target_counts = None

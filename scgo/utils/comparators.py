@@ -38,7 +38,7 @@ def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
 
 
 def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
-    """Compute unsorted-element fingerprints without consulting the cache."""
+    """Compute per-element sorted distance fingerprints without using the cache."""
     numbers = atoms.numbers
     unique_types = set(numbers)
     pair_cor: dict[int, np.ndarray] = {}
@@ -268,7 +268,8 @@ class PureInteratomicDistanceComparator:
             A tuple containing (cumulative_difference, max_difference).
 
         Raises:
-            ValueError: If the two Atoms objects do not have the same number of atoms.
+            SCGOValidationError: If the two Atoms objects do not have the same
+                number of atoms.
         """
         if len(a1) != len(a2):
             raise SCGOValidationError(

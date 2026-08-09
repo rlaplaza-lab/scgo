@@ -1,7 +1,7 @@
 """Simple optimization for 1-2 atom clusters.
 
 This module provides a minimal optimization approach for very small clusters
-(1-2 atoms) where basin hopping is unnecessary. For these cases, there's only
+(1-2 atoms) where Basin Hopping is unnecessary. For these cases, there's only
 one meaningful structure to optimize, so we just perform a single local
 optimization without iterations.
 """
@@ -46,13 +46,14 @@ def simple_go(
 ) -> list[tuple[float, Atoms]]:
     """Simple local optimization for 1-2 atom clusters.
 
-    Performs a single local optimization without basin hopping iterations.
+    Performs a single local optimization without Basin Hopping iterations.
 
     Args:
         atoms: Initial Atoms object representing the cluster. Calculator must be attached.
         output_dir: Directory where ASE database will be stored.
         rng: Random number generator (numpy.random.Generator). Required.
-        niter: Total number of iterations. Default 1.
+        niter: Accepted for signature parity with the other optimizers and
+            ignored; exactly one local relaxation is performed. Default 1.
         fmax: Maximum force criterion for convergence (eV/Å). Default 0.05.
         niter_local_relaxation: Maximum steps for each local relaxation. Default 250.
         optimizer: ASE optimizer class (e.g., BFGS) for local relaxations. Default LBFGS.
@@ -65,8 +66,8 @@ def simple_go(
         List of (energy, Atoms) tuples for local minima found. Typically a single structure.
 
     Raises:
-        TypeError: If atoms is not an Atoms object.
-        ValueError: If calculator is not attached or atoms is not 1-2 atoms.
+        SCGOValidationError: If atoms is not an ASE Atoms object, no calculator
+            is attached, fmax is not positive, or the cluster is not 1-2 atoms.
     """
     logger = get_logger(__name__)
 

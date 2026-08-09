@@ -191,7 +191,7 @@ def get_calculator_class(calculator_name: str) -> type:
         Calculator class.
 
     Raises:
-        ValueError: If calculator name is unknown or not available.
+        SCGOValidationError: If calculator name is unknown or not available.
     """
     calculators = _get_calculators()
     if calculator_name not in calculators:
@@ -220,6 +220,11 @@ def validate_algorithm_params(
         algo_params: Dictionary of algorithm-specific parameters.
         chosen_go: Name of chosen algorithm ('simple', 'bh', or 'ga').
         verbosity: Logging verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
+            Accepted for call-site symmetry; this function emits no log output.
+
+    Raises:
+        SCGOValidationError: If ``algo_params`` contains keys that are not
+            allowed for ``chosen_go``.
     """
     valid_algo_params = {
         "simple": {
@@ -376,7 +381,7 @@ def _resolve_fitness_strategy(
         Resolved fitness strategy string.
 
     Raises:
-        ValueError: If fitness strategy is invalid.
+        SCGOValidationError: If fitness strategy is invalid.
     """
     top_level_fitness_strategy = params.get("fitness_strategy", "low_energy")
     return resolve_fitness_strategy(
@@ -393,7 +398,7 @@ def resolve_diversity_params(
     """Resolve diversity parameters for fitness strategy.
 
     Extracts diversity parameters from algorithm-specific params or top-level params,
-    with algorithm-specific taking precedence. Raises ValueError if required
+    with algorithm-specific taking precedence. Raises SCGOValidationError if required
     diversity_reference_db is missing.
 
     Args:
@@ -408,7 +413,7 @@ def resolve_diversity_params(
         - diversity_update_interval (default: 5)
 
     Raises:
-        ValueError: If diversity_reference_db is not provided.
+        SCGOValidationError: If diversity_reference_db is not provided.
     """
     diversity_params = {}
 
@@ -452,14 +457,16 @@ def prepare_algorithm_kwargs(
     """Unified parameter preparation for algorithm execution.
 
     Resolves "auto" parameter values, converts optimizer string names to
-    classes, resolves fitness strategy, and filters out top-level keys that
-    shouldn't be passed to algorithms.
+    classes, resolves fitness strategy, and replaces the raw ``niter`` /
+    ``population_size`` entries with their resolved values.
 
     Args:
         algo_params: Dictionary of algorithm-specific parameters from optimizer_params.
         params: Full top-level parameter dictionary (for fitness strategy and diversity resolution).
         composition: List of atomic symbols.
         chosen_go: Name of chosen algorithm ('simple', 'bh', or 'ga').
+        system_type: Resolved system type; validated against ``surface_config``
+            and used to add system-specific keys.
 
     Returns:
         Dictionary ready for direct algorithm execution.

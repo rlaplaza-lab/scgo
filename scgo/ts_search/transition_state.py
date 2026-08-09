@@ -155,7 +155,11 @@ def calculate_structure_similarity(
     n_slab: int | None = None,
     comparator: PureInteratomicDistanceComparator | None = None,
 ) -> tuple[float, float, bool]:
-    """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ."""
+    """Return ``(cum_diff, max_diff, are_similar)`` for two Atoms objects.
+
+    Raises:
+        SCGOValidationError: If the two structures have different atom counts.
+    """
     if len(atoms1) != len(atoms2):
         raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
@@ -1286,7 +1290,8 @@ def validate_initial_neb_path(
     Enabled when ``max_endpoint_mismatch`` is set (adsorbate presets). Checks:
     - aligned mobile Cartesian residual vs ``max(6.0, 3.0 * max_endpoint_mismatch)``;
     - interior-image min mobile pairwise distance vs ``clash_distance``
-      (endpoints are skipped — they are relaxed minima that may contain bonds).
+      (endpoints are skipped — they are relaxed minima that may contain bonds;
+      a two-image band has no interior, so both endpoints are checked instead).
 
     Raises:
         SCGOValidationError: when the initial path is unsuitable for NEB.
@@ -1477,7 +1482,7 @@ def minima_provenance_dict(minima: list, idx: int) -> dict[str, Any]:
     """Extract per-minimum GO provenance for JSON serialization."""
     if not minima or idx < 0 or idx >= len(minima):
         get_logger(__name__).warning(
-            "minima_provenance_dict: invalid index %s for %d minima",
+            "Invalid minima index %s for %d minima; returning empty provenance",
             idx,
             len(minima) if minima else 0,
         )
@@ -1520,8 +1525,13 @@ def _finalize_neb_result(
     """Populate ``result`` with TS / endpoint geometry, energies, and barriers.
 
     Mutates ``result`` in place. Assumes ``reactant_energy`` and
-    ``product_energy`` are already set; raises ``RuntimeError`` otherwise.
-    Marks an endpoint-as-TS result as failed.
+    ``product_energy`` are already set. Bands whose highest-energy image is an
+    endpoint, and barriers above :data:`MAX_SPURIOUS_NEB_BARRIER_EV`, are marked
+    failed.
+
+    Raises:
+        SCGORuntimeError: If an endpoint energy is missing, or if no image energy
+            could be read.
     """
     pair_id = result.get("pair_id")
 

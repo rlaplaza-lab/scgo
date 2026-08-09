@@ -1,4 +1,4 @@
-"""Place gas-phase cluster seeds onto a slab for GA initialization."""
+"""Place gas-phase cluster seeds onto a slab for global optimization setup."""
 
 from __future__ import annotations
 
@@ -162,7 +162,10 @@ def slab_surface_extreme(slab: Atoms, axis: int, *, upper: bool = True) -> float
 def _in_plane_translation_near_slab_atom(
     slab: Atoms, axis: int, rng: Generator, cluster_radius: float
 ) -> np.ndarray:
-    """Random in-plane shift biased towards a random slab atom."""
+    """In-plane translation onto a random slab atom, with a small random offset.
+
+    With an empty slab, falls back to a random fractional in-plane shift.
+    """
     cell = slab.get_cell()
     slab_positions = slab.get_positions()
 
@@ -204,7 +207,8 @@ def _in_plane_translation(
     """Random fractional shift along the two cell directions not dominated by ``axis``.
 
     For ``axis == 2``, uses ``cell[0]`` and ``cell[1]``. Uses ``[0, 1)`` fractions.
-    If cluster_radius is provided, biases placement towards slab atoms.
+    If ``cluster_radius`` is positive, the shift is centered on a random slab atom
+    instead.
 
     Args:
         slab: The slab atoms
@@ -255,12 +259,17 @@ def _place_cluster_above_slab(
     Args:
         cluster_positions: Centered cluster positions (will be rotated/translated).
         slab: The slab atoms.
-        slab_top: Maximum z-coordinate of slab atoms along surface normal axis.
+        slab_top: Maximum coordinate of slab atoms along ``axis``.
         axis: Surface normal axis index (0, 1, or 2).
         rng: Random number generator.
         config: Surface system configuration.
         cluster_atomic_numbers: Atomic numbers of cluster atoms. If provided,
             used to calculate covalent radii for connectivity-based placement.
+        prefer_surface_normal: Use a mostly in-plane rotation with a small tilt
+            instead of a uniformly random rotation.
+
+    Returns:
+        Rotated and translated cluster positions.
     """
     rotation = (
         _near_surface_rotation_matrix(rng, axis)
@@ -274,7 +283,8 @@ def _place_cluster_above_slab(
         slab, axis, rng, cluster_radius
     )
 
-    # Cap sampled height so the cluster bottom stays within bonding distance of the slab top.
+    # Cap the sampled height so the cluster bottom stays within bonding
+    # distance of the slab top.
     cf = config.structure_connectivity_factor
 
     slab_symbols = slab.get_chemical_symbols()
@@ -328,7 +338,13 @@ def create_deposited_cluster(
     """One adsorbate+slab structure, or None if placement fails.
 
     For non-adsorbate runs: build one gas-phase cluster for ``composition``, then
-    place above slab. For adsorbate runs: build hierarchical core+fragment first.
+    place above slab. For adsorbate runs with core symbols: build hierarchical
+    core+fragment first. For adsorbate runs without core symbols: place the
+    fragments directly on slab surface sites.
+
+    Raises:
+        SCGOValidationError: If ``adsorbate_definition`` is given without
+            ``adsorbate_fragment_template``.
     """
     cluster_adsorbate_config = resolve_cluster_adsorbate_config(
         cluster_adsorbate_config
@@ -449,13 +465,13 @@ def create_deposited_cluster(
         )
         if not ok:
             logger.debug(
-                "create_deposited_cluster: rejected by supported-cluster check: %s", err
+                "Rejected deposited structure by supported-cluster check: %s", err
             )
             continue
         return combined
 
     logger.warning(
-        "create_deposited_cluster: exceeded max_placement_attempts=%s",
+        "Exhausted max_placement_attempts=%s in create_deposited_cluster",
         config.max_placement_attempts,
     )
     return None
@@ -476,7 +492,11 @@ def create_deposited_cluster_batch(
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     batch_site_counts: dict[str, int] | None = None,
 ) -> list[Atoms]:
-    """Generate multiple deposited structures (sequential or threaded)."""
+    """Generate multiple deposited structures (sequential or threaded).
+
+    Raises:
+        SCGORuntimeError: If fewer than ``n_structures`` structures can be built.
+    """
     if n_structures <= 0:
         return []
 

@@ -26,8 +26,18 @@ def database_transaction(
 ) -> Generator[sqlite3.Connection, None, None]:
     """Context manager for a transaction.
 
+    Args:
+        db: ASE ``DataConnection`` whose backend (``db.c``) exposes
+            ``managed_connection()``.
+        isolation_level: ``DEFERRED``, ``IMMEDIATE``, or ``EXCLUSIVE``
+            (case-insensitive).
+
     Yields:
         sqlite3.Connection: Raw connection. Commits on success; rolls back on error.
+
+    Raises:
+        SCGOValidationError: If ``db`` has no usable connection, or if
+            ``isolation_level`` is not a valid SQLite isolation level.
     """
     if not hasattr(db, "c") or db.c is None:
         raise SCGOValidationError("Invalid database connection")

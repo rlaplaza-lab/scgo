@@ -42,7 +42,7 @@ def _site_core_positions_key(core: Atoms) -> int:
 
 
 def clear_surface_site_cache() -> None:
-    """Drop cached hull site candidates (e.g. between independent placement stacks)."""
+    """Drop cached hull site candidates (e.g. between placement sessions)."""
     _SITE_CANDIDATE_CACHE.clear()
 
 
@@ -56,7 +56,7 @@ def get_or_compute_surface_site_candidates(
         return cached
     result = compute_surface_site_candidates(core)
     if len(_SITE_CANDIDATE_CACHE) >= _SITE_CACHE_MAX:
-        # Drop an arbitrary old entry (insertion order in CPython 3.7+).
+        # Drop the oldest inserted entry (dicts preserve insertion order).
         _SITE_CANDIDATE_CACHE.pop(next(iter(_SITE_CANDIDATE_CACHE)))
     _SITE_CANDIDATE_CACHE[key] = result
     return result
@@ -65,7 +65,11 @@ def get_or_compute_surface_site_candidates(
 def compute_surface_site_candidates(
     core: Atoms,
 ) -> dict[SiteType, list[SurfaceSiteCandidate]]:
-    """Build explicit vertex/edge/facet adsorption sites from a convex hull."""
+    """Build explicit vertex/edge/facet adsorption sites from a convex hull.
+
+    All three lists stay empty when ``core`` has fewer than four atoms or when
+    the hull is degenerate and cannot be computed.
+    """
     out: dict[SiteType, list[SurfaceSiteCandidate]] = {
         "vertex": [],
         "edge": [],
@@ -126,7 +130,12 @@ def planar_layer_site_candidates(
 
     Graphene/graphite top layers are planar, so :func:`try_convex_hull` fails.
     Use each atom as a vertex site and nearest-neighbor midpoints as edge sites,
-    with the outward surface normal along ``surface_normal_axis``.
+    with the outward surface normal along ``surface_normal_axis``. The
+    ``facet`` list is always empty for planar layers.
+
+    Raises:
+        SCGOValidationError: If ``layer`` is non-empty and
+            ``surface_normal_axis`` is not 0, 1, or 2.
     """
     out: dict[SiteType, list[SurfaceSiteCandidate]] = {
         "vertex": [],

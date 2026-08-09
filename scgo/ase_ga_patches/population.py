@@ -22,7 +22,11 @@ from scgo.utils.fitness_strategies import (
 
 
 def _raw_score(a):
-    """Return GA raw_score from structure tags."""
+    """Return GA raw_score from structure tags.
+
+    Raises:
+        SCGOValidationError: If the candidate carries no ``raw_score`` tag.
+    """
     raw = get_tag(a, "raw_score", default=None)
     if raw is None:
         raise SCGOValidationError(
@@ -85,6 +89,13 @@ class Population:
 
     rng: Random number generator
         Must be an instance of ``np.random.Generator`` or ``None``.
+
+    elite_fraction: float
+        Fraction of the population protected from replacement, counted
+        from the best raw_score downwards.
+
+    run_id: str or None
+        When given, only candidates tagged with this run_id are considered.
 
     """
 
@@ -201,7 +212,7 @@ class Population:
         return [a.copy() for a in self.pop]
 
     def get_population_after_generation(self, gen):
-        """Returns a copy of the population as it where
+        """Returns a copy of the population as it was
         after generation gen
         """
         if self.logfile is not None:
@@ -256,7 +267,8 @@ class Population:
         # the new candidate needs to be added, so ensure we have room
         # Always keep top elite_size candidates
         if len(self.pop) == self.population_size:
-            # Remove worst candidate to make room (it can't be elite since population is sorted)
+            # Remove the worst candidate to make room (the population is
+            # kept sorted by raw_score, best first).
             del self.pop[-1]
 
         # add the new candidate
@@ -298,9 +310,11 @@ class Population:
         """Returns two candidates for pairing employing the
         fitness criteria from
         L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
-        and the roulete wheel selection scheme described in
+        and the roulette wheel selection scheme described in
         R.L. Johnston Dalton Transactions,
         Vol. 22, No. 22. (2003), pp. 4193-4207
+
+        Returns None if the population holds fewer than two candidates.
         """
         if len(self.pop) < 2:
             self.update()
@@ -359,9 +373,11 @@ class Population:
         """Returns one candidate for mutation employing the
         fitness criteria from
         L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
-        and the roulete wheel selection scheme described in
+        and the roulette wheel selection scheme described in
         R.L. Johnston Dalton Transactions,
         Vol. 22, No. 22. (2003), pp. 4193-4207
+
+        Returns None if the population is empty.
         """
         if len(self.pop) < 1:
             self.update()
@@ -440,7 +456,7 @@ class Population:
     def mass_extinction(self, ids):
         """Kills every candidate in the database with gaid in the
         supplied list of ids. Typically used on the main part of the current
-        population if the diversity is to small.
+        population if the diversity is too small.
 
         Parameters
         ----------
@@ -481,6 +497,8 @@ class FitnessStrategyPopulation(Population):
         Random number generator for stochastic operations.
     elite_fraction: float
         Fraction of population to preserve as elite (top performers).
+    run_id: str or None
+        When given, only candidates tagged with this run_id are considered.
     """
 
     def __init__(

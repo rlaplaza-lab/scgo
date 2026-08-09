@@ -146,7 +146,11 @@ def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
 
 
 def get_run_directories(base_output_dir: str) -> list[str]:
-    """Get list of all run directories in base output directory."""
+    """Get sorted paths of canonically named ``run_*`` directories.
+
+    Directories whose name does not parse as a run ID (see
+    :func:`get_run_id_from_dir`) are ignored.
+    """
     if not os.path.exists(base_output_dir):
         return []
 
@@ -168,7 +172,11 @@ def resolve_run_id_from_db_path(
     *,
     base_dir: str | Path | None = None,
 ) -> str:
-    """Resolve GO run ID from a database path (``run_*`` segment when present)."""
+    """Resolve GO run ID from a database path (``run_*`` segment when present).
+
+    Falls back to the database file name (with a warning) when no ``run_*``
+    segment is found, so the return value is never empty for a real path.
+    """
     db_path_str = os.path.abspath(str(db_path))
     if base_dir is not None:
         base_s = os.path.abspath(str(base_dir))
@@ -204,7 +212,7 @@ def resolve_run_id_from_db_path(
 
 
 def get_run_id_from_dir(run_dir: str) -> str | None:
-    """Extract run ID from directory name."""
+    """Extract run ID from directory name, or None if it is not canonical."""
     dir_name = os.path.basename(run_dir)
     if dir_name.startswith("run_") and len(dir_name) == 26:
         parts = dir_name.split("_")

@@ -70,7 +70,8 @@ def format_placement_error_message(
     diagnostics, and suggestions for common placement failures.
 
     Args:
-        context: Context description (e.g., "random_spherical", "seed+growth")
+        context: Action description completing "Could not ..."
+            (e.g., "place all 13 atoms after 10 attempts")
         composition: Composition list (for display)
         n_atoms: Number of atoms (for display)
         placement_radius_scaling: Current placement radius scaling
@@ -135,8 +136,9 @@ _CONVEX_HULL_CACHE_NS = "convex_hull"
 def _get_positions_hash(positions: np.ndarray) -> str:
     """Generate a collision-resistant hash for positions array.
 
-    Uses SHA256 to avoid hash collisions that could return wrong cached results.
-    For small arrays (<100 points), also stores positions bytes for collision detection.
+    Uses SHA256 to make hash collisions negligible. Callers additionally pair
+    the digest with the raw position bytes in the cache key, so a collision
+    cannot return a wrong cached result.
 
     Args:
         positions: Array of atomic positions
@@ -151,8 +153,9 @@ def _get_positions_hash(positions: np.ndarray) -> str:
 def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
     """Get convex hull from cache or compute and cache it.
 
-    Uses LRU eviction policy to maintain cache size limit.
-    Uses SHA256 hashing to avoid collisions and verifies cached results match positions.
+    Backed by the global cache, which uses LRU eviction to bound its size.
+    The cache key combines the SHA256 digest of the positions with their raw
+    bytes, so a digest collision cannot return a hull for other positions.
 
     Args:
         positions: Array of atomic positions
@@ -161,7 +164,9 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
         ConvexHull object for the given positions
 
     Raises:
-        ValueError: If positions array has fewer than 4 points (insufficient for 3D hull)
+        SCGOValidationError: If the positions array has fewer than 4 points
+            (insufficient for a 3D hull) or if the hull computation fails on
+            degenerate geometry
     """
     if len(positions) < 4:
         raise SCGOValidationError(
@@ -230,11 +235,12 @@ def _adjust_bond_distance_for_facet_geometry(
 ) -> float:
     """Adjust bond distance based on facet geometry constraints.
 
-    This function adjusts the bond distance to ensure connectivity constraints
-    are satisfied when placing atoms on convex hull facets. For small facets,
-    it uses strict constraints to ensure connectivity. For large facets, it
-    gradually relaxes the constraint while still relying on per-candidate
-    connectivity checks to maintain cluster connectivity.
+    Caps the bond distance so that a new atom placed along the facet normal
+    stays within ``max_connectivity_dist`` of the closest facet vertex, and
+    raises it again when the geometry allows keeping the atom at least
+    ``min_connectivity_dist`` away from the farthest facet vertex. Facets whose
+    closest vertex already sits beyond ``max_connectivity_dist``, and calls
+    without both connectivity bounds, leave the bond distance unchanged.
 
     Args:
         bond_distance: Initial bond distance for placement
@@ -381,7 +387,8 @@ def _filter_safe_facets_for_placement(
     trial-and-error approaches.
 
     Args:
-        atoms: The Atoms object representing the current cluster structure.
+        atoms: The Atoms object representing the current cluster structure
+            (unused; geometry is taken from ``positions`` and ``symbols_list``).
         facet_properties: List of (centroid, normal, area, (min_dist, max_dist))
             for each facet.
         bond_distance: Target bond distance for placement.
@@ -768,7 +775,7 @@ def _generate_batch_positions_on_convex_hull(
                     for existing_pos in positions
                 )
                 template_debug_logger.debug(
-                    f"candidate rejected: min_dist={min_dist_to_existing:.3f}, "
+                    f"Candidate rejected: min_dist={min_dist_to_existing:.3f}, "
                     f"min_centroid_dist={min_centroid_dist:.3f}, "
                     f"max_conn={max_connectivity_dist:.3f}"
                 )
@@ -790,7 +797,10 @@ def get_largest_facets(
         n_facets: Number of largest facets to return
 
     Returns:
-        List of tuples (centroid, normal, area) for the largest facets
+        List of tuples (centroid, normal, area) for the largest facets, sorted
+        by area (descending). For clusters with fewer than 4 atoms or for
+        degenerate geometry, returns a single synthetic facet at the center of
+        mass with unit area.
 
     """
     if len(atoms) < 4:
@@ -924,7 +934,7 @@ def place_multi_atom_seed_on_facet(
         rng: Random number generator for rotation
 
     Returns:
-        The seed atoms with new positions
+        A copy of the seed with rotated and translated positions
 
     """
     # Get the largest facet of the seed
@@ -986,13 +996,16 @@ def _find_connected_components(
 ) -> tuple[dict[int, list[int]], list[int]]:
     """Find connected components using Union-Find algorithm.
 
+    Pairwise distances are scanned directly for clusters with fewer than 50
+    atoms; larger clusters use a KDTree neighbor query.
+
     Args:
         atoms: The Atoms object to check
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
         use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
-        Tuple of (components dict mapping root to atom indices, parent array for Union-Find)
+        Tuple of (components dict mapping root to atom indices, parent list for Union-Find)
     """
     if len(atoms) <= 1:
         return {0: [0] if len(atoms) == 1 else []}, list(range(len(atoms)))
@@ -1070,12 +1083,13 @@ def is_cluster_connected(
 ) -> bool:
     """Check if all atoms in a cluster are connected within the specified distance threshold.
 
-    Uses a Union-Find algorithm with KDTree spatial indexing to efficiently determine if all
-    atoms form a single connected component where edges exist between atoms within
+    Uses a Union-Find algorithm to determine if all atoms form a single
+    connected component where edges exist between atoms within
     (r_i + r_j) * connectivity_factor.
 
-    This optimized version uses scipy.spatial.KDTree for efficient neighbor queries,
-    providing O(n log n) performance instead of O(n²) for large clusters.
+    Clusters with 50 or more atoms use scipy.spatial.KDTree for neighbor
+    queries, giving roughly O(n log n) behavior instead of the O(n²) pairwise
+    scan used for smaller clusters.
 
     Args:
         atoms: The Atoms object to check
@@ -1232,6 +1246,7 @@ def _identify_safe_removal_candidates(
         cluster: The cluster to analyze
         candidate_indices: List of atom indices to test for safe removal
         connectivity_factor: Factor for connectivity threshold
+        use_mic: If True, use minimum image convention for distance calculations
         max_to_check: Maximum number of candidates to check (for performance)
 
     Returns:
@@ -1313,9 +1328,11 @@ def get_structure_diagnostics(
         atoms: The Atoms object to analyze
         min_distance_factor: Factor to scale covalent radii for minimum distance checks
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
-        StructureDiagnostics object containing detailed analysis results
+        StructureDiagnostics object containing detailed analysis results. At
+        most 10 clash details are collected.
     """
     if len(atoms) == 0:
         return StructureDiagnostics(
@@ -1441,6 +1458,7 @@ def validate_cluster_structure(
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
         check_clashes: Whether to check for atomic clashes (default: True)
         check_connectivity: Whether to check connectivity (default: True)
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
         Tuple of (is_valid, error_message). If is_valid is True, error_message is empty.
@@ -1490,6 +1508,10 @@ def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -
 
     GA cut-and-splice pairing requires identical per-index atomic numbers across
     parents, so all structures for a given composition must share the same order.
+
+    Raises:
+        SCGOValidationError: If the cluster symbols cannot be matched one-to-one
+            with ``composition``.
     """
     desired = list(composition)
     current = cluster.get_chemical_symbols()
@@ -1541,15 +1563,18 @@ def validate_cluster(
         sort_atoms: When True and ``composition`` is set, reorder atoms to match
             the composition list (required for GA pairing). When True without
             ``composition``, fall back to alphabetical element sort.
-        raise_on_failure: Whether to raise ValueError on validation failure
+        raise_on_failure: Whether to raise SCGOValidationError on validation failure
         source: Context string for error messages (e.g., "template", "seed+growth")
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
         Tuple of (validated_atoms, is_valid, error_message). If is_valid is True,
         error_message is empty. validated_atoms may be reordered if sort_atoms=True.
 
     Raises:
-        ValueError: If raise_on_failure=True and validation fails
+        SCGOValidationError: If raise_on_failure=True and validation fails, or
+            if reordering to ``composition`` is requested but the cluster
+            symbols do not match it.
 
     """
     # Auto-detect if we should check connectivity
@@ -1706,6 +1731,9 @@ def _cycle_composition_to_length(
     Returns:
         List of element symbols with length equal to target_length
 
+    Raises:
+        SCGOValidationError: If ``composition`` is empty
+
     Example:
         >>> _cycle_composition_to_length(["Pt", "Au"], 5)
         ["Pt", "Au", "Pt", "Au", "Pt"]
@@ -1744,8 +1772,9 @@ def _assign_exact_composition(
         Atoms object with exact composition assigned
 
     Raises:
-        ValueError: If cluster atom count doesn't match n_atoms (when provided) or if
-                   composition assignment fails
+        SCGOValidationError: If cluster atom count doesn't match n_atoms (when
+                   provided), if ``composition`` is empty, or if composition
+                   assignment fails
     """
     if n_atoms is None:
         n_atoms = len(cluster)

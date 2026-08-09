@@ -155,7 +155,9 @@ def _run_go_trials(
     path_key = resolve_run_path_key(composition, system_type=system_type, params=params)
     main_output_dir = str(resolve_go_searches_dir(output_dir, path_key))
 
-    # Algorithm selection: Use simple optimization for 1-2 atoms, BH for 3, GA for larger
+    # Algorithm selection: simple optimization for 1-2 search-mobile atoms (plain
+    # gas clusters only), Basin Hopping for 3 (Genetic Algorithm when adsorbates
+    # are present), Genetic Algorithm otherwise
     chosen_go = select_scgo_minima_algorithm(n_atoms, system_type)
     if chosen_go == "simple":
         logger.info(
@@ -164,7 +166,7 @@ def _run_go_trials(
         )
     elif chosen_go == "bh":
         logger.info(
-            "Selected Basin Hopping for %d-atom cluster (small cluster)", n_atoms
+            "Selected Basin Hopping for %d search-mobile atoms (small system)", n_atoms
         )
     else:
         logger.info("Selected Genetic Algorithm for %d search-mobile atoms", n_atoms)
@@ -268,7 +270,7 @@ def _run_go_campaign_compositions(
     clean: bool = False,
     output_dir: str | Path | None = None,
 ) -> dict[str, list[tuple[float, Atoms]]]:
-    """Run optimizations for an iterable of compositions; return mapping formula->minima."""
+    """Run global optimization for an iterable of compositions; map path key->minima."""
     compositions_list = list(compositions)
     if not compositions_list:
         raise SCGOValidationError("compositions iterable must not be empty")
@@ -286,7 +288,9 @@ def _run_go_campaign_compositions(
 
     all_results = {}
     num_compositions = len(compositions_list)
-    logger.info("Starting campaign for %d compositions.", num_compositions)
+    logger.info(
+        "Starting global optimization campaign for %d compositions", num_compositions
+    )
 
     # Create calculator once and reuse it for all compositions to avoid file handle leaks
     calculator_kwargs = params.get("calculator_kwargs", {})
@@ -334,7 +338,7 @@ def _run_go_campaign_compositions(
                     path_key,
                     verbosity=verbosity,
                 )
-            log_info_v(logger, "Finished processing %s.", path_key, verbosity=verbosity)
+            log_info_v(logger, "Finished processing %s", path_key, verbosity=verbosity)
             log_info_v(
                 logger,
                 "  Returned %d final minima for %s",

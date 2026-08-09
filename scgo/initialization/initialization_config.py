@@ -43,7 +43,6 @@ ENERGY_SPREAD_DIVISOR = 10.0  # Divisor for adaptive temperature calculation
 
 # Convex hull and geometry
 CONVEX_HULL_PERTURBATION_SCALE = 0.1
-# Cache sizes for initialization caches (tunable via configuration)
 CONVEX_HULL_VOLUME_TOLERANCE = 1e-6  # Tolerance for degenerate convex hulls
 
 # Magic numbers and templates
@@ -154,8 +153,8 @@ TEMPLATE_BASE_WEIGHTS: dict[str, float] = {
 }
 
 # Multi-element composition penalty factor
-# Applied to icosahedron and decahedron for multi-element clusters
-# (these structures are less favorable for mixed compositions)
+# Subtracted from every template weight for multi-element clusters
+# (high-symmetry motifs are less favorable for mixed compositions)
 MULTI_ELEMENT_TEMPLATE_PENALTY = 0.9
 
 # Diversity boost factor for underrepresented template types

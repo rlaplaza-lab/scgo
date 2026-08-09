@@ -1,4 +1,4 @@
-"""UMA (Universal Material Approximation) calculator via fairchem-core."""
+"""UMA (Universal Models for Atoms) calculator via fairchem-core."""
 
 from __future__ import annotations
 

@@ -1,6 +1,8 @@
 """Database registry for fast database lookups.
 
-Simplified in-memory registry for database discovery without filesystem scanning.
+Simplified in-memory registry for database discovery: lookups never scan the
+filesystem, they only stat the registered paths. Scanning happens solely in
+:meth:`DatabaseRegistry.rebuild_from_filesystem`.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ class DatabaseRegistry:
         extra: dict | None = None,
     ) -> None:
         """Register a database in the index.
+
+        Databases outside ``base_dir`` cannot be keyed relative to it, so they
+        are skipped with a warning instead of being registered.
 
         Args:
             db_path: Path to database file
@@ -98,7 +103,8 @@ class DatabaseRegistry:
             run_id: Filter by run ID
 
         Returns:
-            List of matching database paths
+            List of matching database paths, skipping entries whose file no
+            longer exists on disk
         """
         matches = []
         comp_key = self._make_composition_key(composition) if composition else None
@@ -120,7 +126,7 @@ class DatabaseRegistry:
         """Get all registered databases.
 
         Returns:
-            List of all database paths
+            List of registered database paths that still exist on disk
         """
         paths = []
         for entry in self._data["databases"].values():
@@ -205,7 +211,8 @@ class DatabaseRegistry:
             composition: List of element symbols
 
         Returns:
-            Canonical composition string (e.g., "Pt2" or "PdPt")
+            Canonical composition string with explicit counts
+            (e.g., "Pt2" or "Pd1Pt1")
         """
         if not composition:
             return ""

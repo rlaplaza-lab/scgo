@@ -18,11 +18,11 @@ def check_database_health(db_path: str | Path) -> dict:
     """Check database health and return diagnostic information.
 
     Checks for:
-    - File existence and permissions
-    - SQLite corruption
-    - Schema validity
-    - WAL mode status
-    - Database statistics
+    - File existence and read permission
+    - SQLite corruption (``PRAGMA integrity_check``)
+    - Presence of the ASE ``systems`` table
+    - Journal mode (WAL or rollback journal)
+    - Database size and row/table counts
 
     Args:
         db_path: Path to database file
@@ -32,7 +32,8 @@ def check_database_health(db_path: str | Path) -> dict:
             - 'healthy': bool
             - 'errors': list of error messages
             - 'warnings': list of warning messages
-            - 'info': dict of database statistics
+            - 'info': dict of database statistics (empty when the file is
+              missing or unreadable, since those checks return early)
     """
     db_path = Path(db_path)
     result = {"healthy": True, "errors": [], "warnings": [], "info": {}}
@@ -134,11 +135,18 @@ def get_database_statistics(db_path: str | Path) -> dict:
 
     Returns:
         dict: Database statistics including:
-            - size_mb: Database size in megabytes
-            - systems_count: Number of entries in systems table
-            - journal_mode: Current journal mode
+            - page_count: Number of SQLite pages
             - page_size: SQLite page size
-            - fragmentation: Estimated fragmentation percentage
+            - size_mb: Database size in megabytes
+            - journal_mode: Current journal mode
+            - freelist_count: Number of free pages
+            - fragmentation_pct: Free pages as a percentage of ``page_count``
+            - systems_count: Number of rows in the ``systems`` table, or None
+              when that table is missing
+            - tables: Sorted list of table names
+
+        The dict is empty when the file does not exist, and may be partial
+        when a SQLite or OS error interrupts collection.
     """
     db_path = Path(db_path)
     stats = {}

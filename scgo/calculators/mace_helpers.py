@@ -1,8 +1,8 @@
 """MACE machine learning potential wrapper for cluster optimization.
 
-This module provides a simplified wrapper around the MACE-MP pretrained models,
-handling device selection and initialization for seamless integration with
-global optimization workflows.
+This module provides a simplified wrapper around the MACE foundation models
+loaded through ``mace_mp``, handling device selection and initialization for
+seamless integration with global optimization workflows.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class MaceUrls(StrEnum):
 
 
 class MACE(Calculator):
-    """A wrapper for the MACE-MP-0 calculator for global optimization.
+    """A wrapper for MACE foundation-model calculators for global optimization.
 
     This class simplifies the initialization of a MACE calculator, handling
     automatic device selection (CUDA/MPS/CPU) and model loading. It serves as a
@@ -120,7 +120,9 @@ class MACE(Calculator):
 
         logger = get_logger(__name__)
         logger.info(
-            f'Initializing MACE calculator ("{model_name}" model) on device: "{selected_device}"',
+            'Initializing MACE calculator ("%s" model) on device: "%s"',
+            model_name,
+            selected_device,
         )
 
         _ensure_torch_load_mace_checkpoints()
@@ -182,7 +184,12 @@ def infer_mace_model_name_from_calculator(calculator: Calculator) -> str | None:
 def try_extract_torchsim_model_from_mace_calculator(
     calculator: Calculator,
 ) -> object | None:
-    """Reuse the TorchSim/MACE model already loaded on an ASE MACE calculator."""
+    """Return the raw MACE torch module already loaded on an ASE MACE calculator.
+
+    Returns ``None`` when the calculator exposes no module (the caller then lets
+    TorchSim reload the checkpoint); TorchSim wraps the module in ``MaceModel``
+    before use.
+    """
     mace_calc = getattr(calculator, "_mace_calc", None)
     if mace_calc is None:
         return None

@@ -5,12 +5,13 @@ This package contains helper modules for various energy calculators:
 - MACE: Machine learning potentials based on MACE models (optional ``[mace]`` extra)
 - UMA: FAIRChem UMA checkpoints (optional ``[uma]`` extra)
 - UPET: Universal PET models via metatomic (optional ``[upet]`` extra)
-- TorchSim: GPU-accelerated batch relaxation (requires ``[mace]``, ``[uma]``, or ``[upet]``)
+- TorchSim: GPU-accelerated batch relaxation (requires ``[mace]``, ``[uma]``, or
+  ``[upet]``)
 - VASP/ORCA export helpers live under :mod:`scgo.calculators.vasp_helpers` and
   :mod:`scgo.calculators.orca_helpers` (not re-exported here).
 
 Note:
-    MACE, UMA, and TorchSim symbols load lazily so ``import scgo.calculators``
+    MACE, UMA, UPET, and TorchSim symbols load lazily so ``import scgo.calculators``
     works with only the core dependencies. Install ``scgo[mace]``, ``scgo[uma]``,
     or ``scgo[upet]`` for the corresponding stack (not more than one per env).
 """

@@ -25,8 +25,9 @@ class UPET(Calculator):
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
     is a UPET model identifier (e.g. ``\"pet-mad-s\"``); ``version`` selects the
-    checkpoint release (default ``\"1.5.0\"``). Device defaults to CUDA when
-    available, else CPU.
+    checkpoint release (default ``\"1.5.0\"``). A ``checkpoint_path`` takes
+    precedence over ``model_name``. Device defaults to CUDA when available,
+    else CPU.
     """
 
     def __init__(
@@ -111,7 +112,11 @@ def infer_upet_model_name_from_calculator(calculator: Calculator) -> str | None:
 
 
 def _unwrap_metatomic_ase_calculator(calc: object) -> object | None:
-    """Return the innermost Metatomic ASE calculator, unwrapping symmetrizers."""
+    """Return the first calculator in the chain that exposes a ``model``.
+
+    Walks the nested ``calculator`` attributes (e.g. symmetrizer wrappers) and
+    returns ``None`` when no calculator in the chain carries a model.
+    """
     current: object | None = calc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:

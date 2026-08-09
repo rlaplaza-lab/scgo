@@ -50,7 +50,7 @@ class UnifiedCache:
         {'data': 42}
         >>> cache.clear_namespace("namespace1")
         >>> print(cache.get_metrics())
-        {'hits': 1, 'misses': 0, 'evictions': 0, 'size': 0}
+        {'hits': 1, 'misses': 0, 'evictions': 0, 'size': 0, 'hit_rate': 100}
     """
 
     def __init__(self, max_size: int = 1000):
@@ -59,6 +59,9 @@ class UnifiedCache:
         Args:
             max_size: Maximum number of total entries across all namespaces
                      before LRU eviction begins
+
+        Raises:
+            SCGOValidationError: If ``max_size`` is not positive.
         """
         if max_size <= 0:
             raise SCGOValidationError("max_size must be a positive integer")
@@ -192,7 +195,7 @@ class UnifiedCache:
                 del self._cache[key]
 
     def clear(self) -> None:
-        """Clear all entries from the cache."""
+        """Clear all entries from the cache and reset the metrics counters."""
         with self._lock:
             self._cache.clear()
             # Reset metrics
@@ -245,7 +248,7 @@ _global_cache_lock = threading.Lock()
 
 
 def get_global_cache(max_size: int = 1000) -> UnifiedCache:
-    """Return the global cache singleton."""
+    """Return the global cache singleton (``max_size`` applies on creation only)."""
     global _global_cache
     if _global_cache is None:
         with _global_cache_lock:

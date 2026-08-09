@@ -100,7 +100,8 @@ def resolve_ts_torchsim_flags(
     """Return effective ``(use_torchsim, use_parallel_neb)`` for TS search.
 
     If TorchSim is **not** requested, returns ``(False, False)``.
-    If TorchSim is requested but unavailable/misconfigured, raises ImportError/ValueError.
+    If TorchSim is requested but unavailable/misconfigured, raises ImportError or
+    SCGOValidationError.
     When TorchSim is on and ``use_parallel_neb`` is ``None``, parallel NEB defaults
     to ``True`` (matches presets).
     """

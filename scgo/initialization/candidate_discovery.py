@@ -62,7 +62,17 @@ def _safe_mtime(path: str) -> float:
 
 
 def _load_candidates_from_file(db_file: str, mtime: float) -> list[CandidateEntry]:
-    """Load relaxed candidates from a single database file with mtime caching."""
+    """Load minima from a single database file.
+
+    Args:
+        db_file: Path to the database file to read.
+        mtime: Modification time of ``db_file``; unused here, it only takes
+            part in the cache key built by :func:`_load_db_candidates`.
+
+    Returns:
+        List of ``(symbols, energy, atoms)`` entries, or an empty list if the
+        file could not be read.
+    """
     _ = mtime
     try:
         run_id = resolve_run_id_from_db_path(db_file)
@@ -209,7 +219,22 @@ def deduplicate_seed_candidates(
     precision: int = 4,
     energy_bin: float | None = None,
 ) -> list[tuple[float, Atoms]]:
-    """Deduplicate seed candidates by geometry signature."""
+    """Deduplicate seed candidates by geometry signature.
+
+    Candidates are first grouped into energy bins (width ``energy_bin``) and
+    then reduced to one entry per interatomic-distance signature within each
+    bin. When ``energy_bin`` is ``None`` it defaults to one hundredth of the
+    energy range; a bin width of zero deduplicates by signature only.
+
+    Args:
+        entries: List of ``(energy, atoms)`` candidates.
+        precision: Decimal places used when rounding the distance signature.
+        energy_bin: Optional energy bin width; ``None`` derives it from the
+            energy range and non-positive values disable binning.
+
+    Returns:
+        Deduplicated list of ``(energy, atoms)`` candidates (unordered).
+    """
     if len(entries) <= 1:
         return entries
 
@@ -251,7 +276,22 @@ def _find_smaller_candidates(
     target_composition: list[str],
     db_glob_pattern: str,
 ) -> dict[str, list[tuple[float, Atoms]]]:
-    """Find all relaxed database candidates that are sub-compositions of target."""
+    """Find all relaxed database candidates that are sub-compositions of target.
+
+    Only entries tagged as ``final_unique_minimum`` and holding strictly fewer
+    atoms than the target are kept. Results are grouped by cluster formula,
+    sorted by energy, deduplicated by geometry, and truncated to
+    ``_MAX_CANDIDATES_PER_FORMULA`` entries per formula.
+
+    Args:
+        target_composition: Target composition as a list of element symbols.
+        db_glob_pattern: Glob pattern (relative to the current working
+            directory) used to locate database files.
+
+    Returns:
+        Mapping of cluster formula to ``(energy, atoms)`` candidates, with the
+        atoms objects copied so callers can mutate them safely.
+    """
     cwd = os.getcwd()
     matches = glob.glob(os.path.join(cwd, db_glob_pattern), recursive=True)
     candidates_by_formula: dict[str, list[tuple[float, Atoms]]] = {}

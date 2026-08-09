@@ -58,6 +58,8 @@ __all__ = [
     "get_diversity_params",
     "get_high_energy_params",
     "get_low_effort_torchsim_ga_params",
+    "get_low_effort_upet_ga_params",
+    "get_low_effort_uma_ga_params",
     "get_low_effort_ts_search_params",
     "get_ts_defaults",
     "get_ts_search_params",
@@ -477,7 +479,7 @@ def get_uma_ga_benchmark_params(
     Tuned for regression and profiling alongside the MACE TorchSim benchmark preset
     (:func:`get_torchsim_ga_params`): fixed local relaxation budget from the base
     preset (200 steps, not ``"auto"``), with autobatching and ``expected_max_atoms=600``
-    for stable GPU memory behaviour. Pass as-is to ``run_*`` or override keys.
+    for stable GPU memory behavior. Pass as-is to ``run_*`` or override keys.
     For general UMA runs with default GA ``"auto"`` local steps, use
     :func:`get_default_uma_params` instead.
     """
@@ -735,8 +737,9 @@ def get_ts_search_params(
     NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
     system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,
     and ``neb_surface_max_lattice_shift`` (default ``1``). Free in-plane
-    ``neb_surface_lattice_rotation`` is on for bare ``surface_cluster`` and off
-    for ``surface_cluster_adsorbate`` (registry-safe).
+    ``neb_surface_lattice_rotation`` is on for the bare surface types
+    (``surface_cluster``, ``surface``) and off for the adsorbate surface types
+    (``surface_cluster_adsorbate``, ``surface_adsorbate``) to stay registry-safe.
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
@@ -821,6 +824,133 @@ def get_low_effort_torchsim_ga_params(
         seed=seed,
         model_name=model_name,
     )
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": _LOW_EFFORT_GA_NITER,
+            "population_size": _LOW_EFFORT_GA_POPULATION_SIZE,
+            "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
+            "offspring_fraction": 0.5,
+            "n_jobs_population_init": 1,
+            "early_stopping_niter": 0,
+            "write_timing_json": False,
+            "detailed_timing": False,
+        }
+    )
+    return params
+
+
+def get_low_effort_upet_ga_params(
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str = "pet-mad-s",
+    version: str = "1.5.0",
+) -> GLOptimizerParams:
+    """Return reduced-budget GO params (~25%) for UPET demos and CI.
+
+    Mirrors :func:`get_low_effort_torchsim_ga_params` but on the UPET calculator.
+    Thin wrapper over :func:`get_default_upet_params`: the calculator, TorchSim
+    relaxer (``_attach_upet_torchsim_relaxer``), autobatcher, ``expected_max_atoms``
+    and float32 dtype are all inherited unchanged, so the *physics* matches a
+    production run. Only the search budget shrinks:
+
+    - ``niter`` / ``population_size`` are scaled to ~25% of the production
+      benchmark reference in :func:`_get_base_ga_benchmark_params`
+      (``niter=10`` / ``population_size=50``).
+    - ``niter_local_relaxation`` drops to
+      ``_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION``. Surface system types clamp it
+      back up to ``SURFACE_GA_MIN_LOCAL_RELAX_STEPS`` at run time, so supported
+      and slab searches keep production-strength local relaxation — the same
+      clamp :func:`get_low_effort_torchsim_ga_params` relies on.
+    - Population init runs sequentially, early stopping is disabled (so the run
+      length is deterministic), and timing JSON export is off.
+
+    Used by the Kaggle GPU example matrix
+    (``tests/integration/test_gpu_examples_integration.py``) so UPET stays in
+    lockstep with the MACE low-effort path. Pass as-is to ``run_*`` or override
+    individual keys.
+    """
+    params = get_default_upet_params()
+    params["calculator_kwargs"] = {
+        "model_name": model_name,
+        "version": version,
+    }
+    if seed is not None:
+        params["seed"] = int(seed)
+
+    policy = get_system_policy(system_type)
+    if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
+        raise SCGOValidationError(
+            f"system_type={system_type!r} requires surface_config to be provided "
+            "as a SurfaceSystemConfig when building go_params."
+        )
+    for algo in ("simple", "bh", "ga"):
+        params["optimizer_params"][algo]["system_type"] = system_type
+    if policy.uses_surface:
+        params["surface_config"] = surface_config
+        for algo in ("simple", "bh", "ga"):
+            params["optimizer_params"][algo]["surface_config"] = surface_config
+
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": _LOW_EFFORT_GA_NITER,
+            "population_size": _LOW_EFFORT_GA_POPULATION_SIZE,
+            "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
+            "offspring_fraction": 0.5,
+            "n_jobs_population_init": 1,
+            "early_stopping_niter": 0,
+            "write_timing_json": False,
+            "detailed_timing": False,
+        }
+    )
+    return params
+
+
+def get_low_effort_uma_ga_params(
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str = "uma-s-1p2",
+    uma_task: str = "oc25",
+) -> GLOptimizerParams:
+    """Return reduced-budget GO params (~25%) for UMA demos and CI.
+
+    Mirrors :func:`get_low_effort_upet_ga_params` but on the UMA calculator
+    (fairchem). Thin wrapper over :func:`get_default_uma_params`: the calculator,
+    FairChem-backed TorchSim relaxer (``_attach_fairchem_torchsim_relaxer``),
+    autobatcher, ``expected_max_atoms`` and float32 dtype are all inherited
+    unchanged. Only the search budget shrinks to the same ~25% GA reduction as the
+    other low-effort wrappers, with the surface local-relaxation clamp preserved
+    at run time and timing JSON export off.
+
+    Delivered for API / docs completeness, GitHub-Actions UMA smoke, and local
+    runs — UMA is intentionally omitted from the Kaggle GPU matrix (HuggingFace
+    auth for fairchem weights is unavailable there). Pass as-is to ``run_*`` or
+    override individual keys.
+    """
+    params = get_default_uma_params()
+    params["calculator_kwargs"] = {
+        "model_name": model_name,
+        "task_name": uma_task,
+    }
+    if seed is not None:
+        params["seed"] = int(seed)
+
+    policy = get_system_policy(system_type)
+    if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
+        raise SCGOValidationError(
+            f"system_type={system_type!r} requires surface_config to be provided "
+            "as a SurfaceSystemConfig when building go_params."
+        )
+    for algo in ("simple", "bh", "ga"):
+        params["optimizer_params"][algo]["system_type"] = system_type
+    if policy.uses_surface:
+        params["surface_config"] = surface_config
+        for algo in ("simple", "bh", "ga"):
+            params["optimizer_params"][algo]["surface_config"] = surface_config
+
     params["optimizer_params"]["ga"].update(
         {
             "niter": _LOW_EFFORT_GA_NITER,

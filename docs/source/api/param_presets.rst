@@ -21,9 +21,13 @@ Preset Functions
      - Compact GA parameters that run sequentially (easier to debug)
    * - ``get_torchsim_ga_params(*, system_type, surface_config, seed, model_name)``
      - MACE + TorchSim for GPU acceleration. Requires ``scgo[mace]``.
-   * - ``get_low_effort_torchsim_ga_params(*, system_type, surface_config, seed, model_name)``
-     - Reduced-budget (~25%) variant of ``get_torchsim_ga_params`` for demos and CI. Same calculator and relaxer; smaller GA budget.
-   * - ``get_default_uma_params()``
+    * - ``get_low_effort_torchsim_ga_params(*, system_type, surface_config, seed, model_name)``
+      - Reduced-budget (~25%) variant of ``get_torchsim_ga_params`` for demos and CI. Same calculator and relaxer; smaller GA budget.
+    * - ``get_low_effort_upet_ga_params(*, system_type, surface_config, seed, model_name, version)``
+      - Reduced-budget (~25%) variant of ``get_default_upet_params`` for demos and CI. Same UPET calculator and TorchSim relaxer; smaller GA budget.
+    * - ``get_low_effort_uma_ga_params(*, system_type, surface_config, seed, model_name, uma_task)``
+      - Reduced-budget (~25%) variant of ``get_default_uma_params`` for demos and local/Actions CI. Same UMA calculator and FairChem TorchSim relaxer; smaller GA budget. (UMA is omitted from the Kaggle GPU matrix.)
+    * - ``get_default_uma_params()``
      - Default UMA (fairchem) parameters
    * - ``get_uma_ga_benchmark_params(seed, *, model_name, uma_task)``
      - UMA parameters for benchmarking campaigns
@@ -68,8 +72,12 @@ Preset effects (vs defaults)
      - Sequential GA jobs (``n_jobs_* = 1``); optional ``seed`` / ``model_name``
    * - ``get_torchsim_ga_params()``
      - MACE benchmark GA stack + TorchSim relaxer; sets ``surface_config`` for surface types
-   * - ``get_low_effort_torchsim_ga_params()``
-     - As ``get_torchsim_ga_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time.
+    * - ``get_low_effort_torchsim_ga_params()``
+      - As ``get_torchsim_ga_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time.
+    * - ``get_low_effort_upet_ga_params()``
+      - As ``get_default_upet_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time. Mirrors ``get_low_effort_torchsim_ga_params`` on the UPET calculator.
+    * - ``get_low_effort_uma_ga_params()``
+      - As ``get_default_uma_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time. Mirrors ``get_low_effort_torchsim_ga_params`` on the UMA calculator.
    * - ``get_default_uma_params()``
      - ``calculator="UMA"`` + FairChem TorchSim relaxer with auto local-step budget
    * - ``get_uma_ga_benchmark_params()``
@@ -172,13 +180,37 @@ and the Kaggle GPU test matrix uses, so the two cannot drift apart.
        seed=42,
    )
 
-   ts_params = get_low_effort_ts_search_params(
+    ts_params = get_low_effort_ts_search_params(
+        system_type="surface_cluster",
+        surface_config=surface_config,
+        seed=42,
+    )
+    # max_pairs is the dominant TS cost lever and is left to the caller.
+    ts_params["max_pairs"] = 6
+
+``get_low_effort_ts_search_params`` already covers MACE, UMA, and UPET uniformly
+via its ``calculator`` / ``calculator_kwargs`` arguments — there is no separate
+per-calculator TS wrapper.
+
+**Low-effort UPET GO:**
+
+.. code-block:: python
+
+   from scgo import (
+       get_low_effort_upet_ga_params,
+       get_low_effort_ts_search_params,
+       make_graphite_surface_config,
+   )
+
+   surface_config = make_graphite_surface_config(slab_layers=3, slab_repeat_xy=3)
+
+   go_params = get_low_effort_upet_ga_params(
        system_type="surface_cluster",
        surface_config=surface_config,
        seed=42,
+       model_name="pet-mad-s",
+       version="1.5.0",
    )
-   # max_pairs is the dominant TS cost lever and is left to the caller.
-   ts_params["max_pairs"] = 6
 
 See :doc:`/quickstart` for complete workflow examples and :doc:`/parameters` for the full parameter list.
 

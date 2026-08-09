@@ -30,9 +30,14 @@ __all__ = ["RotationalMutation"]
 
 
 class RotationalMutation(OffspringCreator):
-    """Mutates a candidate by applying random rotations
-    to multi-atom moieties in the structure (atoms with
+    """Mutates a candidate by rotating a random subset of the
+    multi-atom moieties in the structure (atoms with
     the same tag are considered part of one such moiety).
+
+    The moieties to rotate are drawn at random, while the rotation axes
+    are derived from each moiety's geometry (topped up with random
+    directions) and the angles span [min_angle, pi]. The resulting
+    candidate rotations are ranked by steric deficit.
 
     Only performs whole-molecule rotations, no internal
     rotations.
@@ -54,7 +59,8 @@ class RotationalMutation(OffspringCreator):
         The number of atoms to optimize (None = include all).
 
     fraction: float
-        Fraction of the moieties to be rotated.
+        Fraction of the eligible multi-atom moieties to be rotated,
+        rounded up.
 
     tags: None or list of integers
         Specifies, respectively, whether all moieties or only those
@@ -69,7 +75,7 @@ class RotationalMutation(OffspringCreator):
         should be checked to satisfy the blmin.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     """
 

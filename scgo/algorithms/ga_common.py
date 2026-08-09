@@ -1,7 +1,8 @@
 """Shared components for Genetic Algorithm implementations.
 
-This module contains code shared between the standard GA and TorchSim-enhanced GA
-implementations to reduce duplication.
+This module contains code shared by the TorchSim Genetic Algorithm and the other
+SCGO drivers that reuse its building blocks (Basin Hopping, transition-state
+search) to reduce duplication.
 """
 
 from __future__ import annotations
@@ -249,7 +250,7 @@ def core_adsorbate_partition_counts(
             context="core_adsorbate_partition_counts",
         )
     except (ValueError, SCGOValidationError) as exc:
-        logger.debug("core_adsorbate_partition_counts validation failed: %s", exc)
+        logger.debug("Validation of core_adsorbate_partition_counts failed: %s", exc)
         return None
     if len(ads_list) == 0:
         return None
@@ -391,10 +392,11 @@ class ClusterStartGenerator(StartGenerator):
 
     Uses :func:`scgo.initialization.create_initial_cluster_batch` to produce
     starting candidates. When population_size is provided, pre-generates the
-    entire population in one batch call.
+    entire population up front.
 
-    For ``gas_cluster_adsorbate``, pass ``adsorbate_definition`` and optional
-    fragment options; uses
+    For ``gas_cluster_adsorbate``, ``adsorbate_definition`` and
+    ``adsorbate_fragment_template`` are required (``cluster_adsorbate_config`` is
+    optional); candidates come from
     :func:`scgo.cluster_adsorbate.hierarchical.build_hierarchical_core_fragment_cluster`
     (same as surface hierarchical seeds without a slab). Plain ``gas_cluster`` must
     not pass these keyword arguments.
@@ -426,7 +428,7 @@ class ClusterStartGenerator(StartGenerator):
             rng: Optional numpy random number generator for reproducibility.
             calculator: Optional calculator to assign to generated atoms.
             population_size: Optional total population size. If provided, pre-generates
-                entire population in one batch call. If None, generates on demand.
+                the entire population up front. If None, generates on demand.
             mode: Initialization mode. Default "smart".
             previous_search_glob: Glob pattern used to find prior databases for
                 seed-based initialization. Defaults to ``"**/*.db"``.
@@ -437,7 +439,8 @@ class ClusterStartGenerator(StartGenerator):
                 spurious adsorbate kwargs for plain gas clusters.
             adsorbate_definition: Required for hierarchical gas seeds; optional for
                 monolithic (validated at runner; still used for metadata in GA).
-            adsorbate_fragment_template: Optional fragment geometry for hierarchical layout.
+            adsorbate_fragment_template: Fragment geometry for the hierarchical
+                layout; required for ``system_type=gas_cluster_adsorbate``.
             cluster_adsorbate_config: Optional placement/validation for the fragment.
             max_hierarchical_attempts: Max inner tries in hierarchical core+fragment
                 build (per candidate).
@@ -1015,8 +1018,10 @@ def create_mutation_operators(
         blmin: Bond length minimums dictionary.
         rng: Random number generator.
         use_adaptive: Whether to include adaptive mutation operators.
-        adsorbate_definition: Two-block mobile partition: tag-aware rattle, skip
-            flattening/breathing.
+        adsorbate_definition: Enables the two-block core/adsorbate mobile
+            partition: tag-aware rattle plus ``_core``/``_ads`` variants of the
+            flattening, breathing, and in-plane slide mutations, and (for
+            cluster searches) a fragment reposition operator.
         n_slab: Number of fixed slab atoms; when > 0, registers in-plane slide.
         surface_normal_axis: Slab normal (0, 1, or 2) for in-plane slide.
         flattening_thickness_factor: Passed to :class:`FlatteningMutation`
@@ -1357,7 +1362,7 @@ def create_structure_comparator(
     and run-level filtering to ensure consistent duplicate detection criteria.
 
     Args:
-        n_atoms: Number of trailing (adsorbate) atoms to compare.
+        n_atoms: Number of trailing (mobile) atoms to compare.
         energy_tolerance: Energy difference tolerance for duplicate detection (eV).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC).
 
@@ -1451,10 +1456,12 @@ def setup_diversity_scorer(
         mic: Whether the diversity comparator uses the minimum-image convention.
 
     Returns:
-        DiversityScorer instance if fitness_strategy is "diversity", None otherwise.
+        DiversityScorer instance when fitness_strategy is "diversity" and at least
+        one reference structure was loaded; None otherwise.
 
     Raises:
-        ValueError: If diversity_reference_db is None when fitness_strategy is "diversity".
+        SCGOValidationError: If diversity_reference_db is None when
+            fitness_strategy is "diversity".
     """
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
@@ -1479,8 +1486,8 @@ def setup_diversity_scorer(
 
     if not reference_structures:
         logger.warning(
-            "No reference structures found for diversity strategy. "
-            "This may result in poor diversity optimization."
+            "No reference structures found for diversity strategy; "
+            "diversity optimization may be ineffective"
         )
         return None
 
@@ -1551,7 +1558,7 @@ def log_early_stopping_info(
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if logger.isEnabledFor(logging.INFO):
-        logger.info("Starting GA evolution with %d generations...", niter)
+        logger.info("Starting GA evolution with %d generations", niter)
         logger.info("Using fitness_strategy='%s'", fitness_strategy)
     if early_stopping_niter > 0:
         stopping_metric: str = (
@@ -1585,6 +1592,4 @@ def sort_minima_by_fitness(
             key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
             reverse=True,  # Higher fitness first
         )
-        logger.info(
-            f"Sorted {len(all_minima)} unique minima by {fitness_strategy} fitness"
-        )
+        logger.info(f"Sorted {len(all_minima)} minima by {fitness_strategy} fitness")

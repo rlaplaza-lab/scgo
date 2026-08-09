@@ -483,6 +483,8 @@ def random_spherical(
     Args:
         composition: List of element symbols for the atoms.
         cell_side: The side length of the cubic cell for the returned Atoms object.
+        rng: Numpy ``Generator`` supplying all randomness for this call
+            (placement order, coordinates, retries).
         placement_radius_scaling: A scaling factor used to determine the initial
             spherical volume for atom placement. Larger values result in a larger
             initial volume.
@@ -491,20 +493,20 @@ def random_spherical(
             overlap, while < 1.0 allows some overlap.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold.
-        max_connectivity_retries: Maximum number of retries if connectivity
-            validation fails.
+        max_connectivity_retries: Maximum number of retries if placement or
+            connectivity validation fails.
         blmin_ratio: GA-compatible steric floor (covalent-radius scale). ``None``
             disables the extra floor beyond ``min_distance_factor``.
-        rng: Numpy ``Generator`` supplying all randomness for this call
-            (placement order, coordinates, retries).
 
     Returns:
-        An :class:`ase.Atoms` instance with the randomly placed cluster.
+        An :class:`ase.Atoms` instance with the randomly placed cluster. For an
+        empty ``composition``, returns an empty ``Atoms`` object.
 
     Raises:
-        ValueError: If all atoms cannot be placed within the given constraints
-        after a maximum number of attempts, or if connectivity validation
-        fails after all retries.
+        SCGOValidationError: If the numeric parameters are invalid, if
+            ``connectivity_factor`` is below the active steric floor, or if a
+            connected, clash-free cluster could not be built within
+            ``max_connectivity_retries`` attempts.
 
     """
     # Handle empty composition
@@ -655,17 +657,26 @@ def grow_from_seed(
         target_composition: The target composition as a list of element symbols.
         placement_radius_scaling: A scaling factor to determine the placement shell
             radius.
-        min_distance_factor: Factor to scale covalent radii for minimum distance
-            checks.
         cell_side: The side length of the cubic cell for the new :class:`ase.Atoms`
             object.
+        rng: Numpy ``Generator`` supplying all randomness for this call.
+        min_distance_factor: Factor to scale covalent radii for minimum distance
+            checks.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold.
-        rng: Optional numpy random number generator.
+        blmin_ratio: GA-compatible steric floor (covalent-radius scale) enforced
+            during placement and on the grown cluster. ``None`` disables it.
 
     Returns:
         A new :class:`ase.Atoms` object of the target composition on success,
-        or ``None`` on failure.
+        or ``None`` on failure (infeasible composition, failed placement, or
+        failed clash/connectivity/blmin validation). When the seed already
+        matches the target composition, the seed is returned re-celled and
+        centered.
+
+    Raises:
+        SCGOValidationError: If growth completed but produced a composition
+            other than ``target_composition``.
 
     """
     base_atoms = seed_atoms.copy()
@@ -765,11 +776,13 @@ def _add_atoms_to_cluster_iteratively(
 ) -> Atoms | None:
     """Iteratively adds atoms to a base Atoms object within a spherical volume.
 
-    This function places new atoms in batches when possible (for clusters with ≥4 atoms),
-    using convex hull facets to place multiple atoms per hull computation. For smaller
-    clusters or edge cases, it falls back to single-atom placement. The placement volume
-    is dynamically adjusted. Connectivity is checked during growth to ensure the cluster
-    remains connected.
+    This function places new atoms in batches when the current cluster already
+    has >=4 atoms and connectivity is not as tight as the steric floor, using
+    convex hull facets to place multiple atoms per hull computation. For
+    smaller clusters, tight connectivity, or when batch generation yields no
+    candidates, it falls back to single-atom placement. The placement volume
+    is dynamically adjusted. Connectivity is checked during growth to ensure
+    the cluster remains connected.
 
     Args:
         base_atoms: The starting Atoms object to add atoms to
@@ -778,6 +791,8 @@ def _add_atoms_to_cluster_iteratively(
         placement_radius_scaling: Scaling for placement radius.
         rng: Random number generator.
         connectivity_factor: Factor for connectivity threshold.
+        steric_floor: Optional lower bound that progressive relaxation of the
+            clash threshold must never cross (e.g. the GA blmin ratio).
 
     Returns:
         A new Atoms object with all atoms added, or None if addition failed
@@ -855,7 +870,11 @@ def _add_atoms_single_mode(
     *,
     steric_floor: float | None = None,
 ) -> Atoms | None:
-    """Single-atom placement mode for clusters with <4 atoms."""
+    """Single-atom placement mode.
+
+    Used for clusters with <4 atoms, when connectivity is as tight as the
+    steric floor, and as the fallback when batch placement finds no candidates.
+    """
     for atom_idx, atom_symbol in enumerate(atoms_to_add):
         atom_radius = radii_to_add[atom_symbol]
         new_pos = None
@@ -954,7 +973,7 @@ def _add_atoms_single_mode(
                     )
                     if not candidates:
                         # Convex hull needs >=4 atoms; anchor on an existing atom so
-                        # bond_distance is measured from a real neighbour, not the COM.
+                        # bond_distance is measured from a real neighbor, not the COM.
                         anchor_idx = int(rng.integers(n_current))
                         anchor_pos = current_positions[anchor_idx]
                         anchor_radius = get_covalent_radius_by_z(

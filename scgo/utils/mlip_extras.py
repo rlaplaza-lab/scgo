@@ -54,7 +54,8 @@ def _installed_scgo_extras() -> set[str]:
     if raw:
         requires = raw
     else:
-        # Fall back to the (deprecated in 3.13) API for older metadata layouts.
+        # Fall back to the functional ``requires()`` API for older metadata
+        # layouts whose ``PackageMetadata`` has no usable ``get_all``.
         try:
             requires = importlib.metadata.requires("scgo") or []
         except importlib.metadata.PackageNotFoundError:

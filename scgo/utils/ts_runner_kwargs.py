@@ -58,8 +58,8 @@ class NebRunConfig:
     surface_config: SurfaceSystemConfig | None
     torchsim_params: dict[str, Any] | None
     # Atom budget (sum of n_images * n_atoms) for one fused parallel-NEB force
-    # batch. Used only when ``parallel_neb_max_bands`` is None; ``None`` means
-    # "no atom budget" (all bands in one batch).
+    # batch. Applied together with ``parallel_neb_max_bands`` (both bounds hold);
+    # ``None`` means "no atom budget" (all bands in one batch).
     parallel_neb_max_batch_atoms: int | None = None
 
 

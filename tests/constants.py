@@ -70,3 +70,7 @@ ADSORPTION_HEIGHT_TOLERANCE_ANG = 0.15
 PT_O_DISTANCE_ANG = (1.8, 2.4)
 # EMT barrier for Pt4 tetrahedron <-> planar isomerization (eV).
 PT4_EMT_BARRIER_EV = (0.05, 8.0)
+# Generic MLIP barrier band (eV). Not an EMT accuracy reference: it only guards
+# against physically-implausible / negative barriers. Used by the GPU example
+# matrix (MACE + UPET), which runs a different PES than EMT.
+MLIP_BARRIER_EV = (0.0, 10.0)

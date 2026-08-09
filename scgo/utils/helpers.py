@@ -99,9 +99,9 @@ def canonicalize_storage_frame(
     the geometric center of the simulation cell.
 
     Slab + adsorbate (``pbc_aware=True`` and ``n_slab > 0``): shift all atoms by
-    integer lattice translations so the adsorbate center of mass sits in the
-    primary cell on periodic axes, then wrap. When ``n_slab == 0``, falls back to
-    the gas-like path (wrap + optional centering).
+    integer lattice translations so the mobile-region (indices ``n_slab:``)
+    center of mass sits in the primary cell on periodic axes, then wrap. When
+    ``n_slab == 0``, falls back to the gas-like path (wrap + optional centering).
     """
     if pbc_aware and n_slab > 0:
         n = len(atoms)
@@ -138,7 +138,7 @@ def canonicalize_relaxed_for_storage(
     Gas clusters use ``atoms.center()`` so the cluster bounding box sits at the
     cell midpoint, matching :func:`perform_local_relaxation`. Slab+adsorbate
     systems use :func:`canonicalize_storage_frame` with ``pbc_aware=True`` to
-    place the adsorbate in the primary cell without recentring the slab.
+    place the mobile region in the primary cell without recentering the slab.
     """
     if surface_mode and n_slab > 0:
         canonicalize_storage_frame(atoms, pbc_aware=True, center=False, n_slab=n_slab)
@@ -216,7 +216,7 @@ def perform_local_relaxation(
         raise
     except (RuntimeError, ValueError, FloatingPointError) as e:
         logger.warning("Local relaxation failed: %s", e)
-        logger.warning("Assigning large penalty energy to this structure.")
+        logger.warning("Assigning large penalty energy to this structure")
         return _assign_penalty_energy(atoms)
 
 
@@ -305,7 +305,7 @@ def validate_pair_id(pair_id: str) -> tuple[int, int]:
     r"""Validate canonical pair identifier 'i_j' and return (i, j).
 
     Raises:
-        ValueError: if `pair_id` is not a string matching "^\d+_\d+$".
+        SCGOValidationError: If `pair_id` is not a string matching "^\d+_\d+$".
     """
     if not isinstance(pair_id, str):
         raise SCGOValidationError(f"Invalid pair_id type: {pair_id!r}")
@@ -452,7 +452,7 @@ def is_true_minimum(
 
     if max_force > fmax_threshold:
         logger.debug(
-            "Check failed: Max force (%.4f eV/Å) > threshold (%.4f eV/Å).",
+            "Check failed: Max force (%.4f eV/Å) > threshold (%.4f eV/Å)",
             max_force,
             fmax_threshold,
         )
@@ -460,11 +460,11 @@ def is_true_minimum(
 
     if not check_hessian:
         logger.debug(
-            "Check passed: Max force is below threshold (Hessian check skipped)."
+            "Check passed: Max force is below threshold (Hessian check skipped)"
         )
         return True
 
-    logger.debug("Max force is OK. Performing vibrational analysis to check Hessian...")
+    logger.debug("Max force is OK. Performing vibrational analysis to check Hessian")
 
     try:
         vib: Vibrations = Vibrations(atoms_check, name="vib_check")
@@ -479,12 +479,12 @@ def is_true_minimum(
     problematic_freqs = frequencies[frequencies < -imag_freq_threshold]
     if problematic_freqs.size > 0:
         logger.debug(
-            "Check failed: Found %s imaginary frequencies below -%.1f cm-1: %s.",
+            "Check failed: Found %s imaginary frequencies below -%.1f cm-1: %s",
             problematic_freqs.size,
             imag_freq_threshold,
             np.round(problematic_freqs, 2),
         )
-        logger.debug("Structure is likely a saddle point.")
+        logger.debug("Structure is likely a saddle point")
         return False
 
     total_imag_count = int(np.sum(frequencies < 0.0))
@@ -493,16 +493,16 @@ def is_true_minimum(
     expected_zero_modes: int = 5 if is_linear else 6
 
     logger.debug(
-        "Check passed: Found 0 imaginary frequencies above threshold (%.1f cm-1).",
+        "Check passed: Found 0 imaginary frequencies below -%.1f cm-1",
         imag_freq_threshold,
     )
     logger.debug(
         "Total of %s imaginary/zero frequencies found (within threshold), "
-        "which is consistent with the %s expected translational/rotational modes.",
+        "which is consistent with the %s expected translational/rotational modes",
         total_imag_count,
         expected_zero_modes,
     )
-    logger.debug("Structure is confirmed as a true local minimum.")
+    logger.debug("Structure is confirmed as a true local minimum")
     return True
 
 
@@ -584,7 +584,8 @@ def _find_unique_minima_with_binning(
     """Find unique minima using energy binning optimization.
 
     Args:
-        sorted_minima: List of (energy, Atoms) tuples sorted by trial and energy.
+        sorted_minima: List of (energy, Atoms) tuples sorted by energy
+            (lowest first).
         comparer: Structure comparator object.
         energy_tolerance: Maximum energy difference for potential duplicates.
         get_bin_index: Function to get bin index for an energy value.
@@ -633,6 +634,10 @@ def filter_unique_minima(
         n_top: Number of trailing atoms to compare (same as GA ``n_to_optimize``).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC),
              matching :func:`scgo.algorithms.ga_common.create_structure_comparator`.
+        comparator_tol: Cumulative structural difference tolerance passed to
+             :class:`~scgo.utils.comparators.PureInteratomicDistanceComparator`.
+        comparator_pair_cor_max: Maximum single-distance difference tolerance
+             passed to the comparator.
 
     Returns:
         A new list of (energy, Atoms) tuples containing only the unique

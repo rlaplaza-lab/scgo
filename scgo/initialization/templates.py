@@ -1,9 +1,11 @@
 """Template structure generators for high-symmetry cluster motifs.
 
 This module provides functions to generate regular polyhedral structures
-(icosahedra, decahedra, octahedra) using ASE's cluster module. These templates
-are used in the smart initialization mode to ensure exploration of important
-high-symmetry basins in the potential energy surface.
+(icosahedra, decahedra, octahedra) using ASE's cluster module, plus
+analytically constructed motifs (tetrahedron, cube, cuboctahedron, truncated
+octahedron). These templates are used in the smart initialization mode to
+ensure exploration of important high-symmetry basins in the potential energy
+surface.
 
 Based on the Doye group's comprehensive study of Morse/LJ clusters:
 https://doye.chem.ox.ac.uk/jon/structures/Morse/paper/node5.html
@@ -100,7 +102,7 @@ def _get_base_element(composition: list[str]) -> str:
         First element symbol
 
     Raises:
-        ValueError: If composition is empty
+        SCGOValidationError: If composition is empty
     """
     if not composition:
         raise SCGOValidationError("Cannot get base element from empty composition")
@@ -121,7 +123,7 @@ def _get_typical_bond_length(composition: list[str]) -> float:
         Typical bond length in Angstroms (2 × average covalent radius)
 
     Raises:
-        ValueError: If composition is empty
+        SCGOValidationError: If composition is empty
     """
     if not composition:
         raise SCGOValidationError("Cannot calculate bond length from empty composition")
@@ -274,10 +276,12 @@ def remove_atoms_from_vertices(
 ) -> Atoms | None:
     """Remove atoms from convex-hull vertices in bulk.
 
-    Uses hull.vertices as the only candidate set. Orders by distance from COM
-    (descending), respects target_composition when given, and supports
-    multi-round removal when n_remove exceeds the number of vertices.
-    Single validation per round (no per-atom connectivity loop).
+    Uses hull.vertices as the only candidate set. Orders vertices by
+    coordination number (ascending), then by distance from the center of mass
+    (descending), with random tie-breaking. Respects target_composition when
+    given (removing one atom per round in that case), and supports multi-round
+    removal when n_remove exceeds the number of vertices. Single validation per
+    round (no per-atom connectivity loop).
 
     Args:
         cluster: The cluster to remove atoms from.
@@ -289,7 +293,12 @@ def remove_atoms_from_vertices(
 
     Returns:
         New Atoms with atoms removed, or None if removal fails (e.g. <4 atoms,
-        cannot satisfy composition from vertices, or validation fails).
+        cannot satisfy composition from vertices, or validation fails). Returns
+        a copy of the input when ``n_remove`` is not positive.
+
+    Raises:
+        SCGOValidationError: If ``n_remove`` is not smaller than the cluster
+            size, or if the requested composition cannot be preserved.
     """
     rng = ensure_rng_or_create(rng)
     if n_remove <= 0:
@@ -517,6 +526,10 @@ def grow_template_via_facets(
 
     Returns:
         Grown Atoms with target composition, or None on failure.
+
+    Raises:
+        SCGOValidationError: If growth completed but the composition does not
+            match ``target_composition``.
     """
     base: Atoms = seed_atoms.copy()
     base_composition = base.get_chemical_symbols()
@@ -699,7 +712,7 @@ def _create_balanced_base_composition(
         List of element symbols with balanced distribution
 
     Raises:
-        ValueError: If composition is empty
+        SCGOValidationError: If composition is empty
     """
     if not composition:
         raise SCGOValidationError(
@@ -762,10 +775,10 @@ def _validate_n_atoms(n_atoms: int, expected: int | None, template_name: str) ->
     Args:
         n_atoms: Number of atoms to validate
         expected: Expected number of atoms (None means no specific requirement)
-        template_name: Name of template for error messages
+        template_name: Name of the template (unused; kept for call-site clarity)
 
     Returns:
-        True if valid, False otherwise (logs debug message if invalid)
+        True if n_atoms is positive and matches ``expected``, False otherwise
     """
     if n_atoms <= 0:
         return False
@@ -863,12 +876,13 @@ def _rescale_cluster_to_bond_length(
     covalent radii × connectivity_factor. Rescaling ensures nn distances align
     with our connectivity model so structures pass validation.
 
-    Modifies atoms in place. Keeps center of mass fixed.
+    Modifies atoms in place. Keeps the geometric centroid of the positions fixed.
 
     Args:
         atoms: ASE-generated cluster (e.g. Icosahedron, Decahedron, Octahedron).
         composition: Target composition (used for typical bond length).
-        connectivity_factor: Connectivity factor; kept for API consistency.
+        connectivity_factor: Connectivity factor; the mean nearest-neighbor
+            distance is rescaled to ``a × min(1.0, 0.95 × connectivity_factor)``.
     """
     if len(atoms) < 2:
         return
@@ -1080,7 +1094,7 @@ def _adjust_template_to_target(
             )
             if grown is None:
                 logger.debug(
-                    "Failed to add atoms to %s template while maintaining connectivity (discovery failure: candidate discarded; not a per-structure fallback)",
+                    "Failed to grow %s template on its facets (discovery failure: candidate discarded; not a per-structure fallback)",
                     template_name,
                 )
                 return None
@@ -1387,6 +1401,7 @@ def generate_template_structure(
             - "cuboctahedron": Cuboctahedral structure
             - "truncated_octahedron": Truncated octahedral structure
         rng: Optional random number generator
+        connectivity_factor: Factor for connectivity threshold
 
     Returns:
         Atoms object with template structure, or None if generation fails
@@ -1497,7 +1512,9 @@ def _generate_template_with_atom_adjustment(
 ) -> Atoms | None:
     """Generate a template structure and adjust atom count to match target.
 
-    Uses seed growth functions to add/remove atoms from the surface.
+    Uses facet-based growth to add atoms, or convex-hull vertex removal to
+    remove them. Shrinking is refused when it would drop half or more of the
+    base atoms.
 
     Args:
         base_template_type: Template type to start from
@@ -1512,6 +1529,9 @@ def _generate_template_with_atom_adjustment(
 
     Returns:
         Atoms object with target composition, or None if generation fails
+
+    Raises:
+        SCGOValidationError: If ``composition`` is empty
     """
     if cell_side is None:
         cell_side = VACUUM_DEFAULT * 2
@@ -1629,8 +1649,9 @@ def _validate_and_add_template(
     """Validate a template structure and add it to results if valid.
 
     This helper consolidates the common validation pattern used in template
-    generation functions. It performs geometry validation and cluster structure
-    validation, then adds valid templates to the results list.
+    generation functions. It checks clashes and connectivity, and for valid
+    templates it optionally reorders atoms to the target composition, tags the
+    template type, and appends the structure to the results list.
 
     Args:
         atoms: The Atoms object to validate

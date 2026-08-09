@@ -29,6 +29,9 @@ def normalize_slab_pbc(
 
     Returns:
         The same ``slab`` instance (for chaining).
+
+    Raises:
+        SCGOValidationError: If ``surface_normal_axis`` is not 0, 1, or 2.
     """
     if surface_normal_axis not in (0, 1, 2):
         raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
@@ -45,7 +48,7 @@ def normalize_slab_pbc(
     slab.pbc = pbc
     if old != tuple(bool(x) for x in slab.pbc):
         logger.debug(
-            "Normalized slab pbc from %s to %s (vacuum axis %d).",
+            "Normalized slab PBC from %s to %s (vacuum axis %d)",
             old,
             tuple(bool(x) for x in slab.pbc),
             surface_normal_axis,

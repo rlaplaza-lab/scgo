@@ -219,7 +219,21 @@ def place_fragment_on_cluster(
     clash_atoms: Atoms | None = None,
     site_candidates: dict[SiteType, list[SurfaceSiteCandidate]] | None = None,
 ) -> Atoms | None:
-    """Rigidly place a gas-phase fragment with random orientation near the cluster."""
+    """Rigidly place a fragment at a ranked adsorption site near the cluster.
+
+    Each attempt scores several site/height trials by steric deficit and takes
+    the first clash-free trial among the best-ranked ones. Multi-atom fragments
+    are oriented along ``bond_axis`` when given (aligned to the site normal,
+    optionally spun about it) and randomly rotated otherwise.
+
+    Returns:
+        The placed fragment, or ``None`` if every attempt fails.
+
+    Raises:
+        SCGOValidationError: If ``core``, ``fragment_template``, ``site_core``
+            or ``clash_atoms`` is empty, or if ``anchor_index``/``bond_axis``
+            is out of range for the fragment.
+    """
     if config is None:
         config = ClusterAdsorbateConfig()
     if len(core) == 0:
@@ -351,7 +365,7 @@ def place_fragment_on_cluster(
         return frag
 
     logger.warning(
-        "place_fragment_on_cluster: exceeded max_placement_attempts=%s",
+        "Reached max_placement_attempts=%s in place_fragment_on_cluster",
         config.max_placement_attempts,
     )
     return None

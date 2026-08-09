@@ -56,7 +56,8 @@ def _layer_indices_by_clustering(
         return {i for i in range(len(positions)) if clusters[i] in selected}
     except (ValueError, TypeError, np.linalg.LinAlgError):
         logger.debug(
-            "fclusterdata layer selection failed; using coordinate rounding fallback",
+            "Layer selection via fclusterdata failed; using coordinate rounding "
+            "fallback",
             exc_info=True,
         )
         coord_flat = positions[:, axis]
@@ -109,6 +110,10 @@ def attach_slab_constraints(
         n_relax_top_slab_layers: If ``fix_all_slab_atoms`` is False and this is
             set, fix all slab atoms except those in the top N distinct layers.
         surface_normal_axis: Cartesian axis for layer grouping.
+
+    Raises:
+        SCGOValidationError: If ``n_slab`` exceeds ``len(atoms)``, or if both
+            ``n_fix_bottom_slab_layers`` and ``n_relax_top_slab_layers`` are set.
     """
     if n_slab > len(atoms):
         raise SCGOValidationError(
@@ -158,11 +163,16 @@ def attach_slab_constraints(
 def attach_slab_constraints_from_surface_config(
     atoms: Atoms, config: SurfaceSystemConfig
 ) -> None:
-    """Apply the same ``FixAtoms`` policy as global optimization on ``SurfaceSystemConfig``.
+    """Apply the ``config`` slab ``FixAtoms`` policy to ``atoms``.
 
     Use this (or pass ``surface_config`` into :func:`run_transition_state_search`) so
-    NEB endpoints match the slab freezing used during GA / local relaxation
-    (``fix_all_slab_atoms``, layer-relax modes, ``surface_normal_axis``).
+    NEB endpoints match the slab freezing used during global optimization and
+    local relaxation (``fix_all_slab_atoms``, layer-relax modes,
+    ``surface_normal_axis``).
+
+    Raises:
+        SCGOValidationError: If ``atoms`` does not start with ``config.slab``'s
+            chemical symbols in order.
     """
     validate_surface_config_slab_prefix(atoms, config)
     attach_slab_constraints(

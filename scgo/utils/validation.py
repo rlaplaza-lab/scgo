@@ -23,7 +23,7 @@ def validate_atoms(atoms: Atoms) -> None:
         atoms: Object to validate.
 
     Raises:
-        TypeError: If atoms is not an Atoms instance.
+        SCGOValidationError: If atoms is not an Atoms instance.
     """
     if not isinstance(atoms, Atoms):
         raise SCGOValidationError("Input 'atoms' must be an ASE Atoms object.")
@@ -44,7 +44,7 @@ def validate_calculator_attached(
         The calculator instance.
 
     Raises:
-        ValueError: If calculator is not attached.
+        SCGOValidationError: If calculator is not attached.
     """
     calculator = atoms.calc
     if calculator is None:
@@ -63,7 +63,8 @@ def validate_positive(name: str, value: float, strict: bool = False) -> None:
         strict: If True, value must be > 0. If False, value must be >= 0.
 
     Raises:
-        ValueError: If value is not positive.
+        SCGOValidationError: If value is not positive (or negative when
+            ``strict`` is False).
     """
     if strict and value <= 0:
         raise SCGOValidationError(f"{name} must be positive, got {value}")
@@ -86,7 +87,7 @@ def validate_in_range(
         max_val: Maximum allowed value (inclusive).
 
     Raises:
-        ValueError: If value is outside the range.
+        SCGOValidationError: If value is outside the range.
     """
     if not (min_val <= value <= max_val):
         raise SCGOValidationError(
@@ -104,7 +105,7 @@ def validate_integer(name: str, value: Any, strict: bool = True) -> None:
             (float with .0).
 
     Raises:
-        TypeError: If value is not an integer.
+        SCGOValidationError: If value is not an integer.
     """
     if isinstance(value, int):
         return
@@ -131,7 +132,7 @@ def validate_in_choices(
         choices: List or tuple of allowed string values.
 
     Raises:
-        ValueError: If value is not in choices.
+        SCGOValidationError: If value is not in choices.
     """
     if value not in choices:
         choices_str = ", ".join(f"'{c}'" for c in choices)
@@ -150,14 +151,13 @@ def validate_composition(
     Args:
         composition: Composition to validate.
         allow_empty: If True, empty composition is valid. If False, raises
-            ValueError.
+            SCGOValidationError.
         allow_tuple: If True, accepts both list and tuple. If False, only
             accepts list.
 
     Raises:
-        TypeError: If composition is None or not a list/tuple.
-        ValueError: If composition is empty (when allow_empty=False) or contains
-            non-string elements.
+        SCGOValidationError: If composition is None, is not a list/tuple, is
+            empty (when allow_empty=False), or contains non-string elements.
     """
     if composition is None:
         raise SCGOValidationError("composition cannot be None")

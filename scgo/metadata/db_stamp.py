@@ -54,7 +54,11 @@ def get_db_schema_version(db: DataConnection) -> int:
 
 
 def set_db_schema_version(db: DataConnection, version: int) -> None:
-    """Set DB schema stamp version."""
+    """Create ``scgo_metadata`` if needed and set the DB schema stamp version.
+
+    Also (re)writes ``created_by = 'scgo'``, so the file is recognized by
+    :func:`is_scgo_db` afterwards.
+    """
     with db.c.managed_connection() as conn:
         _upsert_scgo_metadata_keys(conn, schema_version=version)
         conn.commit()
@@ -64,9 +68,12 @@ def set_db_schema_version(db: DataConnection, version: int) -> None:
 def bump_db_schema_version(
     db: DataConnection, target_version: int | None = None
 ) -> bool:
-    """Set ``schema_version`` in ``scgo_metadata`` to *target_version* (no data migration).
+    """Set ``schema_version`` in ``scgo_metadata`` (no data migration).
 
-    Returns True on success; raises DatabaseMigrationError for downgrades or failure.
+    Writes *target_version* (default :data:`CURRENT_DB_SCHEMA_VERSION`) as the
+    recorded stamp. Returns True on success, including when the database is
+    already at *target_version*; raises DatabaseMigrationError for downgrades or
+    on write failure.
     """
     if target_version is None:
         target_version = CURRENT_DB_SCHEMA_VERSION
@@ -100,15 +107,15 @@ def ensure_db_schema_version(db: DataConnection) -> None:
 
     if current_version < CURRENT_DB_SCHEMA_VERSION:
         logger.info(
-            "Database needs migration from v%s to v%s",
+            "Updating database schema stamp from v%s to v%s (no data migration)",
             current_version,
             CURRENT_DB_SCHEMA_VERSION,
         )
         bump_db_schema_version(db, CURRENT_DB_SCHEMA_VERSION)
     elif current_version > CURRENT_DB_SCHEMA_VERSION:
         logger.warning(
-            "Database version %s is newer than expected "
-            "%s. Update SCGO to latest version.",
+            "Database version %s is newer than expected %s — update SCGO to the "
+            "latest version",
             current_version,
             CURRENT_DB_SCHEMA_VERSION,
         )
@@ -148,7 +155,11 @@ def clear_db_stamp_cache() -> None:
 
 
 def is_scgo_db(db_path: str | Path) -> bool:
-    """True if ``scgo_metadata.created_by`` is ``scgo``."""
+    """True if ``scgo_metadata.created_by`` is ``scgo``.
+
+    The result is memoized per resolved path; call :func:`clear_db_stamp_cache`
+    after stamping or replacing a file outside this module.
+    """
     key = str(Path(db_path).resolve())
     cached = _scgo_database_cache.get(key)
     if cached is not None:
@@ -162,9 +173,11 @@ def is_scgo_db(db_path: str | Path) -> bool:
 def stamp_db(db_path: str | Path, *, schema_version: int | None = None) -> None:
     """Write ``scgo_metadata`` so :func:`is_scgo_db` accepts this file.
 
-    Used by tests and tools that build SQLite files outside :func:`setup_database`.
+    Called by :func:`scgo.database.helpers.setup_database`, and by tests and
+    tools that build SQLite files directly. Clears the :func:`is_scgo_db` cache.
     """
-    # Circular: database.connection imports helpers that use metadata.atoms.
+    # Local import: scgo.database.connection pulls in the scgo.database package,
+    # which imports scgo.database.helpers, which imports this module.
     from scgo.database.connection import _run_sqlite
 
     ver = schema_version if schema_version is not None else CURRENT_DB_SCHEMA_VERSION

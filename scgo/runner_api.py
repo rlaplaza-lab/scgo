@@ -154,10 +154,12 @@ def run_go_campaign(
 ) -> dict[str, list[tuple[float, Atoms]]]:
     """Run global optimization for multiple compositions.
 
-    Each composition gets a reproducible sub-seed derived from ``seed`` /
-    ``params["seed"]``. If a composition fails (``ValueError``, ``RuntimeError``,
-    ``SCGOValidationError``, I/O, or database errors), the error is logged, that
-    formula maps to an empty list, and remaining compositions continue.
+    Results are keyed by the component-aware path key (formula plus adsorbate and
+    surface segments), not by the plain chemical formula. Each composition gets a
+    reproducible sub-seed derived from ``seed`` / ``params["seed"]``. If a
+    composition fails (``ValueError``, ``RuntimeError``, ``SCGOValidationError``,
+    I/O, or database errors), the error is logged, that path key maps to an empty
+    list, and remaining compositions continue.
     """
     try:
         context = _prepare_run_go_campaign_context(

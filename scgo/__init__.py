@@ -1,10 +1,10 @@
-"""SCGO: cluster global optimization tools. See README.md and examples/ for usage."""
+"""SCGO: global optimization and TS search tools. See README.md and examples/."""
 
 from __future__ import annotations
 
 # Configure PyTorch allocator so reserved memory segments can expand instead of
-# fragmenting; recommended for long-running TS campaigns. Set unconditionally so
-# callers do not need to export it in the shell.
+# fragmenting; recommended for long-running TS campaigns. Applied as a default so
+# callers need not export it in the shell; an existing environment value wins.
 import os
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -59,6 +59,8 @@ from scgo.param_presets import (
     get_high_energy_params,
     get_low_effort_torchsim_ga_params,
     get_low_effort_ts_search_params,
+    get_low_effort_uma_ga_params,
+    get_low_effort_upet_ga_params,
     get_minimal_ga_params,
     get_testing_params,
     get_torchsim_ga_params,
@@ -156,6 +158,8 @@ __all__ = [
     "get_diversity_params",
     "get_high_energy_params",
     "get_low_effort_torchsim_ga_params",
+    "get_low_effort_upet_ga_params",
+    "get_low_effort_uma_ga_params",
     "get_low_effort_ts_search_params",
     "get_minimal_ga_params",
     "get_testing_params",

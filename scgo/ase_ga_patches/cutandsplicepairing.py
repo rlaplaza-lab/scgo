@@ -164,7 +164,7 @@ class CutAndSplicePairing(OffspringCreator):
         the atoms and the slab satisfy the blmin.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     """
 

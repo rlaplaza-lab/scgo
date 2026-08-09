@@ -62,7 +62,7 @@ def validate_slab_search_config(config: SurfaceSystemConfig) -> None:
 
 @dataclass(frozen=True)
 class SlabSearchPartition:
-    """Fixed vs search-mobile split of a slab (and optional adsorbates)."""
+    """Fixed vs search-mobile split of the slab atoms."""
 
     n_slab: int
     n_fixed: int

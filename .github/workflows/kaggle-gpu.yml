@@ -3,6 +3,9 @@ name: Kaggle GPU tests
 # Manual GPU CI via Kaggle (see tests/README.md). CPU CI in ci.yml excludes requires_cuda.
 # Runs MACE and UPET suites in separate kernels (mutually exclusive extras).
 # UMA is intentionally omitted: HuggingFace auth for fairchem weights is not available on Kaggle.
+# The example matrix (tests/integration/test_gpu_examples_integration.py) carries both
+# requires_mace and requires_upet, so each suite selects all 12 cases (6 system types x 2
+# calculators) with its own extra installed — closing the silent-swap gap.
 
 on:
   workflow_dispatch:

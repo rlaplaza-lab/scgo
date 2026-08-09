@@ -46,7 +46,14 @@ def build_adsorbate_only_cluster(
     max_placement_attempts: int = 200,
     batch_site_counts: dict[str, int] | None = None,
 ) -> Atoms | None:
-    """Place one or more molecular fragments without a metal core."""
+    """Place one or more molecular fragments without a metal core.
+
+    Returns:
+        The combined fragment structure, or ``None`` if every attempt fails.
+
+    Raises:
+        SCGOValidationError: If ``fragment_templates`` is empty.
+    """
     if not fragment_templates:
         raise SCGOValidationError(
             "fragment_templates must contain at least one fragment"
@@ -95,7 +102,7 @@ def build_adsorbate_only_cluster(
             _stamp_site_metadata(combined, site_types)
             return combined
     logger.warning(
-        "build_adsorbate_only_cluster: exceeded max_placement_attempts=%s",
+        "Reached max_placement_attempts=%s in build_adsorbate_only_cluster",
         max_placement_attempts,
     )
     return None
@@ -117,8 +124,12 @@ def build_hierarchical_core_fragment_cluster(
 ) -> Atoms | None:
     """Build core cluster, place rigid fragment(s), return gas-phase structure.
 
-    Each entry in ``fragment_templates`` is placed sequentially on distinct
-    adsorption sites while preserving previously placed fragments.
+    Fragments are placed sequentially on adsorption sites of the metal core,
+    with anti-repetition weighting across site types; previously placed
+    fragments are kept fixed and are used as clash partners.
+
+    Returns:
+        The combined structure, or ``None`` if every attempt fails.
     """
     from scgo.system_types import resolve_adsorbate_fragments
 
@@ -186,7 +197,7 @@ def build_hierarchical_core_fragment_cluster(
             placement_metadata["site_type"] = site_types[-1]
         return combined
     logger.warning(
-        "build_hierarchical_core_fragment_cluster: exceeded max_placement_attempts=%s",
+        "Reached max_placement_attempts=%s in build_hierarchical_core_fragment_cluster",
         max_placement_attempts,
     )
     return None

@@ -60,7 +60,8 @@ def database_retry(
 
     When ``exception_types`` is set (e.g. :data:`HPC_DATABASE_EXCEPTIONS`), those
     exception types are retried without the SQLite message filter — matching the
-    historical behavior when callers pass ``exception_types`` explicitly (e.g. BH/simple).
+    historical behavior when callers pass ``exception_types`` explicitly (e.g.
+    the basin-hopping and simple global-optimization drivers).
     """
     effective_config = config or PRESET_DEFAULT
     n_retries = effective_config.max_retries
@@ -101,7 +102,7 @@ def database_retry(
 
 
 def is_retryable_error(error: Exception) -> bool:
-    """True for sqlite OperationalError messages that often clear after a short wait."""
+    """True for SQLite ``OperationalError`` messages that often clear after a wait."""
     if not isinstance(error, sqlite3.OperationalError):
         return False
 
@@ -171,6 +172,12 @@ def retry_transaction(
 
     Returns:
         The return value of ``operation`` on success.
+
+    Raises:
+        sqlite3.OperationalError: If the error is not retryable, or if the last
+            attempt still fails.
+        SCGODatabaseError: If the retry loop ends without a result (should not
+            happen for a positive ``max_retries``).
     """
     from scgo.database.transactions import database_transaction
 

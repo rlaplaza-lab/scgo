@@ -129,7 +129,8 @@ def filter_by_tags(
 def compute_final_id(atoms: Atoms, energy: float | None) -> str:
     """Compute a deterministic identifier for a final structure.
 
-    SHA256 over canonical species, rounded positions, and optional energy.
+    SHA256 over the centered copy's chemical symbols, positions rounded to 8
+    decimals, and the energy when one is given.
     """
     a = atoms.copy()
     with contextlib.suppress(AttributeError, TypeError):

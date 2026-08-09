@@ -12,10 +12,11 @@ DEFAULT_OH_BOND_LENGTH = 0.96
 def build_default_fragment_template(
     symbols: list[str], *, oh_bond_length: float = DEFAULT_OH_BOND_LENGTH
 ) -> Atoms | None:
-    """Return a gas-phase template for simple ``adsorbate_symbols`` lists, or ``None``.
+    """Return a gas-phase template for simple ``symbols`` lists, or ``None``.
 
     Supported patterns (exact symbol order) for a **single** template:
         - ``["O", "H"]``: one OH
+        - ``["O", "H", "O", "H"]``: two OH separated by 2.2 Å
 
     For multiple identical fragments, pass ``adsorbates=[frag, frag, ...]`` at the
     runner API; each fragment is placed on its own adsorption site.

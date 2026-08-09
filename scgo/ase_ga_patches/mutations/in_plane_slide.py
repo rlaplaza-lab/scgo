@@ -21,14 +21,19 @@ __all__ = ["InPlaneSlideMutation"]
 
 
 class InPlaneSlideMutation(OffspringCreator):
-    """Randomly translates adsorbate atoms parallel to the slab surface.
+    """Translates adsorbate atoms parallel to the slab surface.
+
+    Candidate shifts combine directions from slab repulsion, the in-plane
+    principal axes and fixed in-plane axis/diagonal directions, scaled by
+    fixed fractions of ``max_displacement``; the first shift that violates
+    no *blmin* pair is accepted.
 
     Parameters
     ----------
     blmin : dict
         Minimum allowed interatomic distances.
     n_top : int
-        Number of adsorbate atoms optimised by the GA.
+        Number of adsorbate atoms optimized by the GA.
     surface_normal_axis : int
         Cartesian axis index (0, 1, or 2) normal to the surface.
     max_displacement : float
@@ -36,7 +41,7 @@ class InPlaneSlideMutation(OffspringCreator):
     rng : numpy.random.Generator or None
         Random number generator.
     max_inner_attempts : int
-        Maximum number of random displacement attempts per call.
+        Upper bound on the number of candidate shifts per call (capped at 12).
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, surface_normal_axis=2,

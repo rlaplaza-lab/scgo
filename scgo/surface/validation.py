@@ -45,7 +45,8 @@ def validate_surface_config_slab_prefix(
     :func:`attach_slab_constraints_from_surface_config` and surface GA rely on this.
 
     Raises:
-        ValueError: If the structure is too short or the prefix does not match.
+        SCGOValidationError: If the structure is too short or the prefix does not
+            match.
     """
     n = len(config.slab)
     if len(atoms) < n:
@@ -224,7 +225,11 @@ def _validate_mobile_connectivity_policy(
     allow_adsorbate_surface_detachment: bool,
     surface_normal_axis: int = 2,
 ) -> tuple[bool, str]:
-    """Enforce mobile-region connectivity rules and per-subgroup slab contact."""
+    """Enforce mobile-region connectivity rules and slab contact.
+
+    When mobile splits are allowed, every subgroup must touch the slab; otherwise
+    the mobile region must be a single component that touches the slab.
+    """
     n_ads = len(mobile)
     if n_ads < 2:
         return _check_mobile_touches_slab(
@@ -327,7 +332,7 @@ def _check_mobile_touches_slab(
     use_mic: bool,
     surface_normal_axis: int = 2,
 ) -> tuple[bool, str]:
-    """True when at least one mobile atom is within bonding distance of the slab."""
+    """True when a mobile atom is within bonding distance of the slab surface layer."""
     n = len(combined)
     symbols = combined.get_chemical_symbols()
     slab_indices = _slab_surface_layer_indices(
@@ -383,7 +388,7 @@ def validate_supported_cluster_deposit(
     ``adsorbate_definition['adsorbate_symbols']`` alone.)
 
     **Default** (both relaxation flags False): the mobile region must form one
-    connected component (when ``len(mobile) > 2``) and touch the slab.
+    connected component (when ``len(mobile) >= 2``) and touch the slab.
 
     **``allow_cluster_fragmentation``**: multiple core/mixed mobile subgroups are allowed;
     detached adsorbate-only subgroups are still rejected unless

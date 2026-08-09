@@ -69,14 +69,17 @@ def mark_final_minima_in_db(
     (:func:`scgo.metadata.atoms.ensure_final_id`).
 
     Args:
-        final_minima_info: List of dicts with keys: 'energy' (float), 'atoms' (Atoms),
-            'rank' (1-based int), 'final_written' (str filepath or filename),
-            'final_id' (str, required)
-        base_dir: Base output directory to search for database files (used by discovery)
+        final_minima_info: List of dicts with keys ``atoms`` (Atoms, required),
+            ``final_id`` (str, required), ``rank`` (1-based int, optional) and
+            ``final_written`` (str filepath or filename, optional). Other keys,
+            such as ``energy``, are ignored
+        base_dir: Base output directory searched for database files, used only
+            when ``db_paths`` is not given
         db_paths: Optional explicit list of database files to search/update
 
     Returns:
-        dict: summary containing counts, e.g. {"dbs_touched": int, "rows_updated": int, "details": {db_path: rows}}
+        dict: Summary counts, e.g.
+            ``{"dbs_touched": int, "rows_updated": int, "details": {db_path: rows}}``
     """
     # Circular: connection → sync → utils → helpers → metadata.atoms;
     # discovery imports db_stamp / run_dir.
@@ -98,11 +101,11 @@ def mark_final_minima_in_db(
         final_id = info.get("final_id")
 
         if atoms is None:
-            logger.warning("mark_final_minima_in_db: missing atoms entry, skipping")
+            logger.warning("Missing atoms entry in mark_final_minima_in_db; skipping")
             continue
 
         if final_id is None:
-            logger.warning("mark_final_minima_in_db: missing final_id, skipping")
+            logger.warning("Missing final_id in mark_final_minima_in_db; skipping")
             continue
 
         run_id = get_tag(atoms, "run_id")
@@ -114,8 +117,8 @@ def mark_final_minima_in_db(
 
         if not db_files:
             logger.warning(
-                "mark_final_minima_in_db: no databases found for "
-                "run=%s — check output layout, registry, or pass db_paths",
+                "No databases found for run=%s in mark_final_minima_in_db "
+                "— check output layout, registry, or pass db_paths",
                 run_id,
             )
             continue
@@ -207,7 +210,7 @@ def mark_final_minima_in_db(
             json.JSONDecodeError,
             ValueError,
         ) as e:
-            logger.warning("mark_final_minima_in_db: failed for %s: %s", db_path, e)
+            logger.warning("Failed marking final minima for %s: %s", db_path, e)
             continue
 
     return {

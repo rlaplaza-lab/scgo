@@ -117,7 +117,7 @@ class _SeedSamplingLogCollector:
                 parts.append(f"{formula}×{total} [{reason_detail}]")
 
         logger.info(
-            "seed+growth: no suitable seed (%d failures): %s",
+            "Seed+growth: no suitable seed (%d failures): %s",
             len(records),
             ", ".join(parts),
         )
@@ -163,8 +163,8 @@ def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) ->
     if cell_side > MAX_REASONABLE_CELL_SIDE:
         logger.warning(
             f"Computed cell_side ({cell_side:.1f} Å) exceeds reasonable threshold "
-            f"({MAX_REASONABLE_CELL_SIDE} Å) for {len(composition)} atoms. "
-            f"This may indicate very large composition or vacuum value."
+            f"({MAX_REASONABLE_CELL_SIDE} Å) for {len(composition)} atoms; "
+            f"this may indicate a very large composition or vacuum value"
         )
 
     return cell_side
@@ -189,6 +189,10 @@ def _boltzmann_sample(
 
     Returns:
         A randomly sampled (energy, atoms) tuple, or None if no candidates provided
+
+    Raises:
+        SCGOValidationError: If the candidates do not all share the same element
+            counts, or if an explicit ``temperature`` is not positive.
 
     """
     if not candidates:
@@ -267,7 +271,7 @@ def _calculate_template_weight(
 
     Args:
         template_type: Type of template (e.g., "icosahedron")
-        n_atoms: Number of atoms
+        n_atoms: Number of atoms (currently unused; kept for call-site symmetry)
         n_unique_elements: Number of unique elements in composition
         template_type_counts: Dictionary counting occurrences of each template type
         total_candidates: Total number of template candidates
@@ -432,7 +436,8 @@ def _apply_template_rotation_and_validate(
     )
     if not is_valid:
         logger.warning(
-            f"Template structure validation failed: {error_message}. Falling back to random_spherical."
+            f"Template structure validation failed: {error_message}; "
+            f"discarding this template candidate"
         )
         return None
     if composition is not None:
@@ -513,7 +518,7 @@ def _try_template_generation(
 
     if not template_candidates:
         logger.debug(
-            "template: no usable templates for %d atoms (composition=%s)",
+            "Template: no usable templates for %d atoms (composition=%s)",
             n_atoms,
             composition,
         )
@@ -527,7 +532,7 @@ def _try_template_generation(
     if len(template_candidates) < original_count:
         logger.debug(
             f"Deduplicated templates: {original_count} -> {len(template_candidates)} "
-            f"unique structures (removed duplicates between exact and near-match templates)"
+            f"unique structures (duplicates between exact and near matches removed)"
         )
 
     # Enhanced diversity: create weighted pool of ALL candidates across all types
@@ -579,8 +584,8 @@ def _try_template_generation(
         # Use specific template index if provided
         if template_index < 0 or template_index >= len(weighted_candidates):
             logger.warning(
-                f"Invalid template_index {template_index}, "
-                f"must be in range [0, {len(weighted_candidates)}). Using random selection."
+                f"Invalid template_index {template_index}, must be in range "
+                f"[0, {len(weighted_candidates)}); using random selection"
             )
             selected_idx = int(rng.integers(0, len(weighted_candidates)))
         else:
@@ -610,7 +615,9 @@ def _try_template_generation(
     if result is None:
         return None
     logger.debug(
-        f"Smart mode: using template {selected_type} ({n_unique_template_types} unique types available, {len(template_candidates)} total candidates)"
+        f"Smart mode: using template {selected_type} "
+        f"({n_unique_template_types} unique type(s) available, "
+        f"{len(template_candidates)} total candidates)"
     )
     return result
 
@@ -661,7 +668,10 @@ def _sample_seed_with_strategy(
         rng: Random number generator
 
     Returns:
-        Selected (energy, atoms) tuple, or None if no suitable candidate found
+        Selected (energy, atoms) tuple, or None if ``candidates`` is empty
+
+    Raises:
+        SCGOValidationError: If ``strategy`` is not one of the indices 0-4
     """
     if not candidates:
         return None
@@ -694,9 +704,11 @@ def _grow_from_random_seed(
 ) -> Atoms | None:
     """Generate a small random seed and grow it to the target composition.
 
-    This function is used when no external seeds from previous runs are available.
-    It creates a small random cluster (about 1/4 of target size, minimum 3 atoms)
-    and grows it to the target composition using convex-hull-based placement.
+    This function is used when no usable database seeds are available, or when
+    every database seed combination failed. It creates a small random cluster
+    (about 1/4 of the target size, clamped to 3-15 atoms, and never exceeding
+    the per-element counts of the target) and grows it to the target
+    composition using convex-hull-based placement.
 
     The growth approach provides different structural characteristics than pure
     random_spherical, as the initial seed geometry influences the final structure.
@@ -710,7 +722,8 @@ def _grow_from_random_seed(
         connectivity_factor: Factor for connectivity threshold
 
     Returns:
-        Atoms object if successful, None otherwise
+        Atoms object if successful, None otherwise (empty composition, seed
+        generation failure, or growth failure)
     """
     n_atoms = len(composition)
 
@@ -765,7 +778,7 @@ def _grow_from_random_seed(
         return result
     except (ValueError, SCGOValidationError):
         logger.debug(
-            "grow_from_seed failed for composition %s",
+            "Growth from random seed failed for composition %s",
             composition,
         )
         return None
@@ -776,6 +789,10 @@ def _find_valid_seed_combinations(
     target_counts: dict[str, int],
 ) -> list[tuple[str, ...]]:
     """Find all valid seed formula combinations that are sub-compositions of target.
+
+    Combinations contain between one and three distinct formulas (each formula
+    is used at most once) and are kept only when their summed element counts
+    fit within ``target_counts``.
 
     Args:
         candidates_by_formula: Dictionary mapping formulas to candidate lists
@@ -896,7 +913,10 @@ def _try_seed_growth(
     """Try to generate a cluster using seed+growth strategy.
 
     This helper function encapsulates seed+growth logic for the smart mode.
-    It finds suitable seeds from previous runs and grows them to the target composition.
+    It combines seeds found in previous runs and grows them to the target
+    composition. When no database seeds or no valid seed combinations are
+    available, and also when every combination strategy fails, it falls back
+    to growing from a freshly generated random seed.
 
     Args:
         composition: Target composition list
@@ -909,7 +929,8 @@ def _try_seed_growth(
         valid_combinations: Precomputed valid seed formula combinations
 
     Returns:
-        Atoms object if successful, None otherwise
+        Atoms object if successful, None otherwise (including compositions
+        with two atoms or fewer, which are left to other strategies)
     """
     if len(composition) <= 2:
         return None
@@ -922,12 +943,12 @@ def _try_seed_growth(
         "connectivity_factor": connectivity_factor,
     }
     if not candidates_by_formula:
-        logger.info("seed+growth: no database seeds found; using random seed growth")
+        logger.info("Seed+growth: no database seeds found; using random seed growth")
         return _grow_from_random_seed(**random_seed_kwargs)
 
     if not valid_combinations:
         logger.info(
-            "seed+growth: no valid DB seed combinations; using random seed growth"
+            "Seed+growth: no valid DB seed combinations; using random seed growth"
         )
         return _grow_from_random_seed(**random_seed_kwargs)
 
@@ -954,7 +975,7 @@ def _try_seed_growth(
                 reason = failure_reason or "unknown"
                 _SeedSamplingLogCollector.record(formula, reason)
                 logger.trace(
-                    "seed+growth: no suitable seed for %s (%s)",
+                    "Seed+growth: no suitable seed for %s (%s)",
                     formula,
                     reason,
                 )
@@ -984,7 +1005,7 @@ def _try_seed_growth(
     # All DB combination strategies failed; still try random-seed growth before
     # yielding None (outer chain may then fall back to random_spherical).
     logger.info(
-        "seed+growth: all %d combination strategies failed; "
+        "Seed+growth: all %d combination strategies failed; "
         "DB combinations exhausted; trying random-seed growth",
         SEED_COMBINATION_STRATEGY_COUNT,
     )
@@ -1088,14 +1109,20 @@ def _try_strategies_in_order(
         composition: Target composition (for validation)
         connectivity_factor: Factor for connectivity threshold (for validation)
         min_distance_factor: Factor for minimum distance checks (for validation)
+        return_strategy: When True, also return the strategy that produced the
+            result and the primary strategy it fell back from (``None`` when
+            the primary strategy succeeded).
 
     Returns:
         Atoms object if successful. When ``return_strategy=True``, returns
         a tuple of (Atoms, used_strategy, fallback_from).
 
     Raises:
-        ValueError: If the final fallback strategy fails
-        RuntimeError: If the final fallback strategy fails
+        SCGOValidationError: If ``strategies`` is empty, or propagated from the
+            final fallback strategy or its validation.
+        SCGORuntimeError: If every strategy returned None.
+        ValueError: Propagated from the final fallback strategy.
+        RuntimeError: Propagated from the final fallback strategy.
     """
     if not strategies:
         raise SCGOValidationError("No strategies provided to _try_strategies_in_order")
@@ -1188,6 +1215,7 @@ def create_initial_cluster(
 
     Args:
         composition: target list of element symbols.
+        rng: numpy ``Generator`` providing all randomness for this call.
         placement_radius_scaling: scale factor for radii in random placement.
         min_distance_factor: scale factor for minimum distance
             checks; the placement loop relaxes it slightly if repeated
@@ -1199,18 +1227,17 @@ def create_initial_cluster(
             ``random_spherical``, or ``template``.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold. Defaults to ``CONNECTIVITY_FACTOR`` (1.4).
-        rng: numpy ``Generator`` providing all randomness for this call.
 
     Returns:
         An :class:`ase.Atoms` instance with the initial cluster. When
         ``composition`` is empty, returns an empty ``Atoms`` object.
 
     Raises:
-        TypeError: If ``composition`` is ``None`` or not a list/tuple of
-            strings.
-        ValueError: If numeric parameters are invalid or a valid cluster
-            satisfying the distance/connectivity constraints cannot be
-            constructed.
+        SCGOValidationError: If ``composition`` is ``None``, is not a
+            list/tuple of element symbols, if numeric parameters are invalid,
+            if ``mode`` is unsupported, or if a valid cluster satisfying the
+            distance/connectivity constraints cannot be constructed.
+        SCGORuntimeError: If every initialization strategy returned ``None``.
 
     Note:
         This function is implemented as a wrapper around
@@ -1394,6 +1421,15 @@ def create_initial_cluster_batch(
     when the parent ``rng`` state matches.
 
     Validated structures are reordered to match ``composition`` for GA pairing.
+
+    Returns:
+        List of ``n_structures`` :class:`ase.Atoms` objects. When
+        ``composition`` is empty, the list contains empty ``Atoms`` objects.
+
+    Raises:
+        SCGOValidationError: If ``n_structures`` is below 1, if ``composition``
+            is invalid, or if ``mode`` is not one of ``smart``, ``template``,
+            ``seed+growth``, or ``random_spherical``.
     """
     if n_structures < 1:
         raise SCGOValidationError(f"n_structures must be >= 1, got {n_structures}")

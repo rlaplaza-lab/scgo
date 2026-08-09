@@ -1,28 +1,40 @@
-"""GPU integration tests mirroring examples/ for Kaggle CI.
+"""GPU integration tests mirroring examples/ for Kaggle CI (dual-suite).
 
-Budgets are the shared low-effort presets (``get_low_effort_torchsim_ga_params``
-/ ``get_low_effort_ts_search_params``): ~25% of the production GA budget, and
-~25%-with-a-floor NEB step budget. The examples build their params from the very
-same two functions, so this matrix cannot drift from ``examples/example_*.py``.
-Per-case deltas are limited to ``max_pairs`` (the dominant TS cost lever) and
-``connectivity_factor``.
+Each base example case is expanded over both MACE and UPET calculators, so the
+Kaggle ``mace`` and ``upet`` suites (each installing only its own extra) both
+exercise every system type. The test is decorated with **both**
+``requires_mace`` and ``requires_upet`` so each suite selects the whole dual
+set. The calculator-specific GO preset is selected *inside* the test function
+(not at module import), because the opposite suite lacks that extra installed
+and a top-level import would error / skip the module.
+
+Budgets are the shared low-effort presets:
+``get_low_effort_torchsim_ga_params`` / ``get_low_effort_upet_ga_params`` /
+``get_low_effort_ts_search_params`` — ~25% of the production GA budget and a
+~25%-with-a-floor NEB step budget. The MACE examples build their params from the
+same ``get_low_effort_torchsim_ga_params`` function, so that path cannot drift
+from ``examples/example_*.py``; the UPET mirror stays in lockstep via the dual
+matrix here. Per-case deltas are limited to ``max_pairs`` (the dominant TS cost
+lever) and ``connectivity_factor``.
 
 Slabs match the examples exactly (``slab_layers=3``, ``slab_repeat_xy=3``), so
 the defected / N-doped cells are physically meaningful rather than
 self-interacting at ~4.9 Å.
 
-Every case passes a ``barrier_range``, which switches
-``assert_e2e_go_ts_summary`` onto ``assert_ts_result_valid``: any saddle that is
-reported must be an interior image with correctly ordered endpoints and a sane
-barrier. Only ``surface_cluster`` additionally *requires* a saddle
-(``require_ts_candidates=True``); the other cases can legitimately end with zero
-qualifying pairs at this budget (gas cases often leave no on-disk pairs, and the
-adsorbate pre-NEB gates can report "No suitable pairs found").
+Every case passes a ``barrier_range`` and ``require_ts_candidates=True`` (the
+"trial of fire"): ``assert_e2e_go_ts_summary`` switches onto
+``assert_ts_result_valid`` (any reported saddle must be an interior image with
+correctly ordered endpoints and a sane barrier) **and** demands at least one
+successful saddle, rejecting any OOM / never-ran band. This closes the silent
+swap gap: previously only ``surface_cluster`` required a saddle, so the other
+cases could pass with zero qualifying pairs even if GPU memory pressure dropped
+every NEB band. ``max_pairs`` is tuned per case so each still finds a saddle
+within the Kaggle timeout.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -32,6 +44,7 @@ from scgo import (
     get_cluster_formula,
     get_low_effort_torchsim_ga_params,
     get_low_effort_ts_search_params,
+    get_low_effort_upet_ga_params,
     make_defected_graphite_surface_config,
     make_graphite_surface_config,
     make_n_doped_graphite_surface_config,
@@ -44,7 +57,7 @@ from scgo.system_types import (
     build_adsorbate_definition_from_inputs,
     get_system_policy,
 )
-from tests.constants import PT4_EMT_BARRIER_EV
+from tests.constants import MLIP_BARRIER_EV
 from tests.test_utils import assert_e2e_go_ts_summary
 
 SEED = 42
@@ -56,9 +69,10 @@ CONNECTIVITY = 1.8
 SLAB_LAYERS = 3
 SLAB_REPEAT_XY = 3
 
-# Wide MACE barrier band: any interior saddle must land inside it. Shared with
-# the EMT e2e matrix so both suites apply the same physics bar shape.
-BARRIER_RANGE_EV = PT4_EMT_BARRIER_EV
+# Generic MLIP barrier band: any interior saddle must land inside it. This is a
+# physically-plausible guard (rejects negative / absurd barriers), NOT an EMT
+# accuracy reference — the GPU matrix runs MACE + UPET, a different PES than EMT.
+BARRIER_RANGE_EV = MLIP_BARRIER_EV
 
 
 def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
@@ -94,12 +108,15 @@ class GpuExampleCase:
     # assert_e2e_go_ts_summary onto assert_ts_result_valid (interior TS image,
     # endpoint ordering, barrier inside the band).
     barrier_range: tuple[float, float] = BARRIER_RANGE_EV
+    # Calculator to drive this case. Each base case is expanded over both MACE
+    # and UPET (see _all_cases), so both Kaggle suites exercise every type.
+    calculator: str = "MACE"
+    calculator_kwargs: dict = field(default_factory=dict)
     # True = "trial of fire": assert_e2e_go_ts_summary additionally demands at
-    # least one *successful* saddle and rejects any OOM / never-ran band. Only
-    # surface_cluster sets it: it is a bare single-stage NEB with the largest
-    # pair budget, so it is the case that must produce a saddle. The others can
-    # legitimately end with zero qualifying pairs at this budget.
-    require_ts_candidates: bool = False
+    # least one *successful* saddle and rejects any OOM / never-ran band. Set for
+    # every case now (closes the silent-swap gap): all 6 system types × both
+    # calculators must produce a saddle within the tuned max_pairs budget.
+    require_ts_candidates: bool = True
 
 
 def _graphite_config() -> SurfaceSystemConfig:
@@ -128,20 +145,20 @@ def _n_doped_graphite_config() -> SurfaceSystemConfig:
 
 
 GPU_EXAMPLE_CASES = [
-    # example_pt5_gas.py
+    # example_pt5_gas.py. Raised to max_pairs=4 so this case reliably finds a
+    # saddle under the ~25% budget (was 2, where it often left zero on-disk pairs).
     GpuExampleCase(
         system_type="gas_cluster",
-        max_pairs=2,
+        max_pairs=4,
     ),
     # example_pt5_graphite.py. max_pairs=6 (>4) so more bands than
     # parallel_neb_max_bands=4 are produced and the surface chunking path
-    # actually runs on the T4. This is the trial-of-fire case.
+    # actually runs on the T4. This is the heaviest case.
     GpuExampleCase(
         system_type="surface_cluster",
         surface_config=_graphite_config(),
         connectivity_factor=CONNECTIVITY,
         max_pairs=6,
-        require_ts_candidates=True,
     ),
     # example_pt5_oh_gas.py
     GpuExampleCase(
@@ -164,18 +181,20 @@ GPU_EXAMPLE_CASES = [
         expected_mobile_atoms=9,
         adsorbate_fragment_lengths=[2, 2],
     ),
-    # example_defected_graphite.py
+    # example_defected_graphite.py. Raised to max_pairs=2 (was 1) so a saddle
+    # is found rather than ending with zero qualifying pairs.
     GpuExampleCase(
         system_type="surface",
         composition=[],
         surface_config=_defected_graphite_config(),
         connectivity_factor=CONNECTIVITY,
-        max_pairs=1,
+        max_pairs=2,
         expected_mobile_atoms=0,
         n_core_mobile=0,
         check_supported_binding=False,
     ),
-    # example_n_doped_graphite.py
+    # example_n_doped_graphite.py. Raised to max_pairs=2 (was 1) so a saddle
+    # is found rather than ending with zero qualifying pairs.
     GpuExampleCase(
         system_type="surface_adsorbate",
         composition=[],
@@ -183,20 +202,58 @@ GPU_EXAMPLE_CASES = [
         adsorbates=_adsorbates_oh(n=1),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
-        max_pairs=1,
+        max_pairs=2,
         expected_mobile_atoms=2,
         n_core_mobile=0,
         adsorbate_fragment_lengths=[2],
     ),
 ]
 
+# Each base case is expanded over both calculators so the example matrix covers
+# MACE + UPET. The MACE path uses the shared low-effort TorchSim preset (the same
+# one examples/ use); UPET uses its low-effort mirror. UMA is intentionally
+# excluded: HuggingFace auth for fairchem weights is unavailable on Kaggle.
+_CALCULATOR_VARIANTS = (
+    ("MACE", {}),
+    ("UPET", {"model_name": "pet-mad-s", "version": "1.5.0"}),
+)
+
+
+def _all_cases() -> list[GpuExampleCase]:
+    """Expand the 6 base cases over MACE + UPET into the 12-case dual matrix."""
+    out: list[GpuExampleCase] = []
+    for base in GPU_EXAMPLE_CASES:
+        for calc, kwargs in _CALCULATOR_VARIANTS:
+            out.append(
+                replace(
+                    base,
+                    calculator=calc,
+                    calculator_kwargs=dict(kwargs),
+                )
+            )
+    return out
+
+
+ALL_GPU_EXAMPLE_CASES = _all_cases()
+
 
 def _build_go_params(case: GpuExampleCase) -> dict:
-    go_params = get_low_effort_torchsim_ga_params(
-        system_type=case.system_type,
-        surface_config=case.surface_config,
-        seed=SEED,
-    )
+    # Select the calculator-specific low-effort GO preset *inside* the test
+    # (not at module import): the opposite Kaggle suite has only its own extra
+    # installed, so a top-level import of the other preset would error/skip.
+    if case.calculator == "UPET":
+        go_params = get_low_effort_upet_ga_params(
+            system_type=case.system_type,
+            surface_config=case.surface_config,
+            seed=SEED,
+            **case.calculator_kwargs,
+        )
+    else:
+        go_params = get_low_effort_torchsim_ga_params(
+            system_type=case.system_type,
+            surface_config=case.surface_config,
+            seed=SEED,
+        )
     if case.connectivity_factor is not None:
         go_params["connectivity_factor"] = case.connectivity_factor
     if case.freeze_adsorbate_internal_geometry:
@@ -227,6 +284,8 @@ def _expected_formula(case: GpuExampleCase) -> str:
 
 def _build_ts_params(case: GpuExampleCase) -> dict:
     ts_params = get_low_effort_ts_search_params(
+        case.calculator,
+        case.calculator_kwargs or None,
         system_type=case.system_type,
         surface_config=case.surface_config,
         seed=SEED,
@@ -238,14 +297,23 @@ def _build_ts_params(case: GpuExampleCase) -> dict:
     return ts_params
 
 
-@pytest.mark.parametrize("case", GPU_EXAMPLE_CASES, ids=lambda c: c.system_type)
+@pytest.mark.parametrize(
+    "case", ALL_GPU_EXAMPLE_CASES, ids=lambda c: f"{c.calculator}-{c.system_type}"
+)
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.requires_cuda
 @pytest.mark.requires_mace
+@pytest.mark.requires_upet
 def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> None:
-    """End-to-end GO+TS with MACE/TorchSim for each example system type."""
-    output_dir = tmp_path / f"gpu_{case.system_type}"
+    """End-to-end GO+TS for each example system type under MACE and UPET.
+
+    Carrying **both** ``requires_mace`` and ``requires_upet`` makes this test
+    selectable by each Kaggle suite (which installs only its own extra), so both
+    calculators are exercised. The calculator-specific GO preset is chosen inside
+    the test, not at import, to stay compatible with the opposite suite.
+    """
+    output_dir = tmp_path / f"gpu_{case.calculator}_{case.system_type}"
     go_params = _build_go_params(case)
     summary = run_go_ts(
         case.composition,

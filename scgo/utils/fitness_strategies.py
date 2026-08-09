@@ -41,7 +41,7 @@ def validate_fitness_strategy(strategy: str) -> None:
         strategy: Fitness strategy name to validate.
 
     Raises:
-        ValueError: If strategy is not a valid choice.
+        SCGOValidationError: If strategy is not a valid choice.
     """
     valid_strategies = [s.value for s in FitnessStrategy]
     validate_in_choices("fitness_strategy", strategy, valid_strategies)

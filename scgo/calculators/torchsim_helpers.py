@@ -4,8 +4,8 @@ This module wraps the TorchSim high-level optimization API so SCGO can relax
 multiple candidate structures in a single batched call.
 
 Important:
-- Imports for optional stacks (TorchSim, MACE, FairChem) are **lazy** so SCGO can
-  be imported in minimal environments without pulling MLIP dependencies.
+- Imports for optional stacks (TorchSim, MACE, FairChem, UPET) are **lazy** so
+  SCGO can be imported in minimal environments without pulling MLIP dependencies.
 - TorchSim can run with multiple model families. SCGO supports MACE, FairChem/UMA,
   and UPET/metatomic via TorchSim model wrappers.
 """
@@ -111,7 +111,7 @@ class MemoryScalerCache:
         device: str,
         geometry_tag: str = DEFAULT_GEOMETRY_TAG,
     ) -> str:
-        """Create a cache key from parameters (n_atoms binned to nearest 5)."""
+        """Create a cache key (``n_atoms`` rounded up to a multiple of 5)."""
         atom_bin = ((n_atoms + 4) // 5) * 5
         tag = str(geometry_tag or DEFAULT_GEOMETRY_TAG)
         return f"{model_name}|{memory_scales_with}|{device}|{tag}|atoms_{atom_bin}"
@@ -164,7 +164,7 @@ class MemoryScalerCache:
         self._save_cache()
 
     def clear(self) -> None:
-        """Clear the cache."""
+        """Clear the in-memory cache and delete the on-disk cache file."""
         self._cache = {}
         if self._cache_path.exists():
             self._cache_path.unlink()
@@ -175,7 +175,7 @@ _GLOBAL_MEMORY_SCALER_CACHE = MemoryScalerCache()
 
 
 def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
-    """Return sorted unique indices constrained by ASE :class:`ase.constraints.FixAtoms`.
+    """Return sorted unique indices fixed by ASE :class:`ase.constraints.FixAtoms`.
 
     Other ASE constraint types are ignored (not represented in TorchSim today).
     """
@@ -187,7 +187,7 @@ def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
 
 
 def _patch_torchsim_constraint_device_mismatch() -> None:
-    """Monkey-patch TorchSim ``IndexedConstraint.select_sub_constraint``.
+    """Monkey-patch TorchSim ``AtomConstraint.select_sub_constraint``.
 
     Upstream ``torch_sim.state._split_state`` builds a CPU ``atom_idx`` tensor
     while a GPU-backed ``FixAtoms`` keeps its indices on CUDA, triggering a
@@ -309,7 +309,7 @@ def _load_default_mace_model(
 def _ensure_torchsim_mace_wrapper(
     model: object, device: object, dtype: object
 ) -> object:
-    """Wrap a raw ASE/MACE ``ScaleShiftMACE`` for :func:`torch_sim.optimize``.
+    """Wrap a raw ASE/MACE ``ScaleShiftMACE`` for :func:`torch_sim.optimize`.
 
     ``ga_go`` reuses the calculator's loaded weights via
     :func:`try_extract_torchsim_model_from_mace_calculator`, which returns the
@@ -458,11 +458,12 @@ def build_torchsim_relaxer(
     """Build a TorchSim relaxer from a live MLIP ASE calculator.
 
     Cascades UMA/FairChem → UPET → MACE: classify the calculator, extract a
-    shared TorchSim model when possible (clearing ``calculator._inner`` so the
-    ASE wrapper does not hold a duplicate), then construct
-    :class:`TorchSimBatchRelaxer`. Optional ``torchsim_params`` override any
-    constructed kwargs. Preset builders that already know ``model_kind`` /
-    model names construct :class:`TorchSimBatchRelaxer` directly.
+    shared TorchSim model when possible (on the UMA/UPET paths this also clears
+    ``calculator._inner`` so the ASE wrapper does not hold a duplicate), then
+    construct :class:`TorchSimBatchRelaxer`. Optional ``torchsim_params``
+    override any constructed kwargs. Preset builders that already know
+    ``model_kind`` / model names construct :class:`TorchSimBatchRelaxer`
+    directly.
 
     Args:
         dtype: Optional torch dtype (e.g. ``torch.float32``). Pass ``None`` to
@@ -501,7 +502,7 @@ def build_torchsim_relaxer(
         if shared_model is None:
             logger.warning(
                 "Could not extract live FairChem predictor from UMA "
-                "calculator; TorchSim will reload the checkpoint."
+                "calculator; TorchSim will reload the checkpoint"
             )
         base.update(
             {
@@ -528,7 +529,7 @@ def build_torchsim_relaxer(
         if shared_model is None:
             logger.warning(
                 "Could not extract live AtomisticModel from UPET "
-                "calculator; TorchSim will reload the checkpoint."
+                "calculator; TorchSim will reload the checkpoint"
             )
         base.update(
             {
@@ -568,7 +569,7 @@ def build_torchsim_relaxer(
 
 @dataclass(eq=False)
 class TorchSimBatchRelaxer:
-    """Batched relaxer that offloads geometry optimization to :func:`torch_sim.optimize`.
+    """Batched relaxer built on :func:`torch_sim.optimize` and :func:`torch_sim.static`.
 
     ASE :class:`ase.constraints.FixAtoms` on input structures are translated to
     TorchSim's internal ``FixAtoms`` before optimization, since
@@ -577,16 +578,21 @@ class TorchSimBatchRelaxer:
     Parameters
     ----------
     device:
-        Optional torch device. Defaults to CUDA when available, otherwise CPU.
+        Optional torch device. Defaults to CUDA when available, then MPS,
+        otherwise CPU.
     dtype:
         Torch dtype. Defaults to ``torch.float64`` for parity with the ASE MACE
         wrapper; override to ``torch.float32`` for speed at the cost of accuracy.
     model:
         Optional TorchSim model implementing ``ModelInterface``. If omitted, a
-        MACE foundation model specified by ``mace_model_name`` is loaded.
+        model is loaded according to ``model_kind`` (``"mace"`` by default, from
+        ``mace_model_name``).
+    model_kind:
+        Which stack to load when ``model`` is omitted: ``"mace"`` (default),
+        ``"fairchem"``/``"uma"``, or ``"upet"``/``"metatomic"``.
     mace_model_name:
-        Name of the TorchSim ``MaceUrls`` member to load when ``model`` is not
-        provided (default: ``"mace_matpes_0"``).
+        Name of the SCGO ``MaceUrls`` member (or any ``mace_mp`` model name) to
+        load when ``model`` is not provided (default: ``"mace_matpes_0"``).
     optimizer_name:
         Name of TorchSim optimizer (e.g., "fire"), resolved to ``ts.Optimizer.*``.
     force_tol:
@@ -598,9 +604,9 @@ class TorchSimBatchRelaxer:
         :func:`torch_sim.optimize`. ``None`` (the default) enables it on CUDA and
         disables it on CPU, matching the torch-sim recommendation that
         autobatching is "generally not supported on CPUs". ``True``/``False``
-        force the choice; passing ``True`` on CPU triggers a one-time warning
-        and coerces back to ``False``. Only :class:`InFlightAutoBatcher` is
-        accepted by :func:`torch_sim.optimize`.
+        force the choice; passing ``True`` on CPU logs a warning at
+        construction time and coerces back to ``False``. Only
+        :class:`InFlightAutoBatcher` is accepted by :func:`torch_sim.optimize`.
     memory_scales_with, max_memory_scaler:
         Advanced knobs forwarded to :class:`torch_sim.InFlightAutoBatcher` when
         autobatching is active.
@@ -660,7 +666,7 @@ class TorchSimBatchRelaxer:
     optimizer_name: str = "fire"
     force_tol: float | None = 0.05
     max_steps: int | None = 100
-    # Autobatching: None -> enable on CUDA / disable on CPU (matches docs).
+    # Autobatching: None -> enabled unless the device is CPU (matches the docs).
     autobatcher: bool | None = None
     memory_scales_with: str = "n_atoms_x_density"
     max_memory_scaler: float | None = None
@@ -671,7 +677,7 @@ class TorchSimBatchRelaxer:
     # Hard cap on the InFlightAutoBatcher GPU probe. None -> fall back to
     # expected_max_atoms (if set) or torch-sim's 500k default.
     max_atoms_to_try: int | None = None
-    # Warm-probe geometry. None -> dense bulk-Cu dummy (legacy GO behaviour).
+    # Warm-probe geometry. Both None -> dense bulk-Cu dummy (legacy GO behavior).
     probe_atoms: Atoms | None = None
     probe_builder: Callable[[int], Atoms] | None = None
     geometry_tag: str | None = None
@@ -700,7 +706,8 @@ class TorchSimBatchRelaxer:
             # Match ASE MACE wrapper default of float64 for parity
             self.dtype = torch.float64
 
-        # Optional seeding (do not force deterministic algorithms to avoid CuBLAS constraints)
+        # Optional seeding (deterministic algorithms are not forced, to avoid
+        # CuBLAS constraints)
         if self.seed is not None:
             torch.manual_seed(self.seed)
 
@@ -777,7 +784,7 @@ class TorchSimBatchRelaxer:
             if use_autobatcher and on_cpu:
                 logger.warning(
                     "TorchSim autobatching is not supported on CPU; disabling "
-                    "the autobatcher. Pass autobatcher=False to avoid this warning."
+                    "the autobatcher. Pass autobatcher=False to avoid this warning"
                 )
                 use_autobatcher = False
         if use_autobatcher and "autobatcher" not in self._runner_kwargs:
@@ -798,7 +805,8 @@ class TorchSimBatchRelaxer:
         if "max_steps" not in self._runner_kwargs and self.max_steps is not None:
             self._runner_kwargs["max_steps"] = self.max_steps
 
-        # Probe memory upfront if expected_max_atoms provided (avoids runtime probing cost)
+        # Probe memory upfront when expected_max_atoms is given (keeps the
+        # probing cost out of the first relax_batch call)
         if self.expected_max_atoms is not None and self.max_memory_scaler is None:
             self._warm_autobatcher_memory_scaler(self.expected_max_atoms)
 
@@ -913,11 +921,11 @@ class TorchSimBatchRelaxer:
         For the caller-supplied cases a *single representative* structure is
         returned rather than an ``n_atoms``-sized block: torch-sim's
         ``determine_max_batch_size`` replicates it geometrically up to
-        ``max_atoms_to_try`` (== ``expected_max_atoms``), so the resulting
-        scaler is exactly "how many of these real structures fit", which is the
-        quantity the binning autobatcher needs. Sizing the probe by atom count
-        instead (the legacy bulk dummy) measures a geometry the workload never
-        sees and yields a scaler that does not transfer.
+        ``max_atoms_to_try`` (which defaults to ``expected_max_atoms``), so the
+        resulting scaler is exactly "how many of these real structures fit",
+        which is the quantity the binning autobatcher needs. Sizing the probe by
+        atom count instead (the legacy bulk dummy) measures a geometry the
+        workload never sees and yields a scaler that does not transfer.
         """
         if self.probe_builder is not None:
             return self.probe_builder(int(n_atoms)), "caller-supplied probe builder"
@@ -928,7 +936,8 @@ class TorchSimBatchRelaxer:
             # device-placement work inside torch-sim.
             probe.set_constraint()
             return probe, f"workload geometry ({len(probe)} atoms/structure)"
-        # Legacy fallback: dense bulk Cu sized by atom count (GO/cluster path).
+        # Legacy fallback (GO/cluster path): bulk-Cu block truncated to
+        # ``n_atoms``, then padded with 3 Å of vacuum.
         dummy = bulk("Cu", "fcc", a=3.61, cubic=True)
         while len(dummy) < n_atoms:
             dummy = dummy.repeat((2, 2, 2))
@@ -957,7 +966,7 @@ class TorchSimBatchRelaxer:
         try:
             probe, probe_desc = self._build_probe_atoms(n_atoms)
             logger.info(
-                "Probing GPU memory with %s, capped at %d atoms/batch...",
+                "Probing GPU memory with %s, targeting %d atoms/batch...",
                 probe_desc,
                 n_atoms,
             )
@@ -975,7 +984,7 @@ class TorchSimBatchRelaxer:
                 self._persist_autobatcher_scaler(n_atoms)
                 logger.info(
                     "Memory probing complete (%.2fs). max_memory_scaler=%.1f "
-                    "cached for %d atoms (%s).",
+                    "cached for %d atoms (%s)",
                     probe_time,
                     float(autobatcher.max_memory_scaler),
                     n_atoms,
@@ -993,7 +1002,9 @@ class TorchSimBatchRelaxer:
             # partially built probe batch); hand the real workload a clean GPU.
             cleanup_torch_cuda(logger=logger)
             logger.warning(
-                f"Memory probing failed (non-fatal): {e}. Will retry on first relax_batch()."
+                "Memory probing failed (non-fatal): %s; will retry on the "
+                "first relax_batch() call",
+                e,
             )
 
     def relax_batch(
@@ -1007,8 +1018,8 @@ class TorchSimBatchRelaxer:
                 evaluation via ``torch_sim.static`` (used by NEB/TS force paths).
 
         Returns:
-            A list of ``(energy, atoms)`` with matching order to the input
-        list. Energies are converted to Python floats in eV.
+            A list of ``(energy, atoms)`` in the same order as the input list.
+            Energies are converted to Python floats in eV.
         """
         if not atoms_list:
             return []
@@ -1023,7 +1034,7 @@ class TorchSimBatchRelaxer:
                 if attempt == 0 and self._is_max_metric_value_error(exc):
                     logger.warning(
                         "Cached or probed max_memory_scaler too tight (%s); "
-                        "invalidating cache and re-estimating.",
+                        "invalidating cache and re-estimating",
                         exc,
                     )
                     self._invalidate_memory_scaler_cache(max_atoms_in_batch)
@@ -1192,7 +1203,7 @@ class TorchSimBatchRelaxer:
         input geometry (ASE calculator semantics).
         """
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
-        logger.debug("Running TorchSim single-point evaluation via static().")
+        logger.debug("Running TorchSim single-point evaluation via static()")
         props = self._ts.static(  # type: ignore[call-arg]
             system=system_in,
             model=self.model,
@@ -1212,7 +1223,8 @@ class TorchSimBatchRelaxer:
         steps: int | None,
         max_atoms_in_batch: int,
     ) -> list[tuple[float, Atoms]]:
-        # Try to apply cached memory scaler to avoid expensive re-probing (~70s per new cluster size)
+        # Apply a cached memory scaler when available to avoid expensive
+        # re-probing (~70s per new cluster size).
         # The batch bucket first (exact workload), then the warm-probe bucket
         # (``expected_max_atoms``): NEB force batches hold many small images, so
         # ``max_atoms_in_batch`` rarely matches the probe's cache key.

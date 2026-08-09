@@ -45,7 +45,7 @@ def _neb_image_dedup_key(atoms: Atoms) -> tuple:
     Positions alone are not enough: surface bands enable ``neb_surface_cell_remap``
     and ``neb_surface_lattice_rotation``, which legitimately produce identical
     Cartesian positions in *different* cells. Cell and PBC are part of the key so
-    such images never collide and receive a neighbour's energy/forces.
+    such images never collide and receive a neighbor's energy/forces.
     """
     return (
         tuple(atoms.get_chemical_symbols()),
@@ -97,7 +97,7 @@ def chunk_band_indices_by_atom_budget(
 
 
 def _is_cuda_oom_error(exc: BaseException) -> bool:
-    """True for CUDA out-of-memory failures raised by torch / torch-sim."""
+    """True for CUDA out-of-memory failures raised by torch / TorchSim."""
     oom_cls = getattr(getattr(_tsh, "torch", None), "cuda", None)
     oom_cls = getattr(oom_cls, "OutOfMemoryError", None)
     if oom_cls is not None and isinstance(exc, oom_cls):
@@ -140,12 +140,14 @@ class ParallelNEBBatch:
     def _step_optimizer(self, neb_idx: int) -> None:
         """Advance one band's optimizer using the just-computed batched forces.
 
-        ``optimizer.step()`` is called with no arguments: ASE deprecated (and
-        3.28 removes) ``Optimizer.step(f)``. ``FIRE.step()`` falls back to
-        ``optimizable.get_gradient().reshape(-1, 3)``, and ``NEBOptimizable.
-        get_gradient`` is ``neb.get_forces().ravel()`` (NEB forces are already
-        the descent direction, no sign flip), so the value is identical to the
-        forces this batch just computed.
+        ``optimizer.step()`` is called with no arguments: the ASE
+        ``Dynamics.step()`` API takes none, and ``FIRE.step`` keeps ``f=None``
+        only for backwards compatibility. Called that way ``FIRE.step()`` falls
+        back to ``optimizable.get_gradient().reshape(-1, 3)``, and
+        ``NEBOptimizable.get_gradient`` is ``neb.get_forces().ravel()`` (NEB
+        forces are already the descent direction, no sign flip), so the value is
+        identical to the forces this batch just computed (checked against ASE
+        3.26).
 
         Crucially this does *not* cost an extra TorchSim call: every image still
         carries the SinglePoint results attached moments ago, so
@@ -171,8 +173,8 @@ class ParallelNEBBatch:
             RuntimeError: (or ``torch.cuda.OutOfMemoryError``) when a batched
                 force evaluation runs out of GPU memory. CUDA OOM is *not*
                 converted into per-band error dicts: the caller
-                (:func:`run_parallel_neb_search`) re-bins the chunk at half the
-                atom budget and retries. Non-OOM ``RuntimeError``/``ValueError``
+                (:func:`run_parallel_neb_search`) re-bins the chunk at half its
+                own atom cost and retries. Non-OOM ``RuntimeError``/``ValueError``
                 still mark the active bands failed and end the loop, because
                 those indicate bad input rather than GPU pressure.
         """
@@ -232,8 +234,8 @@ class ParallelNEBBatch:
             except (RuntimeError, ValueError) as e:
                 if _is_cuda_oom_error(e):
                     # Propagate GPU pressure so ``_run_chunk_with_oom_retry`` can
-                    # re-bin this chunk at half the atom budget. Swallowing it here
-                    # (the historical behaviour) made that safety net unreachable
+                    # re-bin this chunk at half its atom cost. Swallowing it here
+                    # (the historical behavior) made that safety net unreachable
                     # and silently produced zero transition states.
                     logger.warning(
                         "Batched force evaluation hit CUDA OOM at step %d "
@@ -334,7 +336,10 @@ class ParallelNEBBatch:
         return results
 
     def _refresh_pes_after_optimization(self) -> None:
-        """Re-evaluate all NEB images at their final positions (no optimizer step)."""
+        """Re-evaluate images of every non-failed NEB at their final positions.
+
+        No optimizer step is taken; failed bands are skipped.
+        """
         unique_images: list[Atoms] = []
         unique_index: dict[tuple, int] = {}
         neb_image_map: list[tuple[int, int, int]] = []
@@ -399,9 +404,9 @@ def run_parallel_neb_search(
     * ``parallel_neb_max_bands`` (>0) additionally caps how many bands share a
       batch. Surface presets pass ``4``.
 
-    A chunk that hits CUDA OOM is retried once at half the atom budget (after
-    ``cleanup_torch_cuda``); only if the retry also fails do that chunk's bands
-    get marked failed.
+    A chunk that hits CUDA OOM is re-binned at half its own atom cost and retried
+    once (after ``cleanup_torch_cuda``); only the sub-chunks that still OOM have
+    their bands marked failed.
 
     ``relaxer`` lets the caller reuse a single :class:`TorchSimBatchRelaxer`
     (e.g. the one built for the IDPP screen) instead of constructing a fresh
@@ -605,7 +610,7 @@ def run_parallel_neb_search(
         def _chunk_indices(
             indices: list[int], *, budget: int | None = None
         ) -> list[list[int]]:
-            """Chunk band indices honouring *both* the atom budget and band cap.
+            """Chunk band indices honoring *both* the atom budget and band cap.
 
             ``parallel_neb_max_bands`` used to override the atom budget entirely,
             so a band cap that still exceeded GPU capacity produced one oversized
@@ -632,11 +637,12 @@ def run_parallel_neb_search(
             max_total_steps: int,
             max_steps: int,
         ) -> list[dict[str, Any]]:
-            """Run one chunk; on CUDA OOM re-bin at half budget and retry once.
+            """Run one chunk; on CUDA OOM re-bin at half its atom cost and retry.
 
             Returns per-band summaries in ``chunk`` order. Bands that still fail
-            after the retry carry the OOM error text with ``steps_taken=0`` so
-            :func:`_finalize_neb_result` is skipped for them downstream.
+            after the retry carry the OOM error text with ``steps_taken=0`` so the
+            caller's ``batch_never_ran`` guard can skip :func:`_finalize_neb_result`
+            for them downstream.
             """
             try:
                 return _run_chunk(chunk, max_total_steps, max_steps)
@@ -645,7 +651,7 @@ def run_parallel_neb_search(
                     raise
                 logger.warning(
                     "Parallel NEB chunk of %d band(s) hit CUDA OOM (%s); "
-                    "retrying once at half the atom budget",
+                    "retrying once at half the chunk atom cost",
                     len(chunk),
                     exc,
                 )

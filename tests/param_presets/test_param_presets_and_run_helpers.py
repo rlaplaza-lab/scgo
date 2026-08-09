@@ -600,3 +600,75 @@ class TestGetCalculatorClass:
         )
         with pytest.raises(SCGOValidationError, match="not available"):
             get_calculator_class("TEST")
+
+
+def test_get_low_effort_upet_ga_params_structure():
+    """UPET low-effort GO preset: reduced budget + attached relaxer (no CUDA)."""
+    pytest.importorskip("upet")
+    from scgo.param_presets import get_low_effort_upet_ga_params
+
+    params = get_low_effort_upet_ga_params(
+        system_type="gas_cluster",
+        seed=42,
+        model_name="pet-mad-s",
+        version="1.5.0",
+    )
+    assert params["calculator"] == "UPET"
+    assert params["calculator_kwargs"] == {
+        "model_name": "pet-mad-s",
+        "version": "1.5.0",
+    }
+    ga = params["optimizer_params"]["ga"]
+    # Reduced GA budget vs the production TorchSim benchmark preset.
+    assert ga["niter"] == 3
+    assert ga["population_size"] == 13
+    assert ga["niter_local_relaxation"] == 70
+    assert ga["n_jobs_population_init"] == 1
+    assert ga["early_stopping_niter"] == 0
+    assert ga["relaxer"] is not None
+
+
+def test_get_low_effort_uma_ga_params_structure():
+    """UMA low-effort GO preset: reduced budget + attached relaxer (no CUDA)."""
+    pytest.importorskip("fairchem")
+    from scgo.param_presets import get_low_effort_uma_ga_params
+
+    params = get_low_effort_uma_ga_params(
+        system_type="gas_cluster",
+        seed=42,
+        model_name="uma-s-1p2",
+        uma_task="oc25",
+    )
+    assert params["calculator"] == "UMA"
+    assert params["calculator_kwargs"] == {
+        "model_name": "uma-s-1p2",
+        "task_name": "oc25",
+    }
+    ga = params["optimizer_params"]["ga"]
+    assert ga["niter"] == 3
+    assert ga["population_size"] == 13
+    assert ga["niter_local_relaxation"] == 70
+    assert ga["n_jobs_population_init"] == 1
+    assert ga["early_stopping_niter"] == 0
+    assert ga["relaxer"] is not None
+
+
+def test_low_effort_ts_search_params_upet_floors_neb_steps():
+    """UPET TS low-effort path returns the same floored neb_steps as MACE."""
+    from scgo.param_presets import (
+        get_low_effort_neb_steps,
+        get_low_effort_ts_search_params,
+    )
+
+    mace = get_low_effort_ts_search_params(
+        "MACE", None, system_type="gas_cluster", seed=42
+    )
+    upet = get_low_effort_ts_search_params(
+        "UPET",
+        {"model_name": "pet-mad-s", "version": "1.5.0"},
+        system_type="gas_cluster",
+        seed=42,
+    )
+    assert upet["neb_steps"] == get_low_effort_neb_steps("gas_cluster")
+    assert upet["neb_steps"] == mace["neb_steps"]
+    assert upet["calculator"] == "UPET"

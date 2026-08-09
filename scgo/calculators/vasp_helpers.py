@@ -29,7 +29,8 @@ def write_vasp_inputs(
 
     This function prepares a directory for a VASP calculation by creating the
     necessary input files based on a template Atoms object and a dictionary of
-    VASP settings.
+    VASP settings. A ``<formula>_best.xyz`` copy of the structure is written
+    alongside them for easy viewing.
 
     Args:
         atoms: The ASE Atoms object representing the structure.
@@ -52,7 +53,7 @@ def write_vasp_inputs(
     if center_structure:
         atoms_for_vasp.center(vacuum=vacuum)
 
-    # Save the final, best structure for easy viewing
+    # Save a plain XYZ copy of the structure for easy viewing
     cluster_formula = get_cluster_formula(atoms.get_chemical_symbols())
 
     # Remove tags array to ensure consistent XYZ format

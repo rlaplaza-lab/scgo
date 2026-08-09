@@ -68,7 +68,7 @@ class DiversityScorer:
         if len(set(lengths)) > 1:
             logger.warning(
                 f"Inconsistent descriptor lengths: {set(lengths)}. "
-                f"May indicate different compositions."
+                f"May indicate different compositions"
             )
 
         return np.array(descriptors)
@@ -120,7 +120,7 @@ class DiversityScorer:
             logger.warning(
                 f"Descriptor length mismatch: candidate {len(candidate_desc)} vs "
                 f"references {self._ref_descriptors.shape[1]}. "
-                f"May indicate different compositions."
+                f"May indicate different compositions"
             )
             return self._score_pairwise(atoms)
 
@@ -173,7 +173,7 @@ class DiversityScorer:
                 logger.warning(
                     f"New reference descriptor length {len(new_desc)} doesn't match "
                     f"existing {self._ref_descriptors.shape[1]}. "
-                    f"Recomputing all descriptors."
+                    f"Recomputing all descriptors"
                 )
                 # Recompute all descriptors
                 self._ref_descriptors = self._compute_descriptors(

@@ -337,7 +337,15 @@ def _optimizer_kwargs_for_algorithm_call(
 def _sanitize_global_optimizer_kwargs_for_metadata(
     global_optimizer_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Copy kwargs for JSON metadata: drop non-serializable objects (relaxer, slab)."""
+    """Copy GO kwargs for JSON metadata, dropping non-serializable objects.
+
+    ``relaxer``, ``adsorbate_fragment_template`` and ``cluster_adsorbate_config``
+    are dropped; ``surface_config`` is replaced by a plain-dict slab summary.
+
+    Raises:
+        SCGOValidationError: If ``surface_config`` is set but is not a
+            :class:`~scgo.surface.config.SurfaceSystemConfig`.
+    """
     gok = global_optimizer_kwargs.copy()
     gok.pop("relaxer", None)
     gok.pop("adsorbate_fragment_template", None)
@@ -461,7 +469,9 @@ def scgo(
         List of (energy, Atoms) for minima.
 
     Raises:
-        ValueError: For invalid parameters.
+        SCGOValidationError: For invalid parameters (unknown ``global_optimizer``,
+            missing ``system_type``, missing calculator, or unusable
+            ``surface_config`` / ``adsorbate_definition``).
     """
     _validate_common_run_inputs(
         composition=composition,
@@ -530,7 +540,8 @@ def scgo(
             core_symbols = [str(s) for s in ads_def.get("core_symbols", [])]
             if len(core_symbols) == 0:
                 logger.info(
-                    "Gas adsorbate run with empty core_symbols: skipping global optimization."
+                    "Gas adsorbate run with empty core_symbols: "
+                    "skipping global optimization"
                 )
                 return []
 
@@ -628,7 +639,7 @@ def scgo(
         )
 
     if not all_minima:
-        logger.info("Global optimization finished but found no valid minima.")
+        logger.info("Global optimization finished but found no valid minima")
         return []
 
     for _, atoms_obj in all_minima:
@@ -787,7 +798,7 @@ def run_trials(
         all_minima_for_filtering = all_raw_minima
 
     if not all_minima_for_filtering:
-        logger.info("No minima found.")
+        logger.info("No minima found")
         _write_results_summary(
             output_dir=output_dir,
             final_minima=[],
@@ -798,10 +809,10 @@ def run_trials(
         return []
 
     logger.info(
-        "Run complete. Found %s raw minima from current run.",
+        "Run complete. Found %s raw minima from current run",
         len(all_raw_minima),
     )
-    logger.info("Filtering for unique structures across all runs...")
+    logger.info("Filtering for unique structures across all runs")
     surface_cfg = global_optimizer_kwargs.get("surface_config")
     system_type_for_mic = global_optimizer_kwargs.get("system_type")
     if not isinstance(system_type_for_mic, str):
@@ -814,7 +825,7 @@ def run_trials(
         n_top=len(composition),
         mic=dedupe_mic,
     )
-    logger.info("Found %s unique candidates.", len(unique_candidates))
+    logger.info("Found %s unique candidates", len(unique_candidates))
 
     if not unique_candidates:
         _write_results_summary(
@@ -854,7 +865,7 @@ def run_trials(
             and len(payloads) >= _MIN_PARALLEL_VALIDATION_CANDIDATES
         ):
             logger.info(
-                "Validating %d unique candidates with %d parallel workers...",
+                "Validating %d unique candidates with up to %d parallel workers...",
                 len(payloads),
                 n_validate_workers,
             )
@@ -876,7 +887,7 @@ def run_trials(
                         ValueError,
                         SCGOValidationError,
                     ) as e:
-                        logger.warning("Validation failed for candidate %d: %s", i, e)
+                        logger.warning("Parallel validation task %d failed: %s", i, e)
                         continue
                     if validated is not None:
                         validated_minima.append(validated)
@@ -911,7 +922,7 @@ def run_trials(
 
         if not validated_minima:
             logger.info(
-                "Validation finished. No candidates were confirmed as true minima."
+                "Validation finished. No candidates were confirmed as true minima"
             )
             _write_results_summary(
                 output_dir=output_dir,
@@ -927,7 +938,7 @@ def run_trials(
         final_minima = unique_candidates
 
     best_energy, _ = final_minima[0]
-    logger.info("Process complete. Found %s final unique minima.", len(final_minima))
+    logger.info("Process complete. Found %s final unique minima", len(final_minima))
     logger.info("Best potential energy: %.4f eV", best_energy)
 
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")

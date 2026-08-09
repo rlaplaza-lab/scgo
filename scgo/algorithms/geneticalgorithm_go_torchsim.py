@@ -453,7 +453,7 @@ def _torchsim_prepare_relaxed_copy(
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
 ) -> Atoms:
-    """Copy candidate and attach slab constraints before TorchSim relaxation."""
+    """Copy a candidate and attach slab / adsorbate constraints before relaxation."""
     c = cand.copy()
     if freeze_adsorbate_internal_geometry:
         enforce_frozen_adsorbate_geometry(
@@ -524,8 +524,8 @@ def _write_relaxed_candidate(
 ) -> str | None:
     """Write a single relaxed candidate to the database.
 
-    Returns the validation error string when the structure is disconnected,
-    or ``None`` when it is eligible for GA evolution.
+    Returns the validation error string when the structure fails GA storage
+    validation, or ``None`` when it is eligible for GA evolution.
     """
     original.set_cell(relaxed.get_cell(), scale_atoms=True)
     original.set_pbc(relaxed.get_pbc())
@@ -628,11 +628,11 @@ def _relax_unrelaxed_candidates(
 
     if available == 0:
         return (0, 0)
-    # When not forced, relax all currently available candidates (drop the
-    # `available < max_batch` early-return stall). A generation that produced
-    # few children no longer defers work and starves the GPU; remaining
-    # unrelaxed candidates are simply re-queued for the next generation.
-    # A user-set `max_batch` still caps the take via `min` below.
+    # Relax every currently available candidate instead of returning early when
+    # `available < max_batch`. A generation that produced few children no longer
+    # defers work and starves the GPU; candidates left over after this call stay
+    # unrelaxed and are picked up by the next call.
+    # A user-set `max_batch` still caps the take via `min` below unless `force`.
 
     to_take = available if force or max_batch is None else min(available, max_batch)
 
@@ -680,7 +680,8 @@ def _relax_unrelaxed_candidates(
         raise SCGORuntimeError("TorchSim relaxer returned mismatched batch size")
 
     # Batch write results under a single database connection.
-    # Disconnected structures are persisted but marked ineligible for GA evolution.
+    # Structures failing validation are persisted but marked ineligible for GA
+    # evolution.
     successful_count = 0
     ineligible_count = 0
 
@@ -715,7 +716,8 @@ def _relax_unrelaxed_candidates(
                         "Offspring" if generation is not None else "Initial candidate"
                     )
                     logger.debug(
-                        "%s %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
+                        "%s %d/%d failed validation after relaxation; storing "
+                        "but excluding from GA population: %s",
                         label,
                         idx + 1,
                         len(batch),
@@ -805,9 +807,10 @@ def ga_go(
     """Run the GA using TorchSim for batched relaxations.
 
     Genetic algorithm with batched relaxations (TorchSim for MLIPs, ASE batch otherwise).
-    The ``relaxer`` argument controls TorchSim batching; when omitted the
-    function instantiates a default :class:`TorchSimBatchRelaxer` using the
-    provided ``fmax`` as a force tolerance.
+    The ``relaxer`` argument controls batching; when omitted the function builds a
+    :class:`TorchSimBatchRelaxer` for MLIP calculators and an
+    :class:`~scgo.calculators.ase_batch_relaxer.AseBatchRelaxer` otherwise, using
+    ``fmax`` as the force tolerance and ``niter_local_relaxation`` as the step cap.
 
     Args:
         composition: List of element symbols defining the cluster composition.
@@ -822,7 +825,8 @@ def ga_go(
         elite_fraction: Fraction of population to preserve as elite candidates
                          (top performers by fitness). Default 0.1 (top 10%).
         run_id: Optional run ID for tracking.
-        clean: If True, start fresh (ignore previous databases).
+        clean: If True, remove an existing GA database and auxiliary files in the
+            output directory.
         fitness_strategy: Fitness strategy to use. One of: "low_energy", "high_energy", "diversity".
             Defaults to "low_energy" (minimize energy).
         diversity_reference_db: Glob pattern for reference structure databases (for diversity strategy).
@@ -1147,14 +1151,15 @@ def ga_go(
         )
         log_info_v(
             logger,
-            "Generated initial population of %d candidates (batched, parallel n_jobs=%s)",
+            "Generated initial population of %d candidates (batched, parallel: %s)",
             population_size,
             n_workers,
             verbosity=verbosity,
         )
 
-    # Do not pass initial_population to SetupDB (avoids formula keys in key_value_pairs).
-    # Insert unrelaxed starters via the low-level API, then batch-relax with TorchSim and tag generation=0.
+    # Do not pass initial_population to setup_database (avoids formula keys in
+    # key_value_pairs). Insert unrelaxed starters via the low-level API, then
+    # batch-relax them and tag generation=0.
     da = setup_database(
         output_dir=output_dir,
         db_filename="ga_go.db",
@@ -1175,7 +1180,7 @@ def ga_go(
         if verbosity >= 1:
             log_info_v(
                 logger,
-                "Relaxing initial population of %d candidates...",
+                "Relaxing initial population of up to %d candidates",
                 population_size,
                 verbosity=verbosity,
             )
@@ -1237,7 +1242,7 @@ def ga_go(
                 if validation_error is not None:
                     initial_discarded_count += 1
                     logger.debug(
-                        "Discarding disconnected initial candidate before DB insert: %s",
+                        "Discarding invalid initial candidate before DB insert: %s",
                         validation_error,
                     )
                     continue
@@ -1284,7 +1289,9 @@ def ga_go(
                     if validation_error is not None:
                         initial_ineligible_relaxed_count += 1
                         logger.debug(
-                            "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
+                            "Initial candidate failed validation after "
+                            "relaxation; storing but excluding from GA "
+                            "population: %s",
                             validation_error,
                         )
 
@@ -1376,7 +1383,7 @@ def ga_go(
         if verbosity >= 2:
             log_debug_v(
                 logger,
-                "Initial Population confids=%s",
+                "Initial population confids=%s",
                 [a.info.get("confid") for a in population.pop],
                 verbosity=verbosity,
             )
@@ -1853,7 +1860,7 @@ def ga_go(
         if verbosity >= 1:
             log_info_v(
                 logger,
-                "GA evolution complete. Found %d unique minima.",
+                "GA evolution complete: found %d minima",
                 len(all_minima),
                 verbosity=verbosity,
             )

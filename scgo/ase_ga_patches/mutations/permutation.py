@@ -28,7 +28,8 @@ class PermutationMutation(OffspringCreator):
     ----------
     n_top: Number of atoms optimized by the GA.
 
-    probability: The probability with which an atom is permuted.
+    probability: Fraction of the groups to be permuted; the number of
+        pair swaps performed is ceil(n_groups * probability / 2).
 
     test_dist_to_slab: whether to also make sure that the distances
         between the atoms and the slab satisfy the blmin.
@@ -44,7 +45,7 @@ class PermutationMutation(OffspringCreator):
         no such check is performed.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     verbose: bool
         If True, print verbose output.
@@ -149,7 +150,9 @@ class PermutationMutation(OffspringCreator):
 
 
 class CustomPermutationMutation(PermutationMutation):
-    """PermutationMutation that requires ``rng`` to be a ``numpy.random.Generator`` (or None)."""
+    """PermutationMutation preset with a higher default swap probability and
+    slab-distance testing disabled.
+    """
 
     def __init__(
         self,

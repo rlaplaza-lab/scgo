@@ -24,7 +24,7 @@ def get_optimizer_class(optimizer_name: str) -> type:
         The corresponding ASE optimizer class.
 
     Raises:
-        ValueError: If optimizer_name is None or not supported.
+        SCGOValidationError: If optimizer_name is None or not supported.
     """
     if optimizer_name is None:
         raise SCGOValidationError("optimizer_name cannot be None")

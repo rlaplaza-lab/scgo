@@ -22,8 +22,8 @@ class OverlapReliefMutation(OffspringCreator):
     """Resolve steric clashes with bounded geometric sweeps.
 
     The operator accumulates pairwise displacements for atoms that violate
-    ``blmin`` and applies a small exploratory jitter only after the repaired
-    geometry is valid.
+    ``blmin``. The repaired geometry is first tried with a small exploratory
+    jitter and, if that trial still clashes, without it.
     """
 
     def __init__(

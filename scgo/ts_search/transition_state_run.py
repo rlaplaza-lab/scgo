@@ -124,8 +124,8 @@ def _prioritize_adsorbate_pairs_by_idpp(
 ) -> list[tuple[int, int]]:
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
 
-    Endpoint-max IDPP paths are retained only when too few robust-interior
-    candidates exist in the oversampled pool (CI-NEB can still salvage some).
+    Endpoint-max IDPP paths are retained only when the oversampled pool holds no
+    robust-interior candidate at all (CI-NEB can still salvage some).
 
     The per-pair image construction and geometry-only path validation run on the
     CPU (no GPU). All energy evaluations are then fused into a single
@@ -240,7 +240,11 @@ def _run_serial_neb_search(
     verbosity: int,
     write_timing_json: bool = False,
 ) -> list[dict[str, Any]]:
-    """Run NEBs sequentially via :func:`find_transition_state` (one calc per pair)."""
+    """Run NEBs sequentially via :func:`find_transition_state`.
+
+    Without TorchSim a fresh ASE calculator is built for each pair; the TorchSim
+    path instead shares one ``TorchSimBatchRelaxer`` across all pairs.
+    """
     logger = get_logger(__name__)
     ts_results: list[dict[str, Any]] = []
     torchsim_params = neb_cfg.torchsim_params or {}
@@ -401,7 +405,8 @@ def _warn_on_surface_mobile_indices(
 
     When ``n_slab > 0`` (from ``surface_config``), pair comparison uses the slab
     prefix from the live surface template, not stored ``n_slab_atoms`` metadata.
-    Warnings about \"all atoms mobile\" apply only when that partition is unavailable.
+    Warnings about ``all atoms mobile`` apply only when that partition is
+    unavailable.
     """
     logger = get_logger(__name__)
     policy = get_system_policy(system_type)
@@ -419,7 +424,7 @@ def _warn_on_surface_mobile_indices(
             except (ValueError, SCGOValidationError):
                 logger.warning(
                     "Surface TS pair (%d,%d) has no shared mobile atoms for comparison; "
-                    "pair similarity may be skipped.",
+                    "pair similarity may be skipped",
                     i,
                     j,
                 )
@@ -428,7 +433,7 @@ def _warn_on_surface_mobile_indices(
                 logger.warning(
                     "Surface TS pair (%d,%d) compares all atoms as mobile; pass "
                     "surface_config so TS can use len(slab) as n_slab, or ensure "
-                    "minima carry FixAtoms / n_slab_atoms metadata.",
+                    "minima carry FixAtoms / n_slab_atoms metadata",
                     i,
                     j,
                 )
@@ -543,7 +548,7 @@ def run_transition_state_search(
 
     Loads minima from previous global optimization searches, pairs nearby structures,
     and finds transition states connecting them using nudged elastic band (NEB) with
-    geodesic interpolation for initial path generation.
+    IDPP (default) or linear interpolation for initial path generation.
 
     Prefer :func:`scgo.param_presets.get_ts_search_params` (or ``run_ts_search`` /
     ``run_go_ts``) for production defaults: shared ``neb_fmax=0.20`` and parallel
@@ -581,7 +586,7 @@ def run_transition_state_search(
         similarity_pair_cor_max: Maximum single distance difference tolerance for similarity.
         neb_n_images: Number of intermediate NEB images. ``None`` selects the
             system-aware preset (``5`` bare / ``7`` adsorbate).
-        neb_spring_constant: Spring constant for NEB band (eV/Ų). Default 0.1.
+        neb_spring_constant: Spring constant for NEB band (eV/Å²). Default 0.1.
         neb_fmax: Maximum force convergence for NEB (eV/Å). Default 0.20
             (shared across system types; same as presets).
         neb_steps: Maximum NEB optimization steps. Default 'auto' (resolved with auto_niter_ts).
@@ -593,20 +598,21 @@ def run_transition_state_search(
         neb_tangent_method: ASE NEB tangent method.
         max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``;
             when set (adsorbate presets), also enables pre-NEB path/energy checks.
-        use_torchsim: Use TorchSim for GPU-efficient batched force evaluation (MACE/UMA only).
+        use_torchsim: Use TorchSim for GPU-efficient batched force evaluation
+            (MACE/UMA/UPET only).
             Low-level default ``False``; presets set ``True``.
         use_parallel_neb: Batch multiple NEB bands (requires TorchSim). Default
             ``None`` resolves to ``True`` when ``use_torchsim=True`` (same as
             presets) and ``False`` otherwise. Explicit ``True`` without TorchSim
             raises.
-        parallel_neb_max_bands: Cap concurrent bands inside parallel NEB (``None`` =
-            chunk by ``parallel_neb_max_batch_atoms`` instead). Surface presets use
-            ``4`` to avoid GPU OOM on large slab cells while keeping the parallel
-            NEB path.
+        parallel_neb_max_bands: Cap concurrent bands inside parallel NEB
+            (``None`` = no band cap). Applied together with
+            ``parallel_neb_max_batch_atoms``. Surface presets use ``4`` to avoid
+            GPU OOM on large slab cells while keeping the parallel NEB path.
         parallel_neb_max_batch_atoms: Atom budget (sum of ``n_images * n_atoms``)
-            for one fused parallel-NEB force batch. Applied only when
-            ``parallel_neb_max_bands`` is ``None``; ``None`` puts all bands in a
-            single batch. Presets use ``6000`` (gas) / ``4000`` (surface).
+            for one fused parallel-NEB force batch. Applied together with
+            ``parallel_neb_max_bands``; ``None`` disables the atom budget.
+            Presets use ``6000`` (gas) / ``4000`` (surface).
         torchsim_params: Optional parameters for TorchSimBatchRelaxer when use_torchsim=True.
         surface_config: When set, the same :class:`scgo.surface.config.SurfaceSystemConfig`
             used for GA. Endpoint structures are copied per pair and slab
@@ -615,10 +621,13 @@ def run_transition_state_search(
             when ``neb_align_endpoints`` is True.
 
     Returns:
-        List of result dictionaries from :func:`find_transition_state`.
+        List of per-pair TS result dictionaries (one entry per selected pair,
+        including skipped and failed pairs).
 
     Raises:
-        ValueError: If composition is empty or invalid, or calculator is unavailable.
+        SCGOValidationError: If the composition is invalid, ``params`` is missing
+            or lacks ``"calculator"``, the calculator class cannot be located, or
+            ``use_parallel_neb=True`` is requested without TorchSim.
     """
     configure_logging(verbosity)
     logger = get_logger(__name__)
@@ -1023,7 +1032,8 @@ def run_transition_state_search(
     neb_sum = float(parallel_meta.get("neb_batch_optimization_s", 0.0))
     if neb_sum <= 0.0:
         logger.debug(
-            "neb_batch_optimization_s unavailable; summing per-pair NEB timings"
+            "Timing key neb_batch_optimization_s unavailable; "
+            "summing per-pair NEB timings"
         )
         neb_sum = sum_neb_seconds_from_ts_results(ts_results)
     ts_rollup: dict[str, float] = {
@@ -1106,7 +1116,7 @@ def run_transition_state_search(
     num_success = sum(1 for r in ts_results if r.get("status") == "success")
     log_info_v(
         logger,
-        "TS search complete for %s: %d result(s) (%d successful).",
+        "TS search complete for %s: %d result(s) (%d successful)",
         formula,
         len(ts_results),
         num_success,
@@ -1126,8 +1136,8 @@ def integrate_ts_to_database(
 ) -> int:
     """Add found transition states to the minima database.
 
-    Iterates over ``ts_results`` and calls the module-level :func:`add_ts_to_database`
-    for each successful TS. Returns the number of TS entries successfully added.
+    Iterates over ``ts_results`` and calls :func:`add_ts_to_database` for each
+    successful TS. Returns the number of TS entries successfully added.
 
     Row-level failures are logged and skipped; systemic filesystem/DB errors
     cause an early return (or are re-raised by underlying helpers).

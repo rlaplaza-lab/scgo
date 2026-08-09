@@ -23,8 +23,9 @@ def write_orca_inputs(
 ):
     """Writes a multi-job ORCA input file for a given structure.
 
-    The first job is a geometry optimization and frequency calculation.
-    The second job is a single point calculation reading orbitals from the first job.
+    With the default settings the first job is a geometry optimization plus
+    frequency calculation, and the second job is a single point that reads the
+    orbitals from the first job.
 
     Args:
         atoms: The ASE Atoms object representing the structure.
@@ -32,7 +33,9 @@ def write_orca_inputs(
                     written.
         orca_settings: A dictionary of ORCA parameters. Expected keys include:
                        'charge', 'multiplicity', 'keywords', and 'blocks_str'.
-                       If not provided, reasonable defaults are used.
+                       If not provided, reasonable defaults are used. Note that
+                       'keywords' and 'blocks_str' are shared by both jobs when
+                       supplied, overriding the per-job defaults.
     """
     ensure_directory_exists(output_dir)
     logger = get_logger(__name__)
@@ -59,7 +62,8 @@ end"""
 
     # Job 2
     keywords2 = orca_settings.get("keywords", default_keywords_2)
-    # The second job should read the gbw file from the first job, which is named after the input file (orca.gbw)
+    # The second job reads the gbw file written by the first job, which is
+    # named after the input file (orca.gbw)
     moinp_block = '%moinp "orca.gbw"'
     # Combine the moinp block with the other blocks for the second job
     blocks2 = f"{moinp_block}\n\n{blocks1}"
@@ -87,7 +91,8 @@ end"""
     lines.append("")
     lines.append(blocks2)
     lines.append("")
-    # The second job should read the optimized coordinates from the first job's output xyz file.
+    # The second job reads the optimized coordinates from the xyz file written
+    # by the first job.
     lines.append(f"* xyzfile {charge} {multiplicity} orca.xyz")
     lines.append("")
 

@@ -35,7 +35,7 @@ def validate_surface_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class SurfaceSystemConfig:
-    """Describe a fixed slab plus a movable adsorbate cluster for GA.
+    """Describe a slab plus a movable adsorbate cluster for global optimization.
 
     Atom ordering in combined systems must be ``slab`` atoms first, then the
     ``len(composition)`` adsorbate atoms (matching ASE GA patches: ``n_top``
@@ -117,8 +117,10 @@ class SurfaceSystemConfig:
         vacuum_length = slab.cell.lengths()[self.surface_normal_axis]
         if vacuum_length < 10.0:
             logger.warning(
-                f"Slab vacuum size ({vacuum_length:.2f} A) on axis {self.surface_normal_axis} "
-                "might be too small to prevent periodic interaction.",
+                "Slab cell length along axis %d (%.2f Å) might be too small to "
+                "prevent periodic interaction across the vacuum gap",
+                self.surface_normal_axis,
+                vacuum_length,
             )
 
         if (

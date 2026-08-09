@@ -13,7 +13,11 @@ from scgo.utils.helpers import perform_local_relaxation
 
 
 class AseBatchRelaxer:
-    """Relax structures one-by-one with ASE optimizers (EMT and other ASE calculators)."""
+    """Relax structures one-by-one with ASE optimizers.
+
+    Used for EMT and other plain ASE calculators, i.e. whenever no batched
+    MLIP relaxer is available.
+    """
 
     def __init__(
         self,

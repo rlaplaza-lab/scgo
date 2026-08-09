@@ -84,13 +84,20 @@ class SCGODatabaseManager:
     def _is_cache_valid(
         self, cache_key: tuple, fingerprint: tuple[int, int, tuple[str, ...]]
     ) -> bool:
-        """Check if cache entry is still valid based on TTL.
+        """Check whether a cached entry can still be reused.
+
+        An entry is reusable only when caching is enabled, the value is still
+        present in the shared cache, the recorded file fingerprint is unchanged,
+        and the entry is younger than ``cache_ttl_seconds``.
 
         Args:
             cache_key: Cache key to check
+            fingerprint: Current fingerprint of the database files backing the
+                entry, as returned by ``_compute_files_fingerprint``
 
         Returns:
-            True if cache is valid, False if expired
+            True if the cache entry is valid, False if caching is disabled, the
+            entry is missing, the files changed, or the TTL expired
         """
         if not self.enable_caching:
             return False
@@ -110,7 +117,7 @@ class SCGODatabaseManager:
         self._cache.clear_namespace(self._cache_namespace)
         self._cache_timestamps.clear()
         self._cache_fingerprints.clear()
-        logger.info("Cleared all caches")
+        logger.info("Cleared database manager caches")
 
     def load_previous_results(
         self,
@@ -131,6 +138,7 @@ class SCGODatabaseManager:
             force_reload: Force reload from disk, bypassing cache
             prefer_final_unique: If True (default), only ``final_unique_minimum``
                 rows are loaded. Set False to include all relaxed structures.
+                Transition states are excluded either way.
 
         Returns:
             List of (energy, Atoms) tuples from all previous runs
@@ -184,7 +192,8 @@ class SCGODatabaseManager:
         Results are cached for improved performance.
 
         Args:
-            db_glob_pattern: Glob pattern to find database files
+            db_glob_pattern: Glob pattern to find database files, resolved
+                relative to ``base_dir``
             composition: Optional composition filter
             max_structures: Maximum number of structures to load
             force_reload: Force reload from disk, bypassing cache

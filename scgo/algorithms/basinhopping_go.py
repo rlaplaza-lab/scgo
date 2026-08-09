@@ -313,7 +313,8 @@ def bh_go(
             is set.
         timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``
             when ``run_trials`` is not used).
-        timing_collector: Optional list appended with the timing payload after the run.
+        timing_collector: Optional list appended with the timing payload after the
+            run; only populated when ``write_timing_json`` is set.
         deduplicate: If True (default), filter to structurally unique minima.
         energy_tolerance: Energy difference (eV) below which structures are considered duplicates.
         comparator_tol: Tolerance for interatomic distance comparator.
@@ -321,7 +322,7 @@ def bh_go(
         comparator_n_top: Number of top distances to use in comparator. If None, uses all.
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace). Default 1.
         run_id: Optional run ID for tracking.
-        clean: If True, start fresh (ignore previous databases).
+        clean: If True, remove an existing database in the output directory.
         fitness_strategy: Fitness strategy. One of: "low_energy", "high_energy", "diversity".
             Default "low_energy".
         diversity_reference_db: Glob pattern for reference structure databases.
@@ -335,8 +336,9 @@ def bh_go(
         non-low_energy strategies, or by energy (lowest first) for low_energy.
 
     Raises:
-        TypeError: If atoms is not an Atoms object or niter is not an integer.
-        ValueError: If calculator is not attached or parameters are invalid.
+        SCGOValidationError: If atoms is not an ASE Atoms object, niter is not a
+            positive integer, no calculator is attached, or any other parameter
+            is invalid.
     """
     validate_atoms(atoms)
     validate_integer("niter", niter)
@@ -776,7 +778,7 @@ def bh_go(
             _finish_bh_timing()
             return []
 
-        # Reuse the comparator created earlier (line 200) for deduplication
+        # Reuse the comparator created before the run loop for deduplication
         # Sort by energy for binning (lowest first)
         sorted_minima = sorted(valid_minima, key=lambda x: x[0])
 

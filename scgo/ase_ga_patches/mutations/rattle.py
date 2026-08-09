@@ -30,9 +30,13 @@ class RattleMutation(OffspringCreator):
 
     n_top: Number of atoms optimized by the GA.
 
-    rattle_strength: Strength with which the atoms are moved.
+    rattle_strength: Strength with which the atoms are moved; each
+        Cartesian component is displaced uniformly in
+        [-rattle_strength, rattle_strength).
 
-    rattle_prop: The probability with which each atom is rattled.
+    rattle_prop: The probability with which each atom (or each tag group,
+        when use_tags is True) is rattled. One group is always rattled
+        per attempt, regardless of this probability.
 
     test_dist_to_slab: whether to also make sure that the distances
         between the atoms and the slab satisfy the blmin.
@@ -47,7 +51,7 @@ class RattleMutation(OffspringCreator):
         Used to ensure physical validity of mutations.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     verbose: bool
         If True, print verbose output.

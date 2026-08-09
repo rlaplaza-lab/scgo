@@ -1,4 +1,4 @@
-"""Mutation that uniformly scales atom positions relative to the centre of mass."""
+"""Mutation that uniformly scales atom positions about the center of positions."""
 
 # fmt: off
 
@@ -19,25 +19,28 @@ __all__ = ["BreathingMutation"]
 
 
 class BreathingMutation(OffspringCreator):
-    """Uniformly scales all atom positions relative to the centre of mass.
+    """Uniformly scales all atom positions relative to the center of positions.
 
-    Each attempt samples a random scale factor in ``[scale_min, scale_max]``
-    and accepts if no pair of atoms violates *blmin*.
+    Candidate scale factors are enumerated deterministically within
+    ``[scale_min, scale_max]``, always including 1.0 when it is valid, and the
+    first candidate that violates no *blmin* pair is accepted. When no scale in
+    that window can clear *blmin*, the smallest relieving uniform expansion is
+    used even if it exceeds ``scale_max``.
 
     Parameters
     ----------
     blmin : dict
         Minimum allowed interatomic distances.
     n_top : int
-        Number of atoms optimised by the GA.
+        Number of atoms optimized by the GA.
     scale_min, scale_max : float
-        Bounds for the uniform scale-factor distribution.
+        Bounds for the candidate scale factors.
     test_dist_to_slab : bool
         Also check distances to slab atoms.
     rng : numpy.random.Generator or None
         Random number generator.
     max_inner_attempts : int
-        Maximum number of random scale attempts per call.
+        Upper bound on the number of candidate scales per call (capped at 8).
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, scale_min=0.9, scale_max=1.1,
