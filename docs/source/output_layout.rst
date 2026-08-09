@@ -144,7 +144,7 @@ UTC-based):
    :header-rows: 1
 
    * - Runner
-     - ``run_id`` behaviour
+     - ``run_id`` behavior
    * - ``run_go``
      - One new ``run_*`` per call under ``{path_key}_searches/``
    * - ``run_go_campaign``

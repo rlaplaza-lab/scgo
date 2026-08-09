@@ -40,6 +40,24 @@
   cases legitimately yield no interior saddle / no on-disk pairs on their CI
   budgets, so they keep ``require_ts_candidates=False``.
 
+- Audited log messages, comments, and docstrings across the package for
+  consistency (American spelling, capitalized messages without trailing periods,
+  %-style formatting) and factual accuracy; corrected stale docstrings, exception
+  types (``SCGOValidationError`` vs ``ValueError``/``TypeError``), and misleading
+  comments.
+
+- CI: ``test_low_effort_ts_search_params_upet_floors_neb_steps`` imported a
+  nonexistent ``get_low_effort_neb_steps``; the exported helper is
+  ``low_effort_neb_steps`` (no ``get_`` prefix). This broke every test job.
+
+- CI: ``test_get_low_effort_uma_ga_params_structure`` was missing
+  ``@pytest.mark.requires_uma``, so the MACE/UPET jobs ran it and hit a gated
+  Hugging Face download (401). It now matches its ``requires_uma`` siblings.
+
+- Docs: fixed over-indented ``list-table`` rows for the low-effort presets in
+  ``api/param_presets.rst``, which emitted docutils "Bullet list ends without a
+  blank line" warnings and failed the ``-W`` docs build.
+
 ### Changed
 
 - Per-pair parallel NEB ``timings_s`` keys are renamed to ``total_wall_avg_s`` /
@@ -71,20 +89,16 @@
   re-export removed).
 - Candidate discovery prefers component path keys; packed ASE stems
   (e.g. ``H2O2Pt5_searches``) and pure-metal formulas still parse.
-- Drop TorchSim ``max_steps=0`` warning/log filters (single-point uses
-  ``ts.static``).
-- Deduplicate UPET ``HAS_NVALCHEMIOPS`` disable into
-  ``disable_metatomic_nvalchemiops``; extract UMA/UPET model-name infer helpers
-  mirroring MACE; collapse ``retry_on_lock`` onto ``database_retry`` (drop
-  unused ``PRESET_CONSERVATIVE``); DRY connection pragma apply; share
-  ``_assign_penalty_energy`` in ``SCGODataConnection.add_relaxed_step``;
-  simplify TorchSim step extraction; remove ASE Spacegroup deposition warmup.
-- Drop package-level re-export of rigid adsorbate helpers (import from
-  ``scgo.cluster_adsorbate.rigid``; avoids a ``system_types``/``surface`` cycle);
-  drop duplicate GO ``rng`` validation and centralize seed fallback in
-  ``_resolve_go_seed``; move TS defaults / ``SystemPolicy`` consistency checks
-  into tests (no import-time assert); calculator registry uses
-  ``functools.cache``.
+- Internal cleanup: drop TorchSim ``max_steps=0`` filters; dedupe the UPET
+  nvalchemiops disable into ``disable_metatomic_nvalchemiops``; collapse
+  ``retry_on_lock`` onto ``database_retry`` (drop unused ``PRESET_CONSERVATIVE``);
+  share ``_assign_penalty_energy``; simplify TorchSim step extraction; remove the
+  ASE Spacegroup deposition warmup.
+- Imports/API tidied: import rigid adsorbate helpers from
+  ``scgo.cluster_adsorbate.rigid`` (avoids a cycle); centralize GO seed fallback
+  in ``_resolve_go_seed``; move TS defaults / ``SystemPolicy`` checks into tests
+  (no import-time assert); use ``functools.cache`` for the calculator registry;
+  UMA/UPET model-name infer helpers mirror MACE.
 - Kaggle GPU example suite shares stricter e2e artifact bars (run metadata,
   SCGO DB stamp) and requires TS candidates for surface cluster-bearing
   example cases (gas cases keep soft TS bars at CI budgets).

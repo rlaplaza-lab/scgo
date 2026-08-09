@@ -438,7 +438,7 @@ Run multiple compositions in one call. Composition builders
 Failed compositions (e.g. initialization ``SCGOValidationError`` on extreme
 stoichiometries) are logged, recorded as empty lists under their ``path_key``,
 and skipped so the rest of the campaign continues. See :doc:`/api/initialization`
-for multi-element atom ordering and placement behaviour.
+for multi-element atom ordering and placement behavior.
 
 **Binary compositions:**
 

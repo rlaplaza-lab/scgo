@@ -17,7 +17,7 @@ deposition:
    :header-rows: 1
 
    * - Mode
-     - Behaviour
+     - Behavior
    * - ``smart`` (default)
      - Metropolis allocation across templates, seed+growth, and random_spherical.
        Batch generation discovers strategies once, then assigns per-structure

@@ -20,7 +20,7 @@ All high-level ``run_*`` functions share the same contract:
    :header-rows: 1
 
    * - Dict
-     - Merge behaviour
+     - Merge behavior
    * - ``params`` / ``go_params``
      - Deep-merge onto :func:`~scgo.param_presets.get_default_params` via :func:`~scgo.utils.run_helpers.initialize_params`. Nested dicts (e.g. ``optimizer_params["ga"]``, ``calculator_kwargs``) merge recursively; user keys win.
    * - ``ts_params``
@@ -39,7 +39,7 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
    :header-rows: 1
 
    * - Level
-     - Behaviour
+     - Behavior
    * - 0
      - Warnings and errors only; no progress bars
    * - 1

@@ -628,6 +628,7 @@ def test_get_low_effort_upet_ga_params_structure():
     assert ga["relaxer"] is not None
 
 
+@pytest.mark.requires_uma
 def test_get_low_effort_uma_ga_params_structure():
     """UMA low-effort GO preset: reduced budget + attached relaxer (no CUDA)."""
     pytest.importorskip("fairchem")
@@ -656,8 +657,8 @@ def test_get_low_effort_uma_ga_params_structure():
 def test_low_effort_ts_search_params_upet_floors_neb_steps():
     """UPET TS low-effort path returns the same floored neb_steps as MACE."""
     from scgo.param_presets import (
-        get_low_effort_neb_steps,
         get_low_effort_ts_search_params,
+        low_effort_neb_steps,
     )
 
     mace = get_low_effort_ts_search_params(
@@ -669,6 +670,6 @@ def test_low_effort_ts_search_params_upet_floors_neb_steps():
         system_type="gas_cluster",
         seed=42,
     )
-    assert upet["neb_steps"] == get_low_effort_neb_steps("gas_cluster")
+    assert upet["neb_steps"] == low_effort_neb_steps("gas_cluster")
     assert upet["neb_steps"] == mace["neb_steps"]
     assert upet["calculator"] == "UPET"
