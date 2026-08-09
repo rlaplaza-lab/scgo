@@ -190,7 +190,7 @@ class RotationalMutation(OffspringCreator):
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
 
         mutant = atoms.copy()
         gather_atoms_by_tag(mutant)
@@ -215,6 +215,17 @@ class RotationalMutation(OffspringCreator):
             hits = np.where(tags == tag)[0]
             if len(hits) > 1:
                 indices[tag] = hits
+
+        if len(slab) == 0:
+            # Without a slab, rotating a group that spans the whole mobile region
+            # is a rigid-body move of the entire (re-centred) cluster and hence
+            # energy-identical to the parent; drop such groups.
+            n_mobile = len(mutant)
+            indices = {
+                tag: hits for tag, hits in indices.items() if len(hits) < n_mobile
+            }
+            if not indices:
+                return None
 
         n_rot = int(np.ceil(len(indices) * self.fraction))
         if n_rot > 0 and len(indices) > 0:

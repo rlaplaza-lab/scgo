@@ -294,6 +294,83 @@ def test_validate_structure_for_system_type_respects_connectivity_flags(
     )
 
 
+def _slab_with_buried_atom() -> Atoms:
+    """Three-atom slab: two spread-out surface atoms plus one buried atom.
+
+    A mobile atom placed over the middle is within bonding distance of the
+    buried atom only; the surface (top-layer) atoms are too far away.
+    """
+    return Atoms(
+        "Pt3",
+        positions=[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [5.0, 0.0, -3.0]],
+        cell=[30.0, 30.0, 30.0],
+        pbc=False,
+    )
+
+
+def test_contact_with_buried_slab_atom_is_rejected_in_both_paths() -> None:
+    """Bonding a buried slab atom is not slab contact, split path included."""
+    slab = _slab_with_buried_atom()
+    mobile = Atoms(
+        "Pt2",
+        positions=[[5.0, 0.0, 0.5], [5.0, 0.0, 3.0]],
+        cell=slab.cell,
+        pbc=slab.pbc,
+    )
+    combined = combine_slab_adsorbate(slab, mobile)
+
+    ok_strict, msg_strict = validate_supported_cluster_deposit(
+        combined,
+        len(slab),
+        surface_normal_axis=2,
+        use_mic=False,
+    )
+    assert not ok_strict
+    assert "No adsorbate–slab pair" in msg_strict
+
+    ok_split, msg_split = validate_supported_cluster_deposit(
+        combined,
+        len(slab),
+        surface_normal_axis=2,
+        use_mic=False,
+        allow_cluster_fragmentation=True,
+        allow_adsorbate_surface_detachment=True,
+    )
+    assert not ok_split
+    assert "Every mobile subgroup must touch the slab" in msg_split
+
+
+def test_two_and_three_atom_disconnected_mobile_share_one_message() -> None:
+    """``n_ads == 2`` must use the same connectivity owner (and text) as ``n_ads == 3``."""
+    slab = _slab_with_buried_atom()
+    two = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 2.0], [10.0, 0.0, 2.0]],
+        cell=slab.cell,
+        pbc=slab.pbc,
+    )
+    three = Atoms(
+        "Pt3",
+        positions=[[0.0, 0.0, 2.0], [0.0, 0.0, 4.4], [10.0, 0.0, 2.0]],
+        cell=slab.cell,
+        pbc=slab.pbc,
+    )
+
+    messages = []
+    for mobile in (two, three):
+        ok, msg = validate_supported_cluster_deposit(
+            combine_slab_adsorbate(slab, mobile),
+            len(slab),
+            surface_normal_axis=2,
+            use_mic=False,
+        )
+        assert not ok
+        messages.append(msg)
+
+    assert all(m.startswith("Adsorbate validation failed: ") for m in messages)
+    assert all("not connected" in m for m in messages)
+
+
 def test_validate_supported_cluster_deposit_rejects_dissociated_adsorbate_fragment(
     pt_slab: Atoms,
 ) -> None:

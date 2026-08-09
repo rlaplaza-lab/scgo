@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import find_mic
 from ase.io import write as ase_write
 
 from scgo.constants import DEFAULT_COMPARATOR_TOL, DEFAULT_ENERGY_TOLERANCE
@@ -188,10 +189,10 @@ def _core_rms_displacement(
     )
     dlt = matched_pos - pos_i
     if mic_cell is not None and mic_pbc is not None:
-        inv = np.linalg.inv(mic_cell)
-        frac = dlt @ inv.T
-        frac -= np.round(frac)
-        dlt = frac @ mic_cell
+        # A hand-rolled fractional-round MIC is wrong for skewed cells (the
+        # nearest fractional image is not always the nearest Cartesian image).
+        # ``find_mic`` performs the correct minimum-image search.
+        dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
     return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
 
 

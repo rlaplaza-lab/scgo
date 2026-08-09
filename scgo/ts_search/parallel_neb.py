@@ -105,6 +105,113 @@ def _is_cuda_oom_error(exc: BaseException) -> bool:
     return "out of memory" in str(exc).lower()
 
 
+# The soft sentinel "NEB did not converge after N steps" is the only error text
+# that stays climb-eligible: a band that merely exhausted stage-1's half budget
+# is the normal interior-max IDPP case and MUST still proceed to the climb pass.
+# Every other non-empty error (non-finite forces, "not processed", CUDA OOM, or
+# any arbitrary exception message) marks a hard failure.
+_STAGE1_SOFT_NONCONVERGENCE = "did not converge"
+
+
+def _stage1_band_climb_eligible(summary: dict[str, Any]) -> bool:
+    """Return True when a stage-1 band should proceed to the CI-NEB climb pass.
+
+    A band is climb-eligible when it actually took at least one optimizer step
+    and did not *hard*-fail. The previous ``not summary.get("error")`` test
+    filtered out every band that merely exhausted stage-1's half budget (which
+    is stamped ``error="NEB did not converge after N steps"``), so in the normal
+    case no band ever climbed.
+
+    Preference order:
+
+    * the explicit ``summary["failed"]`` boolean set by
+      :meth:`ParallelNEBBatch.run_optimization` (``neb_idx in self.failed_nebs``);
+    * a string sniff of ``summary["error"]`` as a fallback for summaries produced
+      outside ``run_optimization`` (e.g. the OOM-retry stubs), where only an
+      empty error or the soft "did not converge" sentinel stays climb-eligible
+      and any other error text is treated as a hard failure.
+    """
+    if int(summary.get("steps_taken") or 0) <= 0:
+        return False
+    if "failed" in summary:
+        return not bool(summary["failed"])
+    error_text = str(summary.get("error") or "").lower()
+    if not error_text:
+        return True
+    return _STAGE1_SOFT_NONCONVERGENCE in error_text
+
+
+def _evaluate_bands_in_chunks(
+    bands: list[list[Atoms]],
+    relaxer: Any,
+    *,
+    atom_budget: int | None,
+    band_cap: int | None,
+) -> list[list[float]]:
+    """Batched single-point energies per band, chunked to fit GPU memory.
+
+    ``bands`` is a list of image lists (one per band). Returns per-band energy
+    lists in the same order as the input. Each fused
+    :func:`evaluate_neb_image_energies` call is bounded by ``atom_budget`` (the
+    summed ``n_images * n_atoms`` cost) and ``band_cap`` (max bands per batch),
+    mirroring the chunking used for the optimization pass. On CUDA OOM a chunk is
+    re-binned at half its atom cost and retried once (``cleanup_torch_cuda`` runs
+    between attempts).
+
+    This replaces a single ``evaluate_neb_image_energies(all_images)`` over every
+    image of every band, which bypassed the atom budget and OOM recovery and
+    could silently OOM the whole pre-screen for large ``setup_pairs`` lists.
+    """
+    if not bands:
+        return []
+    band_costs = [len(imgs) * len(imgs[0]) if imgs else 0 for imgs in bands]
+
+    def _chunk(indices: list[int], budget: int | None) -> list[list[int]]:
+        chunks = chunk_band_indices_by_atom_budget(indices, band_costs, budget)
+        if band_cap is None:
+            return chunks
+        capped: list[list[int]] = []
+        for chunk in chunks:
+            capped.extend(
+                chunk[k : k + band_cap] for k in range(0, len(chunk), band_cap)
+            )
+        return capped
+
+    results: list[list[float] | None] = [None] * len(bands)
+
+    def _run_chunk(chunk: list[int]) -> None:
+        chunk_images = [img for band_i in chunk for img in bands[band_i]]
+        energies = evaluate_neb_image_energies(chunk_images, relaxer)
+        offset = 0
+        for band_i in chunk:
+            n = len(bands[band_i])
+            results[band_i] = [float(e) for e in energies[offset : offset + n]]
+            offset += n
+
+    for chunk in _chunk(list(range(len(bands))), atom_budget):
+        try:
+            _run_chunk(chunk)
+        except (RuntimeError, MemoryError) as exc:
+            if not _is_cuda_oom_error(exc):
+                raise
+            logger.warning(
+                "Pre-screen energy eval hit CUDA OOM for %d band(s) (%s); "
+                "retrying once at half the chunk atom cost",
+                len(chunk),
+                exc,
+            )
+            cleanup_torch_cuda(logger=logger)
+            chunk_atoms = sum(band_costs[i] for i in chunk)
+            retry_budget = max(1, chunk_atoms // 2)
+            for sub_chunk in chunk_band_indices_by_atom_budget(
+                chunk, band_costs, retry_budget
+            ):
+                _run_chunk(sub_chunk)
+
+    assert all(r is not None for r in results)
+    return results  # type: ignore[return-value]
+
+
 class ParallelNEBBatch:
     """Coordinate multiple TorchSimNEB instances and run batched evaluations."""
 
@@ -189,6 +296,7 @@ class ParallelNEBBatch:
                 "final_fmax": None,
                 "error": None,
                 "force_calls": None,
+                "failed": False,
             }
             for _ in self.neb_instances
         ]
@@ -316,6 +424,9 @@ class ParallelNEBBatch:
                 break
 
         for neb_idx in range(len(self.neb_instances)):
+            # Record the hard-failure flag so ``_stage1_band_climb_eligible`` can
+            # key off it directly instead of sniffing the error string.
+            results[neb_idx]["failed"] = neb_idx in self.failed_nebs
             if neb_idx not in self.converged_nebs and neb_idx not in self.failed_nebs:
                 steps = results[neb_idx]["steps_taken"] or 0
                 results[neb_idx]["error"] = (
@@ -525,23 +636,32 @@ def run_parallel_neb_search(
             continue
         setup_pairs.append((pair_ord, pair_id, i, j, react_e, prod_e, images))
 
-    # Single batched single-point energy eval across all valid bands (input order
-    # preserved by relax_batch). Only needed when max_endpoint_mismatch gating is on.
+    # Batched single-point energy pre-screen across all valid bands, chunked to
+    # fit GPU memory (per-band, input order preserved). Only needed when the
+    # ``max_endpoint_mismatch`` energy-profile gate is enabled. Chunking mirrors
+    # the optimization pass so a large ``setup_pairs`` list cannot OOM the screen
+    # without recovery.
     if setup_pairs and neb_cfg.max_endpoint_mismatch is not None:
-        all_images = [
-            img for _ord, _pid, _i, _j, _re, _pe, imgs in setup_pairs for img in imgs
-        ]
-        all_energies = evaluate_neb_image_energies(all_images, relaxer)
+        prescreen_band_cap = (
+            int(parallel_neb_max_bands)
+            if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
+            else None
+        )
+        band_energy_lists = _evaluate_bands_in_chunks(
+            [imgs for _ord, _pid, _i, _j, _re, _pe, imgs in setup_pairs],
+            relaxer,
+            atom_budget=neb_cfg.parallel_neb_max_batch_atoms,
+            band_cap=prescreen_band_cap,
+        )
     else:
-        all_energies = []
+        band_energy_lists = []
 
-    offset = 0
-    for pair_ord, pair_id, i, j, react_e, prod_e, images in setup_pairs:
+    for setup_i, (pair_ord, pair_id, i, j, react_e, prod_e, images) in enumerate(
+        setup_pairs
+    ):
         band_energies: list[float] | None = None
         if neb_cfg.max_endpoint_mismatch is not None:
-            n = len(images)
-            band_energies = all_energies[offset : offset + n]
-            offset += n
+            band_energies = band_energy_lists[setup_i]
             try:
                 validate_initial_neb_energy_profile(
                     band_energies,
@@ -724,7 +844,7 @@ def run_parallel_neb_search(
             climb_local = [
                 i
                 for i, summary in enumerate(stage1_results)
-                if not summary.get("error")
+                if _stage1_band_climb_eligible(summary)
             ]
             if climb_local:
                 steps1_vals = [

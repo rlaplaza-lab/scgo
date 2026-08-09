@@ -1008,6 +1008,8 @@ def ga_go(
                 optimizer=optimizer,
                 force_tol=fmax,
                 max_steps=niter_local_relaxation,
+                surface_mode=surface_mode,
+                n_slab=n_fixed,
             )
     elif (
         isinstance(niter_local_relaxation, int) and niter_local_relaxation > 0

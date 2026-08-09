@@ -19,11 +19,15 @@ from scgo.cluster_adsorbate.config import (
 )
 from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
 from scgo.cluster_adsorbate.hierarchical import (
+    _stamp_site_metadata,
     build_hierarchical_core_fragment_cluster,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.sites import (
+    SiteType,
+    SurfaceSiteCandidate,
     count_site_candidates,
+    filter_sites_to_outward,
     get_or_compute_surface_site_candidates,
     planar_layer_site_candidates,
 )
@@ -67,6 +71,49 @@ def _slab_surface_layer(slab: Atoms, axis: int, thickness: float = 2.5) -> Atoms
     return slab[indices].copy()
 
 
+def _outward_slab_site_candidates(
+    site_core: Atoms, axis: int
+) -> dict[SiteType, list[SurfaceSiteCandidate]]:
+    """Hull sites of a slab top-layer slice, restricted to outward-facing ones.
+
+    The 3D convex hull of a slab slice also yields downward/sideways normals,
+    which point into the bulk. Those are filtered out (never in place: the hull
+    dict is cached by positions hash). Planar layers, or slices whose sites are
+    all filtered away, fall back to :func:`planar_layer_site_candidates`.
+    """
+    sites = get_or_compute_surface_site_candidates(site_core)
+    if count_site_candidates(sites) > 0:
+        top_layer_z_min = float(np.min(site_core.get_positions()[:, axis]))
+        sites = filter_sites_to_outward(
+            sites, axis=axis, top_layer_z_min=top_layer_z_min
+        )
+    if count_site_candidates(sites) == 0:
+        # Planar top layers (graphene/graphite) have no 3D convex hull.
+        sites = planar_layer_site_candidates(site_core, surface_normal_axis=axis)
+    return sites
+
+
+def _stamp_site_types_on_combined(combined: Atoms, site_types: list[str]) -> None:
+    """Stamp adsorbate site-type tags without aliasing another structure's tag bag."""
+    if not site_types:
+        return
+    existing = combined.info.get("key_value_pairs")
+    if isinstance(existing, dict):
+        combined.info["key_value_pairs"] = dict(existing)
+    _stamp_site_metadata(combined, site_types)
+
+
+def _site_types_from_structure(source: Atoms) -> list[str]:
+    """Read back the site-type list stamped on ``source`` (empty when absent)."""
+    site_types = get_tag(source, "adsorbate_site_types_json")
+    if isinstance(site_types, list) and site_types:
+        return [str(x) for x in site_types]
+    site_type = get_tag(source, "adsorbate_site_type")
+    if isinstance(site_type, str) and site_type:
+        return [site_type]
+    return []
+
+
 def _build_adsorbate_fragments_on_slab(
     slab: Atoms,
     fragments: list[Atoms],
@@ -98,12 +145,7 @@ def _build_adsorbate_fragments_on_slab(
         structure_check_connectivity=False,
     )
     site_core = _slab_surface_layer(slab, axis)
-    precomputed_sites = get_or_compute_surface_site_candidates(site_core)
-    if count_site_candidates(precomputed_sites) == 0:
-        # Planar top layers (graphene/graphite) have no 3D convex hull.
-        precomputed_sites = planar_layer_site_candidates(
-            site_core, surface_normal_axis=axis
-        )
+    precomputed_sites = _outward_slab_site_candidates(site_core, axis)
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
 
@@ -111,9 +153,11 @@ def _build_adsorbate_fragments_on_slab(
         mobile = Atoms()
         mobile.set_cell(slab.get_cell())
         mobile.set_pbc(slab.get_pbc())
+        site_types: list[str] = []
         all_ok = True
         for frag_tmpl in fragments:
             clash_target = slab if len(mobile) == 0 else slab + mobile
+            frag_metadata: dict[str, str] = {}
             placed = place_fragment_on_cluster(
                 site_core,
                 frag_tmpl,
@@ -125,14 +169,18 @@ def _build_adsorbate_fragments_on_slab(
                 clash_atoms=clash_target,
                 within_structure_site_counts=within_structure_site_counts,
                 batch_site_counts=batch_site_counts,
+                placement_metadata=frag_metadata,
                 site_candidates=precomputed_sites,
             )
             if placed is None:
                 all_ok = False
                 break
+            site_types.append(frag_metadata.get("site_type", "directional_fallback"))
             mobile = combine_core_adsorbate(mobile, placed) if len(mobile) else placed
         if all_ok and len(mobile) > 0:
-            return combine_slab_adsorbate(slab, mobile)
+            combined = combine_slab_adsorbate(slab, mobile)
+            _stamp_site_types_on_combined(combined, site_types)
+            return combined
     return None
 
 
@@ -308,7 +356,7 @@ def _place_cluster_above_slab(
 
     target_height_above_slab = min(
         config.adsorption_height_max,
-        max(config.adsorption_height_min, connectivity_threshold * 0.4),
+        max(config.adsorption_height_min, connectivity_threshold),
     )
 
     sampled_height = float(
@@ -440,6 +488,11 @@ def create_deposited_cluster(
             continue
 
         combined = combine_slab_adsorbate(slab, adsorbate)
+        # The bare Atoms rebuild above drops the site metadata stamped on the
+        # gas-phase seed; re-stamp it so batch anti-repetition can see it.
+        _stamp_site_types_on_combined(
+            combined, _site_types_from_structure(cluster_seed)
+        )
         n_slab = len(slab)
         skip_supported_cluster_check = bool(
             adsorbate_definition is not None

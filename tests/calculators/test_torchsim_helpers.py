@@ -95,6 +95,8 @@ def test_try_extract_torchsim_model_from_uma_calculator():
     from types import SimpleNamespace
     from unittest.mock import MagicMock, patch
 
+    import torch
+
     from scgo.calculators import uma_helpers as uh
 
     predictor = object()
@@ -102,8 +104,8 @@ def test_try_extract_torchsim_model_from_uma_calculator():
     calc._inner = MagicMock(predictor=predictor, task_name="oc25")
     calc.task_name = "oc25"
 
-    class FakeFairChemModel:
-        pass
+    class FakeFairChemModel(torch.nn.Module):
+        """Mirrors the real ``FairChemModel``, which is an ``nn.Module``."""
 
     fairchem_mod = SimpleNamespace(FairChemModel=FakeFairChemModel)
     with patch.dict("sys.modules", {"torch_sim.models.fairchem": fairchem_mod}):
@@ -879,3 +881,221 @@ def test_build_torchsim_relaxer_uma_like_sets_fairchem_kind():
     assert captured["force_tol"] == 0.05
     assert captured["max_steps"] == 50
     assert calc._inner is None
+
+
+def _make_fake_mace_module():
+    """A tiny ``nn.Module`` whose class name triggers the MACE wrapper branch."""
+    import torch
+
+    class ScaleShiftMACE(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(2, 2)
+
+    return ScaleShiftMACE().to(dtype=torch.float32)
+
+
+@pytest.mark.requires_mace
+def test_ensure_torchsim_mace_wrapper_does_not_upcast_shared_module(monkeypatch):
+    """K4: wrapping must not cast the live ASE calculator's weights in place."""
+    import torch
+    import torch_sim.models.mace as ts_mace
+
+    from scgo.calculators.torchsim_helpers import _ensure_torchsim_mace_wrapper
+
+    class _FakeMaceModel:
+        """Mirrors ``MaceModel``: casts the module it is given, in place."""
+
+        def __init__(self, *, model, device, dtype, compute_forces, compute_stress):
+            self.model = model.to(dtype=dtype)
+            self.device = device
+            self.dtype = dtype
+            self.compute_forces = compute_forces
+            self.compute_stress = compute_stress
+
+    monkeypatch.setattr(ts_mace, "MaceModel", _FakeMaceModel)
+
+    source = _make_fake_mace_module()
+    assert next(source.parameters()).dtype == torch.float32
+
+    wrapper = _ensure_torchsim_mace_wrapper(source, torch.device("cpu"), torch.float64)
+
+    assert isinstance(wrapper, _FakeMaceModel)
+    assert next(wrapper.model.parameters()).dtype == torch.float64
+    # The shared ASE calculator module must keep its own precision.
+    assert next(source.parameters()).dtype == torch.float32
+    assert wrapper.model is not source
+
+
+@pytest.mark.requires_mace
+def test_ensure_torchsim_mace_wrapper_falls_back_when_deepcopy_fails(
+    monkeypatch, caplog
+):
+    """K4: an uncopyable module still gets wrapped (with a warning)."""
+    import copy
+
+    import torch
+    import torch_sim.models.mace as ts_mace
+
+    from scgo.calculators.torchsim_helpers import _ensure_torchsim_mace_wrapper
+
+    class _FakeMaceModel:
+        def __init__(self, *, model, device, dtype, compute_forces, compute_stress):
+            self.model = model
+            self.device = device
+            self.dtype = dtype
+
+    monkeypatch.setattr(ts_mace, "MaceModel", _FakeMaceModel)
+
+    def _boom(_obj, _memo=None):
+        raise TypeError("cannot deepcopy this module")
+
+    monkeypatch.setattr(copy, "deepcopy", _boom)
+
+    source = _make_fake_mace_module()
+    with caplog.at_level("WARNING", logger="scgo.calculators.torchsim_helpers"):
+        wrapper = _ensure_torchsim_mace_wrapper(
+            source, torch.device("cpu"), torch.float64
+        )
+
+    assert wrapper.model is source
+    assert any("deep-copy" in rec.message for rec in caplog.records)
+
+
+def test_relaxer_max_steps_is_resolved_at_call_time(monkeypatch):
+    """K5: mutating ``relaxer.max_steps`` after construction must take effect."""
+    import torch
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer(
+        device="cpu",
+        model=_StubModel(),
+        max_steps=3,
+        force_tol=None,
+    )
+    # Never baked into the runner kwargs (that is what made mutation a no-op).
+    assert "max_steps" not in relaxer._runner_kwargs
+
+    captured: list[dict] = []
+
+    class _FakeState:
+        energy = torch.tensor([1.25])
+
+        @staticmethod
+        def to_atoms():
+            return [Atoms("H", positions=[[0.0, 0.0, 0.0]])]
+
+    class _FakeTS:
+        def optimize(self, **kwargs):
+            captured.append(kwargs)
+            return _FakeState()
+
+    relaxer._ts = _FakeTS()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    relaxer.relax_batch([atoms])
+    assert captured[-1]["max_steps"] == 3
+
+    relaxer.max_steps = 7
+    relaxer.relax_batch([atoms])
+    assert captured[-1]["max_steps"] == 7
+
+    # An explicit per-call override still wins over the field.
+    relaxer.relax_batch([atoms], steps=2)
+    assert captured[-1]["max_steps"] == 2
+
+
+def test_relaxer_runner_kwargs_max_steps_seeds_the_field():
+    """K5: a caller-supplied ``runner_kwargs['max_steps']`` keeps working."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer(
+        device="cpu",
+        model=_StubModel(),
+        max_steps=100,
+        runner_kwargs={"max_steps": 42},
+    )
+    assert "max_steps" not in relaxer._runner_kwargs
+    assert relaxer.max_steps == 42
+
+
+def test_relax_batch_preserves_tags_constraints_and_info(monkeypatch):
+    """K9: the optimize path must return the same metadata as the static path."""
+    import numpy as np
+    import torch
+    from ase import Atoms
+    from ase.constraints import FixAtoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    def _make_input(shift: float) -> Atoms:
+        atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74 + shift]])
+        atoms.set_tags([0, 1])
+        atoms.set_constraint(FixAtoms(indices=[0]))
+        atoms.info["key_value_pairs"] = {"gaid": 11}
+        atoms.info["confid"] = 3
+        return atoms
+
+    inputs = [_make_input(0.0), _make_input(0.1)]
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer.max_memory_scaler = None
+    relaxer.max_steps = 1
+    relaxer.expected_max_atoms = None
+    relaxer._runner_kwargs = {}
+    relaxer.device = torch.device("cpu")
+    relaxer.dtype = torch.float64
+    relaxer.model = object()
+    relaxer.optimizer = object()
+    relaxer.model_kind = "mace"
+    relaxer.autobatcher = False
+    relaxer.last_batch_relax_steps = []
+
+    class _FakeState:
+        energy = torch.tensor([-1.0, -2.0])
+        forces = torch.zeros((4, 3))
+
+        @staticmethod
+        def to_atoms():
+            # ``SimState.to_atoms`` returns bare Atoms: no tags, no constraints,
+            # no info.
+            return [
+                Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.7]])
+                for _ in range(2)
+            ]
+
+    class _FakeTS:
+        def optimize(self, **_kwargs):
+            return _FakeState()
+
+    relaxer._ts = _FakeTS()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+
+    results = relaxer.relax_batch(inputs, steps=1)
+    assert len(results) == 2
+
+    for src, (_energy, out) in zip(inputs, results, strict=True):
+        assert np.array_equal(out.get_tags(), src.get_tags())
+        assert len(out.constraints) == 1
+        assert isinstance(out.constraints[0], FixAtoms)
+        assert list(out.constraints[0].index) == [0]
+        assert out.constraints[0] is not src.constraints[0]
+        assert out.info["confid"] == 3
+        assert out.info["key_value_pairs"]["gaid"] == 11
+        # The input must not be aliased by the tag writes.
+        assert "raw_score" not in src.info["key_value_pairs"]
+
+    # Mutating the output tags must not touch the input.
+    _energy, first_out = results[0]
+    first_out.set_tags([5, 5])
+    assert np.array_equal(inputs[0].get_tags(), [0, 1])

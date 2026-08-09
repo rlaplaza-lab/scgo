@@ -158,21 +158,65 @@ def planar_layer_site_candidates(
         )
     if len(pos) < 2:
         return out
-    # In-plane nearest-neighbor midpoints as bridge sites.
+    # In-plane nearest-neighbor midpoints as bridge sites. The nearest-neighbor
+    # relation is asymmetric (``argmin`` picks a single partner per atom), so
+    # collect unordered pairs in a set and emit one midpoint per unique pair.
     in_plane = [i for i in (0, 1, 2) if i != axis]
+    nn_pairs: set[tuple[int, int]] = set()
     for i, pi in enumerate(pos):
         deltas = pos - pi
         d2 = deltas[:, in_plane[0]] ** 2 + deltas[:, in_plane[1]] ** 2
         d2[i] = np.inf
         j = int(np.argmin(d2))
-        if j <= i:
+        if j == i:
             continue
-        midpoint = 0.5 * (pi + pos[j])
+        nn_pairs.add((min(i, j), max(i, j)))
+    for i, j in sorted(nn_pairs):
+        midpoint = 0.5 * (pos[i] + pos[j])
         out["edge"].append(
             SurfaceSiteCandidate(
                 site_type="edge", anchor=midpoint, normal=normal.copy()
             )
         )
+    return out
+
+
+def filter_sites_to_outward(
+    sites: dict[SiteType, list[SurfaceSiteCandidate]],
+    *,
+    axis: int,
+    top_layer_z_min: float,
+    tol: float = 1e-6,
+) -> dict[SiteType, list[SurfaceSiteCandidate]]:
+    """Keep only candidates whose normal points away from the slab bulk.
+
+    A full 3D convex hull of a slab top-layer slice yields normals in every
+    direction; roughly half aim under or beside the slab and are unusable for
+    deposition. A candidate is kept when its normal has a positive component
+    along ``axis`` and its anchor sits at or above ``top_layer_z_min``.
+
+    Returns a **new** dict; ``sites`` is never mutated (the hull cache in
+    :func:`get_or_compute_surface_site_candidates` shares its value).
+
+    Raises:
+        SCGOValidationError: If ``axis`` is not 0, 1, or 2.
+    """
+    ax = int(axis)
+    if ax not in (0, 1, 2):
+        raise SCGOValidationError(f"axis must be 0, 1, or 2, got {ax}")
+    out: dict[SiteType, list[SurfaceSiteCandidate]] = {
+        "vertex": [],
+        "edge": [],
+        "facet": [],
+    }
+    for site_type, entries in sites.items():
+        kept = [
+            candidate
+            for candidate in entries
+            if float(candidate.normal[ax]) > tol
+            and float(candidate.anchor[ax]) >= top_layer_z_min
+        ]
+        out[site_type] = kept
     return out
 
 

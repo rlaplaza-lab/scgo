@@ -12,6 +12,7 @@ Important:
 
 from __future__ import annotations
 
+import copy
 import functools
 import json
 import logging
@@ -174,15 +175,47 @@ class MemoryScalerCache:
 _GLOBAL_MEMORY_SCALER_CACHE = MemoryScalerCache()
 
 
+#: Constraint type names already reported as dropped (warn once per process).
+_WARNED_DROPPED_CONSTRAINTS: set[str] = set()
+
+
+def _warn_dropped_ase_constraints(names: Sequence[str]) -> None:
+    """Warn once per process for each ASE constraint type TorchSim cannot map."""
+    new = sorted({name for name in names if name not in _WARNED_DROPPED_CONSTRAINTS})
+    if not new:
+        return
+    _WARNED_DROPPED_CONSTRAINTS.update(new)
+    logger.warning(
+        "Ignoring ASE constraint(s) that TorchSim cannot represent: %s. Only "
+        "FixAtoms is mapped to TorchSim; these constraints are NOT enforced "
+        "during batched relaxation.",
+        ", ".join(new),
+    )
+
+
 def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
     """Return sorted unique indices fixed by ASE :class:`ase.constraints.FixAtoms`.
 
-    Other ASE constraint types are ignored (not represented in TorchSim today).
+    Negative indices (ASE allows ``FixAtoms(indices=[-1])``) are normalized to
+    their positive equivalents so that batching them into global TorchSim
+    indices cannot freeze the wrong atom.
+
+    Other ASE constraint types cannot be represented in TorchSim today; they are
+    dropped with a once-per-process warning listing the constraint type names.
     """
+    n_atoms = len(atoms)
     out: list[int] = []
+    dropped: list[str] = []
     for c in atoms.constraints:
-        if isinstance(c, ASEFixAtoms):
-            out.extend(int(i) for i in c.index)
+        if not isinstance(c, ASEFixAtoms):
+            dropped.append(type(c).__name__)
+            continue
+        if n_atoms == 0:
+            logger.warning("Ignoring FixAtoms on an empty Atoms object")
+            continue
+        out.extend(int(i) % n_atoms for i in c.index)
+    if dropped:
+        _warn_dropped_ase_constraints(dropped)
     return sorted(set(out))
 
 
@@ -320,6 +353,11 @@ def _ensure_torchsim_mace_wrapper(
     :func:`try_extract_torchsim_model_from_mace_calculator`, which returns the
     inner torch module. TorchSim expects a model exposing ``.device`` and
     ``.dtype`` (e.g. :class:`torch_sim.models.mace.MaceModel`).
+
+    The module handed in is the **live** ASE calculator's module and
+    ``MaceModel`` casts it to ``dtype`` in place, which would silently change
+    the user's ASE calculator precision. Wrap a deep copy instead; if copying
+    fails, fall back to the shared module with a warning.
     """
     if hasattr(model, "device") and hasattr(model, "dtype"):
         return model
@@ -329,8 +367,20 @@ def _ensure_torchsim_mace_wrapper(
         return model
     from torch_sim.models.mace import MaceModel  # type: ignore
 
+    try:
+        model_for_wrapper = copy.deepcopy(model)
+    except (TypeError, RuntimeError) as exc:
+        logger.warning(
+            "Could not deep-copy the live MACE module before wrapping it for "
+            "TorchSim (%s); the ASE calculator shares this module and its "
+            "weights may be cast to %s",
+            exc,
+            dtype,
+        )
+        model_for_wrapper = model
+
     return MaceModel(
-        model=model,
+        model=model_for_wrapper,
         device=device,
         dtype=dtype,
         compute_forces=True,
@@ -397,6 +447,28 @@ def _restore_ase_cell_from_reference(relaxed: Atoms, reference: Atoms) -> None:
     """Restore SCGO storage cell/PBC after a metatomic TorchSim relaxation."""
     relaxed.cell = reference.cell.copy()
     relaxed.pbc = reference.pbc
+
+
+def _reattach_input_metadata(relaxed: Atoms, source: Atoms) -> None:
+    """Copy ``tags`` / ``constraints`` / ``info`` from the input onto an output.
+
+    ``SimState.to_atoms()`` builds fresh :class:`ase.Atoms` from positions,
+    numbers and cell only, so the optimize path would otherwise return
+    structures without the integer ``tags`` array, without ASE constraints and
+    without ``atoms.info`` — unlike the ``ts.static`` path, which copies the
+    input. This aligns both output contracts.
+
+    Nested ``info`` dicts are de-aliased (``copy_atoms``-style) so later
+    ``set_tags`` writes cannot corrupt the caller's ``key_value_pairs``.
+    """
+    if len(relaxed) == len(source):
+        relaxed.set_tags(source.get_tags())
+        if source.constraints:
+            relaxed.set_constraint(copy.deepcopy(source.constraints))
+    for key, value in source.info.items():
+        if key in relaxed.info:
+            continue
+        relaxed.info[key] = dict(value) if isinstance(value, dict) else value
 
 
 def _load_default_upet_model(
@@ -819,9 +891,14 @@ class TorchSimBatchRelaxer:
                 force_tol=self.force_tol,
                 include_cell_forces=False,
             )
-        # Cap iterations; default 100 matches ASE GA niter_local_relaxation default
-        if "max_steps" not in self._runner_kwargs and self.max_steps is not None:
-            self._runner_kwargs["max_steps"] = self.max_steps
+        # ``max_steps`` is deliberately NOT baked into ``_runner_kwargs``: it is
+        # resolved per call in ``_relax_batch_once`` so that mutating
+        # ``relaxer.max_steps`` after construction (the GA sets it from
+        # ``niter_local_relaxation``) actually takes effect. A caller-supplied
+        # ``runner_kwargs['max_steps']`` seeds the field instead.
+        runner_max_steps = self._runner_kwargs.pop("max_steps", None)
+        if runner_max_steps is not None:
+            self.max_steps = runner_max_steps
 
         # Probe memory upfront when expected_max_atoms is given (keeps the
         # probing cost out of the first relax_batch call)
@@ -1255,14 +1332,16 @@ class TorchSimBatchRelaxer:
             self._apply_cached_memory_scaler(int(self.expected_max_atoms))
 
         runner_kwargs = self._runner_kwargs.copy()
-        if steps is not None:
-            runner_kwargs["max_steps"] = steps
+        # Resolve ``max_steps`` at call time so a post-construction
+        # ``relaxer.max_steps = N`` (GA ``niter_local_relaxation``) is honoured.
+        max_steps_now = steps if steps is not None else self.max_steps
+        if max_steps_now is not None:
+            runner_kwargs["max_steps"] = max_steps_now
 
         # `steps=0` is single-point mode (NEB/TS force evals and endpoint energies).
         # Use ts.static: optimize(max_steps=0) still takes one FIRE step, displaces
         # atoms, returns forces at the wrong geometry, and emits
         # "All systems have reached the maximum number of steps: 0".
-        max_steps_now = runner_kwargs.get("max_steps", self.max_steps)
         if max_steps_now == 0:
             return self._single_point_batch(
                 atoms_list, max_atoms_in_batch=max_atoms_in_batch
@@ -1290,7 +1369,7 @@ class TorchSimBatchRelaxer:
                 "TorchSim relax_batch: %d structures, steps_taken=%d (max_steps=%s)",
                 len(atoms_list),
                 batch_steps,
-                runner_kwargs.get("max_steps", self.max_steps),
+                max_steps_now,
             )
 
         energies_tensor = getattr(state, "energy", None)
@@ -1336,6 +1415,9 @@ class TorchSimBatchRelaxer:
         ):
             if self._uses_metatomic_model():
                 _restore_ase_cell_from_reference(relaxed, reference_atoms[idx])
+            # ``state.to_atoms()`` drops tags/constraints/info; restore them from
+            # the input so optimize and static share one output contract.
+            _reattach_input_metadata(relaxed, reference_atoms[idx])
             if forces_list is not None:
                 relaxed.arrays["forces"] = np.asarray(
                     forces_list[idx], dtype=np.float64

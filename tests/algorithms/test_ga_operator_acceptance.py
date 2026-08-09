@@ -49,6 +49,22 @@ _GAS_PT55_RANDOM_SPHERICAL_SEED = 1234
 
 _TEMPLATE_CORE_OPERATOR_NAMES = ("rattle", "rotational", "anisotropic_rattle")
 
+# An untagged gas-phase cluster forms a single tag group spanning every mobile
+# atom, so RotationalMutation could only produce a rigid rotation of the whole
+# (re-centred) cluster, i.e. an energy-identical duplicate. The operator now
+# declines those moves instead of burning a GA evaluation.
+_GAS_PHASE_NOOP_OPERATOR_NAMES = frozenset({"rotational"})
+
+
+def _assert_mutation_expectation(op_name: str, ok: bool, *, n_slab: int) -> None:
+    if n_slab == 0 and op_name in _GAS_PHASE_NOOP_OPERATOR_NAMES:
+        assert not ok, (
+            f"mutation {op_name!r} must decline no-op rotations of an untagged "
+            "gas-phase cluster"
+        )
+        return
+    assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
+
 
 def _plain_atoms(a: Atoms) -> Atoms:
     """Coerce to plain Atoms so CutAndSplicePairing.copy() never hits Cluster bugs."""
@@ -264,7 +280,7 @@ def test_mutations_gas_pt55_icosahedral_template_core_operators() -> None:
             rotational_max_inner_attempts=24,
             mirror_max_tries=12,
         )
-        assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
+        _assert_mutation_expectation(op_name, ok, n_slab=0)
 
 
 @pytest.mark.slow
@@ -298,7 +314,7 @@ def test_mutations_gas_pt55_random_spherical_all_factory_operators() -> None:
             0,
             flattening_thickness_factor=_ACCEPTANCE_FLATTENING_THICKNESS,
         )
-        assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
+        _assert_mutation_expectation(op_name, ok, n_slab=0)
 
 
 @pytest.mark.slow
@@ -329,7 +345,7 @@ def test_mutations_gas_bimetallic_55_permutation_and_rest() -> None:
             0,
             flattening_thickness_factor=_ACCEPTANCE_FLATTENING_THICKNESS,
         )
-        assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
+        _assert_mutation_expectation(op_name, ok, n_slab=0)
 
 
 @pytest.mark.slow

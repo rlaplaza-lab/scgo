@@ -6,14 +6,11 @@ everything into memory at once.
 
 from __future__ import annotations
 
-import contextlib
-import json
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 
 from ase import Atoms
-from ase.db.row import AtomsRow
 
 from scgo.database.connection import get_connection
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
@@ -27,63 +24,36 @@ from scgo.utils.logging import TRACE, get_logger
 logger = get_logger(__name__)
 
 
-def _load_atoms_chunk(
-    conn: sqlite3.Connection, row_ids: list[int], da
-) -> list[tuple[int, Atoms]]:
-    """Load atom rows for a chunk using one SQL query."""
-    if not row_ids:
-        return []
-    placeholders = ",".join("?" for _ in row_ids)
-    by_id: dict[int, Atoms] = {}
-    try:
-        old_row_factory = conn.row_factory
-        conn.row_factory = sqlite3.Row
-        try:
-            cur = conn.execute(
-                f"SELECT * FROM systems WHERE id IN ({placeholders})",
-                tuple(row_ids),
-            )
-            rows = cur.fetchall()
-        finally:
-            conn.row_factory = old_row_factory
-            cur.close()
-        for row in rows:
-            row_dict = dict(row)
-            for key in ("key_value_pairs", "data", "constraints"):
-                value = row_dict.get(key)
-                if isinstance(value, str):
-                    with contextlib.suppress(json.JSONDecodeError):
-                        row_dict[key] = json.loads(value)
-            with contextlib.suppress(
-                TypeError,
-                ValueError,
-                KeyError,
-                json.JSONDecodeError,
-                sqlite3.DatabaseError,
-            ):
-                by_id[int(row["id"])] = AtomsRow(row_dict).toatoms(
-                    add_additional_information=True
-                )
-    except (sqlite3.DatabaseError, sqlite3.OperationalError, TypeError, ValueError):
-        by_id = {}
+def _load_atoms_chunk(row_ids: list[int], da) -> list[tuple[int, Atoms]]:
+    """Load atom rows for a chunk of ids through ASE's row decoder.
 
+    ASE stores ``numbers`` / ``positions`` / ``cell`` as blobs, so rows have to
+    be decoded by ASE itself (``DataConnection.get_atoms``); a hand-rolled bulk
+    ``SELECT *`` cannot turn those raw buffers back into an ``Atoms`` object.
+
+    Args:
+        row_ids: ``systems`` row ids to load, in the desired output order
+        da: ASE ``DataConnection`` used to decode each row
+
+    Returns:
+        ``(row_id, atoms)`` pairs for every row that could be decoded; rows that
+        fail to decode are logged and skipped.
+    """
     out: list[tuple[int, Atoms]] = []
     for row_id in row_ids:
-        atoms = by_id.get(row_id)
-        if atoms is None:
-            try:
-                atoms = da.get_atoms(row_id)
-            except (
-                KeyError,
-                IndexError,
-                sqlite3.DatabaseError,
-                ValueError,
-                TypeError,
-                json.JSONDecodeError,
-            ) as exc:
-                logger.warning(
-                    "Failed to fetch atoms id=%s from chunked stream: %s", row_id, exc
-                )
+        try:
+            atoms = da.get_atoms(row_id)
+        except (
+            KeyError,
+            IndexError,
+            sqlite3.DatabaseError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            logger.warning(
+                "Failed to fetch atoms id=%s from chunked stream: %s", row_id, exc
+            )
+            continue
         if atoms is not None:
             out.append((row_id, atoms))
     return out
@@ -168,7 +138,7 @@ def iter_relaxed_structures(
             if not rows:
                 break
             row_ids = [int(row_id) for (row_id,) in rows]
-            for row_id, candidate in _load_atoms_chunk(conn, row_ids, da):
+            for row_id, candidate in _load_atoms_chunk(row_ids, da):
                 energy = extract_energy_from_atoms(candidate)
                 if energy is None:
                     logger.log(TRACE, "Skipping candidate id=%s: no energy", row_id)

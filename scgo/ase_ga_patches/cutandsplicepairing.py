@@ -591,8 +591,11 @@ class CutAndSplicePairing(OffspringCreator):
                 # crossover is requested for only a subset (e.g., core-only).
                 # Without this, those groups disappear from ``sym`` and offspring
                 # generation can become impossible for odd-sized target subsets.
+                # ``d > 0`` makes ``to_use()`` True only for the parent-0 copy
+                # (``origin == 0``), so the parent-1 copy is deterministically
+                # discarded instead of being pruned at random.
                 if self.target_tags is not None and not is_target_tag:
-                    d = 1.0 if parent_idx == 0 else -1.0
+                    d = 1.0
                 spos = a.get_scaled_positions()[indices]
                 scop = np.mean(spos, axis=0)
                 p.append(

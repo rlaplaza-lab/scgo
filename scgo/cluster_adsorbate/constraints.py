@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ase import Atoms
-from ase.constraints import FixBondLength
+from ase.constraints import FixBondLengths
 
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
 from scgo.exceptions import SCGOValidationError
@@ -15,10 +15,20 @@ def attach_fix_bond_lengths(
     atoms: Atoms,
     bond_pairs: Sequence[tuple[int, int]],
 ) -> None:
-    """Append one :class:`~ase.constraints.FixBondLength` per pair (global indices)."""
+    """Append one :class:`~ase.constraints.FixBondLengths` for all pairs (global indices).
+
+    A single multi-pair constraint is used (instead of one
+    :class:`~ase.constraints.FixBondLength` per pair) because the per-pair
+    constraints are applied sequentially and each one undoes the previous
+    correction, so a rigid multi-atom fragment is not actually held rigid.
+
+    Raises:
+        SCGOValidationError: If a pair is out of range, self-paired, or duplicated.
+    """
     n = len(atoms)
     seen: set[tuple[int, int]] = set()
     new_constraints: list = list(atoms.constraints) if atoms.constraints else []
+    pairs: list[tuple[int, int]] = []
     for a, b in bond_pairs:
         if not (0 <= a < n and 0 <= b < n):
             raise SCGOValidationError(
@@ -32,7 +42,9 @@ def attach_fix_bond_lengths(
         if key in seen:
             raise SCGOValidationError(f"duplicate bond pair {key}")
         seen.add(key)
-        new_constraints.append(FixBondLength(int(a), int(b)))
+        pairs.append((int(a), int(b)))
+    if pairs:
+        new_constraints.append(FixBondLengths(pairs))
     if new_constraints:
         atoms.set_constraint(new_constraints)
 

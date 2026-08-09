@@ -121,6 +121,9 @@ class MACE(Calculator):
         # Pass the constructed name to the parent class initializer.
         super().__init__(name=name, **kwargs)
         self.model_name = model_name
+        # Store the resolved device so downstream helpers (e.g. TorchSim model
+        # extraction) can honour an explicit device="cpu" instead of guessing.
+        self.device = selected_device
 
         logger = get_logger(__name__)
         logger.info(

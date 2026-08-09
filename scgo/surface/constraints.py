@@ -75,7 +75,7 @@ def _layer_indices_by_clustering(
 
 
 def _replace_slab_fixatoms(atoms: Atoms, fix_indices: list[int] | None) -> None:
-    """Replace ``FixAtoms`` while preserving other constraints (e.g. FixBondLength)."""
+    """Replace ``FixAtoms`` while preserving other constraints (e.g. FixBondLengths)."""
     kept = [c for c in (atoms.constraints or []) if not isinstance(c, FixAtoms)]
     if fix_indices:
         kept.append(FixAtoms(indices=fix_indices))
@@ -94,7 +94,7 @@ def attach_slab_constraints(
     """Attach ``FixAtoms`` for slab atoms; preserve non-``FixAtoms`` constraints.
 
     Existing ``FixAtoms`` are removed and replaced. Other constraints (e.g.
-    adsorbate ``FixBondLength``) are kept.
+    adsorbate ``FixBondLengths``) are kept.
 
     To relax only the top N slab layers (typical surface region), either set
     ``n_relax_top_slab_layers=N`` or fix the bottom ``L - N`` layers via

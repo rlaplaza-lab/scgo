@@ -35,7 +35,9 @@ def write_vasp_inputs(
     Args:
         atoms: The ASE Atoms object representing the structure.
         output_dir: The directory where the VASP input files will be written.
-        vasp_settings: A dictionary of INCAR parameters (e.g., `{'encut': 400}`).
+        vasp_settings: A dictionary of VASP/INCAR parameters (e.g.,
+            `{'encut': 400}`). Keys given here override the SCGO defaults
+            (``xc='PBE'``, ``kpts=(1, 1, 1)``, ``gamma=True``).
         vacuum: The amount of vacuum (in Angstrom) to add around the cluster
                 in the simulation cell. Defaults to 10.0. Only used when
                 ``center_structure`` is True.
@@ -64,13 +66,15 @@ def write_vasp_inputs(
 
     # Set up and write VASP files
     # NOTE: ASE needs the VASP_PP_PATH environment variable to be set
-    vasp_calc = Vasp(
-        directory=output_dir,
-        xc="PBE",  # Exchange-correlation functional
-        kpts=(1, 1, 1),  # Gamma-point only for a cluster
-        gamma=True,
-        **vasp_settings,
-    )
+    # Defaults first, then user settings, so ``vasp_settings`` can override
+    # ``xc``/``kpts``/``gamma`` instead of colliding with them (TypeError).
+    params: dict[str, Any] = {
+        "xc": "PBE",  # Exchange-correlation functional
+        "kpts": (1, 1, 1),  # Gamma-point only for a cluster
+        "gamma": True,
+    }
+    params.update(vasp_settings)
+    vasp_calc = Vasp(directory=output_dir, **params)
     vasp_calc.write_input(atoms_for_vasp)
 
 

@@ -180,20 +180,36 @@ class BreathingMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
         pos = top.get_positions()
-        cm = np.average(pos, axis=0)
         num = top.get_atomic_numbers()
         cell = top.get_cell()
         pbc = top.get_pbc()
+        tags = top.get_tags() if hasattr(top, "get_tags") else np.arange(N)
+
+        # Determine which tags to target
+        unique_tags = np.unique(tags)
+        if self.target_tags is not None:
+            target_tags_set = set(self.target_tags)
+            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
+            if len(unique_tags) == 0:
+                return None
+
+        # Only the targeted tag groups are scaled; the rest stay put.
+        mask = np.isin(tags, unique_tags)
+        if not np.any(mask):
+            return None
+
+        cm = np.average(pos[mask], axis=0)
 
         self.last_attempt_count = 0
-        for scale in self._candidate_scales(pos, num, slab):
+        for scale in self._candidate_scales(pos[mask], num[mask], slab):
             self.last_attempt_count += 1
             s = scale
-            new_pos = cm + s * (pos - cm)
+            new_pos = pos.copy()
+            new_pos[mask] = cm + s * (pos[mask] - cm)
             # Check with proper PBC to avoid periodic image violations
-            cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc)
+            cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc, tags=tags)
             if atoms_too_close(cand, self.blmin):
                 continue
             if self.test_dist_to_slab and len(slab) > 0:

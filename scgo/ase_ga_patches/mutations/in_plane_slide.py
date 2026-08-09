@@ -146,7 +146,7 @@ class InPlaneSlideMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
         pos = top.get_positions()
         num = top.get_atomic_numbers()
         cell = top.get_cell()

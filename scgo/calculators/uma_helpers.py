@@ -53,6 +53,9 @@ class UMA(Calculator):
 
         self.model_name = model_name
         self.task_name = task_name
+        # Store the resolved device so downstream helpers (e.g. TorchSim model
+        # extraction) can honour an explicit device="cpu" instead of guessing.
+        self.device = dev
         self._inner = FAIRChemCalculator.from_model_checkpoint(
             model_name,
             task_name=task_name,
@@ -97,6 +100,9 @@ def try_extract_torchsim_model_from_uma_calculator(
     ``torch_sim.models.fairchem.FairChemModel`` only accepts a checkpoint name
     or path in its public constructor, so this builds a TorchSim-ready shell
     around the live ``predictor`` instead of reloading weights.
+
+    Returns ``None`` when the shell cannot be built (the caller then lets
+    TorchSim reload the checkpoint).
     """
     try:
         import torch
@@ -116,19 +122,31 @@ def try_extract_torchsim_model_from_uma_calculator(
     if task_name is None:
         task_name = getattr(inner, "task_name", None)
 
-    device = getattr(predictor, "device", None)
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    elif not isinstance(device, torch.device):
-        device = torch.device(str(device))
+    try:
+        device = getattr(predictor, "device", None)
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        elif not isinstance(device, torch.device):
+            device = torch.device(str(device))
 
-    model = FairChemModel.__new__(FairChemModel)
-    model._dtype = torch.float32
-    model._compute_stress = False
-    model._compute_forces = True
-    model._memory_scales_with = "n_atoms"
-    model._device = device
-    model.predictor = predictor
-    model.task_name = task_name
-    model.implemented_properties = ["energy", "forces"]
+        model = FairChemModel.__new__(FairChemModel)
+        # ``__new__`` skips ``nn.Module.__init__``, so the module bookkeeping
+        # dicts are missing and assigning ``predictor`` (an ``nn.Module``)
+        # raises "cannot assign module before Module.__init__() call".
+        torch.nn.Module.__init__(model)
+        model._dtype = torch.float32
+        model._compute_stress = False
+        model._compute_forces = True
+        model._memory_scales_with = "n_atoms"
+        model._device = device
+        model.predictor = predictor
+        model.task_name = task_name
+        model.implemented_properties = ["energy", "forces"]
+    except (AttributeError, TypeError, RuntimeError) as exc:
+        logger.debug(
+            "Could not build a TorchSim FairChemModel shell from the live UMA "
+            "calculator (%s); TorchSim will reload the checkpoint",
+            exc,
+        )
+        return None
     return model

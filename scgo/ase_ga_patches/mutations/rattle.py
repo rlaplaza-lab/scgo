@@ -104,7 +104,7 @@ class RattleMutation(OffspringCreator):
         """
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()
@@ -117,8 +117,9 @@ class RattleMutation(OffspringCreator):
         if self.target_tags is not None:
             target_tags_set = set(self.target_tags)
             unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        if len(unique_tags) == 0:
+            # Nothing to rattle (empty mobile region or no matching tag).
+            return None
 
         count = 0
         maxcount = 1000
@@ -141,7 +142,7 @@ class RattleMutation(OffspringCreator):
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(top, slab, self.blmin)
 
-        if count == maxcount:
+        if too_close:
             return None
 
         mutant = slab + top
@@ -199,7 +200,7 @@ class AnisotropicRattleMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()
@@ -211,8 +212,9 @@ class AnisotropicRattleMutation(OffspringCreator):
         if self.target_tags is not None:
             target_tags_set = set(self.target_tags)
             unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        if len(unique_tags) == 0:
+            # Nothing to rattle (empty mobile region or no matching tag).
+            return None
 
         count = 0
         maxcount = 1000
@@ -259,7 +261,7 @@ class AnisotropicRattleMutation(OffspringCreator):
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(top, slab, self.blmin)
 
-        if count == maxcount:
+        if too_close:
             return None
 
         result = slab + top

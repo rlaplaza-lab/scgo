@@ -1273,3 +1273,104 @@ def test_full_neb_convergence(cu3_triangle, cu3_linear, temp_output_dir):
     # Should converge for Cu3 with EMT
     # (though TS might not be meaningful for EMT)
     assert "status" in result
+
+
+# ---------------------------------------------------------------------------
+# T1: interior NEB images must not share the reactant's key_value_pairs dict
+# ---------------------------------------------------------------------------
+
+
+def test_interpolate_path_interior_images_have_isolated_key_value_pairs(
+    cu3_triangle, cu3_linear
+):
+    """Each band image owns its ``info['key_value_pairs']`` dict.
+
+    ``Atoms.copy()`` shallow-copies ``info``, so the nested ``key_value_pairs``
+    dict was shared across interior images: ``set_tags`` on one image (e.g.
+    ``potential_energy``/``raw_score``) overwrote every other image. The source
+    minimum must also stay untouched.
+    """
+    from scgo.metadata.atoms import get_tag, set_tags
+
+    reactant = cu3_triangle.copy()
+    reactant.info["key_value_pairs"] = {"raw_score": 1.23}
+    product = cu3_linear.copy()
+    product.info["key_value_pairs"] = {"raw_score": 4.56}
+
+    images = interpolate_path(
+        reactant, product, n_images=3, method="idpp", align_endpoints=True
+    )
+    assert len(images) == 5
+
+    for i, img in enumerate(images):
+        set_tags(img, potential_energy=float(i))
+
+    # Each image reports its own potential_energy (no cross-image clobbering).
+    for i, img in enumerate(images):
+        assert get_tag(img, "potential_energy") == pytest.approx(float(i))
+
+    # Interior images must not alias each other's tag dict.
+    interior = images[1:-1]
+    for a, b in zip(interior, interior[1:], strict=False):
+        assert a.info["key_value_pairs"] is not b.info["key_value_pairs"]
+    # ...nor the endpoint band image's dict.
+    assert images[1].info["key_value_pairs"] is not images[0].info["key_value_pairs"]
+
+    # The source minima are never mutated by band tag writes.
+    assert "potential_energy" not in reactant.info["key_value_pairs"]
+    assert "potential_energy" not in product.info["key_value_pairs"]
+    assert reactant.info["key_value_pairs"]["raw_score"] == pytest.approx(1.23)
+    assert product.info["key_value_pairs"]["raw_score"] == pytest.approx(4.56)
+
+
+# ---------------------------------------------------------------------------
+# T3: serial NEB fallback with a non-deepcopyable calculator must not raise
+# ---------------------------------------------------------------------------
+
+
+def test_serial_neb_shared_calculator_fallback_reaches_neb(
+    cu3_triangle, cu3_linear, temp_output_dir
+):
+    """A calculator that cannot be deep-copied falls back to a shared instance.
+
+    ASE ``NEB.get_forces`` raises ``ValueError`` when images share one
+    calculator unless ``allow_shared_calculator=True``. The serial fallback must
+    set that flag so the run reaches (and steps) NEB construction instead of
+    failing with the shared-calculator error.
+
+    ``_finalize_neb_result`` deep-copies the TS image (including its calculator);
+    it is patched here so the deliberately non-deep-copyable calculator does not
+    trip that unrelated code path — the assertion is about NEB construction.
+    """
+    from unittest.mock import patch
+
+    class _NoDeepcopyEMT(EMT):
+        def __deepcopy__(self, memo):
+            raise TypeError("this calculator cannot be deep-copied")
+
+    reactant = cu3_triangle.copy()
+    product = cu3_linear.copy()
+    reactant.calc = _NoDeepcopyEMT()
+    product.calc = _NoDeepcopyEMT()
+
+    with patch("scgo.ts_search.transition_state._finalize_neb_result") as finalize_mock:
+        result = find_transition_state(
+            reactant,
+            product,
+            calculator=_NoDeepcopyEMT(),
+            output_dir=temp_output_dir,
+            pair_id="shared_calc",
+            n_images=3,
+            fmax=0.5,
+            neb_steps=1,
+            use_torchsim=False,
+            verbosity=0,
+        )
+
+    assert "status" in result
+    err = str(result.get("error") or "").lower()
+    # The specific shared-calculator ASE ValueError must not appear.
+    assert "share the same calculator" not in err
+    # NEB was constructed and stepped (finalize was reached).
+    finalize_mock.assert_called_once()
+    assert int(result.get("steps_taken") or 0) >= 1

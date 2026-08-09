@@ -64,7 +64,7 @@ class OverlapReliefMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
         positions = top.get_positions().copy()
         numbers = top.get_atomic_numbers()
         cell = top.get_cell()
@@ -151,7 +151,7 @@ class OverlapReliefMutation(OffspringCreator):
             )
             if not self._policy.uses_surface:
                 candidate.center()
-            if atoms_too_close(candidate, self.blmin):
+            if atoms_too_close(candidate, self.blmin, use_tags=self.use_tags):
                 continue
             if (
                 self.test_dist_to_slab

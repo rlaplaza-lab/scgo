@@ -170,13 +170,12 @@ class FlatteningMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
 
         mutant = top.copy()
         pos = mutant.get_positions()
         atomic_numbers = mutant.get_atomic_numbers()
         tags = mutant.get_tags() if hasattr(mutant, "get_tags") else np.arange(N)
-        cm = np.average(pos, axis=0)
 
         # Determine which tags to target
         unique_tags = np.unique(tags)
@@ -186,20 +185,31 @@ class FlatteningMutation(OffspringCreator):
             if len(unique_tags) == 0:
                 return None
 
+        # Only the targeted tag groups are flattened; the rest stay put.
+        mask = np.isin(tags, unique_tags)
+        if not np.any(mask):
+            return None
+
+        target_pos = pos[mask]
+        target_numbers = atomic_numbers[mask]
+        cm = np.average(target_pos, axis=0)
+
         avg_blmin = np.mean(list(self.blmin.values()))
         desired_thickness = max(0.05 * avg_blmin, avg_blmin * self.thickness_factor)
 
-        candidate_positions = [
-            self._build_flatten_candidate(
-                pos,
+        candidate_positions = []
+        for normal in self._candidate_normals(target_pos, cm, slab):
+            score, flattened = self._build_flatten_candidate(
+                target_pos,
                 cm,
                 normal,
-                atomic_numbers,
+                target_numbers,
                 desired_thickness,
                 avg_blmin,
             )
-            for normal in self._candidate_normals(pos, cm, slab)
-        ]
+            new_positions = pos.copy()
+            new_positions[mask] = flattened
+            candidate_positions.append((score, new_positions))
 
         candidate_positions.sort(key=lambda item: item[0])
         self.last_attempt_count = 0

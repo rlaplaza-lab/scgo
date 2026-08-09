@@ -542,9 +542,20 @@ def _build_graph_from_connections(
         adjacency_sets[idx2].add(idx1)
 
         edge_key = tuple(sorted((idx1, idx2)))
+        new_barrier = connection.get("barrier_height")
+        existing = edge_metadata.get(edge_key)
+        # Duplicate connections for the same minima pair: keep the one with the
+        # smaller barrier. A numeric barrier always beats a missing (None) one,
+        # and two missing barriers keep the first seen.
+        if existing is not None:
+            old_barrier = existing.get("barrier")
+            if new_barrier is None:
+                continue
+            if old_barrier is not None and float(new_barrier) >= float(old_barrier):
+                continue
         edge_metadata[edge_key] = {
             "pair_id": connection.get("pair_id"),
-            "barrier": connection.get("barrier_height"),
+            "barrier": new_barrier,
             "forward": connection.get("barrier_forward"),
             "reverse": connection.get("barrier_reverse"),
             "ts_energy": connection.get("ts_energy"),
@@ -588,7 +599,7 @@ def get_connected_components(
             if neighbor not in visited:
                 dfs(neighbor, component)
 
-    for node in range(graph.get("num_nodes", 0)):
+    for node in adjacency:
         if node not in visited:
             component: set[int] = set()
             dfs(node, component)

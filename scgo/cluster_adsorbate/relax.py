@@ -99,7 +99,10 @@ def relax_metal_cluster_with_adsorbate(
             )
 
     combined = combine_core_adsorbate(core_work, frag)
-    expand_cubic_cell_to_fit(combined, config.cell_margin)
+    # Only gas-phase (non-periodic) systems get a cubic bounding box; a periodic
+    # core keeps its own cell/pbc.
+    if not any(combined.pbc):
+        expand_cubic_cell_to_fit(combined, config.cell_margin)
 
     ok0, err0 = True, ""
     if config.validate_combined_structure:

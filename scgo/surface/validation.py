@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 
 import numpy as np
 from ase import Atoms
@@ -158,24 +159,59 @@ def _slab_top_coordinate(slab: Atoms, axis: int) -> float:
     return float(np.max(pos[:, axis]))
 
 
-def _mobile_atom_touches_slab(
+def _slab_surface_layer_indices(
     combined: Atoms,
-    mobile_global_idx: int,
     n_slab: int,
+    *,
+    surface_normal_axis: int,
+    thickness: float = 2.5,
+) -> list[int]:
+    """Indices of slab atoms within ``thickness`` Å of the top surface."""
+    pos = combined.get_positions()
+    if n_slab <= 0 or len(pos) < n_slab:
+        return list(range(n_slab))
+    return top_layer_indices(pos[:n_slab], surface_normal_axis, thickness=thickness)
+
+
+def _mobile_indices_touch_slab(
+    combined: Atoms,
+    n_slab: int,
+    mobile_global_indices: Iterable[int],
     *,
     connectivity_factor: float,
     use_mic: bool,
-) -> bool:
-    """True when ``mobile_global_idx`` has a slab neighbor within the bonding threshold."""
+    surface_normal_axis: int,
+) -> tuple[bool, float]:
+    """Single "touches the slab" definition: contact with the top surface layer.
+
+    Only slab atoms within 2.5 Å of the top surface count: a mobile atom cannot
+    bond a buried slab atom without also bonding a top-layer one, and the
+    top-layer test is strictly cheaper than scanning the whole slab.
+
+    Returns:
+        ``(touches, min_cross_distance)``. The distance is ``inf`` when there is
+        no mobile/slab pair to compare.
+    """
     symbols = combined.get_chemical_symbols()
-    r_i = get_covalent_radius(symbols[mobile_global_idx])
-    for j in range(n_slab):
-        r_j = get_covalent_radius(symbols[j])
-        threshold = (r_i + r_j) * connectivity_factor
-        d = float(combined.get_distance(mobile_global_idx, j, mic=use_mic))
-        if d <= threshold:
-            return True
-    return False
+    slab_indices = _slab_surface_layer_indices(
+        combined,
+        n_slab,
+        surface_normal_axis=surface_normal_axis,
+    )
+    if not slab_indices:
+        return False, float("inf")
+    slab_radii = [get_covalent_radius(symbols[j]) for j in slab_indices]
+    min_cross = float("inf")
+    for i in mobile_global_indices:
+        idx = int(i)
+        r_i = get_covalent_radius(symbols[idx])
+        for j_idx, j in enumerate(slab_indices):
+            threshold = (r_i + slab_radii[j_idx]) * connectivity_factor
+            d = float(combined.get_distance(idx, j, mic=use_mic))
+            min_cross = min(min_cross, d)
+            if d <= threshold:
+                return True, min_cross
+    return False, min_cross
 
 
 def _adsorbate_subgroup_touches_slab(
@@ -185,18 +221,18 @@ def _adsorbate_subgroup_touches_slab(
     *,
     connectivity_factor: float,
     use_mic: bool,
+    surface_normal_axis: int,
 ) -> bool:
-    """True when any atom in a mobile subgroup is slab-connected."""
-    return any(
-        _mobile_atom_touches_slab(
-            combined,
-            n_slab + int(local_i),
-            n_slab,
-            connectivity_factor=connectivity_factor,
-            use_mic=use_mic,
-        )
-        for local_i in subgroup_local_indices
+    """True when any atom in a mobile subgroup touches the slab surface layer."""
+    touches, _min_cross = _mobile_indices_touch_slab(
+        combined,
+        n_slab,
+        (n_slab + int(local_i) for local_i in subgroup_local_indices),
+        connectivity_factor=connectivity_factor,
+        use_mic=use_mic,
+        surface_normal_axis=surface_normal_axis,
     )
+    return touches
 
 
 def _classify_mobile_component(
@@ -224,14 +260,20 @@ def _validate_mobile_connectivity_policy(
     allow_cluster_fragmentation: bool,
     allow_adsorbate_surface_detachment: bool,
     surface_normal_axis: int = 2,
+    components: dict[int, list[int]] | None = None,
 ) -> tuple[bool, str]:
     """Enforce mobile-region connectivity rules and slab contact.
 
     When mobile splits are allowed, every subgroup must touch the slab; otherwise
     the mobile region must be a single component that touches the slab.
+
+    ``components`` is the already-computed mobile connectivity map (see
+    :func:`~scgo.initialization.geometry_helpers._find_connected_components`);
+    the caller computes it once. When it is ``None`` (or the mobile region has
+    fewer than two atoms) only the slab-contact check applies.
     """
     n_ads = len(mobile)
-    if n_ads < 2:
+    if n_ads < 2 or components is None:
         return _check_mobile_touches_slab(
             combined,
             n_slab,
@@ -240,9 +282,6 @@ def _validate_mobile_connectivity_policy(
             surface_normal_axis=surface_normal_axis,
         )
 
-    components, _ = _find_connected_components(
-        mobile, connectivity_factor, use_mic=use_mic
-    )
     subgroups = list(components.values())
     allow_split = allow_cluster_fragmentation or allow_adsorbate_surface_detachment
 
@@ -300,6 +339,7 @@ def _validate_mobile_connectivity_policy(
             subgroup,
             connectivity_factor=connectivity_factor,
             use_mic=use_mic,
+            surface_normal_axis=surface_normal_axis,
         ):
             return (
                 False,
@@ -308,20 +348,6 @@ def _validate_mobile_connectivity_policy(
                 f"connectivity_factor={connectivity_factor})",
             )
     return True, ""
-
-
-def _slab_surface_layer_indices(
-    combined: Atoms,
-    n_slab: int,
-    *,
-    surface_normal_axis: int,
-    thickness: float = 2.5,
-) -> list[int]:
-    """Indices of slab atoms within ``thickness`` Å of the top surface."""
-    pos = combined.get_positions()
-    if n_slab <= 0 or len(pos) < n_slab:
-        return list(range(n_slab))
-    return top_layer_indices(pos[:n_slab], surface_normal_axis, thickness=thickness)
 
 
 def _check_mobile_touches_slab(
@@ -333,29 +359,14 @@ def _check_mobile_touches_slab(
     surface_normal_axis: int = 2,
 ) -> tuple[bool, str]:
     """True when a mobile atom is within bonding distance of the slab surface layer."""
-    n = len(combined)
-    symbols = combined.get_chemical_symbols()
-    slab_indices = _slab_surface_layer_indices(
+    touches, min_cross = _mobile_indices_touch_slab(
         combined,
         n_slab,
+        range(n_slab, len(combined)),
+        connectivity_factor=connectivity_factor,
+        use_mic=use_mic,
         surface_normal_axis=surface_normal_axis,
     )
-    slab_radii = [get_covalent_radius(symbols[j]) for j in slab_indices]
-    touches = False
-    min_cross = float("inf")
-    for i in range(n_slab, n):
-        r_i = get_covalent_radius(symbols[i])
-        for j_idx, j in enumerate(slab_indices):
-            r_j = slab_radii[j_idx]
-            threshold = (r_i + r_j) * connectivity_factor
-            d = float(combined.get_distance(i, j, mic=use_mic))
-            min_cross = min(min_cross, d)
-            if d <= threshold:
-                touches = True
-                break
-        if touches:
-            break
-
     if not touches:
         return (
             False,
@@ -439,7 +450,7 @@ def validate_supported_cluster_deposit(
         return False, f"Invalid n_core_mobile={n_core_mobile} for mobile len={n_ads}"
 
     allow_split = allow_cluster_fragmentation or allow_adsorbate_surface_detachment
-    require_single_mobile_component = n_ads > 2 and not allow_split
+    require_single_mobile_component = n_ads >= 2 and not allow_split
     ok, err = validate_cluster_structure(
         mobile,
         min_distance_factor,
@@ -476,6 +487,12 @@ def validate_supported_cluster_deposit(
         if not ok:
             return False, msg
 
+    components: dict[int, list[int]] | None = None
+    if n_ads >= 2:
+        components, _parent = _find_connected_components(
+            mobile, connectivity_factor, use_mic=use_mic
+        )
+
     return _validate_mobile_connectivity_policy(
         combined,
         n_slab,
@@ -486,4 +503,5 @@ def validate_supported_cluster_deposit(
         allow_cluster_fragmentation=allow_cluster_fragmentation,
         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         surface_normal_axis=surface_normal_axis,
+        components=components,
     )

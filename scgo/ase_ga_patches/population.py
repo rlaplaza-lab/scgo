@@ -239,6 +239,14 @@ class Population:
 
     def __add_candidate__(self, a):
         """Adds a single candidate to the population."""
+        # An empty population accepts the candidate unconditionally.
+        if not self.pop:
+            a.info["looks_like"] = count_looks_like(a,
+                                                    self.all_cand,
+                                                    self.comparator)
+            self.pop.append(a)
+            return
+
         # check if the structure is too low in raw score
         raw_score_a = _raw_score(a)
         raw_score_worst = _raw_score(self.pop[-1])
@@ -250,12 +258,11 @@ class Population:
         # replace a similar structure in the population
         for (i, b) in enumerate(self.pop):
             if self.comparator.looks_like(a, b):
+                # Replace a duplicate only when the newcomer is strictly better;
+                # elites are no exception, otherwise a better copy of the best
+                # candidate would be discarded and the population could never
+                # improve past it. Ties keep the incumbent.
                 if _raw_score(b) < raw_score_a:
-                    # Only replace if the structure being removed is not elite
-                    # Elite candidates are the top elite_size by raw_score
-                    if i < self.elite_size:
-                        # Trying to replace an elite candidate - keep the elite
-                        return
                     del self.pop[i]
                     a.info["looks_like"] = count_looks_like(a,
                                                             self.all_cand,
@@ -328,45 +335,23 @@ class Population:
             # All fitness values are near-zero; fall back to uniform random selection
             idx = self.rng.choice(len(self.pop), size=2, replace=False)
             return (self.pop[idx[0]].copy(), self.pop[idx[1]].copy())
-        c1 = self.pop[0]
-        c2 = self.pop[0]
-        used_before = False
-        _maxiter = 10000
-        _outer_iter = 0
-        while c1.info.get("confid") == c2.info.get("confid") or used_before:
-            _outer_iter += 1
-            if _outer_iter > _maxiter:
-                # Exhausted attempts; return best effort pair.
-                break
-            nnf = True
-            _inner = 0
-            while nnf:
-                _inner += 1
-                if _inner > _maxiter:
-                    # Fall back to uniform random selection.
-                    t = self.rng.integers(len(self.pop))
-                    c1 = self.pop[t]
-                    break
-                t = self.rng.integers(len(self.pop))
-                if fit[t] > self.rng.random() * fmax:
-                    c1 = self.pop[t]
-                    nnf = False
-            nnf = True
-            _inner = 0
-            while nnf:
-                _inner += 1
-                if _inner > _maxiter:
-                    t = self.rng.integers(len(self.pop))
-                    c2 = self.pop[t]
-                    break
-                t = self.rng.integers(len(self.pop))
-                if fit[t] > self.rng.random() * fmax:
-                    c2 = self.pop[t]
-                    nnf = False
 
+        # Fitness-proportional selection without replacement: the two indices
+        # are distinct by construction, so a confid collision is impossible.
+        p = np.clip(np.asarray(fit, dtype=float), 0.0, None)
+        p = p / p.sum()
+        c1 = self.pop[0]
+        c2 = self.pop[1]
+        # Bounded retry: only the pairing history can reject a drawn pair.
+        for _attempt in range(100):
+            idx = self.rng.choice(len(self.pop), size=2, replace=False, p=p)
+            c1 = self.pop[int(idx[0])]
+            c2 = self.pop[int(idx[1])]
             c1id = c1.info.get("confid")
             c2id = c2.info.get("confid")
             used_before = (min([c1id, c2id]), max([c1id, c2id])) in self.pairs
+            if not used_before:
+                break
         return (c1.copy(), c2.copy())
 
     def get_one_candidate(self, with_history=True):
@@ -391,19 +376,11 @@ class Population:
             # All fitness values are near-zero; fall back to uniform random selection
             t = self.rng.integers(len(self.pop))
             return self.pop[t].copy()
-        nnf = True
-        _inner = 0
-        _maxiter = 10000
-        while nnf:
-            _inner += 1
-            if _inner > _maxiter:
-                t = self.rng.integers(len(self.pop))
-                c1 = self.pop[t]
-                break
-            t = self.rng.integers(len(self.pop))
-            if fit[t] > self.rng.random() * fmax:
-                c1 = self.pop[t]
-                nnf = False
+
+        # Single fitness-proportional draw; no pairing history applies here.
+        p = np.clip(np.asarray(fit, dtype=float), 0.0, None)
+        p = p / p.sum()
+        c1 = self.pop[int(self.rng.choice(len(self.pop), p=p))]
 
         return c1.copy()
 

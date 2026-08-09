@@ -228,7 +228,8 @@ def setup_database(
         atoms_template: Template structure defining the expected stoichiometry
         initial_candidate: Optional single unrelaxed starting candidate
         initial_population: Optional list of unrelaxed starting candidates; when
-            given, ``initial_candidate`` is ignored
+            non-empty, ``initial_candidate`` is ignored. An empty list falls
+            back to ``initial_candidate``.
         remove_existing: Delete an existing database file before writing
         remove_aux_files: Delete leftover ``-shm`` / ``-wal`` / ``-journal`` files
         enable_wal_mode: Enable SQLite WAL journaling (off by default, since
@@ -277,7 +278,7 @@ def setup_database(
             simulation_cell=True,
         )
 
-        if initial_population is not None:
+        if initial_population:
             for candidate in initial_population:
                 gaid = prep_db.write(
                     candidate,
@@ -396,23 +397,23 @@ def _extract_structures_from_db(
 
             if persist:
                 try:
-                    with da.c.managed_connection() as conn:
-                        for _, atoms in out:
-                            row_id = get_tag(atoms, "systems_row_id", None)
-                            if row_id is None:
-                                continue
-                            row_id = int(row_id)
-
-                            k = SYSTEMS_JSON_COLUMN
-                            conn.execute(
-                                f"UPDATE systems SET {k} = json_set(COALESCE({k}, '{{}}'), '$.run_id', ?) WHERE id = ?",
-                                (run_id, row_id),
-                            )
+                    for _, atoms in out:
+                        row_id = get_tag(atoms, "systems_row_id", None)
+                        if row_id is None:
+                            continue
+                        # Go through ASE so ``run_id`` also lands in the
+                        # key-index tables (``keys`` / ``text_key_values``);
+                        # a raw JSON UPDATE leaves ``db.select(run_id=...)``
+                        # unable to find the row.
+                        da.c.update(int(row_id), run_id=run_id)
+                    conn = getattr(da.c, "connection", None)
+                    if conn is not None:
                         conn.commit()
                 except (
                     sqlite3.DatabaseError,
                     sqlite3.OperationalError,
                     OSError,
+                    KeyError,
                     ValueError,
                     TypeError,
                 ) as e:

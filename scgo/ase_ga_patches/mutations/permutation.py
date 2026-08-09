@@ -79,7 +79,7 @@ class PermutationMutation(OffspringCreator):
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
         if self.use_tags:
             gather_atoms_by_tag(atoms)
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
@@ -139,7 +139,7 @@ class PermutationMutation(OffspringCreator):
                 if not too_close and self.test_dist_to_slab:
                     too_close = atoms_too_close_two_sets(top, slab, self.blmin)
 
-        if count == maxcount:
+        if too_close:
             return None
 
         mutant = slab + top

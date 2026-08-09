@@ -64,6 +64,10 @@ class UPET(Calculator):
         self.version = version
         self.checkpoint_path = checkpoint_path
         self.non_conservative = non_conservative
+        # Store the resolved device so ``try_extract_torchsim_model_from_upet_
+        # calculator`` honours an explicit device="cpu" instead of falling back
+        # to "CUDA if available".
+        self.device = dev
         self._inner = UPETCalculator(
             model=model_name if checkpoint_path is None else None,
             version=version,

@@ -113,7 +113,15 @@ class SCGODatabaseManager:
         return age < self.cache_ttl_seconds
 
     def clear_cache(self):
-        """Clear all cached results."""
+        """Clear all cached results.
+
+        Note:
+            The value cache is the process-wide :func:`get_global_cache`
+            namespace shared by every manager instance, so this wipes cached
+            entries for *all* managers, not just this one. Cache keys are
+            prefixed with the resolved ``base_dir``, so entries stay isolated
+            per manager while they live.
+        """
         self._cache.clear_namespace(self._cache_namespace)
         self._cache_timestamps.clear()
         self._cache_fingerprints.clear()
@@ -145,6 +153,7 @@ class SCGODatabaseManager:
         """
         formula = get_cluster_formula(composition)
         cache_key = (
+            str(self.base_dir.resolve()),
             "prev_results",
             tuple(composition),
             current_run_id,
@@ -202,6 +211,7 @@ class SCGODatabaseManager:
             List of Atoms objects sorted by energy (lowest first)
         """
         cache_key = (
+            str(self.base_dir.resolve()),
             "ref_structs",
             db_glob_pattern,
             tuple(composition) if composition else None,

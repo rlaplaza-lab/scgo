@@ -68,7 +68,7 @@ class ShellSwapMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        top = atoms[-N:].copy()
+        top = atoms[len(atoms) - N:].copy()
         if self.use_tags:
             gather_atoms_by_tag(top)
 

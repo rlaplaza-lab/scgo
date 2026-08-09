@@ -210,3 +210,48 @@ def test_interpolate_path_mic_inplane_rotates_mobile_cluster():
     ref_mobile = images[0].get_positions()[n_slab:]
     rms = float(np.sqrt(np.mean((aligned_mobile - ref_mobile) ** 2)))
     assert rms < 0.15
+
+
+# ---------------------------------------------------------------------------
+# T6: core RMS displacement uses ase.geometry.find_mic for skewed cells
+# ---------------------------------------------------------------------------
+
+
+def test_core_rms_displacement_uses_find_mic_for_skewed_cell():
+    """Hand-rolled fractional-round MIC over-estimates displacement in skewed cells.
+
+    For a strongly skewed triclinic cell the nearest fractional image is not the
+    nearest Cartesian image, so ``round(frac)`` picks a longer vector than
+    ``find_mic``. The gate must report the true (``find_mic``) displacement.
+    """
+    from ase.geometry import find_mic
+
+    from scgo.ts_search.transition_state_io import _core_rms_displacement
+
+    cell = np.array(
+        [
+            [4.0, 0.0, 0.0],
+            [3.6, 1.6, 0.0],
+            [0.0, 0.0, 20.0],
+        ]
+    )
+    pbc = [True, True, False]
+    pos_i = np.array([[0.0, 0.0, 10.0]])
+    pos_j = np.array([[3.7, 0.8, 10.0]])
+    atoms_i = Atoms(numbers=[29], positions=pos_i, cell=cell, pbc=pbc)
+    atoms_j = Atoms(numbers=[29], positions=pos_j, cell=cell, pbc=pbc)
+
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=1, use_mic=True)
+
+    dlt_mic, _ = find_mic(pos_j - pos_i, cell, pbc)
+    expected = float(np.sqrt(np.mean(np.sum(dlt_mic**2, axis=1))))
+    assert rms == pytest.approx(expected, abs=1e-9)
+
+    # The naive fractional-round MIC (the previous implementation) is strictly
+    # longer here, so the fix is observable.
+    inv = np.linalg.inv(cell)
+    frac = (pos_j - pos_i) @ inv.T
+    frac -= np.round(frac)
+    dlt_naive = frac @ cell
+    naive = float(np.sqrt(np.mean(np.sum(dlt_naive**2, axis=1))))
+    assert naive > expected + 1e-3

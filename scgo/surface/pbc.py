@@ -23,6 +23,9 @@ def normalize_slab_pbc(
     helper downgrades accidental full 3D periodicity (e.g. ``slab.pbc = True``) so
     calculators see a true slab during relaxation and global optimization.
 
+    In-plane periodicity follows the cell: an axis with a zero-length (degenerate)
+    cell vector is reported as non-periodic even when the caller set ``pbc=True``.
+
     Args:
         slab: Substrate ``Atoms`` object.
         surface_normal_axis: Index of the Cartesian axis with vacuum (default 2 = z).
@@ -40,8 +43,9 @@ def normalize_slab_pbc(
     in_plane = [i for i in range(3) if i != surface_normal_axis]
 
     for axis in in_plane:
-        if float(np.linalg.norm(slab.cell[axis])) > 1e-8:
-            pbc[axis] = True
+        # Assign (not just set True): a degenerate/zero-length in-plane vector
+        # must also turn periodicity *off* when the caller requested pbc=True.
+        pbc[axis] = float(np.linalg.norm(slab.cell[axis])) > 1e-8
 
     old = tuple(bool(x) for x in slab.pbc)
     pbc[surface_normal_axis] = False

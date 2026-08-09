@@ -22,6 +22,18 @@ def test_fcc111_slab_unchanged_by_normalize():
     assert list(slab.pbc) == expected
 
 
+def test_normalize_slab_pbc_disables_degenerate_in_plane_axis():
+    """A zero-length in-plane cell vector must not stay periodic."""
+    slab = Atoms(
+        "Pt",
+        positions=[[0, 0, 0]],
+        cell=[[10.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 10.0]],
+        pbc=True,
+    )
+    normalize_slab_pbc(slab)
+    assert list(slab.pbc) == [True, False, False]
+
+
 def test_surface_system_config_rejects_all_open_pbc():
     from scgo.exceptions import SCGOValidationError
 

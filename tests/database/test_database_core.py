@@ -40,6 +40,7 @@ from scgo.database.streaming import (
     count_database_structures,
     iter_database_minima,
     iter_databases_minima,
+    iter_relaxed_structures,
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import (
@@ -89,6 +90,70 @@ def _register_unrelaxed(da, atoms: Atoms, *, description: str = "test:insert") -
     atoms.info.setdefault("key_value_pairs", {})
     atoms.info.setdefault("data", {})
     da.add_unrelaxed_candidate(atoms, description=description)
+
+
+def _build_relaxed_db(tmp_path: Path, filename: str, n_rows: int) -> Path:
+    """Create an SCGO db with ``n_rows`` relaxed final minima (raw_score -10-i)."""
+    template = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    da = setup_database(tmp_path, filename, template, initial_candidate=template)
+    try:
+        for i in range(n_rows):
+            a = template.copy()
+            a.positions[1][0] += 0.05 * i
+            a.info["key_value_pairs"] = _final_kvp(-10.0 - i)
+            a.info["data"] = {"tag": f"row_{i}"}
+            da.add_relaxed_step(a)
+    finally:
+        close_data_connection(da)
+        gc.collect()
+    return Path(tmp_path) / filename
+
+
+class _RecordingConnection:
+    """Proxy around a live sqlite3 connection that records ``execute`` calls.
+
+    Statements containing ``fail_on`` raise ``sqlite3.OperationalError`` so the
+    caller's error handling can be exercised.
+    """
+
+    def __init__(self, real, fail_on: str | None = None):
+        self._real = real
+        self._fail_on = fail_on
+        self.statements: list[str] = []
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def execute(self, sql, *args, **kwargs):
+        self.statements.append(sql)
+        if self._fail_on is not None and self._fail_on in sql:
+            raise sqlite3.OperationalError(f"simulated failure for {self._fail_on!r}")
+        return self._real.execute(sql, *args, **kwargs)
+
+
+def _stream_with_recording_connection(
+    db_file: Path, *, fail_on: str | None = None, chunk_size: int = 2
+) -> tuple[list[tuple[float, Atoms]], list[str]]:
+    """Stream ``db_file`` while recording SQL issued on the streaming connection."""
+    proxies: list[_RecordingConnection] = []
+
+    with get_connection(db_file) as da:
+        real_managed = da.c.managed_connection
+
+        @contextmanager
+        def _managed(commit_frequency=5000):
+            with real_managed(commit_frequency) as real:
+                proxy = _RecordingConnection(real, fail_on=fail_on)
+                proxies.append(proxy)
+                yield proxy
+
+        da.c.managed_connection = _managed
+        yielded = list(
+            iter_relaxed_structures(da, Path(db_file), chunk_size=chunk_size)
+        )
+
+    statements = [sql for proxy in proxies for sql in proxy.statements]
+    return yielded, statements
 
 
 def _count_open_files() -> int:
@@ -307,6 +372,24 @@ class TestDatabaseSetupAndFlow:
             energy = extract_energy_from_atoms(inserted)
             assert kv["final_id"] == ensure_final_id(inserted, energy)
 
+    def test_empty_initial_population_falls_back_to_initial_candidate(self, tmp_path):
+        """``initial_population=[]`` must not discard ``initial_candidate``."""
+        template = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+        candidate = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.7, 0.0, 0.0]])
+
+        with _setup_test_db(
+            tmp_path,
+            "test.db",
+            template,
+            initial_candidate=candidate,
+            initial_population=[],
+        ) as (da, _db_path):
+            unrelaxed = da.get_all_unrelaxed_candidates()
+
+            assert len(unrelaxed) == 1
+            assert candidate.info.get("confid") is not None
+            assert da.get_all_relaxed_candidates() == []
+
     def test_algorithm_database_integration(self, tmp_path, pt3_atoms, rng):
         """BH and GA integration creates database entries."""
         # Test BH
@@ -475,6 +558,50 @@ class TestTransactions:
             count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
 
         assert count == initial + expected_delta
+
+    def test_transaction_joins_already_open_transaction(self, tmp_path, pt2_atoms):
+        """An outer (ASE-owned) transaction must be joined, not re-``BEGIN``-ed."""
+        with _setup_test_db(tmp_path, "test.db", pt2_atoms, initial_candidate=None) as (
+            _da,
+            _db_path,
+        ):
+            pass
+
+        insert_sql = (
+            "INSERT INTO systems (username, numbers, positions, cell) "
+            "VALUES (?, '[78,78]', '[[0,0,0],[2.5,0,0]]', "
+            "'[[10,0,0],[0,10,0],[0,0,10]]')"
+        )
+
+        with (
+            get_connection(tmp_path / "test.db") as db,
+            db.c.managed_connection() as conn,
+        ):
+            initial = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
+
+            # Mimic a pending ASE write: the connection is already in a transaction.
+            conn.execute(insert_sql, ("outer",))
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+            assert conn.in_transaction
+
+            with database_transaction(db) as inner_conn:
+                assert inner_conn is conn
+                inner_conn.execute(insert_sql, ("inner",))
+
+            # The joined transaction still belongs to the outer writer.
+            assert conn.in_transaction
+            conn.commit()
+
+        with (
+            get_connection(tmp_path / "test.db") as db,
+            db.c.managed_connection() as conn,
+        ):
+            count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
+            usernames = {row[0] for row in conn.execute("SELECT username FROM systems")}
+
+        assert count == initial + 2
+        assert {"outer", "inner"}.issubset(usernames)
 
     def test_retry_transaction_context(self, tmp_path, pt2_atoms):
         with _setup_test_db(tmp_path, "test.db", pt2_atoms, initial_candidate=None) as (
@@ -1180,6 +1307,86 @@ class TestDatabaseStreaming:
         monkeypatch.setattr(DataConnection, "get_all_relaxed_candidates", _fail)
 
         assert count_database_structures(db_file) >= 5
+
+    def test_streaming_returns_every_relaxed_row(self, tmp_path):
+        """Every relaxed row is streamed with its energy and systems_row_id tag."""
+        n_rows = 5
+        db_file = _build_relaxed_db(tmp_path, "stream.db", n_rows)
+
+        yielded, _statements = _stream_with_recording_connection(db_file)
+
+        assert len(yielded) == n_rows
+        assert sorted(e for e, _ in yielded) == [10.0 + i for i in range(n_rows)]
+
+        row_ids = []
+        for energy, atoms_obj in yielded:
+            row_id = get_tag(atoms_obj, "systems_row_id")
+            assert isinstance(row_id, int)
+            row_ids.append(row_id)
+            assert len(atoms_obj) == 2
+            assert atoms_obj.get_chemical_symbols() == ["Pt", "Pt"]
+            assert get_tag(atoms_obj, "raw_score") == pytest.approx(-energy)
+        assert len(set(row_ids)) == n_rows
+
+        with sqlite3.connect(db_file) as raw:
+            db_ids = {
+                row[0]
+                for row in raw.execute(
+                    "SELECT id FROM systems "
+                    "WHERE json_extract(key_value_pairs, '$.relaxed') = 1"
+                )
+            }
+        assert set(row_ids) == db_ids
+
+    def test_streaming_does_not_issue_bulk_select_star(self, tmp_path):
+        """The dead ``SELECT * FROM systems`` bulk path must be gone (D2)."""
+        db_file = _build_relaxed_db(tmp_path, "stream_no_bulk.db", 4)
+
+        yielded, statements = _stream_with_recording_connection(db_file)
+
+        assert len(yielded) == 4
+        bulk = [s for s in statements if "SELECT * FROM systems" in s]
+        assert bulk == [], f"unexpected bulk row query issued: {bulk}"
+
+    def test_streaming_survives_failing_bulk_query(self, tmp_path):
+        """A failing bulk query must not surface as ``UnboundLocalError`` (D1)."""
+        n_rows = 4
+        db_file = _build_relaxed_db(tmp_path, "stream_failure.db", n_rows)
+
+        try:
+            yielded, _statements = _stream_with_recording_connection(
+                db_file, fail_on="SELECT * FROM systems"
+            )
+        except UnboundLocalError as exc:  # pragma: no cover - regression guard
+            pytest.fail(f"chunk loader leaked UnboundLocalError: {exc}")
+
+        assert len(yielded) == n_rows
+        assert sorted(e for e, _ in yielded) == [10.0 + i for i in range(n_rows)]
+
+
+class TestRunIdPersistence:
+    """Persisting ``run_id`` back into database rows."""
+
+    def test_persisted_run_id_is_queryable_via_ase_select(self, tmp_path):
+        """``persist=True`` must update ASE's key-index tables, not just JSON."""
+        from ase.db import connect as ase_db_connect
+
+        from scgo.database.helpers import extract_minima_from_database_file
+
+        run_dir = tmp_path / "run_20250101_000000_000000"
+        run_dir.mkdir(parents=True)
+        n_rows = 3
+        db_file = _build_relaxed_db(run_dir, "ga_go.db", n_rows)
+
+        run_id = "run_persist_index"
+        minima = extract_minima_from_database_file(db_file, run_id, persist=True)
+        assert len(minima) == n_rows
+
+        with ase_db_connect(str(db_file)) as ase_db:
+            selected = list(ase_db.select(run_id=run_id))
+
+        assert len(selected) == n_rows
+        assert all(row.key_value_pairs.get("run_id") == run_id for row in selected)
 
 
 class TestDatabaseManagerCaching:

@@ -180,3 +180,61 @@ def test_cut_and_splice_target_tags_keeps_non_target_groups():
     assert child is not None
     assert len(child) == n_top
     assert sorted(child.get_chemical_symbols()) == sorted(p1.get_chemical_symbols())
+
+
+def _tagged_parents_with_distinct_adsorbates():
+    """Two parents sharing a core tag group but with different adsorbates."""
+    core = [
+        [0.0, 0.0, 0.0],
+        [2.2, 0.0, 0.0],
+        [1.1, 1.9, 0.0],
+    ]
+    p1 = Atoms(
+        symbols=["Co", "Co", "Co", "O", "H"],
+        # Adsorbate O-H along z, 1.0 Angstrom.
+        positions=[*core, [1.1, 0.7, 2.4], [1.1, 0.7, 3.4]],
+        cell=[14.0, 14.0, 14.0],
+        pbc=False,
+    )
+    p2 = Atoms(
+        symbols=["Co", "Co", "Co", "O", "H"],
+        # Shifted core and an adsorbate O-H along x, 1.4 Angstrom.
+        positions=[
+            [0.1, 0.0, 0.0],
+            [2.2, 0.15, 0.0],
+            [1.0, 1.9, 0.1],
+            [1.1, 0.7, 2.4],
+            [2.5, 0.7, 2.4],
+        ],
+        cell=[14.0, 14.0, 14.0],
+        pbc=False,
+    )
+    p1.set_tags([0, 0, 0, 1, 1])
+    p2.set_tags([0, 0, 0, 1, 1])
+    return p1, p2
+
+
+def test_cut_and_splice_non_target_groups_always_come_from_first_parent():
+    """G2: non-target tag groups must not be pruned at random between parents."""
+    p1, p2 = _tagged_parents_with_distinct_adsorbates()
+    co, o, h = 27, 8, 1
+    blmin = {(z1, z2): 0.01 for z1 in (co, o, h) for z2 in (co, o, h)}
+    parent_vector = p1.get_positions()[4] - p1.get_positions()[3]
+
+    for seed in range(20):
+        pairing = CutAndSplicePairing(
+            slab=Atoms(cell=p1.get_cell(), pbc=p1.get_pbc()),
+            n_top=len(p1),
+            blmin=blmin,
+            minfrac=0.5,
+            use_tags=True,
+            target_tags=[0],
+            system_type="gas_cluster_adsorbate",
+            rng=np.random.default_rng(seed),
+        )
+        child = pairing.cross(p1, p2)
+        assert child is not None, f"seed {seed} produced no offspring"
+        child_vector = child.get_positions()[4] - child.get_positions()[3]
+        assert np.allclose(child_vector, parent_vector, atol=1e-8), (
+            f"seed {seed}: adsorbate came from the wrong parent"
+        )

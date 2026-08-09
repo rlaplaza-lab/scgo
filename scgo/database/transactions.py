@@ -26,6 +26,12 @@ def database_transaction(
 ) -> Generator[sqlite3.Connection, None, None]:
     """Context manager for a transaction.
 
+    When the underlying connection already has a transaction open (ASE keeps one
+    pending after its own writes), the context manager *joins* it: no ``BEGIN``
+    is issued and commit/rollback are left to the owner of the outer
+    transaction. Only a transaction started here is committed or rolled back
+    here.
+
     Args:
         db: ASE ``DataConnection`` whose backend (``db.c``) exposes
             ``managed_connection()``.
@@ -33,7 +39,8 @@ def database_transaction(
             (case-insensitive).
 
     Yields:
-        sqlite3.Connection: Raw connection. Commits on success; rolls back on error.
+        sqlite3.Connection: Raw connection. Commits on success and rolls back on
+        error, unless an outer transaction was already open.
 
     Raises:
         SCGOValidationError: If ``db`` has no usable connection, or if
@@ -50,15 +57,24 @@ def database_transaction(
 
     # Use managed_connection() to get actual SQLite connection
     with db.c.managed_connection() as conn:
+        started = not conn.in_transaction
         try:
-            conn.execute(f"BEGIN {isolation_level.upper()}")
-            logger.debug("Started %s transaction", isolation_level)
+            if started:
+                conn.execute(f"BEGIN {isolation_level.upper()}")
+                logger.debug("Started %s transaction", isolation_level)
+            else:
+                logger.debug(
+                    "Joining transaction already open on the connection; "
+                    "commit/rollback is left to its owner"
+                )
 
             yield conn  # Yield connection instead of db
 
-            conn.commit()
-            logger.debug("Transaction committed")
+            if started:
+                conn.commit()
+                logger.debug("Transaction committed")
         except Exception:
-            conn.rollback()
-            logger.debug("Transaction rolled back")
+            if started:
+                conn.rollback()
+                logger.debug("Transaction rolled back")
             raise

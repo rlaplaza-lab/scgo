@@ -7,6 +7,7 @@ import pytest
 from ase import Atoms
 from ase.build import molecule
 from ase.calculators.emt import EMT
+from ase.constraints import FixBondLengths
 from numpy.random import default_rng
 
 from scgo import parse_composition_arg
@@ -231,8 +232,12 @@ def test_attach_adsorbate_internal_geometry_constraints_freezes_bonds() -> None:
         n_slab=0,
         adsorbate_definition=adsorbate_definition,
     )
-    # Two OH fragments, each contributes one constrained pair.
-    assert len(atoms.constraints) == 2
+    # A single FixBondLengths holds every intra-fragment pair (one pair per OH).
+    assert len(atoms.constraints) == 1
+    constraint = atoms.constraints[0]
+    assert isinstance(constraint, FixBondLengths)
+    pairs = {tuple(sorted(int(x) for x in pair)) for pair in constraint.pairs}
+    assert pairs == {(2, 3), (4, 5)}
 
 
 def test_build_adsorbate_definition_allows_shared_oxygen_in_core_and_adsorbate() -> (

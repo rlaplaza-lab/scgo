@@ -93,3 +93,68 @@ def test_torchsim_batch_relaxer_upet_requires_model_identity():
 
     with pytest.raises(SCGOValidationError, match="upet_model_name"):
         TorchSimBatchRelaxer(model_kind="upet")
+
+
+@pytest.mark.requires_upet
+def test_upet_calculator_stores_resolved_device(monkeypatch):
+    """K6: an explicit ``device="cpu"`` must be readable from the calculator."""
+    upet_calculator = pytest.importorskip("upet.calculator")
+
+    from scgo.calculators.upet_helpers import UPET
+
+    class _FakeUPETCalculator:
+        implemented_properties = ["energy", "forces"]
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(upet_calculator, "UPETCalculator", _FakeUPETCalculator)
+
+    calc = UPET(model_name="pet-mad-s", device="cpu")
+    assert calc.device == "cpu"
+    assert calc._inner.kwargs["device"] == "cpu"
+
+
+@pytest.mark.requires_upet
+def test_upet_extractor_uses_the_calculator_device(monkeypatch):
+    """K6: the TorchSim extractor must honour the calculator's stored device."""
+    from types import ModuleType
+    from unittest.mock import MagicMock, patch
+
+    import torch
+
+    from scgo.calculators import upet_helpers as uh
+
+    atomistic = object()
+    meta_calc = MagicMock()
+    meta_calc.model = atomistic
+    # No device on the inner calculator: only ``calculator.device`` can rescue
+    # an explicit CPU request on a CUDA-capable box.
+    meta_calc.device = None
+
+    inner = MagicMock()
+    inner.calculator = meta_calc
+    inner.non_conservative = False
+
+    calc = MagicMock()
+    calc._inner = inner
+    calc.non_conservative = False
+    calc.device = "cpu"
+
+    fake_metatomic = MagicMock(return_value="wrapped")
+    neighbors_mod = ModuleType("metatomic_torchsim._neighbors")
+    neighbors_mod.HAS_NVALCHEMIOPS = True
+    root_mod = ModuleType("metatomic_torchsim")
+    root_mod.MetatomicModel = fake_metatomic
+    root_mod._neighbors = neighbors_mod
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "metatomic_torchsim": root_mod,
+            "metatomic_torchsim._neighbors": neighbors_mod,
+        },
+    ):
+        assert uh.try_extract_torchsim_model_from_upet_calculator(calc) == "wrapped"
+
+    assert fake_metatomic.call_args.kwargs["device"] == torch.device("cpu")

@@ -1183,7 +1183,12 @@ def interpolate_path(
             a2_copy.pbc = a1_copy.pbc
 
     # Build the band from aligned endpoints; ASE interpolation only fills interiors.
-    images = [a1_copy] + [a1_copy.copy() for _ in range(n_images)] + [a2_copy]
+    # ``a1_copy``/``a2_copy`` are already de-aliased via ``copy_atoms`` above, but
+    # ``Atoms.copy()`` shallow-copies ``info`` so the interior images would share
+    # ``a1_copy``'s nested ``key_value_pairs`` dict. ``set_tags`` (potential_energy /
+    # raw_score) on one image would then overwrite every other image, so isolate
+    # each interior copy with ``copy_atoms``.
+    images = [a1_copy] + [copy_atoms(a1_copy) for _ in range(n_images)] + [a2_copy]
     neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
     # Interpolate unconstrained positions first; endpoint/image constraints
     # (e.g., fixed slab atoms) are enforced during subsequent optimization.
@@ -1832,10 +1837,16 @@ def find_transition_state(
         else:
             if calculator is None:
                 raise SCGOValidationError("Calculator required when use_torchsim=False")
+            # Each image should own its calculator (ASE NEB requires distinct
+            # calculators). When a calculator cannot be deep-copied we fall back
+            # to sharing the single instance and must tell ASE that is allowed;
+            # otherwise ``NEB.get_forces`` raises ``ValueError`` for shared calcs.
+            shared_calc = False
             for img in images:
                 try:
                     img.calc = deepcopy(calculator)
                 except (TypeError, AttributeError):
+                    shared_calc = True
                     img.calc = calculator
 
             steps_budget = int(neb_steps)
@@ -1845,6 +1856,7 @@ def find_transition_state(
                 k=spring_constant,
                 climb=bool(climb) and not use_two_stage,
                 method=neb_tangent_method,
+                allow_shared_calculator=shared_calc,
             )
 
         opt_logfile = None if verbosity <= 1 else sys.stdout

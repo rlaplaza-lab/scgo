@@ -31,20 +31,59 @@ def test_write_orca_inputs(tmp_path):
     with open(input_file) as f:
         content = f.read()
 
-    expected_keywords1 = "! PBE def2-SVP"
+    job1, job2 = content.split("$new_job")
+
     expected_blocks1 = "%scf MaxIter 200 end"
-    expected_keywords2 = "! PBE def2-SVP"
     expected_blocks2 = """%moinp "orca.gbw"
 
 %scf MaxIter 200 end"""
 
-    assert expected_keywords1 in content
-    assert expected_blocks1 in content
+    # The legacy shared ``keywords`` key applies to job 1 only; job 2 must keep
+    # its ``MOread`` default or the orbital chaining silently breaks.
+    assert "! PBE def2-SVP" in job1
+    assert expected_blocks1 in job1
     assert "$new_job" in content
-    assert expected_keywords2 in content
-    assert expected_blocks2 in content
-    assert "* xyz 0 1" in content
-    assert "* xyzfile 0 1 orca.xyz" in content
+    assert "! PBE0 def2-tzvp VerySlowConv MOread" in job2
+    assert "! PBE def2-SVP" not in job2
+    assert expected_blocks2 in job2
+    assert "* xyz 0 1" in job1
+    assert "* xyzfile 0 1 orca.xyz" in job2
+
+
+def test_write_orca_inputs_per_job_keywords(tmp_path):
+    """``keywords_opt`` / ``keywords_sp`` configure the two jobs independently."""
+    atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    output_dir = str(tmp_path / "orca_calc")
+    orca_settings = {
+        "keywords_opt": "! PBE def2-SVP Opt",
+        "keywords_sp": "! PBE0 def2-TZVP MOread",
+    }
+
+    write_orca_inputs(atoms, output_dir, orca_settings)
+
+    content = (tmp_path / "orca_calc" / "orca.inp").read_text()
+    job1, job2 = content.split("$new_job")
+    assert "! PBE def2-SVP Opt" in job1
+    assert "! PBE0 def2-TZVP MOread" in job2
+    assert "! PBE def2-SVP Opt" not in job2
+
+
+def test_write_orca_inputs_keywords_opt_wins_over_legacy_keywords(tmp_path):
+    """``keywords_opt`` takes precedence over the legacy ``keywords`` alias."""
+    atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    output_dir = str(tmp_path / "orca_calc")
+
+    write_orca_inputs(
+        atoms,
+        output_dir,
+        {"keywords": "! LEGACY", "keywords_opt": "! MODERN"},
+    )
+
+    content = (tmp_path / "orca_calc" / "orca.inp").read_text()
+    job1, job2 = content.split("$new_job")
+    assert "! MODERN" in job1
+    assert "! LEGACY" not in content
+    assert "! PBE0 def2-tzvp VerySlowConv MOread" in job2
 
 
 def test_write_orca_inputs_nonzero_charge_multiplicity(tmp_path):
@@ -141,6 +180,25 @@ class TestPrepareOrcaCalculations:
         prepare_orca_calculations([], base_dir, orca_settings)
 
 
+def _patch_vasp_capture(monkeypatch) -> dict:
+    """Replace ``Vasp`` with a stub recording the constructor kwargs.
+
+    Avoids requiring ``VASP_PP_PATH`` (POTCAR generation) while still asserting
+    on the parameters SCGO hands to ASE.
+    """
+    captured: dict = {}
+
+    class _FakeVasp:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def write_input(self, atoms):
+            """No-op: this test only inspects the constructor parameters."""
+
+    monkeypatch.setattr("scgo.calculators.vasp_helpers.Vasp", _FakeVasp)
+    return captured
+
+
 class TestWriteVaspInputs:
     """Tests for write_vasp_inputs function."""
 
@@ -210,6 +268,38 @@ class TestWriteVaspInputs:
 
         # Function should complete without error
 
+    def test_user_settings_override_defaults(self, tmp_path, monkeypatch):
+        """K2: ``vasp_settings`` must override (not collide with) SCGO defaults."""
+        captured = _patch_vasp_capture(monkeypatch)
+
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        setup_test_atoms(atoms)
+
+        write_vasp_inputs(
+            atoms,
+            str(tmp_path / "vasp_calc"),
+            {"xc": "PBEsol", "kpts": (3, 3, 1), "gamma": False, "encut": 400},
+        )
+
+        assert captured["xc"] == "PBEsol"
+        assert captured["kpts"] == (3, 3, 1)
+        assert captured["gamma"] is False
+        assert captured["encut"] == 400
+
+    def test_defaults_used_when_not_overridden(self, tmp_path, monkeypatch):
+        """The SCGO gas-phase defaults still apply for unspecified keys."""
+        captured = _patch_vasp_capture(monkeypatch)
+
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        setup_test_atoms(atoms)
+
+        write_vasp_inputs(atoms, str(tmp_path / "vasp_calc"), {"encut": 350})
+
+        assert captured["xc"] == "PBE"
+        assert captured["kpts"] == (1, 1, 1)
+        assert captured["gamma"] is True
+        assert captured["encut"] == 350
+
 
 class TestPrepareVaspCalculations:
     """Tests for prepare_vasp_calculations function."""
@@ -261,3 +351,79 @@ class TestMaceHelpers:
         except (FileNotFoundError, OSError, RuntimeError) as e:
             pytest.skip(f"MACE init failed (e.g. missing model): {e}")
         assert calc is not None
+
+
+class TestAseBatchRelaxerSurfaceMode:
+    """K1: the plain-ASE batch relaxer must not gas-phase-center slabs."""
+
+    @staticmethod
+    def _slab_with_adsorbate():
+        from ase.build import add_adsorbate, fcc111
+        from ase.constraints import FixAtoms
+
+        slab = fcc111("Cu", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+        slab.pbc = True
+        n_slab = len(slab)
+        add_adsorbate(slab, "Cu", height=2.0, position=(1.0, 1.0))
+        slab.set_constraint(FixAtoms(indices=list(range(n_slab))))
+        slab.set_tags([0] * n_slab + [1])
+        return slab, n_slab
+
+    def test_surface_mode_keeps_slab_positions(self):
+        import numpy as np
+        from ase.calculators.emt import EMT
+
+        from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
+
+        atoms, n_slab = self._slab_with_adsorbate()
+        original = atoms.get_positions()[:n_slab].copy()
+
+        relaxer = AseBatchRelaxer(
+            EMT(), force_tol=0.05, max_steps=0, surface_mode=True, n_slab=n_slab
+        )
+        _energy, relaxed = relaxer.relax_batch([atoms], steps=0)[0]
+
+        assert np.allclose(relaxed.get_positions()[:n_slab], original)
+
+    def test_default_mode_recenters_the_whole_system(self):
+        import numpy as np
+        from ase.calculators.emt import EMT
+
+        from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
+
+        atoms, n_slab = self._slab_with_adsorbate()
+        original = atoms.get_positions()[:n_slab].copy()
+
+        relaxer = AseBatchRelaxer(EMT(), force_tol=0.05, max_steps=0)
+        _energy, relaxed = relaxer.relax_batch([atoms], steps=0)[0]
+
+        # Gas-phase canonicalization translates every atom, slab included.
+        assert not np.allclose(relaxed.get_positions()[:n_slab], original)
+
+    def test_ga_passes_surface_mode_to_the_ase_relaxer(self):
+        """The GA construction site must forward surface_mode / n_slab."""
+        import inspect
+
+        from scgo.algorithms import geneticalgorithm_go_torchsim as ga_mod
+
+        src = inspect.getsource(ga_mod)
+        marker = "relaxer = AseBatchRelaxer("
+        assert marker in src
+        call = src.split(marker, 1)[1].split(")", 1)[0]
+        assert "surface_mode=surface_mode" in call
+        assert "n_slab=n_fixed" in call
+
+
+@pytest.mark.requires_mace
+def test_mace_calculator_stores_resolved_device(monkeypatch):
+    """K6: an explicit ``device="cpu"`` must be readable from the calculator."""
+    from unittest.mock import MagicMock
+
+    from scgo.calculators import mace_helpers
+
+    monkeypatch.setattr(
+        mace_helpers, "mace_mp", lambda **_kwargs: MagicMock(name="mace_calc")
+    )
+
+    calc = mace_helpers.MACE(model_name="mace_matpes_0", device="cpu")
+    assert calc.device == "cpu"

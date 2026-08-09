@@ -130,6 +130,73 @@ def test_relax_metal_cluster_with_adsorbate_oh_placement_emt() -> None:
     assert_pt_o_distance_reasonable(relaxed, pt_idx=0, o_idx=3)
 
 
+def _periodic_pt_dimer() -> Atoms:
+    return Atoms(
+        "Pt2",
+        positions=[[4.0, 6.0, 6.0], [6.3, 6.0, 6.0]],
+        cell=[12.0, 12.0, 12.0],
+        pbc=True,
+    )
+
+
+def test_relax_with_adsorbate_keeps_periodic_cell_and_pbc() -> None:
+    """A periodic core must not be re-boxed into a gas-phase cubic cell."""
+    core = _periodic_pt_dimer()
+    cell_before = np.array(core.get_cell())
+    pre = Atoms(
+        "OH",
+        positions=[[5.15, 6.0, 7.6], [5.15, 6.0, 7.6 + _OH_BOND]],
+        cell=core.get_cell(),
+        pbc=core.get_pbc(),
+    )
+
+    relaxed, _info = relax_metal_cluster_with_adsorbate(
+        core,
+        EMT(),
+        _oh_template(),
+        preplaced=pre,
+        anchor_index=0,
+        bond_axis=(0, 1),
+        fix_core=True,
+        fmax=0.2,
+        steps=0,
+    )
+    assert np.allclose(np.array(relaxed.get_cell()), cell_before)
+    assert list(relaxed.pbc) == [True, True, True]
+
+
+def test_relax_with_adsorbate_still_expands_gas_phase_cell() -> None:
+    """Non-periodic cores keep the cubic bounding-box behaviour."""
+    core = _pt_linear_dimer()
+    pre = Atoms(
+        "OH",
+        positions=[[1.15, 0.0, 1.55], [1.15, 0.0, 1.55 + _OH_BOND]],
+        cell=core.get_cell(),
+        pbc=False,
+    )
+    cfg = ClusterAdsorbateConfig(cell_margin=8.0)
+
+    relaxed, _info = relax_metal_cluster_with_adsorbate(
+        core,
+        EMT(),
+        _oh_template(),
+        preplaced=pre,
+        anchor_index=0,
+        bond_axis=(0, 1),
+        fix_core=True,
+        fmax=0.2,
+        steps=0,
+        config=cfg,
+    )
+    assert not any(relaxed.pbc)
+    lengths = relaxed.get_cell().lengths()
+    assert np.allclose(lengths, lengths[0])
+    assert not np.isclose(lengths[0], core.get_cell().lengths()[0])
+    positions = relaxed.get_positions()
+    span = float(np.max(positions.max(axis=0) - positions.min(axis=0)))
+    assert lengths[0] == pytest.approx(span + cfg.cell_margin, abs=1e-6)
+
+
 def test_preplaced_wrong_length_raises() -> None:
     core = _pt_linear_dimer()
     bad = Atoms("O", positions=[[0, 0, 0]], cell=[10, 10, 10], pbc=False)

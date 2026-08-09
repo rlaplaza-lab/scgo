@@ -9,6 +9,7 @@ import tempfile
 import pytest
 
 from scgo.ts_search.ts_network import (
+    _build_graph_from_connections,
     build_connectivity_graph,
     build_connectivity_graph_from_final_unique_ts,
     find_minimum_barrier_path,
@@ -393,3 +394,110 @@ def test_build_connectivity_graph_from_final_unique_ts():
     assert graph["edge_metadata"][(0, 1)]["pair_id"] == "0_1"
     assert graph["edge_metadata"][(1, 2)]["barrier"] == pytest.approx(0.5, rel=1e-6)
     assert graph["edge_metadata"][(0, 2)]["converged"] is False
+
+
+# ---------------------------------------------------------------------------
+# T4: connected components must iterate adjacency keys, not range(num_nodes)
+# ---------------------------------------------------------------------------
+
+
+def _graph_with_sparse_high_index_edge():
+    """adjacency keys {0,1,2,5,6}: 0-1-2 connected, plus a separate 5-6 edge."""
+    connections = [
+        {"pair_id": "0_1", "minima_indices": [0, 1], "barrier_height": 0.5},
+        {"pair_id": "1_2", "minima_indices": [1, 2], "barrier_height": 0.5},
+        {"pair_id": "5_6", "minima_indices": [5, 6], "barrier_height": 0.5},
+    ]
+    return _build_graph_from_connections(
+        ts_connections=connections,
+        num_minima=3,
+        composition=["Cu", "Cu", "Cu"],
+        formula="Cu3",
+        statistics=None,
+    )
+
+
+def test_get_connected_components_uses_adjacency_keys_not_range():
+    """High-index adjacency keys must not be dropped, no phantom singletons.
+
+    ``num_nodes = len(adjacency) = 5`` here, but the real keys are {0,1,2,5,6}.
+    Iterating ``range(num_nodes)`` invented {3}/{4} and never visited 5/6.
+    """
+    graph = _graph_with_sparse_high_index_edge()
+    assert set(graph["adjacency"].keys()) == {0, 1, 2, 5, 6}
+    assert graph["num_nodes"] == 5  # len(adjacency), keys go up to 6
+
+    components = get_connected_components(graph)
+
+    assert {0, 1, 2} in components
+    assert {5, 6} in components
+    assert len(components) == 2
+    # No phantom singletons for the missing dense indices 3 and 4.
+    assert {3} not in components
+    assert {4} not in components
+    # Every real node is covered exactly once (no dropped high-index node).
+    covered = set().union(*components)
+    assert covered == {0, 1, 2, 5, 6}
+
+
+# ---------------------------------------------------------------------------
+# T5: duplicate TS edges keep the minimal barrier
+# ---------------------------------------------------------------------------
+
+
+def _graph_from_barriers(barriers):
+    """Build a graph with repeated (0, 1) connections carrying ``barriers``."""
+    connections = [
+        {"pair_id": "0_1", "minima_indices": [0, 1], "barrier_height": b}
+        for b in barriers
+    ]
+    return _build_graph_from_connections(
+        ts_connections=connections,
+        num_minima=2,
+        composition=["Cu", "Cu"],
+        formula="Cu2",
+        statistics=None,
+    )
+
+
+def test_duplicate_edges_keep_minimal_barrier_high_then_low():
+    """Second (lower) barrier must replace the first (higher) one."""
+    graph = _graph_from_barriers([0.9, 0.4])
+    assert graph["num_edges"] == 1
+    assert graph["edge_metadata"][(0, 1)]["barrier"] == pytest.approx(0.4)
+
+
+def test_duplicate_edges_keep_minimal_barrier_low_then_high():
+    """First (lower) barrier must survive a later (higher) duplicate."""
+    graph = _graph_from_barriers([0.4, 0.9])
+    assert graph["num_edges"] == 1
+    assert graph["edge_metadata"][(0, 1)]["barrier"] == pytest.approx(0.4)
+
+
+def test_duplicate_edges_none_barrier_loses_to_numeric():
+    """A missing (None) barrier must lose to any numeric barrier, either order."""
+    graph_none_first = _graph_from_barriers([None, 0.7])
+    assert graph_none_first["num_edges"] == 1
+    assert graph_none_first["edge_metadata"][(0, 1)]["barrier"] == pytest.approx(0.7)
+
+    graph_none_last = _graph_from_barriers([0.7, None])
+    assert graph_none_last["num_edges"] == 1
+    assert graph_none_last["edge_metadata"][(0, 1)]["barrier"] == pytest.approx(0.7)
+
+
+def test_duplicate_edges_two_none_barriers_keep_first():
+    """Two missing barriers keep the first entry (by pair_id)."""
+    connections = [
+        {"pair_id": "first", "minima_indices": [0, 1], "barrier_height": None},
+        {"pair_id": "second", "minima_indices": [0, 1], "barrier_height": None},
+    ]
+    graph = _build_graph_from_connections(
+        ts_connections=connections,
+        num_minima=2,
+        composition=["Cu", "Cu"],
+        formula="Cu2",
+        statistics=None,
+    )
+    assert graph["num_edges"] == 1
+    assert graph["edge_metadata"][(0, 1)]["barrier"] is None
+    assert graph["edge_metadata"][(0, 1)]["pair_id"] == "first"
