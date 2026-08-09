@@ -121,8 +121,25 @@ def _optimizer_write_timing_json_enabled(params: dict[str, Any]) -> bool:
 
 
 def _copy_params(params: dict[str, Any] | None) -> dict[str, Any]:
-    """Return a deep copy of params or an empty dict when params is None."""
-    return copy.deepcopy(params) if params is not None else {}
+    """Shallow-copy params with isolated per-slot ``optimizer_params`` dicts.
+
+    The top-level dict is copied shallowly, and each ``optimizer_params[algo]``
+    slot is copied as a new dict so callers can mutate slot keys without leaking
+    back into the source. Heavy, identity-sensitive values inside the slots
+    (``relaxer`` — which aliases under ``deepcopy`` — and the frozen
+    ``surface_config``) are shared by reference, matching the prior behavior and
+    avoiding any cloning of torch models or slab configs.
+    """
+    if params is None:
+        return {}
+    out = dict(params)
+    opt = out.get("optimizer_params")
+    if isinstance(opt, dict):
+        out["optimizer_params"] = {
+            key: dict(slot) if isinstance(slot, dict) else slot
+            for key, slot in opt.items()
+        }
+    return out
 
 
 def _default_optimizer_system_type(algo: str) -> SystemType | None:

@@ -176,28 +176,6 @@ def build_timing_payload(
     return payload
 
 
-def build_run_timing_document(
-    *,
-    run_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Attach run_id to a single-run timing payload."""
-    out = dict(payload)
-    out.setdefault("run_id", run_id)
-    return out
-
-
-def write_run_timing_file(
-    run_dir: str,
-    payload: dict[str, Any],
-    *,
-    run_id: str | None = None,
-) -> str:
-    if run_id is not None:
-        payload = build_run_timing_document(run_id=run_id, payload=payload)
-    return write_timing_file(run_dir, payload)
-
-
 def neb_seconds_from_pair_timings(timings: dict[str, Any]) -> float:
     """Return a pair's NEB wall time from serial or parallel timing keys.
 

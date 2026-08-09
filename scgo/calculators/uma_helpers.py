@@ -44,8 +44,7 @@ class UMA(Calculator):
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
 
-        name = f"UMA-{model_name}"
-        super().__init__(name=name, **kwargs)
+        super().__init__(**kwargs)
 
         logger.info(
             'Initializing UMA calculator ("%s") on device: "%s"', model_name, dev

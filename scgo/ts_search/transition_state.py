@@ -1146,10 +1146,6 @@ def interpolate_path(
     surface_lattice_rotation = neb_surface_lattice_rotation
     if align_endpoints and system_type is not None:
         system_policy = get_system_policy(system_type)
-        if system_policy.neb_disable_alignment:
-            raise SCGOValidationError(
-                f"Endpoint alignment is not allowed for {system_type!r}; set align_endpoints=False."
-            )
         surface_cell_remap = (
             system_policy.neb_surface_cell_remap and neb_surface_cell_remap
         )

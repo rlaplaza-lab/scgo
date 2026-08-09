@@ -39,7 +39,13 @@ from .logging import (
     should_show_progress,
 )
 from .mutation_weights import get_adaptive_mutation_config
-from .rng_helpers import create_child_rng, ensure_rng, get_child_rng_or_none
+from .rng_helpers import (
+    create_child_rng,
+    ensure_rng,
+    ensure_rng_or_create,
+    get_child_rng_or_none,
+    offspring_rng_triple,
+)
 
 __all__ = [
     # atoms_helpers
@@ -72,5 +78,7 @@ __all__ = [
     # rng_helpers
     "create_child_rng",
     "ensure_rng",
+    "ensure_rng_or_create",
     "get_child_rng_or_none",
+    "offspring_rng_triple",
 ]

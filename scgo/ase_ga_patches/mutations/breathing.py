@@ -12,7 +12,7 @@ from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import _ensure_rng
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import get_blmin_distance as _get_blmin_distance
+from scgo.initialization.steric_scoring import _blmin_matrix
 from scgo.system_types import SystemType, get_system_policy
 
 __all__ = ["BreathingMutation"]
@@ -73,13 +73,8 @@ class BreathingMutation(OffspringCreator):
         if np.any(distances <= 1e-12):
             return np.inf
 
-        # Compute pairwise blmin requirements
-        blmin_matrix = np.zeros((n_atoms, n_atoms), dtype=float)
-        for i in range(n_atoms):
-            for j in range(i + 1, n_atoms):
-                blmin_matrix[i, j] = _get_blmin_distance(self.blmin, atomic_numbers[i], atomic_numbers[j])
-
-        # We only need the condensed upper triangle for blmin
+        # Compute pairwise blmin requirements (condensed upper triangle)
+        blmin_matrix = _blmin_matrix(atomic_numbers, self.blmin)
         required_condensed = blmin_matrix[np.triu_indices(n_atoms, k=1)]
 
         # Calculate minimum required scale to avoid clashes
@@ -146,15 +141,6 @@ class BreathingMutation(OffspringCreator):
         # as long as it's within the valid range. This is important for cases where
         # the cluster is already in a good configuration and scaling would make it worse.
         if feasible_lower <= 1.0 <= self.scale_max + tol or allow_unit_scale:
-            append_candidate(1.0, force=True)
-
-        # Ensure unit scale (1.0) is included in the final candidates if it's valid,
-        # even if it means slightly exceeding max_candidates. This is important because
-        # scale=1.0 (no scaling) is often the safest option and should always be tried.
-        if feasible_lower <= 1.0 <= self.scale_max + tol and 1.0 not in candidates:
-            # Make room for scale=1.0 by removing the last candidate if necessary
-            if len(candidates) >= max_candidates:
-                candidates = candidates[:max_candidates - 1]
             append_candidate(1.0, force=True)
 
         # Ensure scale=1.0 is in the final candidates if it's valid

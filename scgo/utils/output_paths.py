@@ -66,17 +66,6 @@ def resolve_campaign_root_from_args(
     return Path.cwd().resolve()
 
 
-def resolve_campaign_root(
-    output_dir: str | Path | None,
-) -> Path:
-    """Resolve campaign root from ``output_dir`` alone (discovery entry point).
-
-    Thin wrapper over :func:`resolve_campaign_root_from_args` for callers that
-    have no ``path_key`` / ``output_root`` / ``output_stem`` context.
-    """
-    return resolve_campaign_root_from_args(output_dir, path_key="")
-
-
 def resolve_minima_dir(
     campaign_root: str | Path,
     formula: str,

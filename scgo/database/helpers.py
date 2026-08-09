@@ -114,12 +114,13 @@ def _ensure_database_indices(
                 busy_timeout=30000,
                 cache_size_mb=64,
             )
+            # ``id`` is the INTEGER PRIMARY KEY (rowid alias → implicit index) and
+            # ``unique_id`` already carries ASE's implicit unique index, so a
+            # second user index on either column is redundant. Drop them on
+            # reused DBs too so already-created files also shed the dead indices.
+            conn.execute("DROP INDEX IF EXISTS idx_id")
+            conn.execute("DROP INDEX IF EXISTS idx_unique_id")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_energy ON systems(energy)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_id ON systems(id)")
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_unique_id ON systems(unique_id)"
-                )
 
             if enable_expression_indexes:
                 json_col = SYSTEMS_JSON_COLUMN
@@ -248,6 +249,11 @@ def setup_database(
     ensure_directory_exists(output_dir_str)
     db_file = os.path.join(output_dir_str, db_filename)
 
+    # Track whether the file is being created fresh (or is being replaced by
+    # remove_existing). VACUUM is only meaningful for a freshly created file;
+    # re-vacuuming an existing reused DB (resume paths) just wastes time.
+    db_file_existed_before = os.path.exists(db_file)
+
     if remove_aux_files:
         for suffix in ["-shm", "-wal", "-journal"]:
             aux_file = db_file + suffix
@@ -300,8 +306,9 @@ def setup_database(
             prep_db.update(gaid, gaid=gaid)
             initial_candidate.info["confid"] = gaid
 
-        with contextlib.suppress(AttributeError, sqlite3.OperationalError):
-            prep_db.vacuum()
+        if not db_file_existed_before or remove_existing:
+            with contextlib.suppress(AttributeError, sqlite3.OperationalError):
+                prep_db.vacuum()
 
     try:
         da = database_retry(

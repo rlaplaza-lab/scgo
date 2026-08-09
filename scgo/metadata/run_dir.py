@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from scgo.metadata.provenance import output_json_provenance
+from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import get_logger, log_info_v
 
 logger = get_logger(__name__)
@@ -69,13 +69,6 @@ class RunDirRecord:
         )
 
 
-def _formula_from_composition(composition: list[str]) -> str:
-    counts = Counter(composition)
-    return "".join(
-        f"{elem}{count if count > 1 else ''}" for elem, count in sorted(counts.items())
-    )
-
-
 def generate_run_id() -> str:
     """Generate timestamp-based run ID with microsecond granularity.
 
@@ -114,7 +107,7 @@ def save_run_dir_record(
     composition = record.get("composition") if record else None
     formula = record.get("formula") if record else None
     if composition and not formula:
-        formula = _formula_from_composition(composition)
+        formula = get_cluster_formula(composition)
 
     record_obj = RunDirRecord(
         run_id=run_id,

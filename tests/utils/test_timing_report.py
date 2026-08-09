@@ -11,7 +11,6 @@ from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.utils.logging import get_logger
 from scgo.utils.timing_report import (
-    build_run_timing_document,
     build_timing_payload,
     cpu_non_relax_seconds_from_timings,
     flatten_run_timing_payload,
@@ -21,7 +20,7 @@ from scgo.utils.timing_report import (
     read_timing_file,
     relax_seconds_from_timings,
     sum_neb_seconds_from_ts_results,
-    write_run_timing_file,
+    write_timing_file,
 )
 
 
@@ -34,13 +33,6 @@ def test_ga_relax_includes_initial_and_offspring_batches():
     assert ga_relax_seconds_from_timings(timings) == 150.0
     assert relax_seconds_from_timings(timings) == 150.0
     assert cpu_non_relax_seconds_from_timings(timings) == 50.0
-
-
-def test_build_run_timing_document_attaches_run_id():
-    payload = {"backend": "torchsim_ga", "timings_s": {"total_wall_s": 1.0}}
-    doc = build_run_timing_document(run_id="run_test", payload=payload)
-    assert doc["run_id"] == "run_test"
-    assert doc["timings_s"]["total_wall_s"] == 1.0
 
 
 def test_build_timing_payload_includes_schema_and_run_id():
@@ -62,7 +54,7 @@ def test_load_run_timing_payload(tmp_path: Path):
 
     assert load_run_timing_payload(str(run_dir)) is None
 
-    write_run_timing_file(
+    write_timing_file(
         str(run_dir), {"backend": "x", "timings_s": {"total_wall_s": 9.0}}
     )
     loaded = load_run_timing_payload(str(run_dir))

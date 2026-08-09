@@ -91,7 +91,10 @@ def resolve_slab_search_partition(
             from_top=True,
         )
     else:
-        assert config.n_fix_bottom_slab_layers is not None
+        if config.n_fix_bottom_slab_layers is None:
+            raise SCGOValidationError(
+                "One of n_relax_top_slab_layers or n_fix_bottom_slab_layers must be set"
+            )
         fixed = _layer_indices_by_clustering(
             positions,
             axis,

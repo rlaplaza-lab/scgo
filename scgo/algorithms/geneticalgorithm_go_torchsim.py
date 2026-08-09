@@ -132,15 +132,17 @@ def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
 
 
 def _sorted_unrelaxed_gaids(da: DataConnection) -> list[int]:
-    """Return unrelaxed configuration IDs in deterministic ascending order."""
-    all_unrelaxed = {row.gaid for row in da.c.select(relaxed=0)}
-    all_relaxed = {row.gaid for row in da.c.select(relaxed=1)}
-    all_queued = {row.gaid for row in da.c.select(queued=1)}
-    return sorted(
-        gaid
-        for gaid in all_unrelaxed
-        if gaid not in all_relaxed and gaid not in all_queued
-    )
+    """Return unrelaxed configuration IDs in deterministic ascending order.
+
+    Uses a single ``select()`` scan (rows expose ``.relaxed`` / ``.queued`` /
+    ``.gaid`` directly), instead of three separate filtered scans.
+    """
+    candidates = [
+        r.gaid
+        for r in da.c.select()
+        if not (getattr(r, "relaxed", 0) or getattr(r, "queued", 0))
+    ]
+    return sorted(set(candidates))
 
 
 def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
@@ -300,6 +302,11 @@ def _load_offspring_worker_state(ctx: OffspringBuildContext) -> None:
     _OFFSPRING_WORKER_STATE["operators_epoch"] = ctx.operators_epoch
     _OFFSPRING_WORKER_STATE["pairing"] = pairing
     _OFFSPRING_WORKER_STATE["operators"] = copy.deepcopy(ctx.operators_list)
+    _OFFSPRING_WORKER_STATE["name_map"] = dict(ctx.name_map)
+    # The full static context is retained so per-job payloads (which only carry
+    # the dynamic adaptive_config / mutation probability / epoch) can resolve
+    # the static pairing/operator inputs without being re-pickled each job.
+    _OFFSPRING_WORKER_STATE["static_ctx"] = ctx
 
 
 def _offspring_worker_bootstrap_init(ctx: OffspringBuildContext) -> None:
@@ -312,13 +319,6 @@ def _ensure_offspring_worker_state(ctx: OffspringBuildContext) -> None:
         _load_offspring_worker_state(ctx)
 
 
-def _offspring_worker_has_cached_state(ctx: OffspringBuildContext) -> bool:
-    return (
-        _OFFSPRING_WORKER_STATE.get("operators_epoch") == ctx.operators_epoch
-        and "pairing" in _OFFSPRING_WORKER_STATE
-    )
-
-
 def _offspring_worker_init() -> None:
     """Limit BLAS threading in process-pool offspring workers."""
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -328,32 +328,30 @@ def _offspring_worker_init() -> None:
 
 def _build_offspring_worker(
     job: dict[str, Any],
-    ctx: OffspringBuildContext,
 ) -> dict[str, Any]:
-    """Build one GA offspring (crossover + optional mutation) in an isolated worker."""
+    """Build one GA offspring (crossover + optional mutation) in an isolated worker.
+
+    The static build context (pairing, operator list, name map) is held in the
+    worker process via ``_OFFSPRING_WORKER_STATE`` (loaded once at bootstrap or
+    per generation for the in-process path). Only the lightweight per-job payload
+    (parent frames, task seed, and the dynamic adaptive config / mutation
+    probability / epoch) is pickled per ``submit``, avoiding the per-job pickle
+    of the slab ``Atoms`` and the operator list.
+    """
+    ctx: OffspringBuildContext = _OFFSPRING_WORKER_STATE["static_ctx"]
     pairing_rng, operator_rng, decision_rng = offspring_rng_triple(job["task_seed"])
     setup_t0 = perf_counter()
-    if _offspring_worker_has_cached_state(ctx):
-        local_pairing = _OFFSPRING_WORKER_STATE["pairing"]
-        _reseed_pairing_rng(local_pairing, pairing_rng)
-        local_ops = _OFFSPRING_WORKER_STATE["operators"]
-        reseed_mutation_operator_rngs(local_ops, operator_rng)
-    else:
-        local_pairing = create_ga_pairing(
-            ctx.atoms_template,
-            ctx.n_to_optimize,
-            pairing_rng,
-            slab_atoms=ctx.slab_for_pairing,
-            system_type=ctx.system_type,
-            composition=ctx.composition,
-            adsorbate_definition=ctx.adsorbate_definition,
-        )
-        local_ops = copy.deepcopy(ctx.operators_list)
-        reseed_mutation_operator_rngs(local_ops, operator_rng)
+    # Refresh the cached pairing/operators only when the generation (epoch) advances.
+    if _OFFSPRING_WORKER_STATE.get("operators_epoch") != job["operators_epoch"]:
+        _load_offspring_worker_state(ctx)
+    local_pairing = _OFFSPRING_WORKER_STATE["pairing"]
+    _reseed_pairing_rng(local_pairing, pairing_rng)
+    local_ops = _OFFSPRING_WORKER_STATE["operators"]
+    reseed_mutation_operator_rngs(local_ops, operator_rng)
     local_mutations = update_mutation_weights(
         operators_list=local_ops,
-        name_map=ctx.name_map,
-        adaptive_config=ctx.adaptive_config,
+        name_map=_OFFSPRING_WORKER_STATE["name_map"],
+        adaptive_config=job["adaptive_config"],
         rng=decision_rng,
     )
     operator_setup_s = perf_counter() - setup_t0
@@ -384,7 +382,7 @@ def _build_offspring_worker(
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
         }
-    if decision_rng.random() < ctx.current_mutation_probability:
+    if decision_rng.random() < job["current_mutation_probability"]:
         mutation_t0 = perf_counter()
         mutated = local_mutations.get_operator().mutate(child)
         mutation_s = perf_counter() - mutation_t0
@@ -638,10 +636,28 @@ def _relax_unrelaxed_candidates(
 
     # Batch read candidates under a single database connection
     def _read_batch_under_connection():
-        """Read batch of candidates under a single connection in sorted gaid order."""
+        """Read batch of candidates under a single connection in sorted gaid order.
+
+        A single ``select()`` scan builds the per-gaid row list; for each
+        requested gaid the latest trajectory (max mtime, tie-broken by max id)
+        is loaded. This replaces the previous per-gaid ``select(gaid=...)`` loop,
+        which was an O(N²) scan over a JSON key_value column with no index.
+        """
         with da.c:
-            gaids = _sorted_unrelaxed_gaids(da)[:to_take]
-            return [_load_unrelaxed_by_gaid(da, gaid) for gaid in gaids]
+            rows_by_gaid: dict[int, list] = {}
+            for r in da.c.select():
+                if getattr(r, "relaxed", 0) or getattr(r, "queued", 0):
+                    continue
+                rows_by_gaid.setdefault(r.gaid, []).append(r)
+            gaids = sorted(rows_by_gaid)[:to_take]
+            out: list[Atoms] = []
+            for gaid in gaids:
+                latest = max(rows_by_gaid[gaid], key=lambda row: (row.mtime, row.id))
+                atoms = da.get_atoms(latest.id)
+                atoms.info["confid"] = gaid
+                atoms.info.setdefault("data", {})
+                out.append(atoms)
+            return out
 
     t0 = perf_counter()
     batch = database_retry(
@@ -1536,6 +1552,11 @@ def ga_go(
                                 "a1": a1.copy(),
                                 "a2": a2.copy(),
                                 "task_seed": task_seed,
+                                "operators_epoch": offspring_ctx.operators_epoch,
+                                "adaptive_config": offspring_ctx.adaptive_config,
+                                "current_mutation_probability": (
+                                    offspring_ctx.current_mutation_probability
+                                ),
                             }
                         )
                     if not jobs:
@@ -1551,10 +1572,7 @@ def ga_go(
                     if n_workers == 1:
                         for job in jobs:
                             try:
-                                result = _build_offspring_worker(
-                                    job,
-                                    offspring_ctx,
-                                )
+                                result = _build_offspring_worker(job)
                             except (RuntimeError, ValueError, TypeError) as exc:
                                 worker_failures_gen += 1
                                 err_name = type(exc).__name__
@@ -1575,9 +1593,7 @@ def ga_go(
                     else:
                         assert offspring_executor is not None
                         futures = [
-                            offspring_executor.submit(
-                                _build_offspring_worker, job, offspring_ctx
-                            )
+                            offspring_executor.submit(_build_offspring_worker, job)
                             for job in jobs
                         ]
                         for future in as_completed(futures):

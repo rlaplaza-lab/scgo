@@ -208,7 +208,8 @@ def _evaluate_bands_in_chunks(
             ):
                 _run_chunk(sub_chunk)
 
-    assert all(r is not None for r in results)
+    if not all(r is not None for r in results):
+        raise SCGOValidationError("Parallel NEB returned an empty result")
     return results  # type: ignore[return-value]
 
 
@@ -894,7 +895,8 @@ def run_parallel_neb_search(
         neb = neb_instances[neb_idx]
         summary = batch_results[neb_idx]
         result = pair_results[pair_ord]
-        assert result is not None
+        if result is None:
+            raise SCGOValidationError("Parallel NEB produced a missing pair result")
         result["neb_converged"] = bool(summary.get("converged", False))
         result["error"] = summary.get("error")
         result["final_fmax"] = summary.get("final_fmax")
@@ -955,5 +957,6 @@ def run_parallel_neb_search(
         "neb_batch_optimization_s": neb_batch_s,
         "parallel_wall_s": wall_total,
     }
-    assert all(r is not None for r in pair_results)
+    if not all(r is not None for r in pair_results):
+        raise SCGOValidationError("Parallel NEB produced a missing pair result")
     return pair_results, meta  # type: ignore[return-value]

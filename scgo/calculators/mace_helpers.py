@@ -117,9 +117,7 @@ class MACE(Calculator):
         else:
             model_selector = model_name
 
-        name = f"MACE-{model_name}"
-        # Pass the constructed name to the parent class initializer.
-        super().__init__(name=name, **kwargs)
+        super().__init__(**kwargs)
         self.model_name = model_name
         # Store the resolved device so downstream helpers (e.g. TorchSim model
         # extraction) can honour an explicit device="cpu" instead of guessing.

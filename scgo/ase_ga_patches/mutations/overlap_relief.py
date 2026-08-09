@@ -12,7 +12,7 @@ from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import _ensure_rng, _random_unit_vector
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import get_blmin_distance as _get_blmin_distance
+from scgo.initialization.steric_scoring import _blmin_matrix
 from scgo.system_types import SystemType, get_system_policy
 
 __all__ = ["OverlapReliefMutation"]
@@ -71,6 +71,14 @@ class OverlapReliefMutation(OffspringCreator):
         pbc = top.get_pbc()
         tags = top.get_tags()
 
+        # Precompute the pairwise blmin threshold matrices once (constant across
+        # sweeps): within-set (symmetric) and slab cross-set.
+        req_matrix = _blmin_matrix(numbers, self.blmin)
+        slab_numbers = (
+            slab.get_atomic_numbers() if len(slab) > 0 else np.array([], dtype=int)
+        )
+        req_cross = _blmin_matrix(numbers, self.blmin, slab_numbers)
+
         for _ in range(self.n_sweeps):
             displacements = np.zeros_like(positions)
             moved = False
@@ -79,7 +87,7 @@ class OverlapReliefMutation(OffspringCreator):
                 for j in range(i + 1, len(positions)):
                     if self.use_tags and tags[i] == tags[j]:
                         continue
-                    required = _get_blmin_distance(self.blmin, numbers[i], numbers[j])
+                    required = req_matrix[i, j]
                     vector = positions[j] - positions[i]
                     distance = np.linalg.norm(vector)
                     if distance + 1e-12 < required:
@@ -95,14 +103,9 @@ class OverlapReliefMutation(OffspringCreator):
 
             if self.test_dist_to_slab and len(slab) > 0:
                 slab_positions = slab.get_positions()
-                slab_numbers = slab.get_atomic_numbers()
                 for i in range(len(positions)):
                     for j in range(len(slab_positions)):
-                        required = _get_blmin_distance(
-                            self.blmin,
-                            numbers[i],
-                            slab_numbers[j],
-                        )
+                        required = req_cross[i, j]
                         vector = positions[i] - slab_positions[j]
                         distance = np.linalg.norm(vector)
                         if distance + 1e-12 < required:

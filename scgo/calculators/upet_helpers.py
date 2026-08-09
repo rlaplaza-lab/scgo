@@ -47,11 +47,7 @@ class UPET(Calculator):
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UPET")
 
-        if checkpoint_path is not None:
-            name = f"UPET-{checkpoint_path}"
-        else:
-            name = f"UPET-{model_name}-v{version}"
-        super().__init__(name=name, **kwargs)
+        super().__init__(**kwargs)
 
         logger.info(
             'Initializing UPET calculator ("%s", version=%s) on device: "%s"',

@@ -17,6 +17,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _random_unit_vector,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization.steric_scoring import steric_deficit as _steric_deficit
 from scgo.initialization.steric_scoring import (
     steric_deficit_two_sets as _steric_deficit_two_sets,
@@ -142,7 +143,10 @@ class MirrorMutation(OffspringCreator):
                         del p_use[index]
                         del n_use[index]
                         break
-            assert n_use.count(element) == nu[element]
+            if n_use.count(element) != nu[element]:
+                raise SCGOValidationError(
+                    "Mirror mutation stoichiometry bookkeeping mismatch"
+                )
 
         for index in range(len(n_use)):
             if num[index] == n_use[index]:
@@ -222,7 +226,6 @@ class MirrorMutation(OffspringCreator):
                 continue
             return slab + mutant
 
-        self.last_attempt_count = len(ranked_candidates)
         return None
 
 # fmt: on

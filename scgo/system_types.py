@@ -194,13 +194,36 @@ class SystemPolicy:
     slab_is_search_target: bool
     requires_slab_prefix_validation: bool
     needs_supported_deposit_validation: bool
-    neb_force_mic: bool
-    neb_disable_alignment: bool
-    neb_surface_cell_remap: bool
-    neb_surface_lattice_rotation: bool
-    constrain_adsorbate_moves: bool
-    adsorbate_move_scale: float
-    allow_composition_permutations: bool
+
+    @property
+    def neb_force_mic(self) -> bool:
+        return self.uses_surface
+
+    @property
+    def neb_disable_alignment(self) -> bool:
+        return False
+
+    @property
+    def neb_surface_cell_remap(self) -> bool:
+        return self.uses_surface
+
+    @property
+    def neb_surface_lattice_rotation(self) -> bool:
+        # Continuous in-plane Kabsch breaks adsorbate–slab registry (multi-eV
+        # endpoint energy jumps); skip free rotation when an adsorbate is present.
+        return self.uses_surface and not self.has_adsorbate
+
+    @property
+    def constrain_adsorbate_moves(self) -> bool:
+        return self.has_adsorbate
+
+    @property
+    def adsorbate_move_scale(self) -> float:
+        return 0.6 if self.has_adsorbate else 1.0
+
+    @property
+    def allow_composition_permutations(self) -> bool:
+        return not self.has_adsorbate
 
 
 SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
@@ -211,13 +234,6 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         slab_is_search_target=False,
         requires_slab_prefix_validation=False,
         needs_supported_deposit_validation=False,
-        neb_force_mic=False,
-        neb_disable_alignment=False,
-        neb_surface_cell_remap=False,
-        neb_surface_lattice_rotation=False,
-        constrain_adsorbate_moves=False,
-        adsorbate_move_scale=1.0,
-        allow_composition_permutations=True,
     ),
     "surface_cluster": SystemPolicy(
         system_type="surface_cluster",
@@ -226,13 +242,6 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         slab_is_search_target=False,
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
-        neb_force_mic=True,
-        neb_disable_alignment=False,
-        neb_surface_cell_remap=True,
-        neb_surface_lattice_rotation=True,
-        constrain_adsorbate_moves=False,
-        adsorbate_move_scale=1.0,
-        allow_composition_permutations=True,
     ),
     "gas_cluster_adsorbate": SystemPolicy(
         system_type="gas_cluster_adsorbate",
@@ -241,13 +250,6 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         slab_is_search_target=False,
         requires_slab_prefix_validation=False,
         needs_supported_deposit_validation=False,
-        neb_force_mic=False,
-        neb_disable_alignment=False,
-        neb_surface_cell_remap=False,
-        neb_surface_lattice_rotation=False,
-        constrain_adsorbate_moves=True,
-        adsorbate_move_scale=0.6,
-        allow_composition_permutations=False,
     ),
     "surface_cluster_adsorbate": SystemPolicy(
         system_type="surface_cluster_adsorbate",
@@ -256,15 +258,6 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         slab_is_search_target=False,
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
-        neb_force_mic=True,
-        neb_disable_alignment=False,
-        neb_surface_cell_remap=True,
-        # Continuous in-plane Kabsch breaks adsorbate–slab registry (multi-eV
-        # endpoint energy jumps). Keep cell remap / MIC; skip free rotation.
-        neb_surface_lattice_rotation=False,
-        constrain_adsorbate_moves=True,
-        adsorbate_move_scale=0.6,
-        allow_composition_permutations=False,
     ),
     "surface": SystemPolicy(
         system_type="surface",
@@ -273,13 +266,6 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         slab_is_search_target=True,
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=False,
-        neb_force_mic=True,
-        neb_disable_alignment=False,
-        neb_surface_cell_remap=True,
-        neb_surface_lattice_rotation=True,
-        constrain_adsorbate_moves=False,
-        adsorbate_move_scale=1.0,
-        allow_composition_permutations=True,
     ),
     "surface_adsorbate": SystemPolicy(
         system_type="surface_adsorbate",
@@ -288,13 +274,6 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
         slab_is_search_target=True,
         requires_slab_prefix_validation=True,
         needs_supported_deposit_validation=True,
-        neb_force_mic=True,
-        neb_disable_alignment=False,
-        neb_surface_cell_remap=True,
-        neb_surface_lattice_rotation=False,
-        constrain_adsorbate_moves=True,
-        adsorbate_move_scale=0.6,
-        allow_composition_permutations=False,
     ),
 }
 

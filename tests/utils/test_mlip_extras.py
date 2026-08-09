@@ -52,7 +52,6 @@ def test_no_stack_installed(monkeypatch):
     _install(monkeypatch)
 
     assert mlip_extras.installed_mlip_stacks() == (False, False, False)
-    assert mlip_extras.installed_mace_and_uma() == (False, False)
     assert mlip_extras.ensure_mace_uma_not_both_installed() is None
 
 
@@ -76,7 +75,6 @@ def test_both_mace_and_uma_installed_raises(monkeypatch):
     _install(monkeypatch, "mace-torch", "fairchem-core")
 
     assert mlip_extras.installed_mlip_stacks() == (True, True, False)
-    assert mlip_extras.installed_mace_and_uma() == (True, True)
 
     with pytest.raises(SCGOConfigurationError, match="Multiple MLIP stacks"):
         mlip_extras.ensure_mace_uma_not_both_installed()

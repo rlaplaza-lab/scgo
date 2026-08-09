@@ -661,8 +661,6 @@ def run_transition_state_search(
         )
     if system_policy.neb_force_mic:
         neb_interpolation_mic = True
-    if system_policy.neb_disable_alignment:
-        neb_align_endpoints = False
     if not system_policy.uses_surface:
         neb_surface_cell_remap = False
         neb_surface_lattice_rotation = False

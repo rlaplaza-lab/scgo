@@ -89,12 +89,6 @@ def installed_mlip_stacks() -> tuple[bool, bool, bool]:
     return mace, uma, upet
 
 
-def installed_mace_and_uma() -> tuple[bool, bool]:
-    """Return (mace_stack_present, uma_stack_present) using importlib only."""
-    mace, uma, _ = installed_mlip_stacks()
-    return mace, uma
-
-
 def ensure_mace_uma_not_both_installed() -> None:
     """Fail if more than one MLIP stack is importable (unsupported mixed env)."""
     mace, uma, upet = installed_mlip_stacks()

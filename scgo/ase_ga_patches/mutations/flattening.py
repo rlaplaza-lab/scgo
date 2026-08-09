@@ -14,7 +14,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _geometry_candidate_directions,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import get_blmin_distance as _get_blmin_distance
+from scgo.initialization.steric_scoring import _blmin_matrix
 from scgo.system_types import SystemType, get_system_policy
 
 __all__ = ["FlatteningMutation"]
@@ -94,11 +94,11 @@ class FlatteningMutation(OffspringCreator):
         # Vectorize lateral distance calculations
         lateral_distances = squareform(pdist(ordered_positions))
 
-        # Vectorize blmin lookup
+        # Vectorize blmin lookup (upper triangle only, matching the original double loop)
+        blmin_u = _blmin_matrix(ordered_numbers, self.blmin)
+        iu = np.triu_indices(n_atoms, k=1)
         blmin_matrix = np.zeros((n_atoms, n_atoms), dtype=float)
-        for i in range(n_atoms):
-            for j in range(i + 1, n_atoms):
-                blmin_matrix[i, j] = _get_blmin_distance(self.blmin, ordered_numbers[i], ordered_numbers[j])
+        blmin_matrix[iu] = blmin_u[iu]
 
         required_distances = blmin_matrix + clearance_margin
 

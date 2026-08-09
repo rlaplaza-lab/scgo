@@ -6,7 +6,6 @@ from scgo.utils.output_paths import (
     calculator_slug_from_go_params,
     formula_searches_dir,
     formula_ts_results_dir,
-    resolve_campaign_root,
     resolve_campaign_root_from_args,
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
@@ -20,12 +19,6 @@ def test_formula_dirs():
     root = Path("/tmp/campaign")
     assert formula_searches_dir(root, "Pt5") == Path("/tmp/campaign/Pt5_searches")
     assert formula_ts_results_dir(root, "Pt5") == Path("/tmp/campaign/Pt5_ts_results")
-
-
-def test_resolve_campaign_root_from_searches_path(tmp_path):
-    searches = tmp_path / "Pt5_searches"
-    searches.mkdir()
-    assert resolve_campaign_root(searches) == tmp_path.resolve()
 
 
 def test_resolve_ts_campaign_paths_default(tmp_path, monkeypatch):
@@ -93,17 +86,6 @@ def test_resolve_go_ts_pipeline_paths(tmp_path):
     searches, ts = resolve_go_ts_pipeline_paths(campaign, "Pt5")
     assert searches == campaign / "Pt5_searches"
     assert ts == campaign / "Pt5_ts_results"
-
-
-def test_resolve_campaign_root_none_uses_cwd(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert resolve_campaign_root(None) == tmp_path.resolve()
-
-
-def test_resolve_campaign_root_plain_campaign_path(tmp_path):
-    campaign = tmp_path / "benchmark" / "results"
-    campaign.mkdir(parents=True)
-    assert resolve_campaign_root(campaign) == campaign.resolve()
 
 
 def test_resolve_ts_campaign_paths_from_campaign_root(tmp_path):

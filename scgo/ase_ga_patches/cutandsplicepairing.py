@@ -179,7 +179,10 @@ class CutAndSplicePairing(OffspringCreator):
         self.slab = slab
         self.n_top = n_top
         self.blmin = blmin
-        assert number_of_variable_cell_vectors in range(4)
+        if number_of_variable_cell_vectors not in range(4):
+            raise SCGOValidationError(
+                "number_of_variable_cell_vectors must be 0, 1, 2, or 3"
+            )
         self.number_of_variable_cell_vectors = number_of_variable_cell_vectors
         self.p1 = p1
         self.p2 = p2
@@ -394,7 +397,8 @@ class CutAndSplicePairing(OffspringCreator):
         cell2 = a2.get_cell()
         for i in range(self.number_of_variable_cell_vectors, 3):
             err = "Unit cells are supposed to be identical in direction %d"
-            assert np.allclose(cell1[i], cell2[i]), (err % i, cell1, cell2)
+            if not np.allclose(cell1[i], cell2[i]):
+                raise SCGOValidationError(err % i)
 
         counter = 0
         maxcount = self.max_pairing_attempts
@@ -515,7 +519,8 @@ class CutAndSplicePairing(OffspringCreator):
 
         # Now the cell vectors
         if self.number_of_variable_cell_vectors == 0:
-            assert np.allclose(cell1, cell2), "Parent cells are not the same"
+            if not np.allclose(cell1, cell2):
+                raise SCGOValidationError("Parent cells are not the same")
             newcell = np.copy(cell1)
             self.last_cell_attempt_count = 1
         else:
@@ -637,7 +642,10 @@ class CutAndSplicePairing(OffspringCreator):
                 else:
                     not_used.append(all_points.pop(i))
 
-            assert len(used) + len(not_used) == types[s] * 2
+            if len(used) + len(not_used) != types[s] * 2:
+                raise SCGOValidationError(
+                    f"Internal pairing bookkeeping mismatch for type {s}"
+                )
 
             # While we have too few of the given atom type
             while len(used) < types[s]:
@@ -653,7 +661,8 @@ class CutAndSplicePairing(OffspringCreator):
             use_total[s] = used
 
         n_tot = sum(len(ll) for ll in use_total.values())
-        assert n_tot == len(sym)
+        if n_tot != len(sym):
+            raise SCGOValidationError("Internal pairing bookkeeping mismatch")
 
         # Check if the generated structure contains enough atoms from both
         # parents. For target-tag crossover, enforce this on the target subset

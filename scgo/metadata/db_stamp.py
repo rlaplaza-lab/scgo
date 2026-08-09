@@ -12,7 +12,6 @@ from pathlib import Path
 
 from ase_ga.data import DataConnection
 
-from scgo.database.exceptions import DatabaseMigrationError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -65,42 +64,6 @@ def set_db_schema_version(db: DataConnection, version: int) -> None:
         logger.debug("Set DB schema version to %s", version)
 
 
-def bump_db_schema_version(
-    db: DataConnection, target_version: int | None = None
-) -> bool:
-    """Set ``schema_version`` in ``scgo_metadata`` (no data migration).
-
-    Writes *target_version* (default :data:`CURRENT_DB_SCHEMA_VERSION`) as the
-    recorded stamp. Returns True on success, including when the database is
-    already at *target_version*; raises DatabaseMigrationError for downgrades or
-    on write failure.
-    """
-    if target_version is None:
-        target_version = CURRENT_DB_SCHEMA_VERSION
-
-    current_version = get_db_schema_version(db)
-
-    if current_version == target_version:
-        logger.debug("Database already at version %s", target_version)
-        return True
-
-    if current_version > target_version:
-        raise DatabaseMigrationError(
-            f"Cannot downgrade from version {current_version} to {target_version}"
-        )
-
-    try:
-        set_db_schema_version(db, target_version)
-        logger.info(
-            "Marked database schema version as %s (no migrations applied)",
-            target_version,
-        )
-        return True
-    except (OSError, sqlite3.Error, TypeError, ValueError) as e:
-        logger.error("Failed to set schema version to %s: %s", target_version, e)
-        raise DatabaseMigrationError(f"Failed to set schema version: {e}") from e
-
-
 def ensure_db_schema_version(db: DataConnection) -> None:
     """Bump recorded schema version to :data:`CURRENT_DB_SCHEMA_VERSION` when behind."""
     current_version = get_db_schema_version(db)
@@ -111,7 +74,7 @@ def ensure_db_schema_version(db: DataConnection) -> None:
             current_version,
             CURRENT_DB_SCHEMA_VERSION,
         )
-        bump_db_schema_version(db, CURRENT_DB_SCHEMA_VERSION)
+        set_db_schema_version(db, CURRENT_DB_SCHEMA_VERSION)
     elif current_version > CURRENT_DB_SCHEMA_VERSION:
         logger.warning(
             "Database version %s is newer than expected %s — update SCGO to the "

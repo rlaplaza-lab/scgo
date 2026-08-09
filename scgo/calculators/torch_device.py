@@ -13,16 +13,7 @@ _warned_unsupported: set[str] = set()
 
 def _normalize_device_str(device: str | torch.device) -> str:
     """Normalize a device specifier to a lowercase string (e.g. ``cuda:0``)."""
-    if isinstance(device, torch.device):
-        if device.index is not None and device.type == "cuda":
-            return f"cuda:{device.index}"
-        return device.type
-    text = str(device).strip().lower()
-    if text.startswith("cuda"):
-        return text
-    if text in ("cpu", "mps"):
-        return text
-    return text
+    return str(device).strip().lower()
 
 
 def _is_supported(device_str: str, *, allow_mps: bool) -> bool:

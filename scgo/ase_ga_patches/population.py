@@ -488,7 +488,7 @@ class FitnessStrategyPopulation(Population):
         comparator=None,
         logfile=None,
         use_extinct=False,
-        rng=np.random,
+        rng=None,
         elite_fraction=0.1,
         run_id: str | None = None,
     ):

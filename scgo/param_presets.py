@@ -115,10 +115,10 @@ _LOW_EFFORT_NEB_FLOOR_BARE: int = 1000
 _LOW_EFFORT_NEB_FLOOR_ADSORBATE: int = 1000
 
 # Per-system-type NEB defaults consumed by `get_ts_search_params` and
-# `coerce_ts_params_to_runner_kwargs`. Keep `neb_align_endpoints` and
-# `neb_interpolation_mic` coherent with `SystemPolicy.neb_disable_alignment` /
-# `neb_force_mic` (an import-time assertion below guards against drift). Other
-# knobs (n_images, steps, climb, pairing gates, ...) are independent per type.
+# `coerce_ts_params_to_runner_kwargs`. Keep `neb_interpolation_mic` coherent with
+# `SystemPolicy.neb_force_mic` (an import-time assertion below guards against
+# drift). Other knobs (n_images, steps, climb, alignment, pairing gates, ...) are
+# independent per type.
 # ``neb_fmax`` / ``torchsim_fmax`` are always ``_TS_NEB_FMAX`` (enforced in tests).
 _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_align_endpoints": True,

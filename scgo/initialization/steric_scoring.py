@@ -16,6 +16,23 @@ def get_blmin_distance(
     return blmin[(int(atomic_number_b), int(atomic_number_a))]
 
 
+def _blmin_matrix(atomic_numbers, blmin: dict, other=None) -> np.ndarray:
+    """Dense ``(n_a × n_b)`` blmin threshold matrix for element-number arrays.
+
+    ``atomic_numbers`` gives the row elements; ``other`` (defaults to the same
+    array) gives the column elements. Each entry is the minimum allowed distance
+    between that element pair from ``blmin``. The matrix is symmetric when
+    ``other`` is ``None``.
+    """
+    a = np.asarray(atomic_numbers, dtype=int)
+    b = a if other is None else np.asarray(other, dtype=int)
+    vget = np.vectorize(
+        lambda zi, zj: get_blmin_distance(blmin, int(zi), int(zj)),
+        otypes=[float],
+    )
+    return vget(a[:, None], b[None, :])
+
+
 def steric_deficit(positions, atomic_numbers, blmin: dict) -> float:
     """Sum of blmin violations within a single structure (lower is better)."""
     n_atoms = len(positions)
@@ -45,13 +62,5 @@ def steric_deficit_two_sets(
         return 0.0
 
     distances = cdist(left_positions, right_positions)
-    left_z = np.asarray(left_numbers, dtype=int)
-    right_z = np.asarray(right_numbers, dtype=int)
-    required = np.array(
-        [
-            [get_blmin_distance(blmin, int(zi), int(zj)) for zj in right_z]
-            for zi in left_z
-        ],
-        dtype=float,
-    )
+    required = _blmin_matrix(left_numbers, blmin, right_numbers)
     return float(np.maximum(required - distances, 0.0).sum())

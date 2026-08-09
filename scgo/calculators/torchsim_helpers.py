@@ -657,7 +657,7 @@ def build_torchsim_relaxer(
     return TorchSimBatchRelaxer(**base)
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, repr=False)
 class TorchSimBatchRelaxer:
     """Batched relaxer built on :func:`torch_sim.optimize` and :func:`torch_sim.static`.
 
@@ -1473,6 +1473,12 @@ class TorchSimBatchRelaxer:
             ver = self.upet_version or _DEFAULT_UPET_VERSION
             return f"{self.upet_model_name}-v{ver}"
         return str(mk)
+
+    def __repr__(self) -> str:
+        return (
+            f"TorchSimBatchRelaxer(model_kind={self.model_kind!r}, "
+            f"device={self.device!r}, max_steps={self.max_steps!r})"
+        )
 
     def __deepcopy__(self, memo):  # pragma: no cover - deepcopy helper
         """Treat the relaxer as a singleton under ``deepcopy``.
