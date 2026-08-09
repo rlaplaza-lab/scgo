@@ -4,12 +4,15 @@
 ``system_type="gas_cluster"`` — gas-phase cluster only (no slab, no ``adsorbates``).
 
 Requires ``scgo[mace]`` (MACE + TorchSim). Start from
-:func:`~scgo.param_presets.get_torchsim_ga_params` and
-:func:`~scgo.param_presets.get_ts_search_params`, override keys, then pass the
-dicts as ``go_params`` / ``ts_params``. Runners deep-merge partial dicts with
-preset defaults at call time. Pass ``system_type`` on the ``run_go_ts`` call
-(not inside the param dicts). Keep ``seed`` consistent across ``seed=``,
-``go_params['seed']``, and ``ts_params['seed']``.
+:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` and
+:func:`~scgo.param_presets.get_low_effort_ts_search_params`, override keys, then
+pass the dicts as ``go_params`` / ``ts_params``. Those are the reduced-budget
+(~25% of production) variants of ``get_torchsim_ga_params`` /
+``get_ts_search_params``: identical calculator and NEB physics, smaller GA and
+NEB step budgets, so the script finishes quickly. Runners deep-merge partial
+dicts with preset defaults at call time. Pass ``system_type`` on the
+``run_go_ts`` call (not inside the param dicts). Keep ``seed`` consistent across
+``seed=``, ``go_params['seed']``, and ``ts_params['seed']``.
 
 TS: bare gas presets keep no-climb NEB, shared ``neb_fmax=0.20``, spring ``0.1``,
 5 images, and parallel TorchSim NEB. This example only sets ``max_pairs``.
@@ -25,7 +28,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from scgo import get_torchsim_ga_params, get_ts_search_params, run_go_ts
+from scgo import (
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
+    run_go_ts,
+)
 
 COMPOSITION = "Pt5"
 SEED = 42
@@ -41,16 +48,14 @@ def _resolve_output_stem() -> str:
     )
 
 
-NITER = 10
-POPULATION_SIZE = 50
-MAX_PAIRS = 15
+# GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
+# per-example knob (it is the dominant TS cost lever).
+MAX_PAIRS = 6
 
 
 def _build_go_params() -> dict:
-    go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
+    go_params = get_low_effort_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["optimizer_params"]["ga"].update(
-        niter=NITER,
-        population_size=POPULATION_SIZE,
         write_timing_json=True,
         detailed_timing=True,
     )
@@ -58,7 +63,7 @@ def _build_go_params() -> dict:
 
 
 def _build_ts_params() -> dict:
-    ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
+    ts_params = get_low_effort_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["write_timing_json"] = True
     return ts_params

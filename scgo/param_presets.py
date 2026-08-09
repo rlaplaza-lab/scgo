@@ -57,8 +57,11 @@ __all__ = [
     "get_torchsim_ga_params",
     "get_diversity_params",
     "get_high_energy_params",
+    "get_low_effort_torchsim_ga_params",
+    "get_low_effort_ts_search_params",
     "get_ts_defaults",
     "get_ts_search_params",
+    "low_effort_neb_steps",
     "get_default_uma_params",
     "get_default_upet_params",
     "get_uma_ga_benchmark_params",
@@ -71,6 +74,36 @@ __all__ = [
 # 0.20 eV/Å is the attainable MACE CI-NEB floor for soft adsorbate MEPs; tighter
 # values often collapse interior saddles to endpoints before forces reach 0.05.
 _TS_NEB_FMAX: float = 0.20
+
+# --- Low-effort ("~25% of production") preset knobs -------------------------
+# Consumed by `get_low_effort_torchsim_ga_params` / `get_low_effort_ts_search_params`.
+# These are the single tuning surface for the examples and the Kaggle GPU CI
+# matrix, which both build their params from those two functions.
+
+# Fraction of the production budget the low-effort presets aim for.
+_LOW_EFFORT_SCALE: float = 0.25
+
+# GA generations / population, scaled from the production benchmark reference
+# in `_get_base_ga_benchmark_params` (niter=10, population_size=50).
+_LOW_EFFORT_GA_NITER: int = 3
+_LOW_EFFORT_GA_POPULATION_SIZE: int = 13
+# Local relaxation steps per candidate. Surface system types clamp this up to
+# `SURFACE_GA_MIN_LOCAL_RELAX_STEPS` (400) in
+# `scgo.utils.run_helpers.prepare_algorithm_kwargs`, so surface GO stays
+# production-strength; only gas types actually run at this value.
+_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION: int = 70
+
+# NEB step floors. Scaling the production `neb_steps` by `_LOW_EFFORT_SCALE`
+# alone (bare 2000 -> 500, adsorbate 4000 -> 1000) is fine, but bare gas types
+# use `neb_steps="auto"` (~372 for Pt5), whose 25% would not converge a saddle.
+# A band that never reaches `neb_fmax` reports status="failed" (see
+# `scgo.ts_search.transition_state`), so a too-small budget silently yields zero
+# successes rather than a cheap answer. These floors keep every low-effort band
+# convergent; raise them if real runs show non-convergence.
+_LOW_EFFORT_NEB_FLOOR_BARE: int = 300
+# Adsorbate bands run two-stage climb, which spends `neb_steps // 2` on stage 1
+# (`scgo.ts_search.parallel_neb`), so the climb stage sees only half of this.
+_LOW_EFFORT_NEB_FLOOR_ADSORBATE: int = 1000
 
 # Per-system-type NEB defaults consumed by `get_ts_search_params` and
 # `coerce_ts_params_to_runner_kwargs`. Keep `neb_align_endpoints` and
@@ -751,4 +784,110 @@ def get_ts_search_params(
     if seed is not None:
         params["seed"] = int(seed)
 
+    return params
+
+
+def get_low_effort_torchsim_ga_params(
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str | None = None,
+) -> GLOptimizerParams:
+    """Return reduced-budget GO params (~25% of production) for demos and CI.
+
+    Thin wrapper over :func:`get_torchsim_ga_params`: the calculator, TorchSim
+    relaxer, autobatcher, ``expected_max_atoms`` and float32 dtype are all
+    inherited unchanged, so the *physics* matches a production run. Only the
+    search budget shrinks:
+
+    - ``niter`` / ``population_size`` are scaled to ~25% of the production
+      benchmark reference in :func:`_get_base_ga_benchmark_params`
+      (``niter=10`` / ``population_size=50``).
+    - ``niter_local_relaxation`` drops to
+      ``_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION``. Surface system types clamp it
+      back up to ``SURFACE_GA_MIN_LOCAL_RELAX_STEPS`` at run time, so supported
+      and slab searches keep production-strength local relaxation.
+    - Population init runs sequentially, early stopping is disabled (so the run
+      length is deterministic), and timing JSON export is off.
+
+    Used by ``examples/example_*.py`` and mirrored by the Kaggle GPU example
+    matrix in ``tests/integration/test_gpu_examples_integration.py`` so the two
+    cannot drift. Pass as-is to ``run_*`` or override individual keys.
+    """
+    params = get_torchsim_ga_params(
+        system_type=system_type,
+        surface_config=surface_config,
+        seed=seed,
+        model_name=model_name,
+    )
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": _LOW_EFFORT_GA_NITER,
+            "population_size": _LOW_EFFORT_GA_POPULATION_SIZE,
+            "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
+            "offspring_fraction": 0.5,
+            "n_jobs_population_init": 1,
+            "early_stopping_niter": 0,
+            "write_timing_json": False,
+            "detailed_timing": False,
+        }
+    )
+    return params
+
+
+def low_effort_neb_steps(system_type: SystemType) -> int:
+    """Return the low-effort ``neb_steps`` budget for one system type.
+
+    ~25% of the production budget, floored so every band can still converge to
+    ``neb_fmax``. Gas system types use ``neb_steps="auto"`` in production (a
+    composition-dependent value resolved at run time), which cannot be scaled
+    here, so they fall back to the floor directly.
+    """
+    policy = get_system_policy(system_type)
+    floor = (
+        _LOW_EFFORT_NEB_FLOOR_ADSORBATE
+        if policy.has_adsorbate
+        else _LOW_EFFORT_NEB_FLOOR_BARE
+    )
+    base = get_ts_defaults(system_type)["neb_steps"]
+    if not isinstance(base, int):
+        # "auto": resolved from composition at run time, so only the floor applies.
+        return floor
+    return max(floor, round(base * _LOW_EFFORT_SCALE))
+
+
+def get_low_effort_ts_search_params(
+    calculator: str = "MACE",
+    calculator_kwargs: dict[str, Any] | None = None,
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Return reduced-budget TS params (~25% of production) for demos and CI.
+
+    Thin wrapper over :func:`get_ts_search_params`. Every physics knob is
+    inherited unchanged — ``neb_n_images`` (7 for adsorbate types, 5 otherwise),
+    ``neb_climb``, ``neb_fmax``, spring constant, MIC / cell remap / lattice
+    rotation, ``max_endpoint_mismatch``, ``energy_gap_threshold`` and
+    ``parallel_neb_max_bands`` — so a saddle found here is as valid as one from
+    a production run. Only ``neb_steps`` / ``torchsim_max_steps`` shrink, to
+    :func:`low_effort_neb_steps`, and timing JSON export is off.
+
+    ``max_pairs`` is deliberately left at the preset default (``None`` = no cap):
+    it is the main cost lever for the TS stage, so callers set it explicitly for
+    their budget.
+    """
+    params = get_ts_search_params(
+        calculator,
+        calculator_kwargs,
+        system_type=system_type,
+        surface_config=surface_config,
+        seed=seed,
+    )
+    neb_steps = low_effort_neb_steps(system_type)
+    params["neb_steps"] = neb_steps
+    params["torchsim_max_steps"] = neb_steps
+    params["write_timing_json"] = False
     return params

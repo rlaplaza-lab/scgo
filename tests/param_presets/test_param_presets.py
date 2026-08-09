@@ -9,9 +9,12 @@ from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import (
     TS_DEFAULTS_BY_SYSTEM_TYPE,
     get_default_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
     get_torchsim_ga_params,
     get_ts_defaults,
     get_ts_search_params,
+    low_effort_neb_steps,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
@@ -475,3 +478,135 @@ def test_get_torchsim_ga_params_default_relaxer_matches_default_model():
         pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
     assert p["calculator_kwargs"].get("model_name") == "mace_matpes_0"
     assert p["optimizer_params"]["ga"]["relaxer"].mace_model_name == "mace_matpes_0"
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_low_effort_ts_params_only_shrink_step_budget(system_type):
+    """The low-effort TS preset must change budgets, never NEB physics."""
+    production = _ts_search_params_for(system_type)
+    if get_system_policy(system_type).uses_surface:
+        low = get_low_effort_ts_search_params(
+            system_type=system_type, surface_config=_surface_config_for_test()
+        )
+    else:
+        low = get_low_effort_ts_search_params(system_type=system_type)
+
+    budget_keys = {"neb_steps", "torchsim_max_steps", "write_timing_json"}
+    for key, expected in production.items():
+        if key in budget_keys:
+            continue
+        assert low[key] == expected, (
+            f"{system_type}: low-effort preset changed physics key {key!r}: "
+            f"{low[key]!r} != {expected!r}"
+        )
+    assert low["write_timing_json"] is False
+    # max_pairs stays uncapped: it is the caller's cost lever.
+    assert low["max_pairs"] is None
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_low_effort_neb_steps_are_floored_and_reduced(system_type):
+    """NEB budgets shrink toward 25% but never below the convergence floor."""
+    policy = get_system_policy(system_type)
+    steps = low_effort_neb_steps(system_type)
+    floor = (
+        param_presets_module._LOW_EFFORT_NEB_FLOOR_ADSORBATE
+        if policy.has_adsorbate
+        else param_presets_module._LOW_EFFORT_NEB_FLOOR_BARE
+    )
+    assert steps >= floor
+
+    production = get_ts_defaults(system_type)["neb_steps"]
+    if isinstance(production, int):
+        assert steps <= production
+        expected = max(
+            floor, round(production * param_presets_module._LOW_EFFORT_SCALE)
+        )
+        assert steps == expected
+    else:
+        # "auto" is resolved from composition at run time, so only the floor applies.
+        assert production == "auto"
+        assert steps == floor
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_low_effort_ts_params_preserve_n_images(system_type):
+    """Adsorbate bands keep their 7 images; the budget preset must not reset them."""
+    policy = get_system_policy(system_type)
+    if policy.uses_surface:
+        low = get_low_effort_ts_search_params(
+            system_type=system_type, surface_config=_surface_config_for_test()
+        )
+    else:
+        low = get_low_effort_ts_search_params(system_type=system_type)
+    assert low["neb_n_images"] == (7 if policy.has_adsorbate else 5)
+
+
+def test_low_effort_ts_params_surface_config_required():
+    with pytest.raises(SCGOValidationError):
+        get_low_effort_ts_search_params(system_type="surface_cluster")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "system_type", ["gas_cluster", "gas_cluster_adsorbate", "surface_cluster"]
+)
+def test_low_effort_ga_params_shrink_budget_only(system_type):
+    """The low-effort GA preset must only shrink the search budget."""
+    pytest.importorskip("torch")
+    pytest.importorskip("mace")
+
+    kwargs = {"system_type": system_type, "seed": 7}
+    if get_system_policy(system_type).uses_surface:
+        kwargs["surface_config"] = _surface_config_for_test()
+    try:
+        production = get_torchsim_ga_params(**kwargs)
+        low = get_low_effort_torchsim_ga_params(**kwargs)
+    except Exception as exc:  # pragma: no cover - environment-dependent model load
+        pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
+
+    assert low["calculator"] == production["calculator"]
+    assert low["calculator_kwargs"] == production["calculator_kwargs"]
+    assert low["seed"] == production["seed"]
+
+    ga = low["optimizer_params"]["ga"]
+    assert ga["niter"] == param_presets_module._LOW_EFFORT_GA_NITER
+    assert ga["population_size"] == param_presets_module._LOW_EFFORT_GA_POPULATION_SIZE
+    assert (
+        ga["niter_local_relaxation"]
+        == param_presets_module._LOW_EFFORT_GA_NITER_LOCAL_RELAXATION
+    )
+    assert ga["n_jobs_population_init"] == 1
+    assert ga["early_stopping_niter"] == 0
+    assert ga["write_timing_json"] is False
+    assert ga["detailed_timing"] is False
+    # Budget is genuinely below the production benchmark reference.
+    base = param_presets_module._get_base_ga_benchmark_params(7)["optimizer_params"][
+        "ga"
+    ]
+    assert ga["niter"] < base["niter"]
+    assert ga["population_size"] < base["population_size"]
+
+
+@pytest.mark.slow
+def test_low_effort_ga_params_surface_local_relaxation_is_clamped_up():
+    """Surface GO keeps production-strength local relaxation despite the low budget."""
+    pytest.importorskip("torch")
+    pytest.importorskip("mace")
+
+    cfg = _surface_config_for_test()
+    try:
+        params = get_low_effort_torchsim_ga_params(
+            system_type="surface_cluster", surface_config=cfg, seed=5
+        )
+    except Exception as exc:  # pragma: no cover - environment-dependent model load
+        pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
+
+    prepared = prepare_algorithm_kwargs(
+        params["optimizer_params"]["ga"],
+        {"fitness_strategy": "low_energy"},
+        ["Pt"] * 5,
+        "ga",
+        system_type="surface_cluster",
+    )
+    assert prepared["niter_local_relaxation"] >= 400

@@ -7,6 +7,10 @@
 Requires ``scgo[mace]``. Pass the same ``surface_config`` to the preset builders
 and ``run_go_ts`` (values must agree when both are set). See
 ``docs/source/parameters.rst`` (*Parameter resolution*) for merge rules.
+Params come from the reduced-budget (~25% of production)
+:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
+:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
+production calculator and NEB physics but shrink the GA and NEB step budgets.
 
 TS: bare surface presets keep no-climb NEB, shared ``neb_fmax=0.20``, spring
 ``0.1``, 5 images, MIC + cell remap + lattice rotation, and parallel NEB.
@@ -24,8 +28,8 @@ from pathlib import Path
 
 from scgo import (
     SurfaceSystemConfig,
-    get_torchsim_ga_params,
-    get_ts_search_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
     make_graphite_surface_config,
     run_go_ts,
 )
@@ -44,22 +48,21 @@ def _resolve_output_stem() -> str:
     )
 
 
-NITER = 6
-POPULATION_SIZE = 24
-MAX_PAIRS = 10
+# GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
+# per-example knob (it is the dominant TS cost lever).
+MAX_PAIRS = 6
 SLAB_LAYERS = 3
+SLAB_REPEAT_XY = 3
 
 
 def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
-    go_params = get_torchsim_ga_params(
+    go_params = get_low_effort_torchsim_ga_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
     )
     go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
-        niter=NITER,
-        population_size=POPULATION_SIZE,
         write_timing_json=True,
         detailed_timing=True,
     )
@@ -67,7 +70,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
 
 
 def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
-    ts_params = get_ts_search_params(
+    ts_params = get_low_effort_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
@@ -79,7 +82,10 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
 
 
 def main() -> None:
-    surface_config = make_graphite_surface_config(slab_layers=SLAB_LAYERS)
+    surface_config = make_graphite_surface_config(
+        slab_layers=SLAB_LAYERS,
+        slab_repeat_xy=SLAB_REPEAT_XY,
+    )
     run_go_ts(
         COMPOSITION,
         go_params=_build_go_params(surface_config),

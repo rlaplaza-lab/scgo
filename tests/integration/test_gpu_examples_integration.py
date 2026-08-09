@@ -1,9 +1,23 @@
-"""GPU integration tests mirroring examples/ at reduced GA/TS scale for Kaggle CI.
+"""GPU integration tests mirroring examples/ for Kaggle CI.
 
-Per-case knobs are derived from the matching ``examples/example_*.py`` scripts
-(~20–25% of their niter / population_size / max_pairs, with heavier surface NEB
-budgets preserved). Targets ~30 min for the full ``requires_cuda and requires_mace``
-Kaggle suite (vs ~10 min with the prior minimal settings).
+Budgets are the shared low-effort presets (``get_low_effort_torchsim_ga_params``
+/ ``get_low_effort_ts_search_params``): ~25% of the production GA budget, and
+~25%-with-a-floor NEB step budget. The examples build their params from the very
+same two functions, so this matrix cannot drift from ``examples/example_*.py``.
+Per-case deltas are limited to ``max_pairs`` (the dominant TS cost lever) and
+``connectivity_factor``.
+
+Slabs match the examples exactly (``slab_layers=3``, ``slab_repeat_xy=3``), so
+the defected / N-doped cells are physically meaningful rather than
+self-interacting at ~4.9 Å.
+
+Every case passes a ``barrier_range``, which switches
+``assert_e2e_go_ts_summary`` onto ``assert_ts_result_valid``: any saddle that is
+reported must be an interior image with correctly ordered endpoints and a sane
+barrier. Only ``surface_cluster`` additionally *requires* a saddle
+(``require_ts_candidates=True``); the other cases can legitimately end with zero
+qualifying pairs at this budget (gas cases often leave no on-disk pairs, and the
+adsorbate pre-NEB gates can report "No suitable pairs found").
 """
 
 from __future__ import annotations
@@ -16,8 +30,8 @@ from ase import Atoms
 
 from scgo import (
     get_cluster_formula,
-    get_torchsim_ga_params,
-    get_ts_search_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
     make_defected_graphite_surface_config,
     make_graphite_surface_config,
     make_n_doped_graphite_surface_config,
@@ -30,29 +44,21 @@ from scgo.system_types import (
     build_adsorbate_definition_from_inputs,
     get_system_policy,
 )
+from tests.constants import PT4_EMT_BARRIER_EV
 from tests.test_utils import assert_e2e_go_ts_summary
 
 SEED = 42
 
-# Shared GA/TS base; per-case overrides mirror example_*.py ratios.
-CI_EXAMPLE_GA_BASE = {
-    "offspring_fraction": 0.5,
-    "niter_local_relaxation": 70,
-    "n_jobs_population_init": 1,
-    "early_stopping_niter": 0,
-    "write_timing_json": False,
-    "detailed_timing": False,
-}
-
-CI_EXAMPLE_TS_BASE = {
-    "neb_n_images": 5,
-    "write_timing_json": False,
-}
-
 CONNECTIVITY = 1.8
+# Slab geometry mirrors examples/example_*.py exactly. Smaller cells (repeat 2)
+# put a vacancy / two N dopants in a ~8-atom top layer at ~4.9 Å, which
+# self-interacts across the periodic image and is not a meaningful system.
 SLAB_LAYERS = 3
-# Smaller than examples (repeat_xy=3) to keep Kaggle wall time bounded.
-SLAB_REPEAT_XY_CI = 2
+SLAB_REPEAT_XY = 3
+
+# Wide MACE barrier band: any interior saddle must land inside it. Shared with
+# the EMT e2e matrix so both suites apply the same physics bar shape.
+BARRIER_RANGE_EV = PT4_EMT_BARRIER_EV
 
 
 def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
@@ -76,29 +82,37 @@ class GpuExampleCase:
     adsorbates: list[Atoms] | None = None
     connectivity_factor: float | None = None
     freeze_adsorbate_internal_geometry: bool = False
-    ga_overrides: dict = field(default_factory=dict)
-    ts_overrides: dict = field(default_factory=dict)
+    # Dominant TS cost lever, so it stays per-case instead of living in the
+    # shared low-effort preset (which leaves max_pairs uncapped).
+    max_pairs: int = 2
     extra_ts: dict = field(default_factory=dict)
     expected_mobile_atoms: int = 5
     n_core_mobile: int = 5
     adsorbate_fragment_lengths: list[int] | None = None
     check_supported_binding: bool = True
-    # True = "trial of fire": assert_e2e_go_ts_summary then demands at least one
-    # *successful* saddle and rejects any OOM / never-ran band. Only the surface
-    # cluster cases set it; the gas cases keep it False because their reduced CI
-    # budget legitimately leaves no on-disk pairs for the TS stage, and
-    # ``surface_adsorbate`` legitimately reports "No suitable pairs found".
+    # Physics bar for every saddle this case reports: passing a range switches
+    # assert_e2e_go_ts_summary onto assert_ts_result_valid (interior TS image,
+    # endpoint ordering, barrier inside the band).
+    barrier_range: tuple[float, float] = BARRIER_RANGE_EV
+    # True = "trial of fire": assert_e2e_go_ts_summary additionally demands at
+    # least one *successful* saddle and rejects any OOM / never-ran band. Only
+    # surface_cluster sets it: it is a bare single-stage NEB with the largest
+    # pair budget, so it is the case that must produce a saddle. The others can
+    # legitimately end with zero qualifying pairs at this budget.
     require_ts_candidates: bool = False
 
 
 def _graphite_config() -> SurfaceSystemConfig:
-    return make_graphite_surface_config(slab_layers=SLAB_LAYERS)
+    return make_graphite_surface_config(
+        slab_layers=SLAB_LAYERS,
+        slab_repeat_xy=SLAB_REPEAT_XY,
+    )
 
 
 def _defected_graphite_config() -> SurfaceSystemConfig:
     return make_defected_graphite_surface_config(
         slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY_CI,
+        slab_repeat_xy=SLAB_REPEAT_XY,
         n_vacancies=1,
         seed=SEED,
     )
@@ -107,74 +121,61 @@ def _defected_graphite_config() -> SurfaceSystemConfig:
 def _n_doped_graphite_config() -> SurfaceSystemConfig:
     return make_n_doped_graphite_surface_config(
         slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY_CI,
+        slab_repeat_xy=SLAB_REPEAT_XY,
         n_dopants=2,
         seed=SEED,
     )
 
 
 GPU_EXAMPLE_CASES = [
-    # example_pt5_gas.py: NITER=10, POPULATION_SIZE=50, MAX_PAIRS=15
+    # example_pt5_gas.py
     GpuExampleCase(
         system_type="gas_cluster",
-        ga_overrides={"niter": 4, "population_size": 10},
-        ts_overrides={"max_pairs": 2, "neb_steps": 70},
-        # Gas CI budgets often leave TS with no on-disk pairs (prefer_final load);
-        # surface cluster cases keep require_ts_candidates=True.
+        max_pairs=2,
     ),
-    # example_pt5_graphite.py: NITER=6, POPULATION_SIZE=24, MAX_PAIRS=10
-    # max_pairs=6 (>4) so more bands than parallel_neb_max_bands=4 are produced
-    # and the surface chunking path actually runs on the T4. GA cost is unchanged
-    # (population_size stays 6); only the NEB band count grows.
+    # example_pt5_graphite.py. max_pairs=6 (>4) so more bands than
+    # parallel_neb_max_bands=4 are produced and the surface chunking path
+    # actually runs on the T4. This is the trial-of-fire case.
     GpuExampleCase(
         system_type="surface_cluster",
         surface_config=_graphite_config(),
         connectivity_factor=CONNECTIVITY,
-        ga_overrides={"niter": 2, "population_size": 6},
-        ts_overrides={"max_pairs": 6, "neb_steps": 90},
+        max_pairs=6,
         require_ts_candidates=True,
     ),
-    # example_pt5_oh_gas.py: NITER=8, POPULATION_SIZE=40, MAX_PAIRS=12
+    # example_pt5_oh_gas.py
     GpuExampleCase(
         system_type="gas_cluster_adsorbate",
         adsorbates=_adsorbates_oh(n=1),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
-        ga_overrides={"niter": 4, "population_size": 8},
-        ts_overrides={"max_pairs": 2, "neb_steps": 70},
+        max_pairs=2,
         expected_mobile_atoms=7,
         adsorbate_fragment_lengths=[2],
     ),
-    # example_pt5_2oh_graphite.py: NITER=6, POP=24, MAX_PAIRS=10, neb 7/800
+    # example_pt5_2oh_graphite.py
     GpuExampleCase(
         system_type="surface_cluster_adsorbate",
         surface_config=_graphite_config(),
         adsorbates=_adsorbates_oh(n=2),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
-        ga_overrides={"niter": 2, "population_size": 6},
-        ts_overrides={"max_pairs": 2, "neb_n_images": 5, "neb_steps": 120},
-        extra_ts={"energy_gap_threshold": 1.0},
+        max_pairs=2,
         expected_mobile_atoms=9,
         adsorbate_fragment_lengths=[2, 2],
-        # Adsorbate pre-NEB gates can legitimately leave no on-disk pairs on the
-        # GPU CI budget ("No suitable pairs found"), so this case is not in the
-        # "trial of fire" — only the bare surface_cluster cases demand a success.
-        require_ts_candidates=False,
     ),
-    # example_defected_graphite.py: NITER=4, POP=16, MAX_PAIRS=4
+    # example_defected_graphite.py
     GpuExampleCase(
         system_type="surface",
         composition=[],
         surface_config=_defected_graphite_config(),
         connectivity_factor=CONNECTIVITY,
-        ga_overrides={"niter": 1, "population_size": 4},
-        ts_overrides={"max_pairs": 1, "neb_steps": 90},
+        max_pairs=1,
         expected_mobile_atoms=0,
         n_core_mobile=0,
         check_supported_binding=False,
     ),
-    # example_n_doped_graphite.py: NITER=4, POP=16, MAX_PAIRS=4
+    # example_n_doped_graphite.py
     GpuExampleCase(
         system_type="surface_adsorbate",
         composition=[],
@@ -182,8 +183,7 @@ GPU_EXAMPLE_CASES = [
         adsorbates=_adsorbates_oh(n=1),
         connectivity_factor=CONNECTIVITY,
         freeze_adsorbate_internal_geometry=True,
-        ga_overrides={"niter": 1, "population_size": 4},
-        ts_overrides={"max_pairs": 1, "neb_steps": 120},
+        max_pairs=1,
         expected_mobile_atoms=2,
         n_core_mobile=0,
         adsorbate_fragment_lengths=[2],
@@ -192,16 +192,13 @@ GPU_EXAMPLE_CASES = [
 
 
 def _build_go_params(case: GpuExampleCase) -> dict:
-    go_params = get_torchsim_ga_params(
+    go_params = get_low_effort_torchsim_ga_params(
         system_type=case.system_type,
         surface_config=case.surface_config,
         seed=SEED,
     )
     if case.connectivity_factor is not None:
         go_params["connectivity_factor"] = case.connectivity_factor
-    ga_params = dict(CI_EXAMPLE_GA_BASE)
-    ga_params.update(case.ga_overrides)
-    go_params["optimizer_params"]["ga"].update(ga_params)
     if case.freeze_adsorbate_internal_geometry:
         go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
@@ -229,13 +226,12 @@ def _expected_formula(case: GpuExampleCase) -> str:
 
 
 def _build_ts_params(case: GpuExampleCase) -> dict:
-    ts_params = get_ts_search_params(
+    ts_params = get_low_effort_ts_search_params(
         system_type=case.system_type,
         surface_config=case.surface_config,
         seed=SEED,
     )
-    ts_params.update(CI_EXAMPLE_TS_BASE)
-    ts_params.update(case.ts_overrides)
+    ts_params["max_pairs"] = case.max_pairs
     if case.connectivity_factor is not None:
         ts_params["connectivity_factor"] = case.connectivity_factor
     ts_params.update(case.extra_ts)
@@ -279,4 +275,5 @@ def test_run_go_ts_gpu_example_smoke(tmp_path: Path, case: GpuExampleCase) -> No
             and get_system_policy(case.system_type).needs_supported_deposit_validation
         ),
         require_ts_candidates=case.require_ts_candidates,
+        barrier_range=case.barrier_range,
     )

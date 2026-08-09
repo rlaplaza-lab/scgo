@@ -75,8 +75,8 @@ def test_example_main_calls_run_go_ts_with_current_api(
         )
 
     module = _load_example_module(script_path)
-    monkeypatch.setattr(module, "get_torchsim_ga_params", _fake_go_params)
-    monkeypatch.setattr(module, "get_ts_search_params", _fake_ts_params)
+    monkeypatch.setattr(module, "get_low_effort_torchsim_ga_params", _fake_go_params)
+    monkeypatch.setattr(module, "get_low_effort_ts_search_params", _fake_ts_params)
     monkeypatch.setattr(module, "run_go_ts", _fake_run_go_ts)
     for maker in (
         "make_graphite_surface_config",
@@ -102,3 +102,18 @@ def test_example_main_calls_run_go_ts_with_current_api(
     assert ga["write_timing_json"] is True
     assert ga["detailed_timing"] is True
     assert kwargs["ts_params"]["write_timing_json"] is True
+
+
+@pytest.mark.parametrize("script_path", EXAMPLE_SCRIPTS, ids=lambda p: p.name)
+def test_example_uses_low_effort_presets(script_path: Path) -> None:
+    """Examples must build params from the shared low-effort presets.
+
+    The Kaggle GPU matrix in
+    ``tests/integration/test_gpu_examples_integration.py`` consumes the same two
+    functions; importing them here is what keeps the two in sync. An example
+    that falls back to ``get_torchsim_ga_params`` / ``get_ts_search_params``
+    would silently run at full production budget.
+    """
+    source = script_path.read_text(encoding="utf-8")
+    assert "get_low_effort_torchsim_ga_params(" in source
+    assert "get_low_effort_ts_search_params(" in source

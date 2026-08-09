@@ -28,7 +28,7 @@ Parametrized public `run_go` / `run_go_ts` matrix plus tagging and H₂ negative
 - Supported surface deposits: `assert_supported_cluster_binding` (+ fragment lengths)
 - TS: candidate counts when required; `assert_ts_result_valid` / finite barriers on success; explicit zero-TS negative control
 
-**GPU MACE (all six `system_type`s):** [`tests/integration/test_gpu_examples_integration.py`](integration/test_gpu_examples_integration.py) — same assertion helpers, example-shaped budgets.
+**GPU MACE (all six `system_type`s):** [`tests/integration/test_gpu_examples_integration.py`](integration/test_gpu_examples_integration.py) — same assertion helpers, budgets from the shared low-effort presets that `examples/` also uses.
 
 **API wiring (mocked, fast):** [`tests/integration/test_run_api.py`](integration/test_run_api.py) — validation, coherence errors, 6-type optimizer wiring matrix.
 
@@ -101,7 +101,7 @@ GPU tests are **not** run on GitHub-hosted CPU runners. Trigger manually:
 
 The workflow uploads a source tarball to the private Kaggle dataset `rlaplaza/scgocisrc` so the GPU kernel can run without relying on GitHub network access from Kaggle. Kaggle may mount that dataset as either `scgo-src.tar.gz` or an extracted tree under `/kaggle/input/scgocisrc/`. **Pip installs (MACE/UPET/TorchSim) still require internet on the Kaggle kernel** — enable it in your Kaggle account settings and complete phone verification if GPU sessions cannot reach PyPI. The kernel requests a **Tesla T4** GPU (`machine_shape: NvidiaTeslaT4`). Kaggle may assign a P100 otherwise; its sm_60 architecture is incompatible with the cu124 PyTorch wheels used here.
 
-Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all six `system_type` values from `examples/`). Shared e2e bars require run-dir `metadata.json`, SCGO-stamped `*.db`, and (for surface cluster / surface cluster+adsorbate) at least one TS candidate. Gas cases keep soft TS bars at CI budgets.
+Example-mimic GPU integration coverage (MACE): `tests/integration/test_gpu_examples_integration.py` (all six `system_type` values from `examples/`). Budgets come from the shared low-effort presets (`get_low_effort_torchsim_ga_params` / `get_low_effort_ts_search_params`), which the `examples/` scripts also use, so the matrix cannot drift from them; slabs match the examples (`slab_layers=3`, `slab_repeat_xy=3`). Shared e2e bars require run-dir `metadata.json` and a SCGO-stamped `*.db`. At least one TS candidate is required for `surface_cluster` only (the bare single-stage NEB with the largest pair budget); the other five cases can legitimately end with zero qualifying pairs at this budget. All six pass a `barrier_range`, so every saddle that *is* reported must clear `assert_ts_result_valid` (interior TS image, endpoint ordering, barrier inside the band).
 
 UPET GPU smoke coverage: `tests/integration/test_gpu_upet_smoke.py` (same artifact bars on the short gas GO smoke).
 

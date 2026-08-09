@@ -9,12 +9,15 @@ Workflow: build Pt5 core, place each OH on distinct hull sites, deposit the
 combined cluster on graphite with surface-biased orientation, then run tag-aware
 GA (core crossover, ``fragment_reposition`` for adsorbate diversity). See
 ``docs/source/api/system_types.rst`` for operator details.
+Params come from the reduced-budget (~25% of production)
+:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
+:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
+production calculator and NEB physics but shrink the GA and NEB step budgets.
 
 TS: surface-adsorbate presets supply climb, spring ``0.5``, shared
-``neb_fmax=0.20``, 7 images, ``neb_steps=4000``, parallel NEB,
-``max_endpoint_mismatch=1.5`` Å, ``energy_gap_threshold=0.75``, and
-IDPP-profile pair ranking (prefer robust interior maxima). This example only
-tightens ``max_pairs``.
+``neb_fmax=0.20``, 7 images, parallel NEB, ``max_endpoint_mismatch=1.5`` Å,
+``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
+interior maxima). This example only tightens ``max_pairs``.
 
 Output: ``results/pt5_2oh_graphite_mace/`` with ``Pt5_OH_OH_graphite_searches/``,
 ``Pt5_OH_OH_graphite_ts_results/``, and optional ``go_ts_timing.json`` (see docs
@@ -30,8 +33,8 @@ from ase import Atoms
 
 from scgo import (
     SurfaceSystemConfig,
-    get_torchsim_ga_params,
-    get_ts_search_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
     make_graphite_surface_config,
     run_go_ts,
 )
@@ -50,11 +53,11 @@ def _resolve_output_stem() -> str:
     )
 
 
-NITER = 6
-POPULATION_SIZE = 24
-# Fewer close pairs; adsorbate TS presets supply climb / spring / steps / fmax.
-MAX_PAIRS = 6
+# GA/NEB budgets come from the low-effort presets. Fewer close pairs here:
+# adsorbate bands are the most expensive (7 images, two-stage climb).
+MAX_PAIRS = 4
 SLAB_LAYERS = 3
+SLAB_REPEAT_XY = 3
 ADSORBATES = [
     Atoms(symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]),
     Atoms(symbols=["O", "H"], positions=[[2.2, 0.0, 0.0], [2.2, 0.0, 0.96]]),
@@ -62,15 +65,13 @@ ADSORBATES = [
 
 
 def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
-    go_params = get_torchsim_ga_params(
+    go_params = get_low_effort_torchsim_ga_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
     )
     go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
-        niter=NITER,
-        population_size=POPULATION_SIZE,
         write_timing_json=True,
         detailed_timing=True,
     )
@@ -79,7 +80,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
 
 
 def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
-    ts_params = get_ts_search_params(
+    ts_params = get_low_effort_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
@@ -91,7 +92,10 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
 
 
 def main() -> None:
-    surface_config = make_graphite_surface_config(slab_layers=SLAB_LAYERS)
+    surface_config = make_graphite_surface_config(
+        slab_layers=SLAB_LAYERS,
+        slab_repeat_xy=SLAB_REPEAT_XY,
+    )
     run_go_ts(
         COMPOSITION,
         go_params=_build_go_params(surface_config),
