@@ -12,6 +12,7 @@ Parameter resolution
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Combine atoms
 -------------
@@ -20,6 +21,7 @@ Combine atoms
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Logging
 -------
@@ -28,6 +30,7 @@ Logging
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Phase logging
 -------------
@@ -36,6 +39,7 @@ Phase logging
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Timing JSON
 -----------
@@ -44,6 +48,7 @@ Timing JSON
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Output path helpers
 -------------------
@@ -52,6 +57,7 @@ Output path helpers
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Path keys
 ---------
@@ -60,3 +66,4 @@ Path keys
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*

@@ -15,3 +15,4 @@ Structure tags, DB stamps, and run-dir JSON live in :doc:`metadata`.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*

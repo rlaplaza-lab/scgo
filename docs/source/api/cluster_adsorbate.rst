@@ -9,6 +9,7 @@ Configuration
 .. autoclass:: scgo.cluster_adsorbate.config.ClusterAdsorbateConfig
    :members:
    :show-inheritance:
+   :exclude-members: _*
 
 Surface site discovery
 ----------------------
@@ -19,6 +20,7 @@ clusters and slabs.
 .. autoclass:: scgo.cluster_adsorbate.sites.SurfaceSiteCandidate
    :members:
    :show-inheritance:
+   :exclude-members: _*
 
 .. autofunction:: scgo.cluster_adsorbate.sites.compute_surface_site_candidates
 
@@ -42,6 +44,7 @@ GA repositioning and rigid geometry
 
 .. autoclass:: scgo.cluster_adsorbate.reposition.FragmentRepositionMutation
    :members:
+   :exclude-members: _*
 
 .. autofunction:: scgo.cluster_adsorbate.rigid.enforce_frozen_adsorbate_geometry
 .. autofunction:: scgo.cluster_adsorbate.rigid.restore_rigid_adsorbate_fragments

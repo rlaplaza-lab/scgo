@@ -15,6 +15,7 @@ durable SQLite JSON column). Use :mod:`scgo.metadata.atoms` exclusively.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Final-minima SQL tagging
 ------------------------
@@ -23,6 +24,7 @@ Final-minima SQL tagging
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Output-JSON provenance header
 -----------------------------
@@ -36,6 +38,7 @@ schema key.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Run-directory records
 ---------------------
@@ -46,6 +49,7 @@ Run-directory records
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 SQLite DB stamp
 ---------------
@@ -57,3 +61,4 @@ This integer is **not** the output-JSON header version.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*

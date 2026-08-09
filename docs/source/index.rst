@@ -40,6 +40,7 @@ Contents
    api/surface
    api/cluster_adsorbate
    api/param_presets
+   api/system_types_guide
    api/system_types
    api/utils
 

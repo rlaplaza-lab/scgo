@@ -28,6 +28,7 @@ searches top layers plus adsorbates. Planar graphite/graphene top layers use
 .. autoclass:: scgo.surface.config.SurfaceSystemConfig
    :members:
    :show-inheritance:
+   :exclude-members: _*
 
 .. autofunction:: scgo.surface.make_surface_config
 .. autofunction:: scgo.surface.make_graphite_surface_config
