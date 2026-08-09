@@ -281,7 +281,7 @@ def test_multiple_xyz_files_generation(tmp_path):
     """Test generation of multiple XYZ files for different minima."""
     # Create multiple test structures using helper
     structures = []
-    from tests.test_utils import create_test_atoms
+    from tests.helpers import create_test_atoms
 
     for i in range(3):
         atoms = create_test_atoms(

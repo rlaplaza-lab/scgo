@@ -19,7 +19,7 @@ from ase import Atoms
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster, is_cluster_connected
 from tests.constants import INITIALIZATION_MODES
-from tests.test_utils import (
+from tests.helpers import (
     LARGE_SIZES,
     MEDIUM_SIZES,
     MIXED_COMPOSITIONS,

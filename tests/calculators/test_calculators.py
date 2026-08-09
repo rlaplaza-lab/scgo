@@ -11,7 +11,7 @@ from ase import Atoms
 
 from scgo.calculators.orca_helpers import prepare_orca_calculations, write_orca_inputs
 from scgo.calculators.vasp_helpers import prepare_vasp_calculations, write_vasp_inputs
-from tests.test_utils import setup_test_atoms
+from tests.helpers import setup_test_atoms
 
 
 def test_write_orca_inputs(tmp_path):

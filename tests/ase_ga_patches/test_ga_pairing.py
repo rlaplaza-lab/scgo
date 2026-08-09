@@ -8,7 +8,7 @@ from scgo.ase_ga_patches.cutandsplicepairing import (
     DualCutAndSplicePairing,
 )
 from scgo.exceptions import SCGOValidationError
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 
 def test_cut_and_splice_preserves_stoichiometry_and_is_deterministic(au2pt2_atoms, rng):

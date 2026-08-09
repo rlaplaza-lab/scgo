@@ -49,7 +49,7 @@ def test_rebuild_and_invalidate(tmp_path):
 
     # Create DB file
     db = connect(str(dbpath))
-    from tests.test_utils import create_test_atoms
+    from tests.helpers import create_test_atoms
 
     db.write(create_test_atoms(["Pt", "Pt"], positions=[[0, 0, 0], [1.5, 0, 0]]))
 
@@ -117,7 +117,7 @@ def test_setup_database_registers_search_level_registry(tmp_path):
     get_registry(search_dir).clear()
 
     # Create DB in the run directory (this is what the optimizer does)
-    from tests.test_utils import create_test_atoms
+    from tests.helpers import create_test_atoms
 
     pt6 = create_test_atoms(["Pt"] * 6)
     da = setup_database(str(run_dir), "ga_go.db", pt6, initial_candidate=pt6)
@@ -141,7 +141,7 @@ def test_setup_database_registers_search_level_registry(tmp_path):
 def test_create_preparedb_registers_registry(tmp_path, pt2_atoms):
     # Ensure fresh registry for this base_dir
     from scgo.database.registry import clear_registry_cache, get_registry
-    from tests.test_utils import create_preparedb
+    from tests.helpers import create_preparedb
 
     clear_registry_cache()
     reg = get_registry(tmp_path)
@@ -219,7 +219,7 @@ def test_setup_database_context_manager(tmp_path, pt2_atoms):
     with setup_database(
         tmp_path, "cm.db", pt2_atoms, initial_candidate=pt2_atoms
     ) as da:
-        from tests.test_utils import create_test_atoms
+        from tests.helpers import create_test_atoms
 
         a = create_test_atoms(["Pt", "Pt"], positions=[[0, 0, 0], [1.5, 0, 0]])
         # Insert as unrelaxed first so ASE assigns confid/identifiers as expected

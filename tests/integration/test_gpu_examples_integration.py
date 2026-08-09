@@ -58,7 +58,7 @@ from scgo.system_types import (
     get_system_policy,
 )
 from tests.constants import MLIP_BARRIER_EV
-from tests.test_utils import assert_e2e_go_ts_summary
+from tests.helpers import assert_e2e_go_ts_summary
 
 SEED = 42
 

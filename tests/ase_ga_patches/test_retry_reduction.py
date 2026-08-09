@@ -534,7 +534,7 @@ class TestPopulationSelectionCapped:
 
         from scgo.ase_ga_patches.population import Population
         from scgo.metadata.atoms import set_tags
-        from tests.test_utils import create_ga_comparator, create_preparedb
+        from tests.helpers import create_ga_comparator, create_preparedb
 
         db_path = tmp_path / "pop_cap.db"
         db = create_preparedb(pt3_atoms, db_path)

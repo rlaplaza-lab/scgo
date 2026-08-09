@@ -6,7 +6,7 @@ from ase.db import connect
 
 from scgo.metadata.db_stamp import stamp_db
 from scgo.metadata.persist import mark_final_minima_in_db
-from tests.test_utils import assert_db_final_row
+from tests.helpers import assert_db_final_row
 
 
 def _iter_system_kvps(db_path):
@@ -161,3 +161,54 @@ def test_mark_final_minima_fallback_scans_all_db(tmp_path):
         base_dir=str(tmp_path),
     )
     assert_db_final_row(str(dbpath), run_id, expect_final_id=True)
+
+
+def test_mark_final_minima_accepts_db_paths_and_returns_summary(tmp_path):
+    # Create a DB outside the canonical run_* layout
+    dbpath = tmp_path / "external.db"
+    db = connect(str(dbpath))
+
+    # Write a candidate row with stable final_id/run_id
+    db.write(
+        Atoms("Pt", positions=[[0, 0, 0]]),
+        relaxed=True,
+        key_value_pairs={
+            "run_id": "run_ext",
+            "raw_score": -0.1,
+            "final_id": "fid-ext",
+        },
+    )
+
+    # Prepare final_minima_info matching the above provenance
+    atoms = Atoms("Pt", positions=[[0, 0, 0]])
+    atoms.info.setdefault("key_value_pairs", {})["run_id"] = "run_ext"
+
+    final_info = [
+        {
+            "atoms": atoms,
+            "energy": -0.1,
+            "rank": 1,
+            "final_written": "foo.xyz",
+            "final_id": "fid-ext",
+        }
+    ]
+
+    # Call helper with explicit db_paths list (skip registry discovery)
+    summary = mark_final_minima_in_db(
+        final_info, base_dir=str(tmp_path), db_paths=[str(dbpath)]
+    )
+
+    assert isinstance(summary, dict)
+    assert summary.get("rows_updated", 0) >= 1
+    assert summary.get("dbs_touched", 0) >= 1
+    assert str(dbpath) in summary.get("details", {})
+
+    # Verify DB row was updated with final_unique_minimum and that summary matches actual DB
+    assert_db_final_row(str(dbpath), "run_ext", expect_final_id=True)
+
+    kv_list = list(_iter_system_kvps(dbpath))
+    assert kv_list
+    count_tagged = sum(1 for kv in kv_list if kv.get("final_unique_minimum"))
+    assert count_tagged >= 1
+    # summary should reflect number of rows actually updated
+    assert summary.get("rows_updated", 0) == count_tagged

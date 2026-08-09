@@ -10,7 +10,7 @@ from ase.build import fcc111
 from ase.calculators.emt import EMT
 
 from scgo.surface.config import SurfaceSystemConfig
-from tests.test_utils import setup_test_atoms
+from tests.helpers import setup_test_atoms
 
 
 def pytest_runtest_setup(item):
@@ -123,7 +123,7 @@ def ts_minima_db(tmp_path):
     """Temporary GA database with marked final minima for TS integration tests."""
     from ase import Atoms
 
-    from tests.test_utils import create_preparedb, mark_test_minima_as_final
+    from tests.helpers import create_preparedb, mark_test_minima_as_final
 
     db_path = tmp_path / "ts_minima.db"
     db = create_preparedb(Atoms("Pt2"), db_path, population_size=10)

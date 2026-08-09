@@ -61,7 +61,7 @@ from scgo.initialization.seed_combiners import (
 )
 from scgo.metadata.db_stamp import stamp_db
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     BATCH_TEST_SAMPLES,
     BATCH_TEST_SAMPLES_SLOW,
     MIXED_COMPOSITIONS,
@@ -300,7 +300,7 @@ class TestReproducibility:
         atoms2 = create_initial_cluster(comp, rng=rng2, mode="random_spherical")
 
         # Results should be different
-        from tests.test_utils import positions_equal
+        from tests.helpers import positions_equal
 
         assert not positions_equal(atoms1, atoms2)
 

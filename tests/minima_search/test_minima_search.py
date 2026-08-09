@@ -15,7 +15,7 @@ from scgo.metadata.atoms import set_tags
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.minima_search import run_trials, scgo
 from scgo.utils.helpers import ensure_directory_exists
-from tests.test_utils import create_test_atoms, setup_test_atoms
+from tests.helpers import create_test_atoms, setup_test_atoms
 
 
 class TestRequireCalculator:

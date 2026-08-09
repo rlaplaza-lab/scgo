@@ -642,14 +642,24 @@ def _relax_unrelaxed_candidates(
         requested gaid the latest trajectory (max mtime, tie-broken by max id)
         is loaded. This replaces the previous per-gaid ``select(gaid=...)`` loop,
         which was an O(N²) scan over a JSON key_value column with no index.
+
+        Rows without a ``gaid`` (e.g. the stoichiometry template row written at
+        database setup) are skipped. A gaid is excluded when *any* of its rows is
+        relaxed or queued, because ``add_relaxed_step`` appends a new
+        ``relaxed=1`` row and leaves the original ``relaxed=0`` row in place.
         """
         with da.c:
             rows_by_gaid: dict[int, list] = {}
+            excluded_gaids: set[int] = set()
             for r in da.c.select():
-                if getattr(r, "relaxed", 0) or getattr(r, "queued", 0):
+                gaid = getattr(r, "gaid", None)
+                if gaid is None:
                     continue
-                rows_by_gaid.setdefault(r.gaid, []).append(r)
-            gaids = sorted(rows_by_gaid)[:to_take]
+                if getattr(r, "relaxed", 0) or getattr(r, "queued", 0):
+                    excluded_gaids.add(gaid)
+                    continue
+                rows_by_gaid.setdefault(gaid, []).append(r)
+            gaids = sorted(rows_by_gaid.keys() - excluded_gaids)[:to_take]
             out: list[Atoms] = []
             for gaid in gaids:
                 latest = max(rows_by_gaid[gaid], key=lambda row: (row.mtime, row.id))
@@ -1527,8 +1537,10 @@ def ga_go(
                     initializer=_offspring_worker_bootstrap_init,
                     initargs=(offspring_ctx,),
                 )
-            else:
-                _ensure_offspring_worker_state(offspring_ctx)
+            # The parent process also needs its own state: a batch that yields a
+            # single job falls back to the in-process path below, which calls
+            # ``_build_offspring_worker`` here rather than in a pool worker.
+            _ensure_offspring_worker_state(offspring_ctx)
 
             try:
                 while created < n_offspring and attempts < max_attempts:

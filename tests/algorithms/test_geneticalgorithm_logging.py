@@ -1,7 +1,7 @@
 from ase.calculators.emt import EMT
 
 from scgo.algorithms import ga_go
-from tests.test_utils import MockRelaxer
+from tests.helpers import MockRelaxer
 
 
 def test_ga_go_offspring_logging_levels(tmp_path, rng, capfd):

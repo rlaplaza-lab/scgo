@@ -3,7 +3,7 @@
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import assert_cluster_valid
+from tests.helpers import assert_cluster_valid
 
 
 class TestExactCompositionMatching:

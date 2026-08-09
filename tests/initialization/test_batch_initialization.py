@@ -23,7 +23,7 @@ from scgo.initialization.initializers import (
     _find_valid_seed_combinations,
 )
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     assert_cluster_valid,
     create_paired_rngs,
     get_structure_signature,

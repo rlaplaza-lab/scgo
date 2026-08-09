@@ -7,7 +7,7 @@ from ase_ga.data import DataConnection
 
 from scgo.database.helpers import _load_single_database_worker
 from scgo.metadata.db_stamp import stamp_db
-from tests.test_utils import create_preparedb
+from tests.helpers import create_preparedb
 
 
 def test_load_single_database_worker_extracts_scgo_db(tmp_path, pt2_atoms):

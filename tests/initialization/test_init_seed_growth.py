@@ -28,7 +28,7 @@ from scgo.initialization.initialization_config import (
 )
 from scgo.initialization.initializers import compute_cell_side
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     DIVERSITY_TEST_SAMPLES_MEDIUM,
     DIVERSITY_THRESHOLD_DEFAULT,
     REPRODUCIBILITY_SEEDS,

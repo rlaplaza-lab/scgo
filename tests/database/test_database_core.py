@@ -54,7 +54,7 @@ from scgo.metadata.db_stamp import (
     get_db_schema_version,
     set_db_schema_version,
 )
-from tests.test_utils import assert_run_id_persisted, create_test_atoms
+from tests.helpers import assert_run_id_persisted, create_test_atoms
 
 
 def _final_kvp(raw_score: float) -> dict[str, float | bool]:
@@ -978,7 +978,7 @@ class TestRobustness:
     @pytest.mark.slow
     def test_add_ts_to_database_no_file_handle_leak(self, tmp_path, pt2_atoms):
         from scgo.ts_search.ts_network import add_ts_to_database
-        from tests.test_utils import mark_test_minima_as_final
+        from tests.helpers import mark_test_minima_as_final
 
         with _setup_test_db(
             tmp_path,

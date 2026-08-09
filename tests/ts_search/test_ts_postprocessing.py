@@ -12,7 +12,7 @@ from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.ts_search.transition_state_io import write_final_unique_ts
 from scgo.ts_search.transition_state_run import integrate_ts_to_database
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 
 def _make_ts_result(

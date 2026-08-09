@@ -17,7 +17,7 @@ from scgo.cluster_adsorbate import (
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
-from tests.test_utils import assert_pt_o_distance_reasonable
+from tests.helpers import assert_pt_o_distance_reasonable
 
 _OH_BOND = 0.96
 

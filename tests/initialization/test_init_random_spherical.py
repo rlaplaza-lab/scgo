@@ -23,7 +23,7 @@ from scgo.initialization import (
 )
 from scgo.initialization.atomic_radii import cluster_passes_ga_blmin
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
-from tests.test_utils import assert_cluster_valid
+from tests.helpers import assert_cluster_valid
 
 
 class TestRandomSphericalInitialization:

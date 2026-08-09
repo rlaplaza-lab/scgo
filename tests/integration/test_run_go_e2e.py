@@ -20,7 +20,7 @@ from scgo.surface.presets import (
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.helpers import get_cluster_formula
 from tests.constants import PT4_EMT_BARRIER_EV
-from tests.test_utils import (
+from tests.helpers import (
     assert_e2e_go_ts_summary,
     assert_e2e_minima_list,
     assert_supported_cluster_binding,

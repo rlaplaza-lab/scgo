@@ -17,7 +17,7 @@ from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.db_stamp import is_scgo_db
 from scgo.metadata.run_dir import get_run_directories, load_run_dir_record
 
-# Re-exported for `from tests.test_utils import ...` (single source: _tc).
+# Re-exported for `from tests.helpers import ...` (single source: _tc).
 REPRODUCIBILITY_RTOL = _tc.REPRODUCIBILITY_RTOL
 REPRODUCIBILITY_ATOL = _tc.REPRODUCIBILITY_ATOL
 SMOKE_RTOL = _tc.SMOKE_RTOL

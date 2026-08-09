@@ -10,7 +10,7 @@ import pytest
 
 from scgo.initialization import create_initial_cluster
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
-from tests.test_utils import assert_cluster_valid, create_paired_rngs
+from tests.helpers import assert_cluster_valid, create_paired_rngs
 
 
 @pytest.mark.parametrize(

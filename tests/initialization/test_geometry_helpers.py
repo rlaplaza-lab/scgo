@@ -12,7 +12,7 @@ from scgo.initialization.geometry_helpers import (
     get_largest_facets,
     place_multi_atom_seed_on_facet,
 )
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 
 class TestComputeBondDistanceParams:
@@ -643,7 +643,7 @@ class TestDisjointedClustersBug:
 
     def test_wrap_with_pbc_false(self):
         """Test that wrap() works correctly with PBC=False after our fix."""
-        from tests.test_utils import setup_test_atoms
+        from tests.helpers import setup_test_atoms
 
         # Create a cluster with atoms outside the cell
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [25, 0, 0]])
@@ -664,7 +664,7 @@ class TestDisjointedClustersBug:
 
     def test_scaled_position_wrapping(self):
         """Test that scaled position wrapping maintains structure integrity."""
-        from tests.test_utils import setup_test_atoms
+        from tests.helpers import setup_test_atoms
 
         # Create a cluster with atoms outside the cell
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [25, 0, 0]])

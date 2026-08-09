@@ -10,7 +10,7 @@ import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms import ga_go
 from scgo.database import get_connection
 from scgo.metadata.atoms import get_tag
-from tests.test_utils import MockRelaxer, assert_serial_parallel_offspring_equal
+from tests.helpers import MockRelaxer, assert_serial_parallel_offspring_equal
 
 
 def test_ga_go_generational_smoke(tmp_path, rng):
@@ -361,7 +361,7 @@ def test_relax_unrelaxed_relaxes_when_available_below_max_batch(tmp_path):
     """
     from ase_ga.data import DataConnection
 
-    from tests.test_utils import create_preparedb
+    from tests.helpers import create_preparedb
 
     db_path = tmp_path / "ga_relax_stall.db"
     atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]], cell=[10, 10, 10])

@@ -15,7 +15,7 @@ from ase_ga.data import DataConnection
 
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 # Intentionally excluded from CI/Kaggle: every run selects "not benchmark", and
 # Kaggle selects "not benchmark" too. This heavy MACE single-system regression is

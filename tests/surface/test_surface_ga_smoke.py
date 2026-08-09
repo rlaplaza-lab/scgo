@@ -7,7 +7,7 @@ from ase.calculators.emt import EMT
 from numpy.random import default_rng
 
 from scgo.algorithms import ga_go
-from tests.test_utils import (
+from tests.helpers import (
     MockRelaxer,
     assert_deposition_height_in_bounds,
     assert_supported_cluster_binding,

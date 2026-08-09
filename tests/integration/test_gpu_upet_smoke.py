@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.test_utils import assert_e2e_minima_list
+from tests.helpers import assert_e2e_minima_list
 
 pytest.importorskip("upet")
 pytest.importorskip("metatomic_torchsim")

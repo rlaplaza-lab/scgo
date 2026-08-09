@@ -14,7 +14,7 @@ from scgo.initialization.geometry_helpers import (
 )
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 
 def test_combine_seeds_empty_list(rng):

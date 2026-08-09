@@ -28,7 +28,7 @@ from scgo.initialization.templates import (
     generate_template_structure,
 )
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     REPRODUCIBILITY_SEEDS,
     assert_cluster_valid,
     create_paired_rngs,

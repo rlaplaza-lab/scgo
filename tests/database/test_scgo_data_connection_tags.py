@@ -3,7 +3,7 @@ from ase import Atoms
 from scgo.database import close_data_connection
 from scgo.database.helpers import SCGODataConnection, setup_database
 from scgo.metadata.atoms import set_tags
-from tests.test_utils import assert_run_id_persisted
+from tests.helpers import assert_run_id_persisted
 
 
 def test_db_adapter_persists_tags_in_key_value_pairs(tmp_path):

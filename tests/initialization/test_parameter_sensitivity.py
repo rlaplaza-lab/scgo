@@ -16,7 +16,7 @@ import pytest
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster, is_cluster_connected
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
-from tests.test_utils import (
+from tests.helpers import (
     LARGE_SIZES,
     MEDIUM_SIZES,
     SMALL_SIZES,

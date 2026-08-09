@@ -23,7 +23,7 @@ from scgo.ts_search.transition_state_io import (
 from scgo.ts_search.transition_state_run import (
     run_transition_state_search,
 )
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 
 @pytest.fixture

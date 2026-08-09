@@ -23,7 +23,7 @@ from scgo.runner_go import _run_go_campaign_compositions
 from scgo.utils.helpers import auto_niter
 from scgo.utils.run_helpers import prepare_algorithm_kwargs
 from tests.constants import REPRODUCIBILITY_ATOL, REPRODUCIBILITY_RTOL
-from tests.test_utils import (
+from tests.helpers import (
     MockRelaxer,
     assert_batch_init_reproducible,
     compare_minima_lists,

@@ -23,7 +23,7 @@ from scgo.initialization.templates import (
     get_nearest_magic_number,
     is_near_magic_number,
 )
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 # Template generation uses a more lenient connectivity factor
 TEMPLATE_GENERATION_FACTOR = 2.5

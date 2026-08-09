@@ -16,7 +16,7 @@ from scgo.surface.fragment_templates import build_default_fragment_template
 from scgo.surface.partition import prepare_slab_search_surface_config
 from scgo.surface.presets import make_n_doped_graphite_surface_config
 from scgo.system_types import validate_adsorbate_definition
-from tests.test_utils import assert_supported_cluster_binding
+from tests.helpers import assert_supported_cluster_binding
 
 
 def _small_slab() -> SurfaceSystemConfig:

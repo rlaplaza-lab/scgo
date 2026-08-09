@@ -475,7 +475,7 @@ def test_composition_isolation(tmp_path, rng):
 
 def test_no_duplicates_across_runs(tmp_path):
     """Test that duplicate structures from different runs are filtered out."""
-    from tests.test_utils import create_paired_rngs
+    from tests.helpers import create_paired_rngs
 
     composition = ["Pt", "Pt", "Pt"]
     output_dir = str(tmp_path / "Pt3_searches")

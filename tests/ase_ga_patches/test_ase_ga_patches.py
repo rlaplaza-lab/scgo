@@ -14,7 +14,7 @@ from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 from scgo.ase_ga_patches.cutandsplicepairing import CutAndSplicePairing
 from scgo.ase_ga_patches.population import Population
 from scgo.exceptions import SCGOValidationError
-from tests.test_utils import create_ga_comparator, create_paired_rngs, create_preparedb
+from tests.helpers import create_ga_comparator, create_paired_rngs, create_preparedb
 
 
 @pytest.fixture

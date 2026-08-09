@@ -28,7 +28,7 @@ from scgo.initialization.initialization_config import (
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     DIVERSITY_TEST_SAMPLES_LARGE,
     DIVERSITY_TEST_SAMPLES_MEDIUM,
     DIVERSITY_TEST_SAMPLES_SMALL,

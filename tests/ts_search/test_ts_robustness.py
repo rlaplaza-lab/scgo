@@ -11,7 +11,7 @@ import torch
 
 from scgo.ts_search.transition_state_run import run_transition_state_search
 from scgo.ts_search.ts_network import save_ts_network_metadata
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 
 def test_save_ts_network_metadata_skips_malformed_success():

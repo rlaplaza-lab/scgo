@@ -5,7 +5,7 @@ from ase import Atoms
 from scgo.ase_ga_patches.population import Population
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import set_tags
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 
 class SymbolsComparator:
