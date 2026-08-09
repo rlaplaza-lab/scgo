@@ -162,15 +162,23 @@ class TestDatabaseSetupAndFlow:
 
         assert db_file.exists()
 
-        with sqlite3.connect(db_file) as conn:
+        conn = sqlite3.connect(db_file)
+        try:
             cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table';")
             tables = {row[0] for row in cursor.fetchall()}
+            cursor.close()
+        finally:
+            conn.close()
 
         assert "systems" in tables
 
-        with sqlite3.connect(db_file) as conn:
+        conn = sqlite3.connect(db_file)
+        try:
             cursor = conn.execute("PRAGMA table_info(systems);")
             systems_columns = {row[1] for row in cursor.fetchall()}
+            cursor.close()
+        finally:
+            conn.close()
 
         assert {"id", "energy", "fmax"}.issubset(systems_columns)
 
@@ -917,8 +925,13 @@ class TestRobustness:
         ) as (_da, _db_path):
             pass
 
-        with sqlite3.connect(str(tmp_path / "test.db")) as conn:
-            mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        try:
+            cur = conn.execute("PRAGMA journal_mode;")
+            mode = cur.fetchone()[0]
+            cur.close()
+        finally:
+            conn.close()
 
         assert mode.lower() == "wal"
 

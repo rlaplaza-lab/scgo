@@ -46,6 +46,7 @@ def _load_atoms_chunk(
             rows = cur.fetchall()
         finally:
             conn.row_factory = old_row_factory
+            cur.close()
         for row in rows:
             row_dict = dict(row)
             for key in ("key_value_pairs", "data", "constraints"):

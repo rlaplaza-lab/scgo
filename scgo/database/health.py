@@ -51,50 +51,73 @@ def check_database_health(db_path: str | Path) -> dict:
 
     # Check SQLite integrity
     try:
-        with sqlite3.connect(str(db_path), timeout=10.0) as conn:
-            # Run integrity check
-            cursor = conn.execute("PRAGMA integrity_check;")
-            integrity_result = cursor.fetchone()[0]
+        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        try:
+            cur = None
+            try:
+                # Run integrity check
+                cur = conn.execute("PRAGMA integrity_check;")
+                integrity_result = cur.fetchone()[0]
+                cur.close()
+                cur = None
 
-            if integrity_result != "ok":
-                result["healthy"] = False
-                result["errors"].append(f"Integrity check failed: {integrity_result}")
+                if integrity_result != "ok":
+                    result["healthy"] = False
+                    result["errors"].append(
+                        f"Integrity check failed: {integrity_result}"
+                    )
 
-            # Get database size
-            cursor = conn.execute("PRAGMA page_count;")
-            page_count = cursor.fetchone()[0]
-            cursor = conn.execute("PRAGMA page_size;")
-            page_size = cursor.fetchone()[0]
-            db_size_mb = (page_count * page_size) / (1024 * 1024)
-            result["info"]["size_mb"] = round(db_size_mb, 2)
+                # Get database size
+                cur = conn.execute("PRAGMA page_count;")
+                page_count = cur.fetchone()[0]
+                cur.close()
+                cur = conn.execute("PRAGMA page_size;")
+                page_size = cur.fetchone()[0]
+                cur.close()
+                cur = None
+                db_size_mb = (page_count * page_size) / (1024 * 1024)
+                result["info"]["size_mb"] = round(db_size_mb, 2)
 
-            # Check journal mode
-            cursor = conn.execute("PRAGMA journal_mode;")
-            journal_mode = cursor.fetchone()[0]
-            result["info"]["journal_mode"] = journal_mode
+                # Check journal mode
+                cur = conn.execute("PRAGMA journal_mode;")
+                journal_mode = cur.fetchone()[0]
+                cur.close()
+                cur = None
+                result["info"]["journal_mode"] = journal_mode
 
-            # Get table count
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table';"
-            )
-            table_count = cursor.fetchone()[0]
-            result["info"]["table_count"] = table_count
-
-            # Check for ASE tables
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='systems';"
-            )
-            has_systems_table = cursor.fetchone() is not None
-
-            if not has_systems_table:
-                result["warnings"].append(
-                    "Missing 'systems' table - may not be an ASE database"
+                # Get table count
+                cur = conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table';"
                 )
-            else:
-                # Count rows in systems table
-                cursor = conn.execute("SELECT COUNT(*) FROM systems;")
-                row_count = cursor.fetchone()[0]
-                result["info"]["systems_count"] = row_count
+                table_count = cur.fetchone()[0]
+                cur.close()
+                cur = None
+                result["info"]["table_count"] = table_count
+
+                # Check for ASE tables
+                cur = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='systems';"
+                )
+                has_systems_table = cur.fetchone() is not None
+                cur.close()
+                cur = None
+
+                if not has_systems_table:
+                    result["warnings"].append(
+                        "Missing 'systems' table - may not be an ASE database"
+                    )
+                else:
+                    # Count rows in systems table
+                    cur = conn.execute("SELECT COUNT(*) FROM systems;")
+                    row_count = cur.fetchone()[0]
+                    cur.close()
+                    cur = None
+                    result["info"]["systems_count"] = row_count
+            finally:
+                if cur is not None:
+                    cur.close()
+        finally:
+            conn.close()
 
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         result["healthy"] = False
@@ -125,39 +148,58 @@ def get_database_statistics(db_path: str | Path) -> dict:
         return stats
 
     try:
-        with sqlite3.connect(str(db_path), timeout=10.0) as conn:
-            # Basic size info
-            cursor = conn.execute("PRAGMA page_count;")
-            page_count = cursor.fetchone()[0]
-            cursor = conn.execute("PRAGMA page_size;")
-            page_size = cursor.fetchone()[0]
-            stats["page_count"] = page_count
-            stats["page_size"] = page_size
-            stats["size_mb"] = round((page_count * page_size) / (1024 * 1024), 2)
-
-            # Journal mode
-            cursor = conn.execute("PRAGMA journal_mode;")
-            stats["journal_mode"] = cursor.fetchone()[0]
-
-            # Freelist (fragmentation indicator)
-            cursor = conn.execute("PRAGMA freelist_count;")
-            freelist = cursor.fetchone()[0]
-            stats["freelist_count"] = freelist
-            if page_count > 0:
-                stats["fragmentation_pct"] = round((freelist / page_count) * 100, 2)
-
-            # Count systems
+        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        try:
+            cur = None
             try:
-                cursor = conn.execute("SELECT COUNT(*) FROM systems;")
-                stats["systems_count"] = cursor.fetchone()[0]
-            except sqlite3.OperationalError:
-                stats["systems_count"] = None
+                # Basic size info
+                cur = conn.execute("PRAGMA page_count;")
+                page_count = cur.fetchone()[0]
+                cur.close()
+                cur = conn.execute("PRAGMA page_size;")
+                page_size = cur.fetchone()[0]
+                cur.close()
+                cur = None
+                stats["page_count"] = page_count
+                stats["page_size"] = page_size
+                stats["size_mb"] = round((page_count * page_size) / (1024 * 1024), 2)
 
-            # Get table names
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
-            )
-            stats["tables"] = [row[0] for row in cursor.fetchall()]
+                # Journal mode
+                cur = conn.execute("PRAGMA journal_mode;")
+                stats["journal_mode"] = cur.fetchone()[0]
+                cur.close()
+                cur = None
+
+                # Freelist (fragmentation indicator)
+                cur = conn.execute("PRAGMA freelist_count;")
+                freelist = cur.fetchone()[0]
+                cur.close()
+                cur = None
+                stats["freelist_count"] = freelist
+                if page_count > 0:
+                    stats["fragmentation_pct"] = round((freelist / page_count) * 100, 2)
+
+                # Count systems
+                try:
+                    cur = conn.execute("SELECT COUNT(*) FROM systems;")
+                    stats["systems_count"] = cur.fetchone()[0]
+                    cur.close()
+                    cur = None
+                except sqlite3.OperationalError:
+                    stats["systems_count"] = None
+
+                # Get table names
+                cur = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+                )
+                stats["tables"] = [row[0] for row in cur.fetchall()]
+                cur.close()
+                cur = None
+            finally:
+                if cur is not None:
+                    cur.close()
+        finally:
+            conn.close()
 
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
         logger.error("Failed to get statistics for %s: %s", db_path, e)

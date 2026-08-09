@@ -8,6 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
+from ase.db.sqlite import SQLite3Database as _ASESQLiteDatabase
 from ase_ga.data import DataConnection
 
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock
@@ -18,6 +19,55 @@ from scgo.exceptions import (
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _force_close_ase_connection(conn: sqlite3.Connection) -> None:
+    """Reliably release an ASE-managed SQLite connection.
+
+    On CPython 3.12+ ``sqlite3.Connection.close()`` can be *deferred* when an
+    active statement is still associated with the connection. That deferred
+    close then surfaces as a ``ResourceWarning: unclosed database`` during
+    interpreter/GC teardown (e.g. pytest's ``gc_collect_harder``), even though
+    ASE already called ``close()``. Rolling back any open transaction before
+    closing forces the underlying handle to be released immediately.
+    """
+    with contextlib.suppress(sqlite3.Error, AttributeError):
+        conn.rollback()
+    with contextlib.suppress(sqlite3.Error, AttributeError):
+        conn.close()
+
+
+def _patch_ase_managed_connection() -> None:
+    """Wrap ASE's ``SQLite3Database.managed_connection`` so handles always close.
+
+    ASE opens ephemeral SQLite handles inside ``managed_connection`` and relies
+    on its own ``__exit__`` to commit and close them. Under heavy GC (pytest's
+    ``gc_collect_harder``) that deferred close can emit a ``ResourceWarning``.
+
+    This wrapper manually drives ASE's ``managed_connection`` generator so ASE's
+    own commit/close logic runs first, then force-closes the handle. Persistent
+    connections owned by ``self.connection`` are left intact for ASE to reuse
+    and close via its own context manager.
+    """
+    import sys
+
+    original = _ASESQLiteDatabase.managed_connection
+
+    @contextmanager
+    def _wrapped_managed_connection(self, commit_frequency=5000):
+        cm = original(self, commit_frequency)
+        conn = cm.__enter__()
+        try:
+            yield conn
+        finally:
+            cm.__exit__(*sys.exc_info()[:3])
+            if self.connection is None:
+                _force_close_ase_connection(conn)
+
+    _ASESQLiteDatabase.managed_connection = _wrapped_managed_connection
+
+
+_patch_ase_managed_connection()
 
 
 def _open_ase_db_backend(backend) -> None:
@@ -271,6 +321,7 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
     if conn is None:
         return
 
+    # Release ASE's persistent handle first (commits + closes via __exit__).
     try:
         backend.__exit__(None, None, None)
     except (
@@ -281,8 +332,12 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
     ) as e:
         if log_errors:
             logger.debug("Error closing database connection: %s", e)
-        with contextlib.suppress(sqlite3.OperationalError, sqlite3.DatabaseError):
-            conn.close()
+
+    # Force-release any handle that ASE left open. On CPython 3.12+ the
+    # deferred close can otherwise surface as ``ResourceWarning`` during GC.
+    conn = getattr(backend, "connection", None)
+    if conn is not None:
+        _force_close_ase_connection(conn)
         backend.connection = None
 
 

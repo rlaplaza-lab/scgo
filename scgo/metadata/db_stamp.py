@@ -6,6 +6,7 @@ output-JSON provenance header (:mod:`scgo.metadata.provenance`).
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -117,17 +118,25 @@ def get_db_stamp(db_path: str | Path) -> dict[str, str]:
     """Return key/value pairs from the ``scgo_metadata`` table, or {}."""
     try:
         db_file = str(db_path)
-        with sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=0.1) as conn:
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='scgo_metadata'"
-            )
-            if cur.fetchone() is None:
-                return {}
-            rows = conn.execute("SELECT key, value FROM scgo_metadata").fetchall()
-            return {r[0]: r[1] for r in rows}
+        conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=0.1)
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, FileNotFoundError) as exc:
+        logger.debug("Could not open scgo_metadata from %s: %s", db_path, exc)
+        return {}
+
+    try:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='scgo_metadata'"
+        )
+        if cur.fetchone() is None:
+            return {}
+        rows = conn.execute("SELECT key, value FROM scgo_metadata").fetchall()
+        return {r[0]: r[1] for r in rows}
     except (sqlite3.OperationalError, sqlite3.DatabaseError, FileNotFoundError) as exc:
         logger.debug("Could not read scgo_metadata from %s: %s", db_path, exc)
         return {}
+    finally:
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
 
 
 _scgo_database_cache: dict[str, bool] = {}
