@@ -34,6 +34,12 @@
   ``failed`` and skip ``_finalize_neb_result`` instead of being reported as a
   transition state.
 
+- The strict ``require_ts_candidates`` "trial of fire" (demand at least one
+  successful saddle and reject degraded bands) is now correctly limited to bare
+  surface-cluster cases. The CPU ``gas_cluster`` and GPU ``surface_cluster_adsorbate``
+  cases legitimately yield no interior saddle / no on-disk pairs on their CI
+  budgets, so they keep ``require_ts_candidates=False``.
+
 ### Changed
 
 - Per-pair parallel NEB ``timings_s`` keys are renamed to ``total_wall_avg_s`` /
