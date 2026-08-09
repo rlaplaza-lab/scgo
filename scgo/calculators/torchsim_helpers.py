@@ -277,19 +277,24 @@ def _load_default_mace_model(
     compute_stress: bool = False,
 ):
     """Create a TorchSim MACE model given a canonical model identifier."""
-    from scgo.utils.mlip_extras import clear_torch_force_no_weights_only_load_env
-
-    clear_torch_force_no_weights_only_load_env()
-    # Lazy imports: only required for the MACE TorchSim path.
-    from mace.calculators.foundations_models import mace_mp  # type: ignore
-    from torch_sim.models.mace import MaceModel  # type: ignore
-
+    # Apply the torch.load(weights_only=False) compat shim BEFORE importing
+    # ``mace``/``e3nn``: ``e3nn.o3._wigner`` unpickles ``constants.pt`` at import
+    # time, and PyTorch >=2.6 rejects it under the default weights_only=True. The
+    # shim (installed by importing mace_helpers / _ensure_torch_load_mace_checkpoints)
+    # must be live before that import runs.
     from scgo.calculators.mace_helpers import (
         MaceUrls,
         _ensure_torch_load_mace_checkpoints,
     )
+    from scgo.utils.mlip_extras import clear_torch_force_no_weights_only_load_env
 
+    clear_torch_force_no_weights_only_load_env()
     _ensure_torch_load_mace_checkpoints()
+    # Lazy imports: only required for the MACE TorchSim path. The shim above is
+    # already active, so e3nn's constants.pt load succeeds under PyTorch >=2.6.
+    from mace.calculators.foundations_models import mace_mp  # type: ignore
+    from torch_sim.models.mace import MaceModel  # type: ignore
+
     model_selector = getattr(MaceUrls, mace_model_name, mace_model_name)
     raw_model = mace_mp(
         model=model_selector,
@@ -367,11 +372,24 @@ def _prepare_atoms_for_metatomic_torchsim(atoms: Atoms) -> Atoms:
     """Return a copy safe for metatomic/vesin when PBC is disabled.
 
     Metatomic neighbor lists require zero cell vectors along non-periodic
-    directions (gas-phase clusters still use a finite ASE box for spacing).
+    directions (gas-phase clusters still use a finite ASE box for spacing). For
+    partially-periodic systems (e.g. surface slabs with ``pbc=(True, True,
+    False)``) only the non-periodic direction's cell vector must be zeroed; the
+    periodic directions keep their full cell vectors. The geometry itself lives
+    in the atom positions, so zeroing a non-periodic cell vector does not change
+    the physics — it only satisfies the stricter validation introduced in
+    metatomic 0.4.1+ (newer than this code was originally written against).
     """
     prepared = atoms.copy()
     if not any(prepared.pbc):
         prepared.cell[:] = 0.0
+        return prepared
+    cell = prepared.cell.copy()
+    for axis in range(3):
+        if not prepared.pbc[axis]:
+            cell[axis, :] = 0.0
+            cell[:, axis] = 0.0
+    prepared.cell[:] = cell
     return prepared
 
 

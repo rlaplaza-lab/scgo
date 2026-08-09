@@ -35,8 +35,12 @@ def _ensure_torch_load_mace_checkpoints() -> None:
     _orig_load = torch.load
 
     def _load(*args: Any, **kwargs: Any) -> Any:
-        if "weights_only" not in kwargs:
-            kwargs["weights_only"] = False
+        # MACE/torch-sim foundation checkpoints pickle full model graphs with many
+        # custom globals (e.g. ``slice`` in ``constants.pt``). PyTorch 2.6+ defaults
+        # ``weights_only=True``, and some call sites pass it explicitly, so force
+        # it off here: SCGO only loads foundation checkpoints from trusted sources
+        # (same policy as upstream MACE).
+        kwargs["weights_only"] = False
         return _orig_load(*args, **kwargs)
 
     torch.load = _load  # type: ignore[method-assign]

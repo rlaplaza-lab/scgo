@@ -102,7 +102,14 @@ _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION: int = 70
 # `scgo.ts_search.transition_state`), so a too-small budget silently yields zero
 # successes rather than a cheap answer. These floors keep every low-effort band
 # convergent; raise them if real runs show non-convergence.
-_LOW_EFFORT_NEB_FLOOR_BARE: int = 300
+#
+# The bare floor is deliberately held at the adsorbate level (1000): below this,
+# the bare Pt5 band converges but its highest-energy image lands on the terminal
+# interior image, tripping the interior-TS assertion in the Kaggle CI "trial of
+# fire" (the saddle sits far enough along the path that 5 interior images cannot
+# resolve it as strictly interior). The extra steps let the MEP settle so the
+# peak falls on an interior image.
+_LOW_EFFORT_NEB_FLOOR_BARE: int = 1000
 # Adsorbate bands run two-stage climb, which spends `neb_steps // 2` on stage 1
 # (`scgo.ts_search.parallel_neb`), so the climb stage sees only half of this.
 _LOW_EFFORT_NEB_FLOOR_ADSORBATE: int = 1000

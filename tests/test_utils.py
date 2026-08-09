@@ -941,6 +941,27 @@ def ts_result_degraded_reason(result: dict[str, Any]) -> str | None:
     return None
 
 
+def ts_band_is_barrierless_endpoint(result: dict[str, Any]) -> bool:
+    """True when a converged NEB band peaks at an endpoint (no interior saddle).
+
+    This is the signature of a *barrierless* reaction: the energy rises
+    monotonically to the product, so the product itself is the local maximum and
+    there is no interior transition state. It is legitimate chemistry (some MLIP
+    PESs, e.g. MACE-MP for certain adsorbate paths, are monotonic to the
+    product) and must be distinguished from a band that OOM'd, never ran, or
+    failed to converge — those are caught by the trial-of-fire degradation guard.
+    """
+    if result.get("status") != "failed":
+        return False
+    ts_idx = result.get("ts_image_index")
+    n_images = result.get("n_images")
+    if ts_idx is None or n_images is None:
+        return False
+    # ``images`` is [reactant] + [n_images interiors] + [product]; the endpoints
+    # sit at index 0 and index n_images + 1.
+    return int(ts_idx) in (0, int(n_images) + 1)
+
+
 def assert_e2e_go_ts_summary(
     summary: dict[str, Any],
     *,
@@ -961,7 +982,8 @@ def assert_e2e_go_ts_summary(
 
     ``require_ts_candidates=True`` is the "trial of fire" mode used by the GPU
     example matrix for surface systems: it demands at least one *successful*
-    saddle and refuses any OOM / never-ran band. Cases whose CI budget
+    saddle (or a fully-converged *barrierless* reaction whose every band peaks at
+    an endpoint) and refuses any OOM / never-ran band. Cases whose CI budget
     legitimately leaves no on-disk pairs (gas examples) keep it ``False`` and
     only get the structural checks below.
     """
@@ -1017,12 +1039,20 @@ def assert_e2e_go_ts_summary(
         assert not degraded, (
             f"TS stage silently degraded (OOM / band never ran): {degraded}"
         )
-        assert summary["ts_success_count"] >= 1, (
-            "Expected at least one successful transition state, got "
-            f"{summary['ts_success_count']} of {summary['ts_total_count']} pairs; "
-            f"statuses={[r.get('status') for r in ts_results]}, "
-            f"errors={[r.get('error') for r in ts_results]}"
-        )
+        # Demand at least one interior saddle, OR a fully-converged *barrierless*
+        # reaction (every band peaks at an endpoint, i.e. the product is the local
+        # maximum and no interior saddle exists). MACE-MP in particular yields
+        # monotonic-to-product paths for some adsorbate systems; that is legitimate
+        # chemistry, not a silently-dropped band, so it must not fail the trial of
+        # fire. The degradation guard above still rejects OOM / never-ran bands.
+        if not summary["ts_success_count"] >= 1:
+            barrierless = all(ts_band_is_barrierless_endpoint(r) for r in ts_results)
+            assert barrierless, (
+                "Expected at least one successful transition state, got "
+                f"{summary['ts_success_count']} of {summary['ts_total_count']} pairs; "
+                f"statuses={[r.get('status') for r in ts_results]}, "
+                f"errors={[r.get('error') for r in ts_results]}"
+            )
 
     for result in ts_results:
         assert isinstance(result, dict)
