@@ -6,7 +6,6 @@ public ``run_go`` / ``run_go_campaign`` API in :mod:`scgo.runner_api`.
 
 from __future__ import annotations
 
-import copy
 import os
 import sqlite3
 from collections.abc import Iterable
@@ -16,7 +15,11 @@ from typing import Any, Literal
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
-from scgo.exceptions import SCGOValidationError
+from scgo.exceptions import (
+    SCGODatabaseError,
+    SCGOFileError,
+    SCGOValidationError,
+)
 from scgo.metadata.run_dir import ensure_run_id
 from scgo.minima_search import run_trials
 from scgo.surface.config import SurfaceSystemConfig
@@ -42,6 +45,7 @@ from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
+    initialize_params,
     log_configuration,
     prepare_algorithm_kwargs,
     validate_algorithm_params,
@@ -64,7 +68,13 @@ def _validate_optimizer_rng(params: dict[str, Any]) -> None:
 
 
 def _prepare_go_params(params: dict[str, Any] | None) -> dict[str, Any]:
-    params = copy.deepcopy(params or {})
+    """Backfill preset defaults under user overrides, then validate optimizer RNG.
+
+    Partial override dicts (e.g. ``{"calculator": "EMT"}``) must not leave
+    required keys missing downstream, otherwise callers see a bare ``KeyError``
+    instead of a usable run or a :class:`SCGOValidationError`.
+    """
+    params = initialize_params(params)
     _validate_optimizer_rng(params)
     return params
 
@@ -251,6 +261,7 @@ def _run_go_trials(
         validation_n_jobs=params.get("validation_n_jobs", 1),
         tag_final_minima=params.get("tag_final_minima", True),
         rng=rng,
+        verbosity=verbosity,
         run_id=run_id,
         clean=clean,
     )
@@ -351,6 +362,8 @@ def _run_go_campaign_compositions(
             ValueError,
             OSError,
             sqlite3.DatabaseError,
+            SCGODatabaseError,
+            SCGOFileError,
             SCGOValidationError,
         ) as e:
             # Enhanced error logging for HPC debugging

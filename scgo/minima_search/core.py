@@ -23,6 +23,8 @@ from ase_ga.utilities import get_all_atom_types
 from scgo.algorithms import bh_go, ga_go, simple_go
 from scgo.database import SCGODatabaseManager
 from scgo.exceptions import (
+    SCGODatabaseError,
+    SCGOFileError,
     SCGORuntimeError,
     SCGOValidationError,
 )
@@ -1063,7 +1065,13 @@ def run_trials(
     if tag_final_minima:
         try:
             mark_final_minima_in_db(final_minima_info, base_dir=output_dir)
-        except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
+        except (
+            sqlite3.DatabaseError,
+            sqlite3.OperationalError,
+            OSError,
+            SCGODatabaseError,
+            SCGOFileError,
+        ) as e:
             # Consider DB tagging a systemic failure -- surface it after logging
             logger.warning("Failed to tag final minima in DB: %s", e)
             raise

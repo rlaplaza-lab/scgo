@@ -227,15 +227,14 @@ def test_comparator_different_structures():
     assert not comp.looks_like(atoms1, atoms2)
 
 
-def test_comparator_different_composition_error():
-    """Test that comparing different compositions raises an error."""
+def test_comparator_different_composition_returns_false():
+    """Different compositions are not similar (must not raise)."""
     from scgo.utils.comparators import PureInteratomicDistanceComparator
 
     atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     atoms2 = Atoms("Au3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     comp = PureInteratomicDistanceComparator()
-    with pytest.raises(SCGOValidationError):
-        comp.looks_like(atoms1, atoms2)
+    assert comp.looks_like(atoms1, atoms2) is False
 
 
 def test_comparator_tolerance():

@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from scgo.metadata.provenance import output_json_provenance
 from scgo.utils.logging import get_logger, log_info_v
 
@@ -17,11 +19,17 @@ logger = get_logger(__name__)
 
 
 class RunDirJSONEncoder(json.JSONEncoder):
-    """JSON encoder: ``type`` objects become their ``__name__`` (for params snapshots)."""
+    """JSON encoder: ``type`` objects become their ``__name__`` (for params snapshots).
+
+    NumPy scalars (``np.int64``, ``np.float64``, ...) are converted to their
+    native Python equivalents so params snapshots stay serializable.
+    """
 
     def default(self, obj: Any) -> Any:
         if isinstance(obj, type):
             return obj.__name__
+        if isinstance(obj, np.generic):
+            return obj.item()
         return super().default(obj)
 
 

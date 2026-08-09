@@ -1232,7 +1232,15 @@ def run_transition_state_campaign(
     configure_logging(verbosity)
     logger = get_logger(__name__)
 
-    ts_kwargs = ts_kwargs or {}
+    ts_kwargs = dict(ts_kwargs or {})
+    # ``params`` and ``system_type`` are named arguments of this function and are
+    # forwarded explicitly below; duplicates inside ``ts_kwargs`` (e.g. from
+    # ``coerce_ts_params_to_runner_kwargs``) would raise ``TypeError`` at the
+    # ``**ts_kwargs`` expansion. The explicit arguments win.
+    ts_kwargs.pop("system_type", None)
+    ts_kwargs_params = ts_kwargs.pop("params", None)
+    if params is None:
+        params = ts_kwargs_params
     campaign_results: dict[str, list[dict[str, Any]]] = {}
     ads_def = ts_kwargs.get("adsorbate_definition")
     if not isinstance(ads_def, dict):

@@ -475,7 +475,11 @@ def bh_go(
     try:
         profile_t0 = perf_counter()
         profile_timings: dict[str, float] = {}
-        profile_counters: dict[str, int] = {"niter": int(niter), "accepted": 0}
+        profile_counters: dict[str, int] = {
+            "niter": int(niter),
+            "accepted": 0,
+            "rejected_invalid": 0,
+        }
         per_iteration: list[dict[str, Any]] | None = [] if detailed_timing else None
 
         def _finish_bh_timing() -> None:
@@ -654,17 +658,28 @@ def bh_go(
             profile_timings["offspring_local_relaxation_s"] = (
                 profile_timings.get("offspring_local_relaxation_s", 0.0) + dt_rel
             )
-            validate_structure_for_system_type(
-                a_trial,
-                system_type=system_type,
-                surface_config=surface_config,
-                n_slab=n_slab if surface_mode else None,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            )
+            try:
+                validate_structure_for_system_type(
+                    a_trial,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab if surface_mode else None,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                )
+            except SCGOValidationError as exc:
+                # A single invalid trial must not abort the whole run: count it as
+                # rejected and continue with the next move.
+                profile_counters["rejected_invalid"] += 1
+                logger.warning(
+                    "Iteration %d: rejecting invalid trial structure (%s)",
+                    iteration,
+                    exc,
+                )
+                continue
             set_tags(
                 a_trial,
                 **_run_metadata_extras(),
@@ -725,6 +740,9 @@ def bh_go(
             if accept:
                 profile_counters["accepted"] += 1
                 a_current = a_trial.copy()
+                # Atoms.copy() drops ``calc``; re-attach so force-based moves and
+                # the next relaxation keep working (MACE/UMA fail without it).
+                a_current.calc = calculator
                 e_current = e_trial
                 fitness_current = fitness_trial
 

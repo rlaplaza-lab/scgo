@@ -36,6 +36,7 @@ def _calculate_target_allocations(
             target_template_raw,
             2 * n_templates,  # Cap at 2 per template
             n_structures,
+            n_templates,  # Never ask for more template slots than templates exist
         )
 
     if n_seed_combinations > 0:

@@ -7,6 +7,8 @@ described in Vilhelmsen and Hammer, PRL 108, 126101 (2012).
 
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
@@ -250,6 +252,7 @@ class PureInteratomicDistanceComparator:
 
         Returns:
             True if the structures are considered similar, False otherwise.
+            Structures with different compositions are never similar (False).
         """
         cum_diff, max_diff = self.get_differences(a1, a2)
 
@@ -290,11 +293,15 @@ class PureInteratomicDistanceComparator:
 
         Returns:
             A tuple containing the cumulative difference and the maximum difference.
+            Structures with different compositions (element *counts* included)
+            are reported as a maximal non-match ``(inf, inf)`` rather than
+            raising, so callers such as :meth:`looks_like` simply return False.
         """
-        if set(a1.numbers) != set(a2.numbers):
-            raise SCGOValidationError(
-                "The two configurations must have the same composition"
-            )
+        if Counter(a1.numbers) != Counter(a2.numbers):
+            # Different compositions can never "look like" each other; report a
+            # maximal difference instead of raising so population dedup and
+            # diversity scoring keep working on mixed-composition pools.
+            return (float("inf"), float("inf"))
 
         p1 = get_sorted_dist_list(a1, mic=self.mic)
         p2 = get_sorted_dist_list(a2, mic=self.mic)

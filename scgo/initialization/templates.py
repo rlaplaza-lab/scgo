@@ -87,8 +87,10 @@ logger: Logger = get_logger(__name__)
 ICOSAHEDRON_SHELL_TO_ATOMS: dict[int, int] = {1: 1, 2: 13, 3: 55, 4: 147, 5: 309}
 
 _TEMPLATE_REGISTRY = {}
-_VALID_TEMPLATE_TYPES_CACHE: dict[int, tuple[str, ...]] = {}
-_VALID_TEMPLATE_TYPES_INFLIGHT: dict[int, Event] = {}
+# Keyed by (n_atoms, connectivity_factor): the connectivity factor changes both
+# the probed geometry and the validation threshold, so it must be part of the key.
+_VALID_TEMPLATE_TYPES_CACHE: dict[tuple[int, float], tuple[str, ...]] = {}
+_VALID_TEMPLATE_TYPES_INFLIGHT: dict[tuple[int, float], Event] = {}
 _VALID_TEMPLATE_TYPES_LOCK = Lock()
 
 
@@ -1433,14 +1435,19 @@ def generate_template_structure(
     return gen_func(composition, n_atoms, rng, connectivity_factor)
 
 
-def _find_valid_template_types(n_atoms: int) -> list[str]:
+def _find_valid_template_types(
+    n_atoms: int, connectivity_factor: float = CONNECTIVITY_FACTOR
+) -> list[str]:
     """Find all template types that can successfully generate a structure with n_atoms.
 
-    Validity probing is deterministic and keyed only by ``n_atoms`` so cached and
-    concurrent calls produce stable results independent of caller RNG state.
+    Validity probing is deterministic and keyed by ``(n_atoms, connectivity_factor)``
+    so cached and concurrent calls produce stable results independent of caller RNG
+    state, while still honouring the connectivity factor actually used downstream.
 
     Args:
         n_atoms: Target number of atoms
+        connectivity_factor: Factor for connectivity threshold used when probing
+            each generator (a stricter factor can make a template type invalid)
 
     Returns:
         List of template type names that can generate this size
@@ -1448,21 +1455,23 @@ def _find_valid_template_types(n_atoms: int) -> list[str]:
     if n_atoms <= 0:
         return []
 
+    cache_key = (n_atoms, float(connectivity_factor))
+
     leader = False
     with _VALID_TEMPLATE_TYPES_LOCK:
-        cached = _VALID_TEMPLATE_TYPES_CACHE.get(n_atoms)
+        cached = _VALID_TEMPLATE_TYPES_CACHE.get(cache_key)
         if cached is not None:
             return list(cached)
-        event = _VALID_TEMPLATE_TYPES_INFLIGHT.get(n_atoms)
+        event = _VALID_TEMPLATE_TYPES_INFLIGHT.get(cache_key)
         if event is None:
             event = Event()
-            _VALID_TEMPLATE_TYPES_INFLIGHT[n_atoms] = event
+            _VALID_TEMPLATE_TYPES_INFLIGHT[cache_key] = event
             leader = True
 
     if not leader:
         event.wait()
         with _VALID_TEMPLATE_TYPES_LOCK:
-            return list(_VALID_TEMPLATE_TYPES_CACHE.get(n_atoms, ()))
+            return list(_VALID_TEMPLATE_TYPES_CACHE.get(cache_key, ()))
 
     deterministic_rng = np.random.default_rng(n_atoms)
     valid_types: list[str] = []
@@ -1475,24 +1484,26 @@ def _find_valid_template_types(n_atoms: int) -> list[str]:
             gen_func: Callable[..., Atoms | None] = _TEMPLATE_GENERATORS[template_type]
             try:
                 result: Atoms | None = gen_func(
-                    test_composition, n_atoms, deterministic_rng
+                    test_composition, n_atoms, deterministic_rng, connectivity_factor
                 )
                 if result is not None and len(result) == n_atoms:
                     valid_types.append(template_type)
             except (ValueError, RuntimeError, TypeError) as exc:
                 logger.debug(
-                    "Template type %s probe failed for n_atoms=%s: %s",
+                    "Template type %s probe failed for n_atoms=%s "
+                    "(connectivity_factor=%s): %s",
                     template_type,
                     n_atoms,
+                    connectivity_factor,
                     exc,
                 )
                 continue
         computed = tuple(sorted(valid_types))
     finally:
         with _VALID_TEMPLATE_TYPES_LOCK:
-            inflight_event = _VALID_TEMPLATE_TYPES_INFLIGHT.pop(n_atoms, None)
+            inflight_event = _VALID_TEMPLATE_TYPES_INFLIGHT.pop(cache_key, None)
             if computed is not None:
-                _VALID_TEMPLATE_TYPES_CACHE[n_atoms] = computed
+                _VALID_TEMPLATE_TYPES_CACHE[cache_key] = computed
             if inflight_event is not None:
                 inflight_event.set()
 
@@ -1559,7 +1570,9 @@ def _generate_template_with_atom_adjustment(
         )
         return None
 
-    base_cluster: Atoms | None = gen_func(base_composition, base_n_atoms, rng)
+    base_cluster: Atoms | None = gen_func(
+        base_composition, base_n_atoms, rng, connectivity_factor
+    )
     if base_cluster is None:
         logger.debug(
             "Template adjustment skipped: base generator returned None (%s, n=%d)",
@@ -1745,7 +1758,7 @@ def generate_template_matches(
     is_exact_match: bool = nearest_magic == n_atoms
 
     if include_exact and is_exact_match:
-        valid_types = _find_valid_template_types(n_atoms)
+        valid_types = _find_valid_template_types(n_atoms, connectivity_factor)
         for template_type in valid_types:
             try:
                 atoms = _TEMPLATE_GENERATORS[template_type](
@@ -1782,7 +1795,7 @@ def generate_template_matches(
                 )
 
     if include_near and not is_exact_match and is_near_magic_number(n_atoms):
-        valid_types = _find_valid_template_types(nearest_magic)
+        valid_types = _find_valid_template_types(nearest_magic, connectivity_factor)
         for template_type in valid_types:
             try:
                 adjusted: Atoms | None = _generate_template_with_atom_adjustment(

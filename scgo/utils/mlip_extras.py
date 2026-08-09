@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import os
-from collections.abc import Iterable
 
 from scgo.exceptions import SCGOConfigurationError
 from scgo.utils.logging import get_logger
@@ -21,6 +20,14 @@ _MLIP_EXTRA_MODULES: dict[str, str] = {
     "upet": "upet",
 }
 
+# Distributions that uniquely identify each MLIP stack. Probing these directly
+# is what tells us whether a stack is *really* installed in this environment.
+_MLIP_EXTRA_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
+    "mace": ("mace-torch",),
+    "uma": ("fairchem-core",),
+    "upet": ("upet",),
+}
+
 
 def clear_torch_force_no_weights_only_load_env() -> None:
     """Remove env override that triggers e3nn import warnings on MACE load."""
@@ -34,49 +41,40 @@ def _import_spec_available(name: str) -> bool:
         return False
 
 
-def _installed_scgo_extras() -> set[str]:
-    """Return the set of optional-dependency extras actually installed for scgo.
+def _distribution_available(name: str) -> bool:
+    """Return True when ``name`` is an installed distribution in this env."""
+    try:
+        importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        # Editable / partially written metadata should never break detection.
+        logger.debug("Could not read distribution metadata for %s: %s", name, exc)
+        return False
+    return True
 
-    Detection is based on the installed ``scgo`` distribution's ``Requires-Dist``
-    metadata rather than bare ``find_spec`` checks. ``torch_sim`` and other shared
-    transitive dependencies (e.g. ``mace`` pulled in via ``torch-sim-atomistic``)
-    are importable across suites, so a name-based probe would falsely report
-    multiple MLIP stacks as present even in an isolated single-extra environment.
+
+def _installed_scgo_extras() -> set[str]:
+    """Return the set of MLIP extras whose real stack is installed.
+
+    Detection probes the *actual* MLIP distributions (``mace-torch``,
+    ``fairchem-core``, ``upet``) instead of parsing SCGO's own
+    ``Requires-Dist`` metadata. The metadata route lists every declared extra
+    regardless of what is installed (making detection a no-op) and can be
+    missing or unreadable for editable installs.
     """
     found: set[str] = set()
-    try:
-        metadata = importlib.metadata.metadata("scgo")
-    except importlib.metadata.PackageNotFoundError:
-        return found
-
-    requires: Iterable[str] = []
-    raw = metadata.get_all("Requires-Dist")
-    if raw:
-        requires = raw
-    else:
-        # Fall back to the functional ``requires()`` API for older metadata
-        # layouts whose ``PackageMetadata`` has no usable ``get_all``.
-        try:
-            requires = importlib.metadata.requires("scgo") or []
-        except importlib.metadata.PackageNotFoundError:
-            return found
-
-    for line in requires:
-        # Lines look like: ``fairchem-core>=2.19.0; extra == "uma"``.
-        marker = line.lower().split("extra ==")
-        if len(marker) < 2:
-            continue
-        extra = marker[1].split("]")[0].split(";")[0].strip().strip('"').strip("'")
-        found.add(extra)
+    for extra, distributions in _MLIP_EXTRA_DISTRIBUTIONS.items():
+        if any(_distribution_available(dist) for dist in distributions):
+            found.add(extra)
     return found
 
 
 def installed_mlip_stacks() -> tuple[bool, bool, bool]:
     """Return (mace_stack_present, uma_stack_present, upet_stack_present).
 
-    A stack counts as present only when its SCGO extra is recorded as installed
-    *and* its unique identifying module is importable. This keeps one suite's
-    shared transitive dependency from leaking into another suite's detection.
+    A stack counts as present only when its identifying distribution is
+    installed *and* its unique identifying module is importable.
     """
     installed_extras = _installed_scgo_extras()
     mace = "mace" in installed_extras and _import_spec_available(

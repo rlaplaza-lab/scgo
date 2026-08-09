@@ -90,6 +90,31 @@ def test_rotational_operator_targets_core_only_for_partition() -> None:
     assert rot.use_tags is True
 
 
+def test_zero_weights_uniform_fallback() -> None:
+    """All-zero operator weights fall back to a valid uniform selection."""
+    comp = ["Pt", "Pt", "Pt"]
+    tmpl = Atoms(symbols=comp, positions=np.zeros((3, 3)), pbc=False)
+    blmin = build_blmin_from_zs(tmpl.numbers, ratio=0.7)
+    ops, name_map = create_mutation_operators(
+        composition=comp,
+        n_to_optimize=3,
+        blmin=blmin,
+        rng=default_rng(0),
+        use_adaptive=True,
+    )
+    adaptive = get_adaptive_mutation_config(comp, use_adaptive=True)
+    adaptive["operator_weights"] = dict.fromkeys(name_map, 0.0)
+
+    selector = update_mutation_weights(ops, name_map, adaptive, rng=default_rng(0))
+
+    n_ops = len(ops)
+    increments = np.diff(np.asarray(selector.rho, dtype=float), prepend=0.0)
+    np.testing.assert_allclose(increments, np.full(n_ops, 1.0 / n_ops))
+    # Before the fallback, OperationSelector returned a None index here.
+    for _ in range(20):
+        assert selector.get_operator() is not None
+
+
 def test_stagnation_boost_propagates_to_partitioned_flattening_weight() -> None:
     name_map = {
         "rattle": 0,

@@ -563,6 +563,10 @@ def run_ts_campaign(
         user_params=ts_params,
         base=ts_base,
     )
+    # ``params`` (calculator name/kwargs) is a named argument of the campaign
+    # runner, which forwards it to ``run_transition_state_search`` alongside
+    # ``**ts_kwargs``; leaving it inside ``ts_kwargs`` duplicates the keyword.
+    ts_calc_params = ts_kwargs.pop("params", None)
 
     full_compositions: list[list[str]] = []
     ads_def: AdsorbateDefinition | None = None
@@ -586,6 +590,7 @@ def run_ts_campaign(
         full_compositions,
         st,
         output_dir=out_path,
+        params=ts_calc_params,
         seed=eff_seed,
         verbosity=verbosity,
         ts_kwargs=ts_kwargs,

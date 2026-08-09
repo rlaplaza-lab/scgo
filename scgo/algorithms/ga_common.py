@@ -1326,6 +1326,15 @@ def update_mutation_weights(
     s = float(sum(weights))
     if s > 0.0:
         weights = [w / s for w in weights]
+    elif weights:
+        # All-zero (or negative) weights make OperationSelector.__get_index__
+        # return None -> ``oplist[None]`` TypeError. Fall back to uniform.
+        logger.warning(
+            "All operator weights are non-positive; falling back to uniform "
+            "selection over %d operators",
+            len(weights),
+        )
+        weights = [1.0 / len(weights)] * len(weights)
 
     if "rattle" in name_map:
         rattle_idx: int = name_map["rattle"]

@@ -820,7 +820,10 @@ def get_largest_facets(
             if len(positions) > 1:
                 cov_matrix = np.cov(centered_positions.T)
                 eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
-                normal = eigenvectors[:, -1] / np.linalg.norm(eigenvectors[:, -1])
+                # np.linalg.eigh returns eigenvalues in ascending order, so the
+                # plane normal is the eigenvector of the *smallest* eigenvalue
+                # (the direction of least positional variance).
+                normal = eigenvectors[:, 0] / np.linalg.norm(eigenvectors[:, 0])
             else:
                 normal = np.array([1.0, 0.0, 0.0])
         else:

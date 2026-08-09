@@ -277,7 +277,8 @@ def _calculate_template_weight(
         total_candidates: Total number of template candidates
 
     Returns:
-        Weight for this template type
+        Weight for this template type; always non-negative so the weights can be
+        normalized into a probability vector for ``rng.choice``.
     """
     # Extract base weight from TEMPLATE_BASE_WEIGHTS
     base_weight = TEMPLATE_BASE_WEIGHTS.get(template_type, 1.0)
@@ -295,7 +296,10 @@ def _calculate_template_weight(
         MULTI_ELEMENT_TEMPLATE_PENALTY if n_unique_elements > 1 else 0.0
     )
 
-    return base_weight + diversity_boost - multi_element_penalty
+    # Clamp at zero: the penalty can exceed the base weight of low-ranked template
+    # types (e.g. cube/tetrahedron at 0.8 vs a 0.9 penalty), and negative weights
+    # would produce negative probabilities in rng.choice(p=...).
+    return max(0.0, base_weight + diversity_boost - multi_element_penalty)
 
 
 def _get_template_type(atoms: Atoms) -> str:
@@ -395,7 +399,11 @@ def _apply_template_rotation_and_validate(
 
     # Check if we have pre-computed rotations for this template signature
     template_signature = get_structure_signature(selected)
-    rotation_cache_key = (template_signature, cell_side)
+    # The signature only encodes sorted interatomic distances, so isostructural
+    # clusters of different elements (e.g. Pt3 vs Au3) share it. Include the
+    # chemical symbols so distinct compositions get distinct cache entries.
+    template_symbols = tuple(selected.get_chemical_symbols())
+    rotation_cache_key = (template_signature, template_symbols, cell_side)
     rotation_candidates = get_global_cache().get(
         TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key
     )

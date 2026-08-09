@@ -46,6 +46,94 @@ class MockVibrationsTrueMinimum:
         pass
 
 
+class MockVibrationsImaginary:
+    """ASE returns *complex* frequencies for imaginary modes (e.g. ``0+965j``)."""
+
+    def __init__(self, atoms, name=None):
+        self.atoms = atoms
+
+    def run(self):
+        pass
+
+    def get_frequencies(self):
+        return np.array([0 + 965j, 0 + 0j, 0 + 0j, 50 + 0j, 100 + 0j, 150 + 0j])
+
+    def clean(self):
+        pass
+
+
+class MockVibrationsComplexRealMinimum:
+    """Complex dtype but no imaginary modes: still a true minimum."""
+
+    def __init__(self, atoms, name=None):
+        self.atoms = atoms
+
+    def run(self):
+        pass
+
+    def get_frequencies(self):
+        return np.array([-0.1 + 0j, 0 + 0j, 0.1 + 0j, 50 + 0j, 100 + 0j, 150 + 0j])
+
+    def clean(self):
+        pass
+
+
+def test_imaginary_mode_detected(tmp_path, monkeypatch):
+    """A complex (imaginary) mode must be reported as NOT a true minimum."""
+    atoms = Atoms(["Pt", "Pt"], positions=[[0, 0, 0], [0, 0, 2.5]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=20)
+
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsImaginary)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is False
+
+
+def test_real_negative_mode_detected(tmp_path, monkeypatch):
+    """Purely real negative frequencies keep being detected as non-minima."""
+    atoms = Atoms(["Pt", "Pt"], positions=[[0, 0, 0], [0, 0, 2.5]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=20)
+
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsSaddle)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is False
+
+
+def test_complex_frequencies_without_imaginary_modes_are_minima(tmp_path, monkeypatch):
+    """A complex-dtype spectrum with zero imaginary parts stays a true minimum."""
+    atoms = Atoms(["Pt", "Pt"], positions=[[0, 0, 0], [0, 0, 2.5]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=20)
+
+    monkeypatch.setattr(
+        "scgo.utils.helpers.Vibrations", MockVibrationsComplexRealMinimum
+    )
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is True
+
+
 def test_is_true_minimum_high_forces(tmp_path):
     # Create an unrelaxed structure with high forces
     atoms = Atoms(["Pt", "Pt"], positions=[[0, 0, 0], [0, 0, 1.0]])

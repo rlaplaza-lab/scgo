@@ -366,7 +366,11 @@ def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
             1 + n_templates * TEMPLATE_PREFACTOR
         )
         expected_template_raw = int(n_structures * template_scaling)
-        expected_template = min(expected_template_raw, 2 * n_templates, n_structures)
+        # Template allocations are additionally capped by the number of available
+        # templates (each template is used at most once when structures are plentiful).
+        expected_template = min(
+            expected_template_raw, 2 * n_templates, n_structures, n_templates
+        )
     else:
         expected_template = 0
 

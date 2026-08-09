@@ -379,6 +379,11 @@ def _find_smaller_candidates(
         sorted_entries = sorted(entries, key=lambda e: e[0])
         deduped_entries = deduplicate_seed_candidates(sorted_entries)
 
+        # Deduplication groups by energy bin and geometry signature, so the
+        # surviving entries come back in an arbitrary (dict/bucket) order.
+        # Re-sort by energy so truncation keeps the lowest-energy candidates.
+        deduped_entries = sorted(deduped_entries, key=lambda e: e[0])
+
         if len(deduped_entries) > _MAX_CANDIDATES_PER_FORMULA:
             deduped_entries = deduped_entries[:_MAX_CANDIDATES_PER_FORMULA]
         processed[formula] = deduped_entries

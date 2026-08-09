@@ -261,6 +261,88 @@ def test_system_policy_surface_neb_defaults():
     assert slab_ads.needs_supported_deposit_validation is True
 
 
+def test_run_go_partial_params_backfills_preset_defaults(monkeypatch, tmp_path):
+    """Partial ``params`` overrides must be merged onto the preset defaults.
+
+    Regression: a partial dict such as ``{"calculator": "EMT"}`` used to reach
+    the optimizer with every other key missing.
+    """
+    captured: dict[str, object] = {}
+
+    def _fake_run_trials(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("scgo.runner_go.run_trials", _fake_run_trials)
+
+    minima = run_go(
+        ["Pt", "Pt", "Pt", "Pt"],
+        params={"calculator": "EMT"},
+        system_type="gas_cluster",
+        verbosity=0,
+        output_dir=tmp_path,
+    )
+
+    assert minima == []
+    defaults = get_default_params()
+    ga_defaults = defaults["optimizer_params"]["ga"]
+    gok = captured["global_optimizer_kwargs"]
+    assert gok["mutation_probability"] == ga_defaults["mutation_probability"]
+    assert gok["offspring_fraction"] == ga_defaults["offspring_fraction"]
+    assert gok["energy_tolerance"] == ga_defaults["energy_tolerance"]
+    assert gok["early_stopping_niter"] == ga_defaults["early_stopping_niter"]
+    assert gok["optimizer"] is not None
+    assert int(gok["population_size"]) > 0
+    assert captured["fmax_threshold"] == defaults["fmax_threshold"]
+    assert captured["check_hessian"] == defaults["check_hessian"]
+
+
+def test_run_go_partial_params_without_calculator_key_is_not_a_key_error(
+    monkeypatch, tmp_path
+):
+    """A partial ``params`` dict without ``calculator`` must never raise ``KeyError``."""
+    captured: dict[str, object] = {}
+
+    def _fake_run_trials(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("scgo.runner_go.run_trials", _fake_run_trials)
+    monkeypatch.setattr("scgo.runner_go.get_calculator_class", lambda name: EMT)
+
+    try:
+        minima = run_go(
+            ["Pt", "Pt"],
+            params={"fmax_threshold": 0.01},
+            system_type="gas_cluster",
+            verbosity=0,
+            output_dir=tmp_path,
+        )
+    except KeyError as exc:  # pragma: no cover - regression guard
+        pytest.fail(f"run_go leaked a bare KeyError for partial params: {exc!r}")
+    except SCGOValidationError:
+        return  # acceptable: the resolved default calculator may be unavailable
+
+    assert minima == []
+    assert captured["fmax_threshold"] == 0.01
+
+
+def test_run_go_partial_params_end_to_end_emt(tmp_path):
+    """End-to-end EMT smoke test for the partial-``params`` entry point."""
+    minima = run_go(
+        ["Pt", "Pt"],
+        params={"calculator": "EMT"},
+        system_type="gas_cluster",
+        verbosity=0,
+        output_dir=tmp_path,
+    )
+
+    assert minima
+    energy, atoms = minima[0]
+    assert isinstance(float(energy), float)
+    assert atoms.get_chemical_symbols() == ["Pt", "Pt"]
+
+
 def test_run_go_requires_system_type():
     with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_go("Pt3", params=None, verbosity=0)

@@ -5,11 +5,14 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import shutil
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 from ase import Atoms
@@ -466,28 +469,50 @@ def is_true_minimum(
 
     logger.debug("Max force is OK. Performing vibrational analysis to check Hessian")
 
+    # A unique cache name per call (and a private temp dir) keeps concurrent
+    # ProcessPoolExecutor workers from sharing/clobbering the same vib cache.
+    vib_dir = tempfile.mkdtemp(prefix="scgo_vib_")
+    vib_name = os.path.join(vib_dir, f"vib_check_{os.getpid()}_{uuid4().hex[:8]}")
+    vib: Vibrations | None = None
     try:
-        vib: Vibrations = Vibrations(atoms_check, name="vib_check")
+        vib = Vibrations(atoms_check, name=vib_name)
         vib.run()
-        frequencies: np.ndarray[tuple[Any, ...], np.dtype[Any]] = vib.get_frequencies()
-        vib.clean()
+        frequencies: np.ndarray[tuple[Any, ...], np.dtype[Any]] = np.atleast_1d(
+            np.asarray(vib.get_frequencies())
+        )
     except (RuntimeError, OSError, ValueError) as e:
         # Treat vibrational analysis failures as a non-minimum condition
         logger.warning("Vibrational analysis failed with error: %s", e)
         return False
+    finally:
+        if vib is not None:
+            with contextlib.suppress(OSError, RuntimeError, ValueError):
+                vib.clean()
+        shutil.rmtree(vib_dir, ignore_errors=True)
 
-    problematic_freqs = frequencies[frequencies < -imag_freq_threshold]
-    if problematic_freqs.size > 0:
+    # ASE returns *complex* frequencies for imaginary modes (e.g. 0+965j), so a
+    # plain ``frequencies < -threshold`` comparison never fires. Check the
+    # imaginary part explicitly (magnitude, to stay sign-convention agnostic)
+    # and keep a real-negative fallback for callers (and tests) that supply
+    # purely real frequency arrays.
+    imag_parts = np.abs(np.imag(frequencies))
+    real_parts = np.real(frequencies)
+    problematic_mask = (imag_parts > imag_freq_threshold) | (
+        real_parts < -imag_freq_threshold
+    )
+    imag_count = int(np.sum(problematic_mask))
+    if imag_count > 0:
+        problematic_freqs = frequencies[problematic_mask]
         logger.debug(
-            "Check failed: Found %s imaginary frequencies below -%.1f cm-1: %s",
-            problematic_freqs.size,
+            "Check failed: Found %s imaginary frequencies beyond %.1f cm-1: %s",
+            imag_count,
             imag_freq_threshold,
             np.round(problematic_freqs, 2),
         )
         logger.debug("Structure is likely a saddle point")
         return False
 
-    total_imag_count = int(np.sum(frequencies < 0.0))
+    total_imag_count = int(np.sum((imag_parts > 0.0) | (real_parts < 0.0)))
     moi = atoms_check.get_moments_of_inertia(vectors=False)
     is_linear: bool = any(np.isclose(moi, 0, atol=1e-5))
     expected_zero_modes: int = 5 if is_linear else 6

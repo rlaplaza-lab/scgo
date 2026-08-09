@@ -301,7 +301,18 @@ SYSTEM_TYPE_POLICIES: dict[SystemType, SystemPolicy] = {
 
 def get_system_policy(system_type: SystemType) -> SystemPolicy:
     """Return centralized behavior policy for one explicit system type."""
-    return SYSTEM_TYPE_POLICIES[system_type]
+    try:
+        return SYSTEM_TYPE_POLICIES[system_type]
+    except KeyError as e:
+        raise SCGOValidationError(
+            f"Unknown system_type: {system_type!r}. Expected one of "
+            f"{sorted(SYSTEM_TYPE_POLICIES)!r}."
+        ) from e
+    except TypeError as e:  # unhashable inputs (e.g. dict/list)
+        raise SCGOValidationError(
+            f"Invalid system_type: {system_type!r}. Expected one of "
+            f"{sorted(SYSTEM_TYPE_POLICIES)!r}."
+        ) from e
 
 
 def resolve_structure_mic(
