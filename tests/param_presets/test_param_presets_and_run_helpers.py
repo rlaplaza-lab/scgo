@@ -30,6 +30,9 @@ from scgo.utils.run_helpers import (
     resolve_diversity_params,
     validate_algorithm_params,
 )
+from tests.conftest import skip_uma_in_github_actions
+
+skip_uma_in_github_actions(allow_module_level=True)
 
 
 def test_get_default_params_structure():
