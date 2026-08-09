@@ -20,7 +20,7 @@ Slow CI (every PR): `pytest tests/ -m "slow and not benchmark"` with `SCGO_BATCH
 
 **CPU EMT (all six `system_type`s):** [`tests/integration/test_run_go_e2e.py`](integration/test_run_go_e2e.py)
 
-Parametrized public `run_go` / `run_go_ts` matrix plus tagging and H₂ negative-control cases. Shared strict bars live in [`helpers.py`](helpers.py) (`assert_e2e_minima_list`, `assert_e2e_go_ts_summary`, `assert_e2e_run_artifacts`):
+Parametrized public `run_go` / `run_go_ts` matrix plus tagging and H₂ negative-control cases. Shared strict bars live in [`test_utils.py`](test_utils.py) (`assert_e2e_minima_list`, `assert_e2e_go_ts_summary`, `assert_e2e_run_artifacts`):
 
 - Finite energies and expected atom counts (slab + mobile)
 - Database written and SCGO-stamped; `run_*/metadata.json` present
@@ -34,7 +34,7 @@ Parametrized public `run_go` / `run_go_ts` matrix plus tagging and H₂ negative
 
 ## Physics helpers
 
-Shared assertions live in [`helpers.py`](helpers.py):
+Shared assertions live in [`test_utils.py`](test_utils.py):
 
 - `assert_ts_result_valid` — interior TS image, barrier band, endpoint ordering
 - `assert_nn_distances_in_band` — covalent-radii-scaled NN distances

@@ -89,7 +89,7 @@ Preset effects (vs defaults)
    * - ``get_ts_search_params()``
      - Full flat TS dict for one ``system_type`` (NEB knobs from :func:`~scgo.param_presets.get_ts_defaults`); baseline for TS merge
    * - ``get_low_effort_ts_search_params()``
-     - As ``get_ts_search_params()``, but ``neb_steps`` / ``torchsim_max_steps`` reduced to ~25% with a per-type floor (300 bare, 1000 adsorbate) so bands still converge to ``neb_fmax``
+     - As ``get_ts_search_params()``, but ``neb_steps`` / ``torchsim_max_steps`` reduced to ~25% with a per-type floor (1000 for both bare and adsorbate) so bands still converge to ``neb_fmax``
 
 -------------------
 Parameter reference

@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import get_distances
 from scipy.spatial import (
     ConvexHull,
     KDTree,
@@ -42,6 +43,10 @@ from .initialization_config import (
 # Core utilities
 
 template_debug_logger = get_logger(__name__)
+
+# Above this atom count, open-boundary connectivity switches from a dense
+# distance matrix to a KDTree neighbour query (see :func:`_bonded_pairs`).
+_KDTREE_MIN_ATOMS = 50
 
 
 def format_composition_counts_short(
@@ -994,13 +999,67 @@ def place_multi_atom_seed_on_facet(
     return placed_seed
 
 
+def pairwise_distances(
+    p1: np.ndarray, p2: np.ndarray, atoms: Atoms, *, use_mic: bool
+) -> np.ndarray:
+    """Vectorised ``(len(p1), len(p2))`` distance matrix between two position sets.
+
+    ``use_mic`` applies the minimum image convention using ``atoms``' cell and
+    periodic boundary conditions. One ASE call replaces an ``O(n*m)`` loop over
+    :meth:`ase.Atoms.get_distance`.
+    """
+    if use_mic:
+        return get_distances(p1, p2, cell=atoms.cell, pbc=atoms.pbc)[1]
+    return cdist(p1, p2)
+
+
+def _covalent_radii_array(atoms: Atoms) -> np.ndarray:
+    """Covalent radii (Å) for every atom, in atom order."""
+    return np.array(
+        [get_covalent_radius(s) for s in atoms.get_chemical_symbols()], dtype=float
+    )
+
+
+def _bonded_pairs(
+    atoms: Atoms, connectivity_factor: float, use_mic: bool
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(i, j)`` index arrays (``i < j``) of covalently bonded pairs.
+
+    Bonded means ``d(i, j) <= (r_i + r_j) * connectivity_factor``.
+
+    ``use_mic`` builds the full minimum-image distance matrix in one vectorised
+    ASE call. A KDTree pre-filter would silently drop pairs that are only close
+    through a periodic image, so it is used exclusively for the (non-periodic)
+    open-boundary case, where it keeps large clusters near ``O(n log n)``.
+    """
+    n_atoms = len(atoms)
+    radii = _covalent_radii_array(atoms)
+
+    if use_mic or n_atoms < _KDTREE_MIN_ATOMS:
+        dist = (
+            atoms.get_all_distances(mic=True)
+            if use_mic
+            else cdist(atoms.get_positions(), atoms.get_positions())
+        )
+        thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
+        return np.nonzero(np.triu(dist <= thresh, k=1))
+
+    positions = atoms.get_positions()
+    tree = KDTree(positions)
+    query_radius = 2.0 * float(np.max(radii)) * connectivity_factor
+    pairs = np.array(sorted(tree.query_pairs(query_radius)), dtype=int)
+    if pairs.size == 0:
+        return np.empty(0, dtype=int), np.empty(0, dtype=int)
+    i_idx, j_idx = pairs[:, 0], pairs[:, 1]
+    d = np.linalg.norm(positions[i_idx] - positions[j_idx], axis=1)
+    keep = d <= (radii[i_idx] + radii[j_idx]) * connectivity_factor
+    return i_idx[keep], j_idx[keep]
+
+
 def _find_connected_components(
     atoms: Atoms, connectivity_factor: float, use_mic: bool = False
 ) -> tuple[dict[int, list[int]], list[int]]:
     """Find connected components using Union-Find algorithm.
-
-    Pairwise distances are scanned directly for clusters with fewer than 50
-    atoms; larger clusters use a KDTree neighbor query.
 
     Args:
         atoms: The Atoms object to check
@@ -1013,68 +1072,29 @@ def _find_connected_components(
     if len(atoms) <= 1:
         return {0: [0] if len(atoms) == 1 else []}, list(range(len(atoms)))
 
-    positions = atoms.get_positions()
-    symbols = atoms.get_chemical_symbols()
     n_atoms = len(atoms)
-
     parent = list(range(n_atoms))
 
     def find(x: int) -> int:
         """Find root of x with path compression."""
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
 
-    def union(x: int, y: int) -> bool:
-        """Union two components. Returns True if union was performed."""
+    def union(x: int, y: int) -> None:
+        """Union two components."""
         px, py = find(x), find(y)
         if px != py:
             parent[px] = py
-            return True
-        return False
 
-    if n_atoms < 50:
-        for i in range(n_atoms):
-            for j in range(i + 1, n_atoms):
-                if use_mic:
-                    distance = float(atoms.get_distance(i, j, mic=True))
-                else:
-                    distance = np.linalg.norm(positions[i] - positions[j])
-                r_i = get_covalent_radius(symbols[i])
-                r_j = get_covalent_radius(symbols[j])
-                threshold = (r_i + r_j) * connectivity_factor
-                if distance <= threshold:
-                    union(i, j)
-    else:
-        tree = KDTree(positions)
-        unique_radii = {get_covalent_radius(s) for s in symbols}
-        max_radius = max(unique_radii)
-        query_radius = 2 * max_radius * connectivity_factor
-
-        for i in range(n_atoms):
-            neighbor_indices = tree.query_ball_point(positions[i], query_radius)
-            r_i = get_covalent_radius(symbols[i])
-
-            for j in neighbor_indices:
-                if j <= i:
-                    continue
-
-                if use_mic:
-                    distance = float(atoms.get_distance(i, j, mic=True))
-                else:
-                    distance = np.linalg.norm(positions[i] - positions[j])
-                r_j = get_covalent_radius(symbols[j])
-                threshold = (r_i + r_j) * connectivity_factor
-
-                if distance <= threshold:
-                    union(i, j)
+    i_idx, j_idx = _bonded_pairs(atoms, connectivity_factor, use_mic)
+    for i, j in zip(i_idx.tolist(), j_idx.tolist(), strict=True):
+        union(i, j)
 
     components: dict[int, list[int]] = {}
     for i in range(n_atoms):
-        root = find(i)
-        if root not in components:
-            components[root] = []
-        components[root].append(i)
+        components.setdefault(find(i), []).append(i)
 
     return components, parent
 
@@ -1090,9 +1110,11 @@ def is_cluster_connected(
     connected component where edges exist between atoms within
     (r_i + r_j) * connectivity_factor.
 
-    Clusters with 50 or more atoms use scipy.spatial.KDTree for neighbor
-    queries, giving roughly O(n log n) behavior instead of the O(n²) pairwise
-    scan used for smaller clusters.
+    Non-periodic clusters with 50 or more atoms use scipy.spatial.KDTree for
+    neighbor queries, giving roughly O(n log n) behavior instead of the O(n²)
+    pairwise scan used for smaller clusters. ``use_mic`` always uses the full
+    minimum-image distance matrix, because a KDTree on unwrapped positions
+    cannot see neighbors that are only close through a periodic image.
 
     Args:
         atoms: The Atoms object to check
@@ -1179,39 +1201,10 @@ def _build_connectivity_adjacency(
     if n <= 1:
         return adj
 
-    positions = cluster.get_positions()
-    symbols = cluster.get_chemical_symbols()
-    radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
-
-    if use_mic:
-        for i in range(n):
-            for j in range(i + 1, n):
-                distance = float(cluster.get_distance(i, j, mic=True))
-                if distance <= (radii[i] + radii[j]) * connectivity_factor:
-                    adj[i].append(j)
-                    adj[j].append(i)
-        return adj
-
-    if n < 50:
-        dist = cdist(positions, positions)
-        thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
-        for i in range(n):
-            for j in range(i + 1, n):
-                if dist[i, j] <= thresh[i, j]:
-                    adj[i].append(j)
-                    adj[j].append(i)
-    else:
-        tree = KDTree(positions)
-        max_radius = float(np.max(radii))
-        query_radius = 2.0 * max_radius * connectivity_factor
-        for i in range(n):
-            for j in tree.query_ball_point(positions[i], query_radius):
-                if j <= i:
-                    continue
-                distance = float(np.linalg.norm(positions[i] - positions[j]))
-                if distance <= (radii[i] + radii[j]) * connectivity_factor:
-                    adj[i].append(j)
-                    adj[j].append(i)
+    i_idx, j_idx = _bonded_pairs(cluster, connectivity_factor, use_mic)
+    for i, j in zip(i_idx.tolist(), j_idx.tolist(), strict=True):
+        adj[i].append(j)
+        adj[j].append(i)
     return adj
 
 

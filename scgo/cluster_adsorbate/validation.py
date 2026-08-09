@@ -4,17 +4,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
 from ase import Atoms
 
 from scgo.initialization.atomic_radii import get_covalent_radius
 from scgo.initialization.geometry_helpers import (
     _find_connected_components,
+    pairwise_distances,
     validate_cluster_structure,
 )
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
+
+# Covalent H-X contact distance (Å) above which an inter-fragment H contact is
+# treated as a hydrogen bond rather than a newly formed covalent bond.
+_H_CONTACT_THRESHOLD_A = 1.15
 
 
 def validate_combined_cluster_structure(
@@ -108,36 +114,43 @@ def validate_adsorbate_fragment_integrity(
         return True, ""
 
     symbols = atoms.get_chemical_symbols()
+    positions = atoms.get_positions()
     for i, fragment_i in enumerate(fragment_index_ranges):
         for j in range(i + 1, len(fragment_index_ranges)):
             fragment_j = fragment_index_ranges[j]
-            for idx_i in fragment_i:
-                sym_i = symbols[idx_i]
-                radius_i = get_covalent_radius(sym_i)
-                for idx_j in fragment_j:
-                    sym_j = symbols[idx_j]
-                    radius_j = get_covalent_radius(sym_j)
-                    distance = float(atoms.get_distance(idx_i, idx_j, mic=use_mic))
-                    if sym_i == "H" or sym_j == "H":
-                        # Allow hydrogen-bond distances between fragments; reject
-                        # only covalent H-X contacts (e.g. unwanted HOH formation).
-                        if distance <= 1.15:
-                            return (
-                                False,
-                                "Adsorbate fragment integrity check failed: "
-                                f"fragment {i} bonded to fragment {j} "
-                                f"(atoms {idx_i}-{idx_j}, distance={distance:.3f} Å, "
-                                "covalent H-contact threshold=1.15 Å).",
-                            )
-                        continue
-                    threshold = (radius_i + radius_j) * connectivity_factor
-                    if distance <= threshold:
-                        return (
-                            False,
-                            "Adsorbate fragment integrity check failed: "
-                            f"fragment {i} bonded to fragment {j} "
-                            f"(atoms {idx_i}-{idx_j}, distance={distance:.3f} Å, "
-                            f"threshold={threshold:.3f} Å).",
-                        )
+            dist = pairwise_distances(
+                positions[fragment_i], positions[fragment_j], atoms, use_mic=use_mic
+            )
+            radii_i = np.array([get_covalent_radius(symbols[k]) for k in fragment_i])
+            radii_j = np.array([get_covalent_radius(symbols[k]) for k in fragment_j])
+            is_h_i = np.array([symbols[k] == "H" for k in fragment_i])
+            is_h_j = np.array([symbols[k] == "H" for k in fragment_j])
+            h_pair = is_h_i[:, None] | is_h_j[None, :]
+            # Hydrogen bonds between fragments are allowed; only covalent H-X
+            # contacts (e.g. unwanted HOH formation) are rejected.
+            thresholds = np.where(
+                h_pair,
+                _H_CONTACT_THRESHOLD_A,
+                (radii_i[:, None] + radii_j[None, :]) * connectivity_factor,
+            )
+            violations = np.argwhere(dist <= thresholds)
+            if violations.size == 0:
+                continue
+            local_i, local_j = (int(x) for x in violations[0])
+            idx_i, idx_j = fragment_i[local_i], fragment_j[local_j]
+            threshold = float(thresholds[local_i, local_j])
+            detail = (
+                "covalent H-contact threshold="
+                if bool(h_pair[local_i, local_j])
+                else "threshold="
+            )
+            return (
+                False,
+                "Adsorbate fragment integrity check failed: "
+                f"fragment {i} bonded to fragment {j} "
+                f"(atoms {idx_i}-{idx_j}, "
+                f"distance={float(dist[local_i, local_j]):.3f} Å, "
+                f"{detail}{threshold:.3f} Å).",
+            )
 
     return True, ""

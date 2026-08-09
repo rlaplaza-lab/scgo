@@ -15,6 +15,7 @@ from scgo.exceptions import (
 from scgo.initialization.geometry_helpers import (
     _find_connected_components,
     get_covalent_radius,
+    pairwise_distances,
     validate_cluster_structure,
 )
 from scgo.initialization.initialization_config import (
@@ -189,8 +190,8 @@ def _mobile_indices_touch_slab(
     top-layer test is strictly cheaper than scanning the whole slab.
 
     Returns:
-        ``(touches, min_cross_distance)``. The distance is ``inf`` when there is
-        no mobile/slab pair to compare.
+        ``(touches, min_cross_distance)``. The distance is the smallest
+        mobile/slab separation, or ``inf`` when there is no pair to compare.
     """
     symbols = combined.get_chemical_symbols()
     slab_indices = _slab_surface_layer_indices(
@@ -198,20 +199,18 @@ def _mobile_indices_touch_slab(
         n_slab,
         surface_normal_axis=surface_normal_axis,
     )
-    if not slab_indices:
+    mobile_indices = [int(i) for i in mobile_global_indices]
+    if not slab_indices or not mobile_indices:
         return False, float("inf")
-    slab_radii = [get_covalent_radius(symbols[j]) for j in slab_indices]
-    min_cross = float("inf")
-    for i in mobile_global_indices:
-        idx = int(i)
-        r_i = get_covalent_radius(symbols[idx])
-        for j_idx, j in enumerate(slab_indices):
-            threshold = (r_i + slab_radii[j_idx]) * connectivity_factor
-            d = float(combined.get_distance(idx, j, mic=use_mic))
-            min_cross = min(min_cross, d)
-            if d <= threshold:
-                return True, min_cross
-    return False, min_cross
+
+    positions = combined.get_positions()
+    dist = pairwise_distances(
+        positions[mobile_indices], positions[slab_indices], combined, use_mic=use_mic
+    )
+    r_mobile = np.array([get_covalent_radius(symbols[i]) for i in mobile_indices])
+    r_slab = np.array([get_covalent_radius(symbols[j]) for j in slab_indices])
+    thresholds = (r_mobile[:, None] + r_slab[None, :]) * connectivity_factor
+    return bool(np.any(dist <= thresholds)), float(np.min(dist))
 
 
 def _adsorbate_subgroup_touches_slab(

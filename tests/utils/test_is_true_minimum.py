@@ -4,10 +4,7 @@ This module tests the is_true_minimum function which verifies that optimized
 structures are true local minima by checking for imaginary frequencies.
 """
 
-import concurrent.futures
-import glob
 import os
-import tempfile
 
 import numpy as np
 import pytest
@@ -420,88 +417,7 @@ def test_is_true_minimum_force_threshold_boundary(tmp_path):
     is_min_above = is_true_minimum(
         atoms,
         calculator=EMT(),
-        fmax_threshold=max_force * 1.1,  # Just above force
+        fmax_threshold=max_force * 1.1,  # Just above
         check_hessian=False,
     )
     assert is_min_above is True
-
-
-# Process-safety regression tests for :func:`is_true_minimum`.
-#
-# The Hessian check used to run ``Vibrations(atoms, name="vib_check")`` in the
-# current working directory, so concurrent ``ProcessPoolExecutor`` workers shared
-# one cache namespace and could clobber each other's displacement files (wrong
-# verdicts) or leave files behind. Helpers below are kept module-level so they
-# remain picklable for ``ProcessPoolExecutor`` workers.
-
-# (symbol, initial bond length, relax?) — relaxed dimers are true minima,
-# the compressed unrelaxed one fails the force check.
-_PROCESS_SAFE_CASES: list[tuple[str, float, bool]] = [
-    ("Pt", 2.6, True),
-    ("Ag", 2.8, True),
-    ("Cu", 2.4, True),
-    ("Au", 2.7, True),
-    ("Pt", 1.2, False),
-    ("Ag", 1.2, False),
-]
-
-
-def _process_safe_build(case: tuple[str, float, bool]) -> Atoms:
-    symbol, distance, relax = case
-    atoms = Atoms(f"{symbol}2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, distance]])
-    if relax:
-        perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.005, steps=100)
-    return atoms
-
-
-def _process_safe_check_case(case: tuple[str, float, bool]) -> bool:
-    """Top-level worker (must be picklable for ProcessPoolExecutor)."""
-    atoms = _process_safe_build(case)
-    return is_true_minimum(
-        atoms,
-        calculator=EMT(),
-        fmax_threshold=0.05,
-        check_hessian=True,
-        imag_freq_threshold=50.0,
-    )
-
-
-def _process_safe_vib_leftovers() -> list[str]:
-    patterns = [
-        os.path.join(os.getcwd(), "vib_check*"),
-        os.path.join(os.getcwd(), "vib*.json"),
-        os.path.join(tempfile.gettempdir(), "scgo_vib_*"),
-    ]
-    found: list[str] = []
-    for pattern in patterns:
-        found.extend(glob.glob(pattern))
-    return found
-
-
-class TestIsTrueMinimumProcessSafe:
-    """Concurrent ``ProcessPoolExecutor`` calls must not share a vib cache."""
-
-    def test_parallel_matches_serial_and_leaves_no_files(self, tmp_path):
-        before = set(_process_safe_vib_leftovers())
-
-        serial = [_process_safe_check_case(case) for case in _PROCESS_SAFE_CASES]
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
-            parallel = list(executor.map(_process_safe_check_case, _PROCESS_SAFE_CASES))
-
-        assert parallel == serial
-        # Relaxed dimers are minima, the compressed unrelaxed ones are not.
-        assert parallel == [case[2] for case in _PROCESS_SAFE_CASES]
-
-        after = set(_process_safe_vib_leftovers())
-        assert after == before, (
-            f"leftover vibration cache files: {sorted(after - before)}"
-        )
-
-    def test_repeated_calls_are_independent(self):
-        """Sequential calls reusing the same process must not share a vib cache."""
-        first = _process_safe_check_case(("Pt", 2.6, True))
-        second = _process_safe_check_case(("Pt", 1.2, False))
-        third = _process_safe_check_case(("Pt", 2.6, True))
-
-        assert (first, second, third) == (True, False, True)

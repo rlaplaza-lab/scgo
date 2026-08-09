@@ -102,6 +102,36 @@
 - Kaggle GPU example suite shares stricter e2e artifact bars (run metadata,
   SCGO DB stamp) and requires TS candidates for surface cluster-bearing
   example cases (gas cases keep soft TS bars at CI budgets).
+- Targeted performance (Phase 3): shallow per-slot ``go_params`` merge,
+  vectorized steric-scoring blmin matrix and GA mutations, single-scan
+  unrelaxed-candidate load (latest mtime per gaid), and split
+  ``OffspringBuildContext`` with a single per-job payload plus worker epoch
+  refresh (fixes latent multi-worker state reuse).
+
+- Critical correctness fixes across GA, TS, database, and calculator paths
+  (Phase 1, 26 items).
+- Subsystem correctness pass (Phase 2): TS search (de-aliased shared
+  ``key_value_pairs`` across NEB images, serial-NEB shared-calculator fix, stage-1
+  climb enabled, adjacency-key iteration, minimal-barrier duplicate TS edges,
+  MIC for skewed cells, chunked pre-screen with CUDA-OOM retry);
+  cluster/adsorbate & surface (deterministic deposition height, batch site-type
+  stamping, outward hull-site filter, bridge dedup, slab ``FixAtoms`` preserved,
+  periodic-cell PBC guards, unified slab-contact definition); GA operators
+  (``target_tags`` honored in breathing/flattening, deterministic cut-and-splice
+  non-target inheritance, ``use_tags`` in overlap relief, off-by-one and
+  duplication fixes, rotational no-op on untagged gas, elitism / empty-pop /
+  roulette guards); calculators (surface-mode ``AseBatchRelaxer``, VASP/ORCA kwarg
+  handling, deepcopy before MACE wrapping, live ``relaxer.max_steps``, ``FixAtoms``
+  index fixes, tags/constraints/info restored on the optimize path).
+- GA generational-loop regression from the Phase 3 perf rewrite (candidate batch
+  read + in-process offspring builds) fixed; it had broken every GA path
+  reaching the generational loop (21 failing tests).
+- Silent TorchSim GPU degradation fixed: cached scaler reuse, real OOM retry,
+  and stricter CI.
+- Low-effort NEB ``neb_steps`` floor raised to ``1000`` for bare system types (was
+  ``300``) so bands still converge to ``neb_fmax`` and the CI interior-TS assertion
+  holds (docs/examples updated).
+- SQLite connections now closed on read paths (silences ``ResourceWarning``).
 
 ### Maintainer notes
 
