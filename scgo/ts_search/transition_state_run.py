@@ -66,11 +66,10 @@ from scgo.utils.ts_runner_kwargs import NebRunConfig
 from scgo.utils.validation import validate_composition
 
 from .neb_endpoints import prepare_neb_endpoints
-from .parallel_neb import run_parallel_neb_search
+from .parallel_neb import _evaluate_bands_in_chunks, run_parallel_neb_search
 from .transition_state import (
     _detach_calc,
     attach_minima_traceability,
-    evaluate_neb_image_energies,
     find_transition_state,
     idpp_band_optimization_priority,
     interpolate_path,
@@ -120,6 +119,8 @@ def _prioritize_adsorbate_pairs_by_idpp(
     neb_surface_lattice_rotation: bool,
     neb_surface_max_lattice_shift: int,
     max_endpoint_mismatch: float,
+    parallel_neb_max_batch_atoms: int | None,
+    parallel_neb_max_bands: int | None,
     logger: Any,
 ) -> list[tuple[int, int]]:
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
@@ -128,10 +129,12 @@ def _prioritize_adsorbate_pairs_by_idpp(
     robust-interior candidate at all (CI-NEB can still salvage some).
 
     The per-pair image construction and geometry-only path validation run on the
-    CPU (no GPU). All energy evaluations are then fused into a single
-    ``relax_batch(steps=0)`` call (``relax_batch`` returns results in input
-    order), so the oversampled screen issues one large batched launch instead of
-    O(n_pairs) tiny ones. ``relaxer`` must be a :class:`TorchSimBatchRelaxer`.
+    CPU (no GPU). All energy evaluations are then fused into per-band batches and
+    evaluated through :func:`_evaluate_bands_in_chunks`, so the oversampled
+    screen respects the same atom budget / band cap and CUDA-OOM retry used by
+    the main pre-screen (a single unbounded ``relax_batch`` over every candidate
+    image OOM'd the 16 GB T4). ``relaxer`` must be a
+    :class:`TorchSimBatchRelaxer`.
     """
     # CPU-only stage: build images and validate geometry. Pairs that fail CPU
     # validation are dropped here so the batched energy eval never sees them.
@@ -179,17 +182,25 @@ def _prioritize_adsorbate_pairs_by_idpp(
         )
         return []
 
-    # Single batched energy evaluation across all candidate bands.
-    all_images: list[Any] = [img for _i, _j, imgs in valid_pairs for img in imgs]
-    all_energies = evaluate_neb_image_energies(all_images, relaxer)
+    # Per-band energy evaluation through the atom-budgeted, OOM-retrying chunker
+    # (no single unbounded fused launch, which OOM'd the 16 GB T4). Energy lists
+    # are returned per band, in input order.
+    bands = [images for _i, _j, images in valid_pairs]
+    band_cap = (
+        int(parallel_neb_max_bands)
+        if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
+        else None
+    )
+    band_energy_lists = _evaluate_bands_in_chunks(
+        bands,
+        relaxer,
+        atom_budget=parallel_neb_max_batch_atoms,
+        band_cap=band_cap,
+    )
 
-    # Slice energies back per pair (input order is preserved by relax_batch).
+    # Re-associate per-band energies with each pair.
     ranked: list[tuple[tuple[int, float, float], int, int]] = []
-    offset = 0
-    for i, j, images in valid_pairs:
-        n = len(images)
-        energies = all_energies[offset : offset + n]
-        offset += n
+    for (i, j, _images), energies in zip(valid_pairs, band_energy_lists, strict=True):
         try:
             validate_initial_neb_energy_profile(
                 energies,
@@ -936,6 +947,8 @@ def run_transition_state_search(
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             max_endpoint_mismatch=float(max_endpoint_mismatch),
+            parallel_neb_max_batch_atoms=parallel_neb_max_batch_atoms,
+            parallel_neb_max_bands=parallel_neb_max_bands,
             logger=logger,
         )
 

@@ -32,11 +32,14 @@ PYPI_INDEX = "https://pypi.org/simple"
 # and the warm probe logs a non-fatal "Memory probing failed" on the way.
 # Unit tests that simulate these paths tag their message with
 # ``SYNTHETIC_FAILURE_TOKEN`` so they can never trip this guard.
-OOM_MARKERS = (
-    "hit cuda oom",
-    "retry still oom",
-    "parallel neb band unusable",
-)
+#
+# A "Parallel NEB band unusable" line is only counted as memory degradation when
+# it also carries a genuine degradation/never-ran substring (e.g. "out of
+# memory", "batched force evaluation", "neb not processed"). Non-finite forces
+# or bad-input ("model weights are corrupt") band failures are physics/numeric,
+# not GPU memory pressure, and a green run that contains them is not a
+# regression. This keeps the guard robust to unit-test simulations even if they
+# forget to tag their message with ``SYNTHETIC_FAILURE_TOKEN``.
 SYNTHETIC_FAILURE_TOKEN = "scgo-simulated-failure"
 
 
@@ -386,7 +389,24 @@ def _is_unexpected_oom_line(line: str) -> bool:
     lowered = line.lower()
     if SYNTHETIC_FAILURE_TOKEN in lowered:
         return False
-    return any(marker in lowered for marker in OOM_MARKERS)
+    # These OOM markers are unambiguous GPU memory pressure.
+    if "hit cuda oom" in lowered or "retry still oom" in lowered:
+        return True
+    # "Parallel NEB band unusable" is emitted for *any* band failure: non-finite
+    # forces, bad-input errors, etc. Only count it as memory degradation when the
+    # band line also names a genuine degradation / never-ran cause (the same
+    # substrings the TS degradation guard matches).
+    if "parallel neb band unusable" in lowered:
+        return any(
+            m in lowered
+            for m in (
+                "out of memory",
+                "outofmemory",
+                "batched force evaluation",
+                "neb not processed",
+            )
+        )
+    return False
 
 
 def _run_pytest_streaming(cmd: list[str], env: dict[str, str]) -> tuple[int, list[str]]:

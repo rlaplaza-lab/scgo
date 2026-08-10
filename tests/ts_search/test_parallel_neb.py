@@ -1305,7 +1305,8 @@ def test_run_parallel_neb_marks_nonfinite_band_failed(
                     "final_fmax": float("nan"),
                     "steps_taken": 1,
                     "error": (
-                        "NEB forces are non-finite (fmax=nan); refusing optimizer step"
+                        "NEB forces are non-finite (fmax=nan); refusing optimizer "
+                        "step [scgo-simulated-failure]"
                     ),
                 }
                 for _ in self.neb_instances
@@ -1402,7 +1403,7 @@ def test_run_optimization_still_fails_bands_on_non_oom_error(cu3_triangle, cu3_l
 
     class _BrokenRelaxer(_CountingFakeRelaxer):
         def relax_batch(self, atoms_list, steps=0):
-            raise RuntimeError("model weights are corrupt")
+            raise RuntimeError("model weights are corrupt [scgo-simulated-failure]")
 
     relaxer = _BrokenRelaxer()
     images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
@@ -1510,7 +1511,7 @@ def test_run_parallel_neb_does_not_retry_non_oom_relax_batch_errors(
 
     class _BrokenRelaxer(_CountingFakeRelaxer):
         def relax_batch(self, atoms_list, steps=0):
-            raise RuntimeError("model weights are corrupt")
+            raise RuntimeError("model weights are corrupt [scgo-simulated-failure]")
 
     with (
         patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
