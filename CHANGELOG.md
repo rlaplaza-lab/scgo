@@ -6,217 +6,217 @@
 
 - :mod:`scgo.metadata` package for structure tags, run-dir records, DB stamps,
   and output-JSON provenance (separate schemas under one namespace).
-- ``parallel_neb_max_batch_atoms`` TS parameter (``6000`` gas / ``4000``
-  surface): when ``parallel_neb_max_bands`` is ``None``, parallel NEB bands are
+- `parallel_neb_max_batch_atoms` TS parameter (`6000` gas / `4000`
+  surface): when `parallel_neb_max_bands` is `None`, parallel NEB bands are
   greedily binned so each fused force batch stays within this atom budget
-  (``sum(n_images * n_atoms)``). The same value sizes the TorchSim relaxer's
-  ``expected_max_atoms`` / ``max_atoms_to_try``, mirroring the GO pattern, so
+  (`sum(n_images * n_atoms)`). The same value sizes the TorchSim relaxer's
+  `expected_max_atoms` / `max_atoms_to_try`, mirroring the GO pattern, so
   the on-disk memory-scaler cache bucket stays stable across runs.
 - Parallel NEB chunks that hit CUDA OOM are now retried once at half the atom
-  budget (after ``cleanup_torch_cuda``) before their bands are marked failed.
+  budget (after `cleanup_torch_cuda`) before their bands are marked failed.
 
 ### Fixed
 
 - Parallel NEB no longer evaluates forces twice per step: the batched NEB forces
-  are passed straight into ``FIRE.step(f)`` (guarded by an ``inspect.signature``
-  check, so optimizers without an ``f`` parameter still fall back to ``step()``).
+  are passed straight into `FIRE.step(f)` (guarded by an `inspect.signature`
+  check, so optimizers without an `f` parameter still fall back to `step()`).
   Previously the optimizer recomputed the gradient, which could re-enter
-  ``TorchSimNEB.get_forces`` and dispatch an unbatched per-band ``relax_batch``.
-- ``force_calls`` is no longer double-counted for parallel NEB bands. The batch
+  `TorchSimNEB.get_forces` and dispatch an unbatched per-band `relax_batch`.
+- `force_calls` is no longer double-counted for parallel NEB bands. The batch
   runner now owns the counter (one increment per batched evaluation the band
-  actually participates in); ``TorchSimNEB.get_forces`` only self-counts on the
+  actually participates in); `TorchSimNEB.get_forces` only self-counts on the
   serial fallback path.
 - The NEB image dedup key now includes the rounded cell and PBC flags. Surface
   bands enable cell remap and lattice rotation, which legitimately produce
   identical Cartesian positions in different cells; those images could
   previously collide and receive a neighbour's energy/forces.
-- Bands whose NEB forces went non-finite (NaN/Inf ``fmax``) are now marked
-  ``failed`` and skip ``_finalize_neb_result`` instead of being reported as a
+- Bands whose NEB forces went non-finite (NaN/Inf `fmax`) are now marked
+  `failed` and skip `_finalize_neb_result` instead of being reported as a
   transition state.
 
-- The strict ``require_ts_candidates`` "trial of fire" (demand at least one
+- The strict `require_ts_candidates` "trial of fire" (demand at least one
   successful saddle and reject degraded bands) is now correctly limited to bare
-  surface-cluster cases. The CPU ``gas_cluster`` and GPU ``surface_cluster_adsorbate``
+  surface-cluster cases. The CPU `gas_cluster` and GPU `surface_cluster_adsorbate`
   cases legitimately yield no interior saddle / no on-disk pairs on their CI
-  budgets, so they keep ``require_ts_candidates=False``.
+  budgets, so they keep `require_ts_candidates=False`.
 
 - Audited log messages, comments, and docstrings across the package for
   consistency (American spelling, capitalized messages without trailing periods,
   %-style formatting) and factual accuracy; corrected stale docstrings, exception
-  types (``SCGOValidationError`` vs ``ValueError``/``TypeError``), and misleading
+  types (`SCGOValidationError` vs `ValueError`/`TypeError`), and misleading
   comments.
 
-- CI: ``test_low_effort_ts_search_params_upet_floors_neb_steps`` imported a
-  nonexistent ``get_low_effort_neb_steps``; the exported helper is
-  ``low_effort_neb_steps`` (no ``get_`` prefix). This broke every test job.
+- CI: `test_low_effort_ts_search_params_upet_floors_neb_steps` imported a
+  nonexistent `get_low_effort_neb_steps`; the exported helper is
+  `low_effort_neb_steps` (no `get_` prefix). This broke every test job.
 
-- CI: ``test_get_low_effort_uma_ga_params_structure`` was missing
-  ``@pytest.mark.requires_uma``, so the MACE/UPET jobs ran it and hit a gated
-  Hugging Face download (401). It now matches its ``requires_uma`` siblings.
+- CI: `test_get_low_effort_uma_ga_params_structure` was missing
+  `@pytest.mark.requires_uma`, so the MACE/UPET jobs ran it and hit a gated
+  Hugging Face download (401). It now matches its `requires_uma` siblings.
 
-- Docs: fixed over-indented ``list-table`` rows for the low-effort presets in
-  ``api/param_presets.rst``, which emitted docutils "Bullet list ends without a
-  blank line" warnings and failed the ``-W`` docs build.
+- Docs: fixed over-indented `list-table` rows for the low-effort presets in
+  `api/param_presets.rst`, which emitted docutils "Bullet list ends without a
+  blank line" warnings and failed the `-W` docs build.
 
 ### Changed
 
-- Per-pair parallel NEB ``timings_s`` keys are renamed to ``total_wall_avg_s`` /
-  ``neb_optimization_avg_s`` / ``cpu_non_relax_avg_s``, reflecting that they are
+- Per-pair parallel NEB `timings_s` keys are renamed to `total_wall_avg_s` /
+  `neb_optimization_avg_s` / `cpu_non_relax_avg_s`, reflecting that they are
   chunk wall time divided across pairs rather than per-pair measurements. No
-  ``neb_optimization_s`` alias is emitted; readers use the new
-  ``scgo.utils.timing_report.neb_seconds_from_pair_timings`` helper, which
-  accepts the serial ``neb_optimization_s`` key and the parallel
-  ``neb_optimization_avg_s`` key.
-- Structure tags live only in ASE ``key_value_pairs`` via ``set_tags`` /
-  ``get_tag`` / ``get_tags`` / ``filter_by_tags``; remove the old
-  ``atoms.info["metadata"]`` / ``provenance`` bags, ``add_metadata`` /
-  ``get_metadata`` / ``update_metadata`` / ``filter_by_metadata``, and
-  ``persist_provenance``.
-- Move DB stamp helpers from ``scgo.database.schema`` to
-  ``scgo.metadata.db_stamp`` (e.g. ``stamp_db``, ``is_scgo_db``,
-  ``CURRENT_DB_SCHEMA_VERSION``); final-minima SQL tagging to
-  ``scgo.metadata.persist``; run-dir tracking from ``utils.run_tracking`` to
-  ``scgo.metadata.run_dir``; output-JSON provenance from ``utils.ts_provenance``
-  to ``scgo.metadata.provenance``.
-- ``simple`` optimizer writes ``simple_go.db`` (was incorrectly ``bh_go.db``);
-  discovery still matches ``*.db``.
-- Remove surface/cluster height cross-aliases (``height_*`` /
-  ``adsorption_height_*``); each config keeps only its canonical names.
-- Slim ``runner_api`` to the public run surface; tests patch definition modules.
-- Per-shape ``generate_*`` template helpers are private; public API is
-  ``generate_template_structure``.
-- Import mutations from ``scgo.ase_ga_patches.mutations`` (``standardmutations``
+  `neb_optimization_s` alias is emitted; readers use the new
+  `scgo.utils.timing_report.neb_seconds_from_pair_timings` helper, which
+  accepts the serial `neb_optimization_s` key and the parallel
+  `neb_optimization_avg_s` key.
+- Structure tags live only in ASE `key_value_pairs` via `set_tags` /
+  `get_tag` / `get_tags` / `filter_by_tags`; remove the old
+  `atoms.info["metadata"]` / `provenance` bags, `add_metadata` /
+  `get_metadata` / `update_metadata` / `filter_by_metadata`, and
+  `persist_provenance`.
+- Move DB stamp helpers from `scgo.database.schema` to
+  `scgo.metadata.db_stamp` (e.g. `stamp_db`, `is_scgo_db`,
+  `CURRENT_DB_SCHEMA_VERSION`); final-minima SQL tagging to
+  `scgo.metadata.persist`; run-dir tracking from `utils.run_tracking` to
+  `scgo.metadata.run_dir`; output-JSON provenance from `utils.ts_provenance`
+  to `scgo.metadata.provenance`.
+- `simple` optimizer writes `simple_go.db` (was incorrectly `bh_go.db`);
+  discovery still matches `*.db`.
+- Remove surface/cluster height cross-aliases (`height_*` /
+  `adsorption_height_*`); each config keeps only its canonical names.
+- Slim `runner_api` to the public run surface; tests patch definition modules.
+- Per-shape `generate_*` template helpers are private; public API is
+  `generate_template_structure`.
+- Import mutations from `scgo.ase_ga_patches.mutations` (`standardmutations`
   re-export removed).
 - Candidate discovery prefers component path keys; packed ASE stems
-  (e.g. ``H2O2Pt5_searches``) and pure-metal formulas still parse.
-- Internal cleanup: drop TorchSim ``max_steps=0`` filters; dedupe the UPET
-  nvalchemiops disable into ``disable_metatomic_nvalchemiops``; collapse
-  ``retry_on_lock`` onto ``database_retry`` (drop unused ``PRESET_CONSERVATIVE``);
-  share ``_assign_penalty_energy``; simplify TorchSim step extraction; remove the
+  (e.g. `H2O2Pt5_searches`) and pure-metal formulas still parse.
+- Internal cleanup: drop TorchSim `max_steps=0` filters; dedupe the UPET
+  nvalchemiops disable into `disable_metatomic_nvalchemiops`; collapse
+  `retry_on_lock` onto `database_retry` (drop unused `PRESET_CONSERVATIVE`);
+  share `_assign_penalty_energy`; simplify TorchSim step extraction; remove the
   ASE Spacegroup deposition warmup.
 - Imports/API tidied: import rigid adsorbate helpers from
-  ``scgo.cluster_adsorbate.rigid`` (avoids a cycle); centralize GO seed fallback
-  in ``_resolve_go_seed``; move TS defaults / ``SystemPolicy`` checks into tests
-  (no import-time assert); use ``functools.cache`` for the calculator registry;
+  `scgo.cluster_adsorbate.rigid` (avoids a cycle); centralize GO seed fallback
+  in `_resolve_go_seed`; move TS defaults / `SystemPolicy` checks into tests
+  (no import-time assert); use `functools.cache` for the calculator registry;
   UMA/UPET model-name infer helpers mirror MACE.
 - Kaggle GPU example suite shares stricter e2e artifact bars (run metadata,
   SCGO DB stamp) and requires TS candidates for surface cluster-bearing
   example cases (gas cases keep soft TS bars at CI budgets).
-- Targeted performance (Phase 3): shallow per-slot ``go_params`` merge,
+- Targeted performance (Phase 3): shallow per-slot `go_params` merge,
   vectorized steric-scoring blmin matrix and GA mutations, single-scan
   unrelaxed-candidate load (latest mtime per gaid), and split
-  ``OffspringBuildContext`` with a single per-job payload plus worker epoch
+  `OffspringBuildContext` with a single per-job payload plus worker epoch
   refresh (fixes latent multi-worker state reuse).
 
 - Critical correctness fixes across GA, TS, database, and calculator paths
   (Phase 1, 26 items).
 - Subsystem correctness pass (Phase 2): TS search (de-aliased shared
-  ``key_value_pairs`` across NEB images, serial-NEB shared-calculator fix, stage-1
+  `key_value_pairs` across NEB images, serial-NEB shared-calculator fix, stage-1
   climb enabled, adjacency-key iteration, minimal-barrier duplicate TS edges,
   MIC for skewed cells, chunked pre-screen with CUDA-OOM retry);
   cluster/adsorbate & surface (deterministic deposition height, batch site-type
-  stamping, outward hull-site filter, bridge dedup, slab ``FixAtoms`` preserved,
+  stamping, outward hull-site filter, bridge dedup, slab `FixAtoms` preserved,
   periodic-cell PBC guards, unified slab-contact definition); GA operators
-  (``target_tags`` honored in breathing/flattening, deterministic cut-and-splice
-  non-target inheritance, ``use_tags`` in overlap relief, off-by-one and
+  (`target_tags` honored in breathing/flattening, deterministic cut-and-splice
+  non-target inheritance, `use_tags` in overlap relief, off-by-one and
   duplication fixes, rotational no-op on untagged gas, elitism / empty-pop /
-  roulette guards); calculators (surface-mode ``AseBatchRelaxer``, VASP/ORCA kwarg
-  handling, deepcopy before MACE wrapping, live ``relaxer.max_steps``, ``FixAtoms``
+  roulette guards); calculators (surface-mode `AseBatchRelaxer`, VASP/ORCA kwarg
+  handling, deepcopy before MACE wrapping, live `relaxer.max_steps`, `FixAtoms`
   index fixes, tags/constraints/info restored on the optimize path).
 - GA generational-loop regression from the Phase 3 perf rewrite (candidate batch
   read + in-process offspring builds) fixed; it had broken every GA path
   reaching the generational loop (21 failing tests).
 - Silent TorchSim GPU degradation fixed: cached scaler reuse, real OOM retry,
   and stricter CI.
-- Low-effort NEB ``neb_steps`` floor raised to ``1000`` for bare system types (was
-  ``300``) so bands still converge to ``neb_fmax`` and the CI interior-TS assertion
+- Low-effort NEB `neb_steps` floor raised to `1000` for bare system types (was
+  `300`) so bands still converge to `neb_fmax` and the CI interior-TS assertion
   holds (docs/examples updated).
-- SQLite connections now closed on read paths (silences ``ResourceWarning``).
+- SQLite connections now closed on read paths (silences `ResourceWarning`).
 
 ### Maintainer notes
 
 - Temporary workarounds for upstream bugs (remove once fixed upstream):
   - TorchSim constraint device patch
-    (``_patch_torchsim_constraint_device_mismatch``): pinned
-    ``torch-sim-atomistic==0.6.0`` still does bare ``torch.isin`` with no
-    CPU/CUDA ``atom_idx`` align in ``AtomConstraint.select_sub_constraint``.
-  - ``HAS_NVALCHEMIOPS = False`` (``disable_metatomic_nvalchemiops``):
+    (`_patch_torchsim_constraint_device_mismatch`): pinned
+    `torch-sim-atomistic==0.6.0` still does bare `torch.isin` with no
+    CPU/CUDA `atom_idx` align in `AtomConstraint.select_sub_constraint`.
+  - `HAS_NVALCHEMIOPS = False` (`disable_metatomic_nvalchemiops`):
     metatomic-torchsim nvalchemiops CUDA NL still fails on non-cubic
     gas-phase cells; vesin path is the reliable fallback.
-  - Kaggle/CI ``vesin==0.6.0`` force-install: ``metatomic-torchsim`` 0.1.4
-    still declares ``vesin<0.6`` but needs ``NeighborList(skin=...)`` from
+  - Kaggle/CI `vesin==0.6.0` force-install: `metatomic-torchsim` 0.1.4
+    still declares `vesin<0.6` but needs `NeighborList(skin=...)` from
     0.6.0.
-  - ``pytest.ini`` ``filterwarnings``: dependency noise (torch.jit / MACE /
-    nvalchemiops alias / warp ``.grad`` / ASE EMT·NEB coincidences / e3nn);
+  - `pytest.ini` `filterwarnings`: dependency noise (torch.jit / MACE /
+    nvalchemiops alias / warp `.grad` / ASE EMT·NEB coincidences / e3nn);
     drop entries individually when upstream stops emitting them.
-- Timing ``"trials"`` guard rejects legacy multi-trial ``timing.json`` shapes
+- Timing `"trials"` guard rejects legacy multi-trial `timing.json` shapes
   (intentional API protection, not an upstream workaround).
-- ``select_structure_pairs(..., *, use_mic: bool)`` is required (no
-  ``None``→``surface_aware`` default); pass ``use_mic=resolve_neb_mic(...)``.
-- Low-level ``run_transition_state_search``: omitted ``energy_gap_threshold`` /
-  ``neb_n_images`` / ``neb_climb`` resolve from TS presets (not the old
-  hardcoded ``1.0`` / ``3`` / ``False``).
-- ``scgo.runner_api`` no longer re-exports internals (``run_trials``,
-  ``_run_go_trials``, etc.); import from definition modules.
-- ``_run_go_trials`` / ``_run_go_campaign_compositions`` expect
-  already-initialized params (``params_already_merged`` removed; merge lives
-  in ``runner_params``).
+- `select_structure_pairs(..., *, use_mic: bool)` is required (no
+  `None`→`surface_aware` default); pass `use_mic=resolve_neb_mic(...)`.
+- Low-level `run_transition_state_search`: omitted `energy_gap_threshold` /
+  `neb_n_images` / `neb_climb` resolve from TS presets (not the old
+  hardcoded `1.0` / `3` / `False`).
+- `scgo.runner_api` no longer re-exports internals (`run_trials`,
+  `_run_go_trials`, etc.); import from definition modules.
+- `_run_go_trials` / `_run_go_campaign_compositions` expect
+  already-initialized params (`params_already_merged` removed; merge lives
+  in `runner_params`).
 
 ## 0.6.5
 
 ### Added
 
-- ``build_torchsim_relaxer`` factory for shared UMA → UPET → MACE TorchSim
+- `build_torchsim_relaxer` factory for shared UMA → UPET → MACE TorchSim
   relaxer construction from a live calculator (GA). Presets still construct
-  ``TorchSimBatchRelaxer`` directly when ``model_kind`` is already known.
-- ``validate_and_resolve_run_context`` shared BH/GA preamble
+  `TorchSimBatchRelaxer` directly when `model_kind` is already known.
+- `validate_and_resolve_run_context` shared BH/GA preamble
   (policy, connectivity factor, fitness strategy).
 
 ### Changed
 
-- Path-key resolution consolidated in ``scgo.utils.path_keys.resolve_run_path_key``
-  (importable from ``runner_params``); GO/TS/minima search use the same helper.
-- ``run_go_campaign`` result dict keys are always ``path_key`` (including failed
+- Path-key resolution consolidated in `scgo.utils.path_keys.resolve_run_path_key`
+  (importable from `runner_params`); GO/TS/minima search use the same helper.
+- `run_go_campaign` result dict keys are always `path_key` (including failed
   compositions); gas-cluster keys still match the formula.
-- GA ``create_mutation_operators`` uses a shared partitioned-mutation helper for
+- GA `create_mutation_operators` uses a shared partitioned-mutation helper for
   flattening / breathing / in-plane slide core/_ads variants (names/weights unchanged).
-- Drop unused aliases: ``retry_with_backoff`` (use ``database_retry``),
-  ``assert_adsorption_height_in_bounds``, Kaggle ``_install_scgo_mace``, and
-  streaming ``_relaxed_rows_where_clause``.
+- Drop unused aliases: `retry_with_backoff` (use `database_retry`),
+  `assert_adsorption_height_in_bounds`, Kaggle `_install_scgo_mace`, and
+  streaming `_relaxed_rows_where_clause`.
 - QC polish: remove dead NEB helpers, deduplicate skip/endpoint/autobatcher paths,
   simplify GA early-stopping and CutAndSplice construction, trim trivial helper
   docstrings, document UPET model list in API docs.
 
 ### Fixed
 
-- Bare ``surface`` / ``surface_adsorbate`` empty-core composition is accepted by
-  ``run_go`` / ``run_go_ts`` / GA / TS (examples with ``COMPOSITION=[]``).
-- Slab-search TS uses fixed-bottom ``n_slab`` (not full slab length) so mobile
+- Bare `surface` / `surface_adsorbate` empty-core composition is accepted by
+  `run_go` / `run_go_ts` / GA / TS (examples with `COMPOSITION=[]`).
+- Slab-search TS uses fixed-bottom `n_slab` (not full slab length) so mobile
   top layers remain comparable.
 - Adsorbate-only deposition on planar graphite: planar site fallback when the
   3D convex hull is empty, and skip whole-slab connectivity checks that reject
   van der Waals stacked layers.
-- Penalty-energy path attaches a ``SinglePointCalculator`` so later energy/force
+- Penalty-energy path attaches a `SinglePointCalculator` so later energy/force
   reads do not hit a broken calculator.
-- BH ``_move_atoms``: single tag groups displace rigidly; empty movable sets log
-  ``Moved_atoms: none``; adsorbate-scaled moves no longer throttle core; single-
+- BH `_move_atoms`: single tag groups displace rigidly; empty movable sets log
+  `Moved_atoms: none`; adsorbate-scaled moves no longer throttle core; single-
   atom descriptions are bracketed for ASE DB compatibility.
-- ``iter_databases_minima(max_structures=0)`` yields nothing (``0`` is not treated
+- `iter_databases_minima(max_structures=0)` yields nothing (`0` is not treated
   as unlimited).
 
 ### Maintainer notes
 
 - Temporary workarounds for upstream bugs still in place at this release:
-  TorchSim constraint device patch; ``HAS_NVALCHEMIOPS = False``; Kaggle
-  ``vesin`` force-install; ``max_steps=0`` warning filters;
-  ``standardmutations`` re-export; ``pytest.ini`` filters. Timing ``"trials"``
+  TorchSim constraint device patch; `HAS_NVALCHEMIOPS = False`; Kaggle
+  `vesin` force-install; `max_steps=0` warning filters;
+  `standardmutations` re-export; `pytest.ini` filters. Timing `"trials"`
   guard is intentional API protection, not an upstream workaround.
 
 ## 0.6.4
 
 ### Added
 
-- ``surface`` and ``surface_adsorbate`` system types: GA/BH search mobile
+- `surface` and `surface_adsorbate` system types: GA/BH search mobile
   top slab layers (bottom layers fixed), with optional adsorbates and no
   cluster core. Includes slab search partition helpers, defected/N-doped
   graphite presets, and examples.
@@ -225,10 +225,10 @@
 
 - On-disk path keys for searches, TS results, XYZ prefixes, and default
   campaign stems are component-aware: nanoparticle, each adsorbate fragment,
-  then surface name (e.g. ``Pt5_OH_OH_graphite``). Chemical composition
-  matching still uses ASE-style formulas (``H2O2Pt5``).
-- ``SurfaceSystemConfig.name`` (default ``"slab"``) supplies the surface
-  path-key segment; ``make_graphite_surface_config`` sets ``name="graphite"``.
+  then surface name (e.g. `Pt5_OH_OH_graphite`). Chemical composition
+  matching still uses ASE-style formulas (`H2O2Pt5`).
+- `SurfaceSystemConfig.name` (default `"slab"`) supplies the surface
+  path-key segment; `make_graphite_surface_config` sets `name="graphite"`.
 
 ### Fixed
 
@@ -239,152 +239,152 @@
 
 ### Fixed
 
-- UPET/UMA TS preset tests expect ``use_parallel_neb=True``, matching the
+- UPET/UMA TS preset tests expect `use_parallel_neb=True`, matching the
   0.6.2 default (fixes GitHub Actions UPET CI jobs).
 
 ## 0.6.2
 
 ### Changed
 
-- NEB plumbing: serial and parallel runners share ``NebRunConfig`` and
-  ``prepare_neb_endpoints`` (copy / FixAtoms / validate). Public
-  ``run_transition_state_search`` kwargs are unchanged.
-- BH surface post-relax framing is owned by ``perform_local_relaxation``
-  (``surface_mode`` / ``n_slab``); diversity scoring uses mobile composition.
+- NEB plumbing: serial and parallel runners share `NebRunConfig` and
+  `prepare_neb_endpoints` (copy / FixAtoms / validate). Public
+  `run_transition_state_search` kwargs are unchanged.
+- BH surface post-relax framing is owned by `perform_local_relaxation`
+  (`surface_mode` / `n_slab`); diversity scoring uses mobile composition.
   GA soft-fail storage validation wraps shared
-  ``canonicalize_and_validate_for_storage``.
-- Structure MIC reads go through ``resolve_structure_mic`` /
-  ``resolve_neb_mic``. Pair selection takes explicit ``use_mic`` (scoring
-  regime stays ``surface_aware``). Empty-core adsorbate NEB dims use shared
-  ``resolve_neb_mobile_dims``.
-- TS presets: ``neb_fmax`` / ``torchsim_fmax`` are shared at ``0.20`` for
-  every system type; ``use_parallel_neb=True`` is the default everywhere
-  (including the low-level ``run_transition_state_search`` signature).
-  Surface types set ``parallel_neb_max_bands=1`` so large slab cells do not
+  `canonicalize_and_validate_for_storage`.
+- Structure MIC reads go through `resolve_structure_mic` /
+  `resolve_neb_mic`. Pair selection takes explicit `use_mic` (scoring
+  regime stays `surface_aware`). Empty-core adsorbate NEB dims use shared
+  `resolve_neb_mobile_dims`.
+- TS presets: `neb_fmax` / `torchsim_fmax` are shared at `0.20` for
+  every system type; `use_parallel_neb=True` is the default everywhere
+  (including the low-level `run_transition_state_search` signature).
+  Surface types set `parallel_neb_max_bands=1` so large slab cells do not
   GPU-OOM; the parallel runner is still used, with bands chunked
   one-at-a-time (and CUDA cache cleared between chunks). Bare surface NEB
-  step budget rises to ``2000``. Supersedes the 0.6.1 surface-adsorbate
-  ``neb_fmax=0.25`` / serial-NEB defaults. Removed unused
-  ``torchsim_batch_size`` from TS presets (OOM safety is band concurrency).
-- Adsorbate TS pair oversample is ``min(max_pairs * 10, max(max_pairs, 50))``;
+  step budget rises to `2000`. Supersedes the 0.6.1 surface-adsorbate
+  `neb_fmax=0.25` / serial-NEB defaults. Removed unused
+  `torchsim_batch_size` from TS presets (OOM safety is band concurrency).
+- Adsorbate TS pair oversample is `min(max_pairs * 10, max(max_pairs, 50))`;
   pair selection reuses one structure comparator and avoids full Atoms
   slices for core-RMS.
 
 ### Fixed
 
 - Parallel NEB refuses FIRE steps when band fmax is non-finite (e.g. ASE
-  ``improvedtangent`` on a flat energy profile), marking the band failed
+  `improvedtangent` on a flat energy profile), marking the band failed
   instead of propagating NaN geometries.
 - Unify structure MIC / surface-awareness across GO, GA, BH, and TS: Pure
-  comparator honors ``mic`` literally under PBC; ``SurfaceSystemConfig``
-  defaults ``comparator_use_mic=True`` (GO/GA/BH via ``resolve_structure_mic``).
-  TS pair scoring uses ``uses_surface`` for the scoring regime and
-  ``resolve_neb_mic`` (``neb_force_mic``) for geometry / minima dedupe — not
-  the comparator knob. BH uses mobile ``n_top`` and skips COM recenter on
+  comparator honors `mic` literally under PBC; `SurfaceSystemConfig`
+  defaults `comparator_use_mic=True` (GO/GA/BH via `resolve_structure_mic`).
+  TS pair scoring uses `uses_surface` for the scoring regime and
+  `resolve_neb_mic` (`neb_force_mic`) for geometry / minima dedupe — not
+  the comparator knob. BH uses mobile `n_top` and skips COM recenter on
   surfaces; empty-core adsorbate enables blockwise NEB dims; core-RMS pair
   gate is permutation-invariant; GO final XYZ alignment forwards
-  ``n_core_mobile``.
+  `n_core_mobile`.
 
 ## 0.6.1
 
 ### Fixed
 
-- TorchSim NEB/TS single-point force evaluations now use ``torch_sim.static``
-  instead of ``optimize(max_steps=0)``. The old path still took one FIRE step
+- TorchSim NEB/TS single-point force evaluations now use `torch_sim.static`
+  instead of `optimize(max_steps=0)`. The old path still took one FIRE step
   (wrong forces at displaced geometries) and spammed
-  ``All systems have reached the maximum number of steps: 0`` via torch_sim's
+  `All systems have reached the maximum number of steps: 0` via torch_sim's
   logger in production. Batched NEB spring/climb/tangent physics remain ASE's.
-  Single-point calls default to ``autobatcher=False`` so TorchSim does not
+  Single-point calls default to `autobatcher=False` so TorchSim does not
   re-probe GPU memory on every NEB force evaluation.
 - Parallel/serial TorchSim NEB finalize no longer fails with
-  ``The property "energy" is not available`` after a final FIRE step: PES is
+  `The property "energy" is not available` after a final FIRE step: PES is
   refreshed at the final geometries, and energies are also cached in atoms
   metadata when attaching SinglePoint results.
-- ASE ``Atoms.copy()`` shallow-shares nested ``info`` dicts; TorchSim
-  single-points writing ``raw_score`` were corrupting minima reused by later
+- ASE `Atoms.copy()` shallow-shares nested `info` dicts; TorchSim
+  single-points writing `raw_score` were corrupting minima reused by later
   NEB pairs (multi-eV bogus product energies). Endpoint/path copies now isolate
-  nested metadata, and static result mapping uses ``copy_atoms``.
+  nested metadata, and static result mapping uses `copy_atoms`.
 - Surface-adsorbate NEBs no longer apply free in-plane Kabsch rotation (breaks
   adsorbate–slab registry). Cell remap / MIC remain on. Pre-NEB band checks
-  reject aligned endpoint energy drift ``> 0.5`` eV vs canonical minima, and
-  one-sided interior maxima with prominence ``< 0.40`` eV (slides that CI-NEB
+  reject aligned endpoint energy drift `> 0.5` eV vs canonical minima, and
+  one-sided interior maxima with prominence `< 0.40` eV (slides that CI-NEB
   collapses to an endpoint).
 
 ### Changed
 
 - Adsorbate TS presets (`gas_cluster_adsorbate` / `surface_cluster_adsorbate`)
-  now use climbing NEB, spring ``0.5``, ``neb_steps=4000``, 7 images, a tighter
-  ``energy_gap_threshold`` (``0.75`` eV), and a hard ``max_endpoint_mismatch``
-  pair gate. Gas adsorbates use ``neb_fmax=0.20`` with ``use_parallel_neb=True``;
-  surface adsorbates use ``neb_fmax=0.25`` with serial NEB (avoids GPU OOM on
+  now use climbing NEB, spring `0.5`, `neb_steps=4000`, 7 images, a tighter
+  `energy_gap_threshold` (`0.75` eV), and a hard `max_endpoint_mismatch`
+  pair gate. Gas adsorbates use `neb_fmax=0.20` with `use_parallel_neb=True`;
+  surface adsorbates use `neb_fmax=0.25` with serial NEB (avoids GPU OOM on
   large slab cells and matches attainable MLIP force convergence). Fragment-wise
   adsorbate matching, core-anchored endpoint alignment, and pre-NEB
   clash/discontinuity rejection improve path quality for multi-fragment
   adsorbates. Surface-adsorbate presets set
-  ``neb_surface_lattice_rotation=False``; pair selection also skips tiny
-  adsorbate hops (``max_diff < 0.20`` Å) that are usually barrierless slides.
+  `neb_surface_lattice_rotation=False`; pair selection also skips tiny
+  adsorbate hops (`max_diff < 0.20` Å) that are usually barrierless slides.
 - Parallel NEB no longer overwrites batch failures (e.g. CUDA OOM with
-  ``force_calls=0``) as ``endpoint as TS`` during finalize.
-- Pre-NEB path/energy rejects in parallel NEB are recorded as ``skipped``
+  `force_calls=0`) as `endpoint as TS` during finalize.
+- Pre-NEB path/energy rejects in parallel NEB are recorded as `skipped`
   (consistent with structure-validation skips and the serial path), not
-  ``failed``.
-- Provenance ``scgo_version`` now reads the in-tree version
-  (``scgo._version``) so editable checkouts are not stuck on stale
-  ``dist-info`` after a bump.
+  `failed`.
+- Provenance `scgo_version` now reads the in-tree version
+  (`scgo._version`) so editable checkouts are not stuck on stale
+  `dist-info` after a bump.
 - Adsorbate NEBs reject IDPP bands with absurdly high barriers
-  (``> 8`` eV; likely discontinuous) before optimization, and use two-stage
+  (`> 8` eV; likely discontinuous) before optimization, and use two-stage
   CI-NEB (relax without climb, then climb). Stage 2 always runs and keeps at
   least half the step budget.
 - Parallel two-stage CI-NEB always runs the climb stage after no-climb
-  relaxation when used, even if stage 1 already met ``fmax``.
+  relaxation when used, even if stage 1 already met `fmax`.
 - Two-stage climb is skipped for endpoint-max / barrierless IDPP bands
-  and for soft interior maxima (IDPP barrier ``< 1.0`` eV); climb starts
+  and for soft interior maxima (IDPP barrier `< 1.0` eV); climb starts
   immediately. A no-climb pre-relax was collapsing those MEPs so finalize
-  reported ``endpoint as TS`` for adsorbate OH hops.
-- Finalize rejects NEB results with barrier ``> 8`` eV (same discontinuous
+  reported `endpoint as TS` for adsorbate OH hops.
+- Finalize rejects NEB results with barrier `> 8` eV (same discontinuous
   threshold as the pre-NEB IDPP energy gate).
 - Adsorbate pair selection now prefers activated hops (moderate endpoint
   mismatch and core RMS) over near-isomer slides, oversamples candidates, and
   re-ranks by IDPP profile so NEB budgets favor robust interior maxima (and
   skip endpoint-max slides when any robust bands exist).
 - TS minima deduplication for adsorbate systems uses core+adsorbate mobile
-  count (matching GA ``n_to_optimize``), not core-only length.
+  count (matching GA `n_to_optimize`), not core-only length.
 
 ## 0.6.0
 
 ### Added
 
-- UPET MLIP backend (``[upet]`` extra) via metatomic-TorchSim, with CI matrix
+- UPET MLIP backend (`[upet]` extra) via metatomic-TorchSim, with CI matrix
   coverage alongside MACE and UMA, plus Kaggle GPU suites for MACE/UPET.
 - Height aliases on surface and cluster-adsorbate configs: surface accepts
-  ``height_*`` as aliases for ``adsorption_height_*``; adsorbate configs accept
-  ``adsorption_height_*`` as aliases for ``height_*``. Conflicting values raise
-  ``SCGOValidationError``.
+  `height_*` as aliases for `adsorption_height_*`; adsorbate configs accept
+  `adsorption_height_*` as aliases for `height_*`. Conflicting values raise
+  `SCGOValidationError`.
 - Shared helpers: :mod:`scgo.calculators.torch_device`,
   :mod:`scgo.utils.config_aliases`, :mod:`scgo.utils.combine_atoms`.
-- GO top-level parameter allowlist (including ``validation_n_jobs``); unexpected
-  keys raise ``SCGOValidationError`` with the expected set.
+- GO top-level parameter allowlist (including `validation_n_jobs`); unexpected
+  keys raise `SCGOValidationError` with the expected set.
 
 ### Changed
 
-- Split the large ``runner_api`` module into focused modules
-  (``runner_composition``, ``runner_params``, ``runner_go``, ``runner_ts``) while
-  keeping the public ``scgo.runner_api`` / ``scgo`` import surface stable via
+- Split the large `runner_api` module into focused modules
+  (`runner_composition`, `runner_params`, `runner_go`, `runner_ts`) while
+  keeping the public `scgo.runner_api` / `scgo` import surface stable via
   re-exports (including names used by test monkeypatches).
-- Split ASE GA ``standardmutations`` into
+- Split ASE GA `standardmutations` into
   :mod:`scgo.ase_ga_patches.mutations` (one module per family); the old import
   path remains a thin re-export.
-- Unsupported Torch devices warn once and raise ``SCGOValidationError`` instead
+- Unsupported Torch devices warn once and raise `SCGOValidationError` instead
   of silently falling back to CPU (MACE / UMA / UPET / TorchSim paths).
-- ``SCGOValidationError`` no longer logs at ERROR on construction. Runner API
+- `SCGOValidationError` no longer logs at ERROR on construction. Runner API
   entry points log validation failures at the prepare boundary; campaign and
-  pair handlers catch ``SCGOValidationError`` and continue where appropriate.
-- Top-level ``surface_config`` in ``go_params`` / ``ts_params`` is allowed and
-  fanned into optimizer slots; only ``system_type`` remains rejected in params
+  pair handlers catch `SCGOValidationError` and continue where appropriate.
+- Top-level `surface_config` in `go_params` / `ts_params` is allowed and
+  fanned into optimizer slots; only `system_type` remains rejected in params
   (use the run-function argument). Adsorbate placement knobs stay in
-  ``go_params``.
-- Surface slab constraint attachment preserves non-``FixAtoms`` constraints
-  (e.g. ``FixBondLength``). Multi-fragment hierarchical placement keeps sites
+  `go_params`.
+- Surface slab constraint attachment preserves non-`FixAtoms` constraints
+  (e.g. `FixBondLength`). Multi-fragment hierarchical placement keeps sites
   on the original metal core.
 - Parallel NEB skips re-evaluating endpoints after step 0 and uses a clearer
   max-atom force metric; force attachment requires forces.
@@ -393,7 +393,7 @@
 
 - Restore auto GA scaling in the TorchSim preset.
 - Align concurrent DB stress tests with production retry policy.
-- Handle ``SCGOValidationError`` in growth, GA, and initialization fallbacks
+- Handle `SCGOValidationError` in growth, GA, and initialization fallbacks
   (and in GO campaign / TS pair error paths).
 
 ## 0.5.2
@@ -414,8 +414,8 @@
 ### Changed
 
 - Adsorbate/core partition reconciliation now routes through all runner paths
-  via centralized ``resolve_adsorbate_run_composition``, sharing the same
-  core/adsorbate stripping logic across gas and surface runs, ``run_go``,
+  via centralized `resolve_adsorbate_run_composition`, sharing the same
+  core/adsorbate stripping logic across gas and surface runs, `run_go`,
   campaigns, GO+TS, and TS entry points.
 - Simplified adsorbate/core reconciliation logic: use list-based stripping,
   drop redundant count checks, consolidate test coverage.
@@ -429,44 +429,44 @@
   INFO summaries with specific reasons; compact, consistently formatted placement
   error messages for large runs.
 - Hardened database operations: production retries for reads, connection opens,
-  structure extraction, and count queries via unified ``retry_on_lock`` /
-  ``database_retry`` machinery; IMMEDIATE isolation for final-minima tagging;
+  structure extraction, and count queries via unified `retry_on_lock` /
+  `database_retry` machinery; IMMEDIATE isolation for final-minima tagging;
   backoff on transient lock/I/O OperationalErrors; retry actual SQLite open
   during setup; log stamp failures instead of suppressing them.
-- Aligned database retry logic: ``database_retry`` now only backs off on
-  transient lock/I/O OperationalErrors, matching ``retry_on_lock`` and
-  ``retry_transaction``; shared retried ``DataConnection`` factory between
-  ``setup_database`` and ``get_connection``.
+- Aligned database retry logic: `database_retry` now only backs off on
+  transient lock/I/O OperationalErrors, matching `retry_on_lock` and
+  `retry_transaction`; shared retried `DataConnection` factory between
+  `setup_database` and `get_connection`.
 - Hardened composition parsing with explicit errors for empty and unknown
-  symbols; expanded regression tests covering ``HO2Ru9W2`` adsorbate resolution
+  symbols; expanded regression tests covering `HO2Ru9W2` adsorbate resolution
   and edge cases.
-- Made compact formula parsing unambiguous: use ASE ``Formula`` with required
+- Made compact formula parsing unambiguous: use ASE `Formula` with required
   chemical capitalization for multi-element strings; allow lowercase only for
-  unambiguous single-element forms (``pt3``); reject ambiguous cases (``ho2``,
-  ``cu``, ``pt3au``) with actionable errors; comma-separated symbols remain the
+  unambiguous single-element forms (`pt3`); reject ambiguous cases (`ho2`,
+  `cu`, `pt3au`) with actionable errors; comma-separated symbols remain the
   fully unambiguous input format.
 - Validation and configuration failures across SCGO now raise typed exceptions
-  (``SCGOValidationError``, ``SCGORuntimeError``, etc.) instead of bare
-  ``ValueError`` / ``RuntimeError``. Downstream code should catch
-  ``SCGOValidationError`` (or ``SCGOError``) rather than ``ValueError``.
-- ``SCGOValidationError`` is logged at ERROR when logging is configured
+  (`SCGOValidationError`, `SCGORuntimeError`, etc.) instead of bare
+  `ValueError` / `RuntimeError`. Downstream code should catch
+  `SCGOValidationError` (or `SCGOError`) rather than `ValueError`.
+- `SCGOValidationError` is logged at ERROR when logging is configured
   (construct-time logging in 0.5.2; superseded in 0.6.0 by runner-boundary
   logging).
-- Preset dicts are documented as ``GLOptimizerParams`` and ``TSParams`` TypedDicts;
-  default GO params template is cached via ``@cache``.
+- Preset dicts are documented as `GLOptimizerParams` and `TSParams` TypedDicts;
+  default GO params template is cached via `@cache`.
 
 ### Fixed
 
-- MACE import on PyTorch 2.6+: patch ``torch.load`` before ``mace``/e3nn import so
-  checkpoint and constants loading no longer fails with ``weights_only`` unpickling errors.
+- MACE import on PyTorch 2.6+: patch `torch.load` before `mace`/e3nn import so
+  checkpoint and constants loading no longer fails with `weights_only` unpickling errors.
 - Fix lowercase compact formula parsing by normalizing all-lowercase strings
-  (e.g., ``pt3`` → ``Pt3``) before calling ASE ``Formula``, preserving case-
-  sensitive ``HO2``-style formulas unchanged.
-- Fix ``parse_composition_arg`` docstring for Sphinx ``-W`` builds by removing
+  (e.g., `pt3` → `Pt3`) before calling ASE `Formula`, preserving case-
+  sensitive `HO2`-style formulas unchanged.
+- Fix `parse_composition_arg` docstring for Sphinx `-W` builds by removing
   indented bullet continuation that docutils treated as invalid RST.
 - Fix adsorbate/core partition reconciliation for oxide campaigns by deriving
-  ``core_symbols`` from full mobile formulas when preset cores disagree,
-  updating ``adsorbate_definition`` in place, and deep-copying preset definitions
+  `core_symbols` from full mobile formulas when preset cores disagree,
+  updating `adsorbate_definition` in place, and deep-copying preset definitions
   per campaign composition.
 - SQLite connection handle leaks in database setup and configuration paths.
 
@@ -476,13 +476,13 @@
 
 - ASE icosahedron/decahedron/octahedron templates for HCP elements by passing an
   explicit lattice constant (structures are still rescaled to covalent bond length).
-- Compact formula parsing for hydrogen–oxide strings such as ``HO2Ru9W2`` (via ASE
-  ``Formula`` instead of mis-reading ``Ho`` as holmium).
-- Gas/surface adsorbate runs with a preset ``adsorbate_definition``: reconcile
-  campaign composition to ``core_symbols + adsorbate_symbols`` when counts match
+- Compact formula parsing for hydrogen–oxide strings such as `HO2Ru9W2` (via ASE
+  `Formula` instead of mis-reading `Ho` as holmium).
+- Gas/surface adsorbate runs with a preset `adsorbate_definition`: reconcile
+  campaign composition to `core_symbols + adsorbate_symbols` when counts match
   but symbol order differs, when only the core formula is supplied, or when the
-  full mobile formula requires re-deriving ``core_symbols`` by stripping known
-  ``adsorbate_symbols`` (oxide campaigns such as ``HO2Ru9W2``). Applies to gas and
+  full mobile formula requires re-deriving `core_symbols` by stripping known
+  `adsorbate_symbols` (oxide campaigns such as `HO2Ru9W2`). Applies to gas and
   surface adsorbate system types across all runner entry points.
 
 ### Changed
@@ -507,16 +507,16 @@
 - Dual MACE/UMA CI matrix with marker-based test partitioning.
 - Capped NumPy below 2.5 and aligned Kaggle GPU dependency installs with CI.
 - Corrected algorithm selection docs: 3-atom adsorbate systems use GA, not BH.
-- Docs version fallback now reads from ``scgo.__version__`` instead of a stale literal.
+- Docs version fallback now reads from `scgo.__version__` instead of a stale literal.
 
 ### Fixed
 
-- SQLite connection handle leaks in ``setup_database`` and DB configuration paths.
+- SQLite connection handle leaks in `setup_database` and DB configuration paths.
 - Concurrent SQLite write stress test stability in CI.
 - Reference run provenance and streaming warning behavior.
-- TorchSim warnings API usage and raw MACE model wrapping for ``optimize()``.
+- TorchSim warnings API usage and raw MACE model wrapping for `optimize()`.
 - Kaggle runner resilience (conda detection, source tarball, log redaction, CUDA torch).
-- Empty GA population crash and surface ``run_go`` e2e test stability.
+- Empty GA population crash and surface `run_go` e2e test stability.
 - Cross-fragment adsorbate bonding rejection in integrity checks.
 - Adsorption height checks and CI disk cleanup for UMA installs.
 
@@ -524,7 +524,7 @@
 
 ### Fixed
 
-- Adsorbate partition overlap handling and ``source_db_relpath`` provenance fields.
+- Adsorbate partition overlap handling and `source_db_relpath` provenance fields.
 
 ### Documentation
 

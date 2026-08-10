@@ -43,7 +43,7 @@ The PDF will be available in `build/latex/scgo.pdf`.
 
 ## Online Documentation
 
-This documentation is automatically built and published on [ReadTheDocs](https://scgo.readthedocs.io/). The configuration is in `.readthedocs.yaml` in the project root.
+This documentation is automatically built and published on [Read the Docs](https://scgo.readthedocs.io/). The configuration is in `.readthedocs.yaml` in the project root.
 
 ## Writing Documentation
 

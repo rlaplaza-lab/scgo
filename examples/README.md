@@ -1,4 +1,4 @@
-# SCGO examples
+# SCGO Examples
 
 `run_go_ts` smoke scripts for the supported system types (MACE + TorchSim). Each
 script builds params from `get_low_effort_torchsim_ga_params` /
