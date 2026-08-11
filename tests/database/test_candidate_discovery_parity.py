@@ -44,7 +44,7 @@ def test_candidate_discovery_matches_extract_minima(tmp_path):
     extracted = extract_minima_from_database_file(
         str(db_path), run_id="runx", require_final=False
     )
-    discovered = _load_candidates_from_file(str(db_path), db_path.stat().st_mtime)
+    discovered = _load_candidates_from_file(str(db_path))
 
     assert len(discovered) == len(extracted)
     extracted_sorted = sorted(extracted, key=lambda item: item[0])

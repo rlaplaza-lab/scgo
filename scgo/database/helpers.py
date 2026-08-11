@@ -41,6 +41,7 @@ from scgo.utils.helpers import (
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
 
 logger = get_logger(__name__)
 _MIN_DB_PARALLEL_LOAD_TASKS = 4
@@ -494,7 +495,13 @@ def load_previous_run_results(
     max_workers: int | None = None,
     prefer_final_unique: bool = True,
 ) -> list[tuple[float, Atoms]]:
-    """Load minima from previous runs for a composition."""
+    """Load minima from previous runs for a composition.
+
+    Args:
+        max_workers: Worker processes for parallel database loading; ``None``
+            uses the project-wide parallelism default (single worker; opt in
+            with -1/-2 for parallelism).
+    """
     all_db_files: list[tuple[str, str | None]] = []
 
     if not os.path.exists(base_output_dir):
@@ -533,7 +540,7 @@ def load_previous_run_results(
         return []
 
     if max_workers is None:
-        resolved_max_workers = max(1, multiprocessing.cpu_count() // 2)
+        resolved_max_workers = resolve_n_jobs_to_workers(None)
     else:
         resolved_max_workers = max_workers
 

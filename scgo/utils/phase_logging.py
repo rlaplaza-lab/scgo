@@ -48,9 +48,9 @@ def log_phase_subheader(
 
 
 def format_count_summary(counts: Mapping[str, int]) -> str:
-    """Format outcome counts as ``label×N, ...``."""
+    """Format outcome counts as ``label x N, ...``."""
     parts = [
-        f"{label}×{count}"
+        f"{label}x{count}"
         for label, count in sorted(counts.items(), key=lambda x: (-x[1], x[0]))
         if count > 0
     ]
@@ -112,11 +112,11 @@ class InitDiagnosticsCollector:
         parts: list[str] = [f"built {n_structures}/{n_structures} candidates"]
         if template_to_random or seed_to_random:
             parts.append(
-                f"fallbacks template→random×{template_to_random}, "
-                f"seed→random×{seed_to_random}"
+                f"fallbacks template→randomx{template_to_random}, "
+                f"seed→randomx{seed_to_random}"
             )
         if placement_failures:
-            parts.append(f"placement failures×{len(placement_failures)}")
+            parts.append(f"placement failuresx{len(placement_failures)}")
         if extra:
             parts.append(extra)
 

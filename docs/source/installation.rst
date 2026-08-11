@@ -62,6 +62,32 @@ fallback; it does not write ``.scgo_db_registry.json`` on disk.
 Set ``SCGO_LOCAL_DEV=1`` or ``configure_logging(..., hpc_mode=False)`` for noisier
 local logs.
 
+**Processor count (parallelism default):** SCGO defaults to a single worker
+so it never silently oversubscribes the host alongside internal BLAS / MACE /
+TorchSIM thread pools. You control parallelism through ``n_jobs_population_init``
+and ``n_jobs_offspring`` in ``go_params`` (or the corresponding ``params`` dict):
+
+- ``1`` (default): sequential — one worker, no parallelism
+- ``-1``: use every logical CPU
+- ``-2``: use every logical CPU except one (good default on shared nodes)
+- ``N`` (positive integer): cap to ``N`` workers
+
+Example (enable parallelism for population initialization):
+
+.. code-block:: python
+
+   from scgo import run_go
+   from scgo.param_presets import get_default_params
+
+   params = get_default_params()
+   params["optimizer_params"]["ga"]["n_jobs_population_init"] = -2
+   params["optimizer_params"]["ga"]["n_jobs_offspring"] = -2
+
+   results = run_go("Pt5", params=params, seed=42, system_type="gas_cluster")
+
+The same ``n_jobs`` semantics apply to ``validation_n_jobs`` for post-GO
+Hessian/force validation.
+
 Direct ``ga_go`` / ``bh_go`` knobs (not accepted in ``run_*`` ``go_params``):
 ``db_enable_expression_indexes``, ``ga_adaptive_retry_enabled``,
 ``ga_fast_prefilter_enabled``.

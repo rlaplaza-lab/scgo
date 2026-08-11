@@ -75,7 +75,7 @@ def test_validate_structure_for_ga_storage_uses_canonical_frame() -> None:
         ["Pt", "Pt"],
         slab,
         blmin,
-        3,
+        12,
         np.random.default_rng(42),
         surface_config,
         n_jobs=1,

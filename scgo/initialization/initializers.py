@@ -12,6 +12,7 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -108,12 +109,12 @@ class _SeedSamplingLogCollector:
             total = sum(counter.values())
             if len(counter) == 1:
                 (reason,) = counter
-                parts.append(f"{formula}×{total} [{reason}]")
+                parts.append(f"{formula}x{total} [{reason}]")
             else:
                 reason_detail = ", ".join(
-                    f"{reason}×{count}" for reason, count in counter.most_common()
+                    f"{reason}x{count}" for reason, count in counter.most_common()
                 )
-                parts.append(f"{formula}×{total} [{reason_detail}]")
+                parts.append(f"{formula}x{total} [{reason_detail}]")
 
         logger.info(
             "Seed+growth: no suitable seed (%d failures): %s",
@@ -1193,6 +1194,10 @@ def create_initial_cluster(
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
     connectivity_factor: float = CONNECTIVITY_FACTOR,
+    *,
+    plan: BatchInitPlan | None = None,
+    allocation: tuple[str, int | None] | None = None,
+    emit_diagnostics: bool = True,
 ) -> Atoms:
     """Create an initial cluster using several strategies.
 
@@ -1223,6 +1228,16 @@ def create_initial_cluster(
             ``random_spherical``, or ``template``.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold. Defaults to ``CONNECTIVITY_FACTOR`` (1.4).
+        plan: A pre-computed :class:`BatchInitPlan` (discovery + allocation).
+            When provided, this call reuses the already-resolved templates,
+            seeds, and strategy allocation instead of re-running discovery. Use
+            :func:`plan_batch_initialization` to build one plan per batch so
+            discovery and allocation run a single time per batch.
+        allocation: Override the ``(strategy, template_index)`` allocation for
+            this single structure. Only meaningful together with ``plan``;
+            without it the plan's first allocation is used.
+        emit_diagnostics: When ``False``, suppress the per-call diagnostic
+            summary logging (the batch owner emits the aggregate summary).
 
     Returns:
         An :class:`ase.Atoms` instance with the initial cluster. When
@@ -1273,6 +1288,9 @@ def create_initial_cluster(
         mode=mode,
         connectivity_factor=connectivity_factor,
         n_jobs=1,  # Single structure, no parallelization needed
+        plan=plan,
+        allocation=allocation,
+        emit_diagnostics=emit_diagnostics,
     )
     return results[0]
 
@@ -1396,31 +1414,81 @@ def _generate_structure_batch_item(
     return idx, atoms, used_strategy, fallback_from
 
 
-def create_initial_cluster_batch(
+def reset_init_diagnostics() -> None:
+    """Clear the per-batch initialization diagnostic collectors.
+
+    The owner of a population batch calls this before generating, passes
+    ``emit_diagnostics=False`` to the inner single-structure calls, and finishes
+    with :func:`emit_init_diagnostics`, so a run logs one aggregate summary
+    instead of one per candidate.
+    """
+    _SeedSamplingLogCollector.reset()
+    InitDiagnosticsCollector.reset()
+
+
+def emit_init_diagnostics(
+    n_structures: int,
+    *,
+    verbosity: int | None = None,
+    extra: str = "",
+) -> None:
+    """Emit the aggregated initialization summaries collected for one batch."""
+    _SeedSamplingLogCollector.emit_summary_if_any()
+    InitDiagnosticsCollector.emit_summary(
+        logger,
+        verbosity=infer_verbosity(logger, verbosity),
+        n_structures=n_structures,
+        extra=extra,
+    )
+
+
+@dataclass
+class BatchInitPlan:
+    """Resolved, reusable outcome of discovery + strategy allocation for a batch.
+
+    Computing this is the expensive (and noisy) part of initialization: it scans
+    previous-search databases and decides how many structures use templates,
+    seed+growth, and random placement. It is produced exactly once per batch and
+    then reused across every structure, so discovery and allocation run a single
+    time instead of once per generated candidate.
+    """
+
+    allocations: list[tuple[str, int | None]]
+    discovery_templates: list[Atoms] | None
+    precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]]
+    valid_seed_combinations: list[tuple[str, ...]]
+
+    def allocation_for(self, index: int) -> tuple[str, int | None]:
+        """Return the ``(strategy, template_index)`` allocation for ``index``.
+
+        Indices cycle through the plan, so single-structure calls and retries
+        that reuse a batch plan keep sampling the planned strategy mix instead
+        of always repeating the first allocation.
+        """
+        return self.allocations[index % len(self.allocations)]
+
+
+def plan_batch_initialization(
     composition: list[str],
     n_structures: int,
     rng: np.random.Generator,
-    placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    *,
     vacuum: float = VACUUM_DEFAULT,
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
+    placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
+    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
-    n_jobs: int = 1,
-) -> list[Atoms]:
-    """Create multiple initial clusters with deterministic per-structure RNG.
+) -> BatchInitPlan:
+    """Run discovery + strategy allocation once for a whole batch.
 
-    For ``smart`` mode, uses Metropolis allocation across templates,
-    seed+growth, and random_spherical. Each structure receives an independent
-    seed derived from ``rng`` (``batch_base_seed + index * 7919``), so batch
-    results are reproducible and identical for ``n_jobs=1`` vs parallel workers
-    when the parent ``rng`` state matches.
+    Returns a :class:`BatchInitPlan` that downstream batched generators reuse,
+    so the (noisy, DB-scanning) discovery step and the strategy allocation
+    happen a single time per batch rather than once per generated structure.
 
-    Validated structures are reordered to match ``composition`` for GA pairing.
-
-    Returns:
-        List of ``n_structures`` :class:`ase.Atoms` objects. When
-        ``composition`` is empty, the list contains empty ``Atoms`` objects.
+    The discovery/allocation INFO logs ("Candidate discovery:", "Initialization
+    for N-atom clusters:", "Strategy allocation (...)") are emitted exactly once
+    here, when the plan is built.
 
     Raises:
         SCGOValidationError: If ``n_structures`` is below 1, if ``composition``
@@ -1429,11 +1497,14 @@ def create_initial_cluster_batch(
     """
     if n_structures < 1:
         raise SCGOValidationError(f"n_structures must be >= 1, got {n_structures}")
-
     validate_composition(composition, allow_empty=True, allow_tuple=True)
-
     if not composition:
-        return [Atoms() for _ in range(n_structures)]
+        return BatchInitPlan(
+            allocations=[("random_spherical", None)] * n_structures,
+            discovery_templates=None,
+            precomputed_candidates_by_formula={},
+            valid_seed_combinations=[],
+        )
 
     n_atoms = len(composition)
     cell_side = compute_cell_side(composition, vacuum=vacuum)
@@ -1467,7 +1538,6 @@ def create_initial_cluster_batch(
             candidates_by_formula=precomputed_candidates_by_formula,
             valid_combinations=valid_seed_combinations,
         )
-
         allocations = _allocate_initialization_strategies(
             n_structures=n_structures,
             templates=discovery["templates"],
@@ -1482,15 +1552,109 @@ def create_initial_cluster_batch(
     else:
         raise SCGOValidationError(f'Unsupported mode: "{mode}"')
 
+    return BatchInitPlan(
+        allocations=allocations,
+        discovery_templates=discovery_templates,
+        precomputed_candidates_by_formula=precomputed_candidates_by_formula,
+        valid_seed_combinations=valid_seed_combinations,
+    )
+
+
+def create_initial_cluster_batch(
+    composition: list[str],
+    n_structures: int,
+    rng: np.random.Generator,
+    placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
+    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    vacuum: float = VACUUM_DEFAULT,
+    previous_search_glob: str = "**/*.db",
+    mode: str = "smart",
+    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    n_jobs: int | None = None,
+    *,
+    plan: BatchInitPlan | None = None,
+    allocation: tuple[str, int | None] | None = None,
+    emit_diagnostics: bool = True,
+) -> list[Atoms]:
+    """Create multiple initial clusters with deterministic per-structure RNG.
+
+    For ``smart`` mode, uses Metropolis allocation across templates,
+    seed+growth, and random_spherical. Each structure receives an independent
+    seed derived from ``rng`` (``batch_base_seed + index * 7919``), so batch
+    results are reproducible and identical for ``n_jobs=1`` vs parallel workers
+    when the parent ``rng`` state matches.
+
+    Validated structures are reordered to match ``composition`` for GA pairing.
+
+    Discovery (previous-search DB scan) and strategy allocation run exactly once
+    for the batch. Pass a :class:`BatchInitPlan` produced by
+    :func:`plan_batch_initialization` via ``plan=`` to reuse an already-resolved
+    plan (the recommended path for all batched initialization, so discovery and
+    allocation happen a single time per batch rather than once per structure).
+
+    Args:
+        n_jobs: Parallelism for structure generation; ``None`` uses the
+            project default (``DEFAULT_N_JOBS`` from
+            :mod:`scgo.utils.parallel_workers`, single worker; opt in with -1/-2
+            for parallelism).
+        plan: Pre-computed :class:`BatchInitPlan`; when given, discovery and
+            allocation are NOT re-run and their INFO logs are emitted only when
+            the plan itself is built.
+        allocation: Override the ``(strategy, template_index)`` allocation for
+            every structure in this call. Only meaningful together with ``plan``
+            (used to steer a single retry without rebuilding the plan).
+        emit_diagnostics: When ``False``, suppress the per-batch diagnostic
+            summary (the batch owner emits the aggregate summary instead).
+
+    Returns:
+        List of ``n_structures`` :class:`ase.Atoms` objects. When
+        ``composition`` is empty, the list contains empty ``Atoms`` objects.
+
+    Raises:
+        SCGOValidationError: If ``n_structures`` is below 1, if ``composition``
+            is invalid, or if ``mode`` is not one of ``smart``, ``template``,
+            ``seed+growth``, or ``random_spherical``.
+    """
+    if n_structures < 1:
+        raise SCGOValidationError(f"n_structures must be >= 1, got {n_structures}")
+
+    validate_composition(composition, allow_empty=True, allow_tuple=True)
+
+    if not composition:
+        return [Atoms() for _ in range(n_structures)]
+
+    if plan is None:
+        plan = plan_batch_initialization(
+            composition,
+            n_structures,
+            rng,
+            vacuum=vacuum,
+            previous_search_glob=previous_search_glob,
+            mode=mode,
+            placement_radius_scaling=placement_radius_scaling,
+            min_distance_factor=min_distance_factor,
+            connectivity_factor=connectivity_factor,
+        )
+
+    if allocation is not None:
+        allocations = [allocation] * n_structures
+    else:
+        allocations = [plan.allocation_for(i) for i in range(n_structures)]
+
+    discovery_templates = plan.discovery_templates
+    precomputed_candidates_by_formula = plan.precomputed_candidates_by_formula
+    valid_seed_combinations = plan.valid_seed_combinations
+
     batch_base_seed = rng.integers(0, 2**31)
     structure_assignments = []
     for i, (strategy, template_index) in enumerate(allocations):
         structure_seed = (batch_base_seed + i * 7919) % (2**31)
         structure_assignments.append((i, strategy, template_index, structure_seed))
 
-    _SeedSamplingLogCollector.reset()
-    if n_structures > 1:
-        InitDiagnosticsCollector.reset()
+    if emit_diagnostics:
+        _SeedSamplingLogCollector.reset()
+        if n_structures > 1:
+            InitDiagnosticsCollector.reset()
 
     def _worker_wrapper(assignment):
         return _generate_structure_batch_item(
@@ -1528,13 +1692,14 @@ def create_initial_cluster_batch(
         if fallback is not None:
             InitDiagnosticsCollector.record_fallback(used_strat, fallback)
 
-    _SeedSamplingLogCollector.emit_summary_if_any()
+    if emit_diagnostics:
+        _SeedSamplingLogCollector.emit_summary_if_any()
 
-    if n_structures > 1:
-        InitDiagnosticsCollector.emit_summary(
-            logger,
-            verbosity=infer_verbosity(logger),
-            n_structures=n_structures,
-        )
+        if n_structures > 1:
+            InitDiagnosticsCollector.emit_summary(
+                logger,
+                verbosity=infer_verbosity(logger),
+                n_structures=n_structures,
+            )
 
     return results  # type: ignore[return-value]

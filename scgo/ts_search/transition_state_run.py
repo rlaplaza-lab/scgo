@@ -718,7 +718,7 @@ def run_transition_state_search(
         surface_config=surface_config if system_policy.uses_surface else None,
     )
     formula = get_cluster_formula(composition)
-    campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
+    _campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
         output_dir,
         path_key_formula,
         searches_dir=searches_dir,

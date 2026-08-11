@@ -63,22 +63,22 @@ def test_format_placement_error_message_is_compact_and_consistent():
         placement_radius_scaling=1.2,
         min_distance_factor=0.7,
         connectivity_factor=1.4,
-        additional_info="remaining: Pt×11",
+        additional_info="remaining: Ptx11",
     )
 
     assert msg.startswith(
         "Could not complete batch placement (4/15 placed, 11 remaining, 500 attempts)"
     )
     assert "  parameters: placement_radius_scaling=1.20" in msg
-    assert "  remaining: Pt×11" in msg
+    assert "  remaining: Ptx11" in msg
     assert "  suggestions: placement_radius_scaling→1.80" in msg
     assert "Parameters:" not in msg
     assert "Diagnostics:" not in msg
 
 
 def test_format_composition_counts_short():
-    assert format_composition_counts_short({"Pt": 11}) == "Pt×11"
-    assert format_composition_counts_short({"Au": 2, "Pt": 3}) == "Au×2, Pt×3"
+    assert format_composition_counts_short({"Pt": 11}) == "Ptx11"
+    assert format_composition_counts_short({"Au": 2, "Pt": 3}) == "Aux2, Ptx3"
 
 
 def test_seed_sampling_log_collector_groups_failures(caplog):
@@ -92,8 +92,8 @@ def test_seed_sampling_log_collector_groups_failures(caplog):
     _SeedSamplingLogCollector.emit_summary_if_any()
 
     assert caplog.text.count("no suitable seed") == 1
-    assert "Pt5×3 [unsuitable linear geometry]" in caplog.text
-    assert "Pt6×2 [need mixed seed geometries]" in caplog.text
+    assert "Pt5x3 [unsuitable linear geometry]" in caplog.text
+    assert "Pt6x2 [need mixed seed geometries]" in caplog.text
 
 
 def test_sample_suitable_seed_reports_specific_failure_reason(rng):

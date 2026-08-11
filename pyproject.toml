@@ -99,6 +99,8 @@ select = [
     "SIM", # simplify
     "PERF", # performance
     "PIE", # flake8-pie
+    "RUF001", # ambiguous unicode characters in strings
+    "RET506", # unnecessary elif after raise
     "D",   # pydocstyle (Google convention)
 ]
 ignore = [

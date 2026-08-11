@@ -151,7 +151,7 @@ def add_ts_to_database(
             )
 
         logger.info(
-            "Added TS %s (E=%.6f eV) to DB (minima %s–%s)",
+            "Added TS %s (E=%.6f eV) to DB (minima %s-%s)",
             pair_id,
             ts_energy,
             minima_idx_1,
@@ -421,7 +421,7 @@ def save_ts_network_metadata(
     stats = network["statistics"]
     if stats.get("min_barrier") is not None:
         logger.info(
-            "Wrote %s (%d edges, barriers %.4f–%.4f eV, mean %.4f eV)",
+            "Wrote %s (%d edges, barriers %.4f-%.4f eV, mean %.4f eV)",
             network_path,
             n_conn,
             stats["min_barrier"],
