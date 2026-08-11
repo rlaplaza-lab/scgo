@@ -69,6 +69,8 @@ def _build_go_params() -> dict:
     go_params = get_low_effort_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
+        n_jobs_population_init=-2,   # all but one CPU
+        n_jobs_offspring=-2,
         write_timing_json=True,
         detailed_timing=True,
     )

@@ -405,7 +405,8 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
             "niter_local_relaxation": 200,
             "niter": 10,
             "population_size": 50,
-            "n_jobs_population_init": DEFAULT_N_JOBS,  # Parallel for benchmarks
+            "n_jobs_population_init": -2,   # HPC: all but one CPU
+            "n_jobs_offspring": -2,         # HPC: parallel offspring, aligned with init
         },
     )
 
@@ -839,6 +840,7 @@ def get_low_effort_torchsim_ga_params(
             "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
             "offspring_fraction": 0.5,
             "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
             "early_stopping_niter": 0,
             "write_timing_json": False,
             "detailed_timing": False,
@@ -907,6 +909,7 @@ def get_low_effort_upet_ga_params(
             "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
             "offspring_fraction": 0.5,
             "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
             "early_stopping_niter": 0,
             "write_timing_json": False,
             "detailed_timing": False,
@@ -966,6 +969,7 @@ def get_low_effort_uma_ga_params(
             "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
             "offspring_fraction": 0.5,
             "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
             "early_stopping_niter": 0,
             "write_timing_json": False,
             "detailed_timing": False,

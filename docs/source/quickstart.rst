@@ -362,8 +362,13 @@ Find transition states between optimized structures.
    from scgo import run_go_ts
    from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
 
-   go_params = get_torchsim_ga_params(system_type="gas_cluster", seed=42)
-   go_params["optimizer_params"]["ga"].update(niter=10, population_size=50)
+    go_params = get_torchsim_ga_params(system_type="gas_cluster", seed=42)
+    go_params["optimizer_params"]["ga"].update(
+        niter=10,
+        population_size=50,
+        n_jobs_population_init=-2,   # all but one CPU
+        n_jobs_offspring=-2,
+    )
 
    ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
    ts_params["max_pairs"] = 15
@@ -385,11 +390,15 @@ Find transition states between optimized structures.
 
    surface_config = make_graphite_surface_config(slab_layers=3)
 
-   go_params = get_torchsim_ga_params(
-       system_type="surface_cluster",
-       surface_config=surface_config,
-       seed=42,
-   )
+    go_params = get_torchsim_ga_params(
+        system_type="surface_cluster",
+        surface_config=surface_config,
+        seed=42,
+    )
+    go_params["optimizer_params"]["ga"].update(
+        n_jobs_population_init=-2,   # all but one CPU
+        n_jobs_offspring=-2,
+    )
 
    ts_params = get_ts_search_params(
        system_type="surface_cluster",
