@@ -61,19 +61,16 @@ def _safe_mtime(path: str) -> float:
         return 0.0
 
 
-def _load_candidates_from_file(db_file: str, mtime: float) -> list[CandidateEntry]:
+def _load_candidates_from_file(db_file: str) -> list[CandidateEntry]:
     """Load minima from a single database file.
 
     Args:
         db_file: Path to the database file to read.
-        mtime: Modification time of ``db_file``; unused here, it only takes
-            part in the cache key built by :func:`_load_db_candidates`.
 
     Returns:
         List of ``(symbols, energy, atoms)`` entries, or an empty list if the
         file could not be read.
     """
-    _ = mtime
     try:
         run_id = resolve_run_id_from_db_path(db_file)
         minima = extract_minima_from_database_file(
@@ -119,7 +116,7 @@ def _load_db_candidates(db_file: str) -> tuple[float, list[CandidateEntry]]:
     if cached is not None:
         return canonical_mtime, cached
 
-    candidates = _load_candidates_from_file(db_file, canonical_mtime)
+    candidates = _load_candidates_from_file(db_file)
     get_global_cache().set(cache_ns, cache_key, candidates)
     return canonical_mtime, candidates
 

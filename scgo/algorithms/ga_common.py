@@ -80,9 +80,8 @@ from scgo.utils.fitness_strategies import (
 )
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
 from scgo.utils.logging import get_logger
+from scgo.utils.parallel_workers import resolve_n_jobs, validate_n_jobs
 from scgo.utils.phase_logging import (
-    InitDiagnosticsCollector,
-    format_count_summary,
     log_phase_header,
 )
 from scgo.utils.rng_helpers import (
@@ -373,10 +372,7 @@ def validate_ga_common_params(
     validate_positive("niter", niter, strict=True)
     validate_integer("population_size", population_size)
     validate_positive("population_size", population_size, strict=True)
-    if n_jobs_population_init not in (-1, -2) and n_jobs_population_init < 1:
-        raise SCGOValidationError(
-            f"n_jobs_population_init must be -1, -2, or >= 1, got {n_jobs_population_init}"
-        )
+    validate_n_jobs(n_jobs_population_init, "n_jobs_population_init")
     if calculator is None:
         raise SCGOValidationError("calculator is required for genetic algorithm")
     if fmax is not None:
@@ -411,7 +407,7 @@ class ClusterStartGenerator(StartGenerator):
         population_size: int | None = None,
         mode: str = "smart",
         previous_search_glob: str = "**/*.db",
-        n_jobs: int = 1,
+        n_jobs: int | None = None,
         *,
         system_type: SystemType = "gas_cluster",
         adsorbate_definition: AdsorbateDefinition | None = None,
@@ -433,8 +429,9 @@ class ClusterStartGenerator(StartGenerator):
             previous_search_glob: Glob pattern used to find prior databases for
                 seed-based initialization. Defaults to ``"**/*.db"``.
             n_jobs: Number of parallel workers for batch initialization.
-                Default 1 (sequential). Special values: -1 (all CPUs), -2 (all except one).
-                Only used when population_size is provided.
+                ``None`` uses the project default (single worker; opt in with
+                -1/-2 for parallelism). Special values: -1 (all CPUs),
+                -2 (all except one). Only used when population_size is provided.
             system_type: ``gas_cluster`` or ``gas_cluster_adsorbate``; used to reject
                 spurious adsorbate kwargs for plain gas clusters.
             adsorbate_definition: Required for hierarchical gas seeds; optional for
@@ -483,7 +480,7 @@ class ClusterStartGenerator(StartGenerator):
         self.population_size: int | None = population_size
         self.mode: str = mode
         self.previous_search_glob: str = previous_search_glob
-        self.n_jobs: int = n_jobs
+        self.n_jobs: int = resolve_n_jobs(n_jobs)
         self.system_type: SystemType = system_type
         self.adsorbate_definition = adsorbate_definition
         self.adsorbate_fragment_template = (
@@ -517,41 +514,22 @@ class ClusterStartGenerator(StartGenerator):
             )
             if self._hierarchical and adsorbate_definition is not None:
                 from scgo.cluster_adsorbate.hierarchical import (
-                    build_hierarchical_core_fragment_cluster,
+                    build_hierarchical_core_fragment_cluster_batch,
                 )
 
-                InitDiagnosticsCollector.reset()
-                self._candidate_batch = []
-                for _i in range(population_size):
-                    placement_metadata: dict[str, str] = {}
-                    a = build_hierarchical_core_fragment_cluster(
-                        adsorbate_definition,
-                        self.rng,
-                        self.previous_search_glob,
-                        self.adsorbate_fragment_template,
-                        self.cluster_adsorbate_config,
-                        cluster_init_vacuum=self.vacuum,
-                        init_mode=self.mode,
-                        max_placement_attempts=self.max_hierarchical_attempts,
-                        batch_site_counts=self._batch_site_type_counts,
-                        placement_metadata=placement_metadata,
-                    )
-                    if a is None:
-                        raise SCGORuntimeError(
-                            "ClusterStartGenerator: hierarchical gas seed could not be "
-                            "placed; increase max_hierarchical_attempts or relax "
-                            "ClusterAdsorbateConfig."
-                        )
-                    site_type = placement_metadata.get("site_type")
-                    if site_type in self._batch_site_type_counts:
-                        self._batch_site_type_counts[site_type] += 1
-                    self._candidate_batch.append(a)
-                site_summary = format_count_summary(self._batch_site_type_counts)
-                InitDiagnosticsCollector.emit_summary(
-                    logger,
-                    verbosity=verbosity,
+                self._candidate_batch = build_hierarchical_core_fragment_cluster_batch(
+                    adsorbate_definition,
+                    self.rng,
+                    self.previous_search_glob,
+                    self.adsorbate_fragment_template,
+                    self.cluster_adsorbate_config,
+                    cluster_init_vacuum=self.vacuum,
+                    init_mode=self.mode,
                     n_structures=population_size,
-                    extra=f"site types {site_summary}" if site_summary else "",
+                    max_placement_attempts=self.max_hierarchical_attempts,
+                    batch_site_counts=self._batch_site_type_counts,
+                    n_jobs=self.n_jobs,
+                    verbosity=verbosity,
                 )
             else:
                 from scgo.initialization import create_initial_cluster_batch
@@ -563,7 +541,7 @@ class ClusterStartGenerator(StartGenerator):
                     vacuum=vacuum,
                     previous_search_glob=previous_search_glob,
                     mode=mode,
-                    n_jobs=n_jobs,
+                    n_jobs=self.n_jobs,
                 )
 
     def get_new_candidate(self) -> Atoms:
@@ -637,7 +615,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         calculator: Calculator | None = None,
         population_size: int | None = None,
         previous_search_glob: str = "**/*.db",
-        n_jobs: int = 1,
+        n_jobs: int | None = None,
         adsorbate_definition: AdsorbateDefinition | None = None,
         adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
         cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
@@ -653,7 +631,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         self.calculator = calculator
         self.population_size = population_size
         self.previous_search_glob = previous_search_glob
-        self.n_jobs = n_jobs
+        self.n_jobs = resolve_n_jobs(n_jobs)
         self.adsorbate_definition = adsorbate_definition
         self.adsorbate_fragment_template = _copy_adsorbate_fragment_template(
             adsorbate_fragment_template
@@ -681,11 +659,12 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 rng=self.rng,
                 config=surface_config,
                 previous_search_glob=previous_search_glob,
-                n_jobs=n_jobs,
+                n_jobs=self.n_jobs,
                 adsorbate_definition=adsorbate_definition,
                 adsorbate_fragment_template=self.adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
                 batch_site_counts=self._batch_site_type_counts,
+                verbosity=verbosity,
             )
 
     def get_new_candidate(self) -> Atoms:

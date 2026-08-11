@@ -356,9 +356,8 @@ class TestCacheBehavior:
         )
 
         get_global_cache().clear_namespace("db_candidates")
-        mtime = db_path.stat().st_mtime
         with pytest.raises(AttributeError, match="simulated DB internals error"):
-            _load_candidates_from_file(str(db_path), mtime)
+            _load_candidates_from_file(str(db_path))
 
     def test_load_candidates_from_file_sqlite_error_returns_empty(
         self, tmp_path, monkeypatch, pt2_atoms
@@ -379,8 +378,7 @@ class TestCacheBehavior:
             raising=True,
         )
 
-        mtime = db_path.stat().st_mtime
-        entries = _load_candidates_from_file(str(db_path), mtime)
+        entries = _load_candidates_from_file(str(db_path))
         assert entries == []
 
     def test_composition_cache_behavior(self, tmp_path, pt2_atoms):
@@ -1540,7 +1538,6 @@ def _assert_connectivity_with_diagnostics(
     is_connected = is_cluster_connected(atoms, connectivity_factor=connectivity_factor)
     if not is_connected:
         (
-            disconnection_distance,
             suggested_factor,
             analysis_msg,
         ) = analyze_disconnection(atoms, connectivity_factor)
@@ -1549,8 +1546,7 @@ def _assert_connectivity_with_diagnostics(
             f"(n_atoms={n_atoms}, seed={seed}). "
             f"Connectivity factor: {connectivity_factor}. "
             f"Analysis: {analysis_msg}. "
-            f"Suggested factor: {suggested_factor:.2f}. "
-            f"Largest gap: {disconnection_distance:.3f} Å"
+            f"Suggested factor: {suggested_factor:.2f}."
         )
 
 

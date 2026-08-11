@@ -32,14 +32,12 @@ def write_orca_inputs(
         output_dir: The directory where the ORCA input file (`orca.inp`) will be
                     written.
         orca_settings: A dictionary of ORCA parameters. Recognized keys are
-            'charge', 'multiplicity', 'keywords_opt', 'keywords_sp',
-            'keywords' and 'blocks_str'. Keyword lines are per job:
+            'charge', 'multiplicity', 'keywords_opt', 'keywords_sp'
+            and 'blocks_str'. Keyword lines are per job:
             'keywords_opt' sets job 1 (optimization) and 'keywords_sp' sets
-            job 2 (single point). The legacy 'keywords' key is an alias for
-            'keywords_opt' and applies to **job 1 only**, so the second job
-            keeps its ``MOread`` default and the orbital chaining stays valid.
-            'blocks_str' is shared by both jobs (job 2 additionally gets the
-            ``%moinp`` block). Unset keys fall back to reasonable defaults.
+            job 2 (single point). 'blocks_str' is shared by both jobs (job 2
+            additionally gets the ``%moinp`` block). Unset keys fall back to
+            reasonable defaults.
     """
     ensure_directory_exists(output_dir)
     logger = get_logger(__name__)
@@ -60,11 +58,7 @@ end"""
     charge = orca_settings.get("charge", 0)
     multiplicity = orca_settings.get("multiplicity", 1)
 
-    # Job 1 (geometry optimization). The legacy shared 'keywords' key is an
-    # alias for 'keywords_opt' and never leaks into job 2.
-    keywords1 = orca_settings.get(
-        "keywords_opt", orca_settings.get("keywords", default_keywords_1)
-    )
+    keywords1 = orca_settings.get("keywords_opt", default_keywords_1)
     blocks1 = orca_settings.get("blocks_str", default_blocks_str)
 
     # Job 2 (single point). Keeps the MOread default unless explicitly set, so

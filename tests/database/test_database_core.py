@@ -1537,10 +1537,13 @@ class TestDatabaseManagerCaching:
 
         monkeypatch.setattr(helpers, "ProcessPoolExecutor", spy)
 
-        # Call the public helper (now delegates to the parallel-capable loader)
+        # Call the public helper (now delegates to the parallel-capable loader).
+        # Request parallelism explicitly: the project default is a single worker,
+        # so the parallel branch is only entered when max_workers > 1.
         _ = helpers.load_previous_run_results(
             base_output_dir=tmp_path,
             composition=["Pt", "Pt"],
+            max_workers=2,
         )
 
         assert invoked["used"] is True

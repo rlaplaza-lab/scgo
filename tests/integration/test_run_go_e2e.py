@@ -190,7 +190,18 @@ EMT_E2E_CASES = [
         adsorbate_fragment_lengths=[2],
         expected_formula="HO",
         connectivity_factor=CONNECTIVITY,
-        ga_overrides={"niter": 1, "population_size": 4, "niter_local_relaxation": 5},
+        freeze_adsorbate_internal_geometry=True,
+        ga_overrides={
+            # EMT poorly describes the H-O bond and relaxes it apart during the
+            # adsorbate-only GO; the post-relaxation cluster validation ("Cluster
+            # is not connected") then rejects every candidate, emptying the GA
+            # population (0 minima). Freezing the adsorbate internal geometry
+            # keeps OH intact (mirrors the sibling surface_cluster_adsorbate
+            # case). The budget bump is secondary safety margin only.
+            "niter": 2,
+            "population_size": 8,
+            "niter_local_relaxation": 10,
+        },
         ts_overrides={
             "max_pairs": 1,
             "neb_steps": 15,

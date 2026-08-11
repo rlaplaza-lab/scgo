@@ -369,7 +369,7 @@ def _check_mobile_touches_slab(
     if not touches:
         return (
             False,
-            "No adsorbate–slab pair within connectivity distance "
+            "No adsorbate-slab pair within connectivity distance "
             f"(min cross-set distance={min_cross:.3f} Å, "
             f"connectivity_factor={connectivity_factor})",
         )

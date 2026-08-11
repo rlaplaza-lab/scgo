@@ -309,7 +309,6 @@ class TestLargeClusterConnectivitySeedGrowth:
         )
         if not is_connected:
             (
-                disconnection_distance,
                 suggested_factor,
                 analysis_msg,
             ) = analyze_disconnection(atoms, CONNECTIVITY_FACTOR)
@@ -318,8 +317,7 @@ class TestLargeClusterConnectivitySeedGrowth:
                 f"(n_atoms={n_atoms}, seed={seed}, seed_sizes={seed_sizes}). "
                 f"Connectivity factor: {CONNECTIVITY_FACTOR}. "
                 f"Analysis: {analysis_msg}. "
-                f"Suggested factor: {suggested_factor:.2f}. "
-                f"Largest gap: {disconnection_distance:.3f} Å"
+                f"Suggested factor: {suggested_factor:.2f}."
             )
 
 

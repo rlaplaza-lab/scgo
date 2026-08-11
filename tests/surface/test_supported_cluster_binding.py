@@ -86,7 +86,7 @@ def test_validate_supported_cluster_deposit_rejects_no_surface_contact(
         use_mic=False,
     )
     assert not ok
-    assert "No adsorbate–slab pair" in msg
+    assert "No adsorbate-slab pair" in msg
 
 
 def test_validate_supported_cluster_deposit_rejects_disconnected_adsorbate(
@@ -326,7 +326,7 @@ def test_contact_with_buried_slab_atom_is_rejected_in_both_paths() -> None:
         use_mic=False,
     )
     assert not ok_strict
-    assert "No adsorbate–slab pair" in msg_strict
+    assert "No adsorbate-slab pair" in msg_strict
 
     ok_split, msg_split = validate_supported_cluster_deposit(
         combined,

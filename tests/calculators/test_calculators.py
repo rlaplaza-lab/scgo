@@ -20,7 +20,7 @@ def test_write_orca_inputs(tmp_path):
     orca_settings = {
         "charge": 0,
         "multiplicity": 1,
-        "keywords": "! PBE def2-SVP",
+        "keywords_opt": "! PBE def2-SVP Opt",
         "blocks_str": "%scf MaxIter 200 end",
     }
 
@@ -38,9 +38,6 @@ def test_write_orca_inputs(tmp_path):
 
 %scf MaxIter 200 end"""
 
-    # The legacy shared ``keywords`` key applies to job 1 only; job 2 must keep
-    # its ``MOread`` default or the orbital chaining silently breaks.
-    assert "! PBE def2-SVP" in job1
     assert expected_blocks1 in job1
     assert "$new_job" in content
     assert "! PBE0 def2-tzvp VerySlowConv MOread" in job2
@@ -66,24 +63,6 @@ def test_write_orca_inputs_per_job_keywords(tmp_path):
     assert "! PBE def2-SVP Opt" in job1
     assert "! PBE0 def2-TZVP MOread" in job2
     assert "! PBE def2-SVP Opt" not in job2
-
-
-def test_write_orca_inputs_keywords_opt_wins_over_legacy_keywords(tmp_path):
-    """``keywords_opt`` takes precedence over the legacy ``keywords`` alias."""
-    atoms = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    output_dir = str(tmp_path / "orca_calc")
-
-    write_orca_inputs(
-        atoms,
-        output_dir,
-        {"keywords": "! LEGACY", "keywords_opt": "! MODERN"},
-    )
-
-    content = (tmp_path / "orca_calc" / "orca.inp").read_text()
-    job1, job2 = content.split("$new_job")
-    assert "! MODERN" in job1
-    assert "! LEGACY" not in content
-    assert "! PBE0 def2-tzvp VerySlowConv MOread" in job2
 
 
 def test_write_orca_inputs_nonzero_charge_multiplicity(tmp_path):

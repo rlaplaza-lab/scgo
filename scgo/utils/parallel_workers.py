@@ -1,4 +1,10 @@
-"""Resolve ``n_jobs`` style parallelism (-1 / -2 / positive) to a worker count."""
+"""Central knob resolving ``n_jobs`` style parallelism (-1 / -2 / positive).
+
+This module owns the single project-wide parallelism default. Library entry
+points take ``n_jobs: int | None = None`` and weave the default in through
+:func:`resolve_n_jobs`, instead of repeating a literal default in every
+signature, so the default can be changed in exactly one place.
+"""
 
 from __future__ import annotations
 
@@ -8,22 +14,62 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 
+DEFAULT_N_JOBS = 1
+"""Project-wide parallelism default: single-threaded unless the user opts in.
 
-def resolve_n_jobs_to_workers(n_jobs: int) -> int:
+This mirrors the convention used by scikit-learn / joblib (``n_jobs=None`` means
+one worker), so the library never silently oversubscribes the host by spawning
+one worker per logical CPU on top of the internal BLAS / MACE / TorchSIM thread
+pools. Callers that want parallelism pass ``-1`` (all CPUs) or ``-2`` (all CPUs
+except one) explicitly, or set their own worker count.
+"""
+
+
+def validate_n_jobs(n_jobs: int, name: str = "n_jobs") -> None:
+    """Reject ``n_jobs`` values outside ``-1``, ``-2``, or ``>= 1``.
+
+    Raises:
+        SCGOValidationError: If ``n_jobs`` is not a supported value.
+    """
+    if n_jobs not in (-1, -2) and n_jobs < 1:
+        raise SCGOValidationError(f"{name} must be -1, -2, or >= 1, got {n_jobs}")
+
+
+def resolve_n_jobs(n_jobs: int | None, name: str = "n_jobs") -> int:
+    """Resolve an optional ``n_jobs`` to a concrete, validated setting.
+
+    ``None`` means "use the project default" (``DEFAULT_N_JOBS``); any
+    other value is validated and returned unchanged.
+
+    Raises:
+        SCGOValidationError: If ``n_jobs`` is not ``None``, ``-1``, ``-2``, or
+            ``>= 1``.
+    """
+    if n_jobs is None:
+        return DEFAULT_N_JOBS
+    validate_n_jobs(n_jobs, name)
+    return n_jobs
+
+
+def resolve_n_jobs_to_workers(n_jobs: int | None) -> int:
     """Map batch-parallel ``n_jobs`` to a concrete worker count (``>= 1``).
 
     Semantics match :func:`scgo.initialization.initializers.create_initial_cluster_batch`:
 
+    - ``None``: the project default (``DEFAULT_N_JOBS``).
     - ``1``: sequential (callers using ``max_workers == 1`` stay single-threaded).
     - ``> 1``: use that many workers.
     - ``-1``: all logical CPUs.
     - ``-2``: all logical CPUs except one.
+
+    Raises:
+        SCGOValidationError: If ``n_jobs`` is not ``None``, ``-1``, ``-2``, or
+            ``>= 1``.
     """
-    if n_jobs < 1 and n_jobs not in (-1, -2):
-        raise SCGOValidationError(f"n_jobs must be >= 1, -1, or -2, got {n_jobs}")
+    resolved = resolve_n_jobs(n_jobs)
     cpu = os.cpu_count() or 1
-    if n_jobs == -1:
+    if resolved == -1:
         return cpu
-    if n_jobs == -2:
+    if resolved == -2:
         return max(1, cpu - 1)
-    return n_jobs
+    return resolved

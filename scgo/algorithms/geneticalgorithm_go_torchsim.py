@@ -99,7 +99,7 @@ from scgo.utils.logging import (
     should_show_progress,
 )
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs, resolve_n_jobs_to_workers
 from scgo.utils.phase_logging import (
     log_generation_offspring_summaries,
     log_phase_subheader,
@@ -764,8 +764,8 @@ def ga_go(
     mutation_probability: float = 0.4,
     population_size: int = 10,
     offspring_fraction: float = 0.5,
-    n_jobs_population_init: int = -2,
-    n_jobs_offspring: int = -2,
+    n_jobs_population_init: int | None = None,
+    n_jobs_offspring: int | None = None,
     vacuum: float = 10.0,
     previous_search_glob: str = "**/*.db",
     use_adaptive_mutations: bool = True,
@@ -819,6 +819,12 @@ def ga_go(
         calculator: ASE calculator for energy/force evaluations.
         previous_search_glob: Glob pattern used to discover previous database
             files for seed-based initialization.
+        n_jobs_population_init: Parallel workers for population initialization.
+            ``None`` uses the project default (single worker; opt in with ``-1``
+            for all CPUs or ``-2`` for all but one). ``>= 1`` sets an explicit
+            worker count.
+        n_jobs_offspring: Parallel workers for offspring construction, with the
+            same semantics as ``n_jobs_population_init``.
         early_stopping_niter: Number of consecutive generations with no improvement
                               before stopping early. Uses fitness for non-low_energy
                               strategies, energy for low_energy. If 0, no early stopping
@@ -877,6 +883,12 @@ def ga_go(
         allow_empty=policy.slab_is_search_target and not policy.has_adsorbate,
         allow_tuple=False,
     )
+    # Weave the project-wide parallelism default in once, here at the top-level
+    # knob, so every downstream helper receives a concrete worker setting.
+    n_jobs_population_init = resolve_n_jobs(
+        n_jobs_population_init, "n_jobs_population_init"
+    )
+    n_jobs_offspring = resolve_n_jobs(n_jobs_offspring, "n_jobs_offspring")
     validate_ga_common_params(
         niter=niter,
         population_size=population_size,
@@ -887,10 +899,6 @@ def ga_go(
         vacuum=vacuum,
         fmax=fmax,
     )
-    if n_jobs_offspring not in (-1, -2) and n_jobs_offspring < 1:
-        raise SCGOValidationError(
-            f"n_jobs_offspring must be -1, -2, or >= 1, got {n_jobs_offspring}"
-        )
 
     if batch_size is not None and batch_size <= 0:
         batch_size = None
@@ -1146,18 +1154,11 @@ def ga_go(
     profile_timings["initial_population_generation_s"] = perf_counter() - t0
 
     if verbosity >= 1:
-        n_workers = (
-            "all CPUs"
-            if n_jobs_population_init == -1
-            else "all but one CPU"
-            if n_jobs_population_init == -2
-            else f"{n_jobs_population_init} workers"
-        )
         log_info_v(
             logger,
             "Generated initial population of %d candidates (batched, parallel: %s)",
             population_size,
-            n_workers,
+            f"{resolve_n_jobs_to_workers(n_jobs_population_init)} workers",
             verbosity=verbosity,
         )
 

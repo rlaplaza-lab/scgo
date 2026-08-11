@@ -821,9 +821,9 @@ def assert_pt_o_distance_reasonable(
     lo: float = PT_O_DISTANCE_ANG[0],
     hi: float = PT_O_DISTANCE_ANG[1],
 ) -> None:
-    """Assert Pt–O separation is within a chemically reasonable window."""
+    """Assert Pt-O separation is within a chemically reasonable window."""
     d = atoms.get_distance(pt_idx, o_idx, mic=True)
-    assert lo <= d <= hi, f"Pt–O distance {d:.3f} Å outside [{lo}, {hi}]"
+    assert lo <= d <= hi, f"Pt-O distance {d:.3f} Å outside [{lo}, {hi}]"
 
 
 def assert_run_id_persisted(atoms: Atoms, expected_run_id: str) -> None:
@@ -1256,14 +1256,12 @@ def run_batch_connectivity_test(
         )
         if not is_connected:
             (
-                disconnection_distance,
                 suggested_factor,
                 analysis_msg,
             ) = analyze_disconnection(atoms, connectivity_factor)
             failures.append(
                 {
                     "sample": i,
-                    "disconnection_distance": disconnection_distance,
                     "suggested_factor": suggested_factor,
                     "analysis": analysis_msg,
                 }
@@ -1278,7 +1276,7 @@ def run_batch_connectivity_test(
     if failures:
         failure_summary = "\n".join(
             [
-                f"  Sample {f['sample']}: gap={f['disconnection_distance']:.3f} Å, "
+                f"  Sample {f['sample']}: "
                 f"suggested_factor={f['suggested_factor']:.2f}, {f['analysis']}"
                 for f in failures
             ]

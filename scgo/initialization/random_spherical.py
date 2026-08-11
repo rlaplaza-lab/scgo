@@ -1083,8 +1083,8 @@ def _add_atoms_single_mode(
         if len(new_atoms) >= 2 and not is_cluster_connected(
             new_atoms, connectivity_factor, use_mic=False
         ):
-            disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
+            suggested_factor, analysis_msg = analyze_disconnection(
+                new_atoms, connectivity_factor, use_mic=False
             )
             remaining_atoms = atoms_to_add[atom_idx + 1 :]
             remaining_counts = (
@@ -1316,8 +1316,8 @@ def _add_atoms_batch_mode(
         if len(new_atoms) >= 2 and not is_cluster_connected(
             new_atoms, connectivity_factor, use_mic=False
         ):
-            disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
+            suggested_factor, analysis_msg = analyze_disconnection(
+                new_atoms, connectivity_factor, use_mic=False
             )
             remaining_counts = get_composition_counts(atoms_to_add)
             diagnostics = get_structure_diagnostics(

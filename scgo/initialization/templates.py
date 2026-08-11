@@ -1554,7 +1554,7 @@ def _generate_template_with_atom_adjustment(
         raise SCGOValidationError(
             f"Cannot generate template with empty composition for {target_n_atoms} atoms"
         )
-    elif len(composition) >= base_n_atoms:
+    if len(composition) >= base_n_atoms:
         base_composition = composition[:base_n_atoms]
     else:
         base_composition = _cycle_composition_to_length(composition, base_n_atoms)

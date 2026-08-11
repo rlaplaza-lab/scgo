@@ -35,7 +35,13 @@ from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
-from scgo.initialization import create_initial_cluster
+from scgo.initialization import (
+    BatchInitPlan,
+    create_initial_cluster,
+    emit_init_diagnostics,
+    plan_batch_initialization,
+    reset_init_diagnostics,
+)
 from scgo.initialization.geometry_helpers import (
     _generate_rotation_matrix,
     get_covalent_radius,
@@ -51,7 +57,9 @@ from scgo.utils.combine_atoms import (
     slab_surface_extreme as _shared_slab_surface_extreme,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs, resolve_n_jobs_to_workers
+from scgo.utils.phase_logging import format_count_summary
+from scgo.utils.site_counts import increment_site_type_count
 
 if TYPE_CHECKING:
     from numpy.random import Generator
@@ -382,6 +390,10 @@ def create_deposited_cluster(
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     batch_site_counts: dict[str, int] | None = None,
+    *,
+    plan: BatchInitPlan | None = None,
+    allocation: tuple[str, int | None] | None = None,
+    emit_diagnostics: bool = True,
 ) -> Atoms | None:
     """One adsorbate+slab structure, or None if placement fails.
 
@@ -389,6 +401,14 @@ def create_deposited_cluster(
     place above slab. For adsorbate runs with core symbols: build hierarchical
     core+fragment first. For adsorbate runs without core symbols: place the
     fragments directly on slab surface sites.
+
+    Args:
+        plan: Pre-computed :class:`BatchInitPlan` (discovery + allocation) so the
+            noisy DB scan runs once per batch instead of once per candidate.
+        allocation: Override the ``(strategy, template_index)`` allocation for
+            this single cluster (used with ``plan`` to preserve diversity).
+        emit_diagnostics: When ``False``, suppress the per-call diagnostic
+            summary (the batch owner emits the aggregate summary).
 
     Raises:
         SCGOValidationError: If ``adsorbate_definition`` is given without
@@ -408,6 +428,9 @@ def create_deposited_cluster(
                 rng=rng,
                 previous_search_glob=previous_search_glob,
                 mode=config.init_mode,
+                plan=plan,
+                allocation=allocation,
+                emit_diagnostics=emit_diagnostics,
             )
         else:
             if adsorbate_fragment_template is None:
@@ -455,6 +478,9 @@ def create_deposited_cluster(
                     init_mode=config.init_mode,
                     max_placement_attempts=config.max_placement_attempts,
                     batch_site_counts=batch_site_counts,
+                    plan=plan,
+                    allocation=allocation,
+                    emit_diagnostics=emit_diagnostics,
                 )
             if cluster_seed is None:
                 continue
@@ -529,6 +555,50 @@ def create_deposited_cluster(
     return None
 
 
+def _plan_deposition_batch(
+    composition: Sequence[str],
+    n_structures: int,
+    rng: Generator,
+    config: SurfaceSystemConfig,
+    *,
+    previous_search_glob: str,
+    adsorbate_definition: AdsorbateDefinition | None,
+) -> BatchInitPlan | None:
+    """Resolve the one-per-batch initialization plan for the deposited cores.
+
+    Returns ``None`` when there is no metal core to build (adsorbate-only
+    deposition places fragments straight onto slab sites, so no previous-search
+    discovery or strategy allocation is involved).
+    """
+    if adsorbate_definition is not None:
+        core_symbols = [str(s) for s in adsorbate_definition.get("core_symbols", [])]
+        if not core_symbols:
+            return None
+        plan_composition: list[str] = core_symbols
+    elif composition:
+        plan_composition = [str(s) for s in composition]
+    else:
+        return None
+
+    return plan_batch_initialization(
+        plan_composition,
+        n_structures,
+        rng,
+        vacuum=config.cluster_init_vacuum,
+        previous_search_glob=previous_search_glob,
+        mode=config.init_mode,
+    )
+
+
+def _record_batch_site_type(
+    structure: Atoms,
+    shared_site_counts: dict[str, int] | None,
+    site_counts_lock: Lock | None = None,
+) -> None:
+    site_type = get_tag(structure, "adsorbate_site_type")
+    increment_site_type_count(shared_site_counts, site_type, site_counts_lock)
+
+
 def create_deposited_cluster_batch(
     composition: Sequence[str],
     slab: Atoms,
@@ -538,13 +608,27 @@ def create_deposited_cluster_batch(
     config: SurfaceSystemConfig,
     *,
     previous_search_glob: str = "**/*.db",
-    n_jobs: int = 1,
+    n_jobs: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     batch_site_counts: dict[str, int] | None = None,
+    verbosity: int | None = None,
 ) -> list[Atoms]:
     """Generate multiple deposited structures (sequential or threaded).
+
+    Discovery (the previous-search DB scan) and strategy allocation run exactly
+    once for the whole batch via a shared :class:`BatchInitPlan`; each produced
+    structure uses its own planned allocation so strategy diversity is
+    preserved. Per-candidate initialization diagnostics are suppressed and this
+    function emits the single aggregate summary.
+
+    Args:
+        n_jobs: Parallelism for structure generation; ``None`` uses the project
+            default (single worker). ``1`` keeps the deterministic
+            sequential path; opt in with -1/-2 for parallelism.
+        verbosity: Verbosity for the aggregate initialization summary; ``None``
+            infers it from the logger level.
 
     Raises:
         SCGORuntimeError: If fewer than ``n_structures`` structures can be built.
@@ -552,27 +636,39 @@ def create_deposited_cluster_batch(
     if n_structures <= 0:
         return []
 
+    n_jobs = resolve_n_jobs(n_jobs)
     max_attempts = max(n_structures * 50, config.max_placement_attempts)
+    reset_init_diagnostics()
+    plan = _plan_deposition_batch(
+        composition,
+        n_structures,
+        rng,
+        config,
+        previous_search_glob=previous_search_glob,
+        adsorbate_definition=adsorbate_definition,
+    )
+
+    def _emit_batch_summary() -> None:
+        site_summary = (
+            format_count_summary(batch_site_counts) if batch_site_counts else ""
+        )
+        emit_init_diagnostics(
+            n_structures,
+            verbosity=verbosity,
+            extra=f"site types {site_summary}" if site_summary else "",
+        )
 
     if n_jobs == 1:
         out: list[Atoms] = []
         attempts = 0
         shared_site_counts = batch_site_counts
 
-        def _record_batch_site_type_sequential(structure: Atoms) -> None:
-            if shared_site_counts is None:
-                return
-            site_type = get_tag(structure, "adsorbate_site_type")
-            if not isinstance(site_type, str):
-                return
-            if site_type in shared_site_counts:
-                shared_site_counts[site_type] += 1
-
         while len(out) < n_structures and attempts < max_attempts:
             attempts += 1
             child_rng = np.random.default_rng(
                 rng.integers(0, 2**63 - 1, dtype=np.int64)
             )
+            allocation = plan.allocation_for(len(out)) if plan is not None else None
             struct = create_deposited_cluster(
                 composition,
                 slab,
@@ -584,15 +680,19 @@ def create_deposited_cluster_batch(
                 adsorbate_fragment_template=adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
                 batch_site_counts=shared_site_counts,
+                plan=plan,
+                allocation=allocation,
+                emit_diagnostics=False,
             )
             if struct is not None:
-                _record_batch_site_type_sequential(struct)
+                _record_batch_site_type(struct, shared_site_counts)
                 out.append(struct)
         if len(out) < n_structures:
             raise SCGORuntimeError(
                 f"Could only generate {len(out)} of {n_structures} deposited structures; "
                 "try widening height range or increasing max_placement_attempts."
             )
+        _emit_batch_summary()
         return out
 
     # Parallel: precompute deterministic per-task seeds on the main thread.
@@ -603,18 +703,9 @@ def create_deposited_cluster_batch(
     shared_site_counts = batch_site_counts
     site_counts_lock = Lock() if shared_site_counts is not None else None
 
-    def _record_batch_site_type(structure: Atoms) -> None:
-        if shared_site_counts is None or site_counts_lock is None:
-            return
-        site_type = get_tag(structure, "adsorbate_site_type")
-        if not isinstance(site_type, str):
-            return
-        with site_counts_lock:
-            if site_type in shared_site_counts:
-                shared_site_counts[site_type] += 1
-
-    def _build_structure_with_seed(task_seed: int) -> Atoms:
+    def _build_structure_with_seed(task_seed: int, task_idx: int) -> Atoms:
         task_rng = np.random.default_rng(task_seed)
+        allocation = plan.allocation_for(task_idx) if plan is not None else None
         for _ in range(per_worker_limit):
             child_rng = np.random.default_rng(
                 task_rng.integers(0, 2**63 - 1, dtype=np.int64)
@@ -630,9 +721,12 @@ def create_deposited_cluster_batch(
                 adsorbate_fragment_template=adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
                 batch_site_counts=shared_site_counts,
+                plan=plan,
+                allocation=allocation,
+                emit_diagnostics=False,
             )
             if structure is not None:
-                _record_batch_site_type(structure)
+                _record_batch_site_type(structure, shared_site_counts, site_counts_lock)
                 return structure
         raise SCGORuntimeError(
             "Could not generate deposited structure in parallel worker; "
@@ -645,11 +739,12 @@ def create_deposited_cluster_batch(
         max_workers=workers, thread_name_prefix="scgo_deposit"
     ) as ex:
         futures = {
-            ex.submit(_build_structure_with_seed, seed): idx
+            ex.submit(_build_structure_with_seed, seed, idx): idx
             for idx, seed in enumerate(task_seeds)
         }
         for future in as_completed(futures):
             ordered_results[futures[future]] = future.result()
     if any(result is None for result in ordered_results):
         raise SCGORuntimeError("Parallel batch returned too few structures")
+    _emit_batch_summary()
     return [result for result in ordered_results if result is not None]

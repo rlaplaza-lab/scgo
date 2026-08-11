@@ -52,10 +52,10 @@ _KDTREE_MIN_ATOMS = 50
 def format_composition_counts_short(
     counts: Mapping[str, int] | Counter[str],
 ) -> str:
-    """Format composition counts as a compact string (e.g. ``Pt×11, Au×2``)."""
+    """Format composition counts as a compact string (e.g. ``Pt x 11, Au x 2``)."""
     if not counts:
         return "none"
-    return ", ".join(f"{symbol}×{count}" for symbol, count in sorted(counts.items()))
+    return ", ".join(f"{symbol}x{count}" for symbol, count in sorted(counts.items()))
 
 
 def format_placement_error_message(
@@ -820,7 +820,7 @@ def get_largest_facets(
             centered_positions = positions - center
             if len(positions) > 1:
                 cov_matrix = np.cov(centered_positions.T)
-                eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+                _eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
                 # np.linalg.eigh returns eigenvalues in ascending order, so the
                 # plane normal is the eigenvector of the *smallest* eigenvalue
                 # (the direction of least positional variance).
@@ -863,7 +863,7 @@ def _classify_seed_geometry(atoms: Atoms) -> str:
         centered_positions = positions - center
 
         cov_matrix = np.cov(centered_positions.T)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        eigenvalues, _eigenvectors = np.linalg.eigh(cov_matrix)
 
         # Check if structure is linear (1D) vs planar (2D)
         # Linear: λ1 ≈ 0 AND λ2 ≈ 0 (only one dimension has variation)
@@ -1127,7 +1127,7 @@ def analyze_disconnection(
     atoms: Atoms,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     use_mic: bool = False,
-) -> tuple[float, float, str]:
+) -> tuple[float, str]:
     """Analyze disconnection in a cluster and suggest appropriate connectivity factor.
 
     Args:
@@ -1136,15 +1136,15 @@ def analyze_disconnection(
         use_mic: If True, use minimum image convention for distance calculations.
 
     Returns:
-        Tuple of (max_disconnection_distance, suggested_connectivity_factor, analysis_message)
+        Tuple of (suggested_connectivity_factor, analysis_message)
     """
     if len(atoms) <= 1:
-        return 0.0, connectivity_factor, "Single atom or empty cluster"
+        return connectivity_factor, "Single atom or empty cluster"
 
     components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
 
     if len(components) <= 1:
-        return 0.0, connectivity_factor, "Cluster is connected"
+        return connectivity_factor, "Cluster is connected"
 
     positions = atoms.get_positions()
     symbols = atoms.get_chemical_symbols()
@@ -1164,7 +1164,7 @@ def analyze_disconnection(
                         closest_atoms = (atom1, atom2, symbols[atom1], symbols[atom2])
 
     if closest_atoms is None:
-        return float("inf"), connectivity_factor, "Unable to analyze disconnection"
+        return connectivity_factor, "Unable to analyze disconnection"
 
     atom1_idx, atom2_idx, sym1, sym2 = closest_atoms
     r1 = get_covalent_radius(sym1)
@@ -1183,7 +1183,7 @@ def analyze_disconnection(
         f"Suggested connectivity_factor: {suggested_factor:.2f}"
     )
 
-    return min_inter_component_distance, suggested_factor, analysis_msg
+    return suggested_factor, analysis_msg
 
 
 def _build_connectivity_adjacency(
@@ -1780,7 +1780,7 @@ def _assign_exact_composition(
         raise SCGOValidationError(
             f"Cannot assign empty composition to cluster with {n_atoms} atoms"
         )
-    elif len(composition) == n_atoms:
+    if len(composition) == n_atoms:
         # Exact match - use composition directly
         cluster.set_chemical_symbols(composition)
     else:

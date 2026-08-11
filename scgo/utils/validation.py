@@ -68,7 +68,7 @@ def validate_positive(name: str, value: float, strict: bool = False) -> None:
     """
     if strict and value <= 0:
         raise SCGOValidationError(f"{name} must be positive, got {value}")
-    elif not strict and value < 0:
+    if not strict and value < 0:
         raise SCGOValidationError(f"{name} must be non-negative, got {value}")
 
 

@@ -181,10 +181,8 @@ def combine_seeds(
         combined_atoms.center()
 
         if not is_cluster_connected(combined_atoms, connectivity_factor, use_mic=False):
-            disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(
-                    combined_atoms, connectivity_factor, use_mic=False
-                )
+            suggested_factor, analysis_msg = analyze_disconnection(
+                combined_atoms, connectivity_factor, use_mic=False
             )
             logger.warning(
                 f"Seed {i + 1} placement created disconnected cluster. "

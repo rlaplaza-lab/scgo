@@ -235,7 +235,7 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
     if getattr(AtomConstraint, "_scgo_device_patch", False):
         return
 
-    def select_sub_constraint(self, atom_idx, sys_idx):  # noqa: ARG001
+    def select_sub_constraint(self, atom_idx, sys_idx):
         if hasattr(atom_idx, "device") and atom_idx.device != self.atom_idx.device:
             atom_idx = atom_idx.to(self.atom_idx.device)
         mask = torch.isin(self.atom_idx, atom_idx)
@@ -254,7 +254,7 @@ _TORCHSIM_WARNINGS_REGISTERED = False
 
 def _register_torchsim_warning_filters() -> None:
     """Suppress known upstream TorchSim/warp warnings (not actionable in SCGO)."""
-    global _TORCHSIM_WARNINGS_REGISTERED  # noqa: PLW0603
+    global _TORCHSIM_WARNINGS_REGISTERED
     if _TORCHSIM_WARNINGS_REGISTERED:
         return
     warnings.filterwarnings(
@@ -1347,7 +1347,7 @@ class TorchSimBatchRelaxer:
                 atoms_list, max_atoms_in_batch=max_atoms_in_batch
             )
 
-        atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
+        _atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
 
         state = self._ts.optimize(  # type: ignore[call-arg]
             system=system_in,

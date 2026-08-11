@@ -200,11 +200,11 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``10``
      - Stop if no improvement for N generations
    * - ``n_jobs_population_init``
-     - ``-2``
-     - Parallel jobs for population init (-2 = all but 1)
+     - ``1``
+     - Workers for population initialization. Default is sequential (``1``); pass ``-1`` (all CPUs), ``-2`` (all but one), or a positive worker count to enable parallelism.
    * - ``n_jobs_offspring``
-     - ``-2``
-     - Parallel jobs for offspring
+     - ``1``
+     - Workers for offspring construction. Same semantics as ``n_jobs_population_init``; default is sequential (``1``).
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``

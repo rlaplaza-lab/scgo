@@ -21,6 +21,7 @@ from scgo.system_types import (
     SystemType,
     get_system_policy,
 )
+from scgo.utils.parallel_workers import DEFAULT_N_JOBS
 
 # Available MACE model names for use in calculator_kwargs["model_name"]
 AVAILABLE_MACE_MODELS = [
@@ -283,8 +284,8 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "aggressive_burst_multiplier": 1.8,
                 "max_mutation_probability": 0.65,
                 "early_stopping_niter": 10,  # Stop if no improvement after N generations
-                "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
-                "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
+                "n_jobs_population_init": DEFAULT_N_JOBS,  # Default: single worker (see DEFAULT_N_JOBS); opt in with -1/-2
+                "n_jobs_offspring": DEFAULT_N_JOBS,  # Aligned with population init
                 "batch_size": None,
                 "relaxer": None,
                 "fitness_strategy": None,  # None = inherit from top-level
@@ -385,7 +386,7 @@ def get_testing_params() -> GLOptimizerParams:
             "offspring_fraction": 0.5,
             "niter": 2,
             "niter_local_relaxation": 2,
-            "n_jobs_population_init": -2,
+            "n_jobs_population_init": DEFAULT_N_JOBS,
         }
     )
     return params
@@ -404,7 +405,7 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
             "niter_local_relaxation": 200,
             "niter": 10,
             "population_size": 50,
-            "n_jobs_population_init": -2,  # Parallel for benchmarks
+            "n_jobs_population_init": DEFAULT_N_JOBS,  # Parallel for benchmarks
         },
     )
 

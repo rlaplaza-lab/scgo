@@ -11,6 +11,7 @@ from scgo.cluster_adsorbate.constraints import (
 from scgo.cluster_adsorbate.hierarchical import (
     build_adsorbate_only_cluster,
     build_hierarchical_core_fragment_cluster,
+    build_hierarchical_core_fragment_cluster_batch,
 )
 from scgo.cluster_adsorbate.placement import (
     blmin_for_core_and_fragment,
@@ -26,6 +27,7 @@ from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 __all__ = [
     "build_adsorbate_only_cluster",
     "build_hierarchical_core_fragment_cluster",
+    "build_hierarchical_core_fragment_cluster_batch",
     "reorder_cluster_to_composition",
     "ClusterAdsorbateConfig",
     "attach_adsorbate_internal_geometry_constraints",

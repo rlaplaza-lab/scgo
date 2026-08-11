@@ -67,22 +67,22 @@ class TestAnalyzeDisconnection:
     def test_empty_cluster(self):
         """Test analyze_disconnection with empty cluster."""
         atoms = Atoms()
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance == pytest.approx(0.0, abs=1e-8)
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "Single atom or empty cluster" in msg
 
     def test_single_atom(self):
         """Test analyze_disconnection with single atom."""
         atoms = Atoms("Pt", positions=[[0, 0, 0]])
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance == pytest.approx(0.0, abs=1e-8)
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "Single atom or empty cluster" in msg
 
     def test_connected_cluster(self):
         """Test analyze_disconnection with connected cluster."""
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance == pytest.approx(0.0, abs=1e-8)
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "Cluster is connected" in msg
 
     def test_disconnected_cluster_two_components(self):
@@ -90,10 +90,9 @@ class TestAnalyzeDisconnection:
         atoms = Atoms(
             "Pt4", positions=[[0, 0, 0], [2.5, 0, 0], [10, 0, 0], [12.5, 0, 0]]
         )
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance > 0.0
-        assert "2 disconnected components" in msg
+        factor, msg = analyze_disconnection(atoms)
         assert factor > 1.0  # Suggested factor should be reasonable
+        assert "2 disconnected components" in msg
 
     def test_disconnected_cluster_multiple_components(self):
         """Test analyze_disconnection with multiple disconnected components."""
@@ -106,8 +105,8 @@ class TestAnalyzeDisconnection:
             [20, 0, 0],  # Cluster 3 (single atom)
         ]
         atoms = Atoms("Pt5", positions=positions)
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance > 0.0
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "3 disconnected components" in msg
 
     def test_exactly_at_threshold(self):
@@ -119,27 +118,24 @@ class TestAnalyzeDisconnection:
         TEST_FACTOR = 2.5  # Specific factor for testing threshold behavior
         threshold = 2 * r_pt * TEST_FACTOR
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [threshold, 0, 0]])
-        distance, factor, msg = analyze_disconnection(
-            atoms, connectivity_factor=TEST_FACTOR
-        )
+        factor, msg = analyze_disconnection(atoms, connectivity_factor=TEST_FACTOR)
         # Should be connected at this threshold
-        assert distance == pytest.approx(0.0, abs=1e-8) or "Cluster is connected" in msg
+        assert "Cluster is connected" in msg
 
     def test_very_large_connectivity_factor(self):
         """Test analyze_disconnection with very large connectivity factor."""
         VERY_LARGE_FACTOR = 10.0  # Very large factor for testing boundary conditions
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [10, 0, 0]])
-        distance, factor, msg = analyze_disconnection(
+        factor, msg = analyze_disconnection(
             atoms, connectivity_factor=VERY_LARGE_FACTOR
         )
         # Should be connected with large factor
-        assert distance == pytest.approx(0.0, abs=1e-8) or "Cluster is connected" in msg
+        assert "Cluster is connected" in msg
 
     def test_mixed_elements(self):
         """Test analyze_disconnection with mixed element types."""
         atoms = Atoms("PtAu", positions=[[0, 0, 0], [10, 0, 0]])
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert isinstance(distance, float)
+        factor, msg = analyze_disconnection(atoms)
         assert isinstance(factor, float)
         assert isinstance(msg, str)
 
@@ -148,14 +144,10 @@ class TestAnalyzeDisconnection:
         # Use a test connectivity factor to verify buffer calculation
         TEST_FACTOR = 1.5
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [5.0, 0, 0]])
-        distance, factor, msg = analyze_disconnection(
-            atoms, connectivity_factor=TEST_FACTOR
-        )
-        if distance > 0:
+        factor, msg = analyze_disconnection(atoms, connectivity_factor=TEST_FACTOR)
+        if "disconnected" in msg:
             # Suggested factor should be at least the required factor
-            assert (
-                factor >= distance / (2 * 1.36) * 1.05
-            )  # 1.36 is approximate Pt radius
+            assert factor >= TEST_FACTOR
 
 
 class TestGetLargestFacets:
