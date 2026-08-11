@@ -357,13 +357,6 @@ Find transition states between optimized structures.
 
 **GO + TS combined:**
 
-The basic ``run_go``/``run_go_ts`` snippets above use the safe single-threaded
-default (``n_jobs_* = 1``). On a multi-core node or HPC job, set
-``n_jobs_population_init`` and ``n_jobs_offspring`` to ``-2`` (all but one CPU)
-— or ``-1`` for every CPU — to relax the initial population and each
-generation's offspring in parallel; otherwise the GA runs on one core and the
-rest of the node sits idle. The production snippets below do this explicitly.
-
 .. code-block:: python
 
    from scgo import run_go_ts
@@ -552,6 +545,6 @@ See :doc:`/parameters` for all options and :doc:`/api/param_presets` for details
 Examples
 ----------
 
-Working examples in the repository — see [`examples/README.md`](https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md)
+Working examples in the repository — see `examples/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md>`_
 for the full list and usage notes. Each example enables ``write_timing_json``
 so per-run ``timing.json`` and campaign ``go_ts_timing.json`` are written.

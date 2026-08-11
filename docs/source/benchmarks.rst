@@ -47,4 +47,4 @@ regression hooks:
 
    pytest benchmark/ -m slow
 
-See also ``benchmark/README.md`` in the repository for maintainer notes.
+See also `benchmark/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/benchmark/README.md>`_ in the repository for maintainer notes.

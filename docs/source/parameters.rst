@@ -210,15 +210,10 @@ benchmark presets already default to ``-2``.
      - Stop if no improvement for N generations
    * - ``n_jobs_population_init``
      - ``1``
-     - Parallel workers for initial-population relaxations. Default is
-       sequential (``1``); for production set ``-2`` (all but one CPU),
-       ``-1`` (all CPUs), or a positive worker count to relax candidates in
-       parallel.
+     - Workers for population initialization. Default is sequential (``1``); pass ``-1`` (all CPUs), ``-2`` (all but one), or a positive worker count to enable parallelism.
    * - ``n_jobs_offspring``
      - ``1``
-     - Parallel workers for each generation's offspring relaxations. Same
-       ``-2``/``-1``/``1`` semantics as population init; enable for production
-       throughput.
+     - Workers for offspring construction. Same semantics as ``n_jobs_population_init``; default is sequential (``1``).
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
