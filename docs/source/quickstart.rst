@@ -357,6 +357,13 @@ Find transition states between optimized structures.
 
 **GO + TS combined:**
 
+The basic ``run_go``/``run_go_ts`` snippets above use the safe single-threaded
+default (``n_jobs_* = 1``). On a multi-core node or HPC job, set
+``n_jobs_population_init`` and ``n_jobs_offspring`` to ``-2`` (all but one CPU)
+— or ``-1`` for every CPU — to relax the initial population and each
+generation's offspring in parallel; otherwise the GA runs on one core and the
+rest of the node sits idle. The production snippets below do this explicitly.
+
 .. code-block:: python
 
    from scgo import run_go_ts
