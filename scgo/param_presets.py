@@ -229,6 +229,7 @@ def _get_default_params_template() -> GLOptimizerParams:
         "fmax_threshold": 0.05,
         "check_hessian": True,
         "imag_freq_threshold": 50.0,
+        "n_jobs": DEFAULT_N_JOBS,  # Single CPU knob (see DEFAULT_N_JOBS); opt in with -1/-2
         "tag_final_minima": True,
         "connectivity_factor": CONNECTIVITY_FACTOR,  # Default for cluster validation
         "allow_cluster_fragmentation": False,
@@ -284,8 +285,8 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "aggressive_burst_multiplier": 1.8,
                 "max_mutation_probability": 0.65,
                 "early_stopping_niter": 10,  # Stop if no improvement after N generations
-                "n_jobs_population_init": DEFAULT_N_JOBS,  # Default: single worker (see DEFAULT_N_JOBS); opt in with -1/-2
-                "n_jobs_offspring": DEFAULT_N_JOBS,  # Aligned with population init
+                "n_jobs_population_init": None,  # None = inherit top-level "n_jobs"
+                "n_jobs_offspring": None,  # None = inherit top-level "n_jobs"
                 "batch_size": None,
                 "relaxer": None,
                 "fitness_strategy": None,  # None = inherit from top-level
@@ -318,6 +319,11 @@ def get_default_params() -> GLOptimizerParams:
     Suitable for ``run_go`` / ``run_go_ts`` as ``params`` / ``go_params``; pass
     as-is or override keys (omitted keys are filled via
     :func:`scgo.utils.run_helpers.initialize_params`).
+
+    CPU parallelism is a single top-level knob: ``params["n_jobs"]`` defaults to
+    ``DEFAULT_N_JOBS`` (sequential) and is inherited by GA population init, GA
+    offspring construction, and post-GO validation. Set it to ``-2`` (all but one
+    CPU) or ``-1`` (all CPUs) to parallelize every CPU stage at once.
     """
     return copy.deepcopy(_get_default_params_template())
 
@@ -328,9 +334,11 @@ def get_minimal_ga_params(
 ) -> GLOptimizerParams:
     """Return compact GA-focused parameters derived from defaults.
 
-    Uses sequential population init and offspring work (``n_jobs_*`` set to 1) so
-    runners stay easy to reason about. Pass as-is to ``run_*`` or override keys;
-    omitted keys are filled via :func:`scgo.utils.run_helpers.initialize_params`.
+    Sequential population init and offspring (explicit ``n_jobs_* = 1``) so
+    runners stay easy to reason about; the top-level ``n_jobs`` default is
+    also ``1``, so nothing parallelizes unless the caller opts in. Pass as-is to
+    ``run_*`` or override keys; omitted keys are filled via
+    :func:`scgo.utils.run_helpers.initialize_params`.
     """
     params = get_default_params()
 
@@ -386,7 +394,6 @@ def get_testing_params() -> GLOptimizerParams:
             "offspring_fraction": 0.5,
             "niter": 2,
             "niter_local_relaxation": 2,
-            "n_jobs_population_init": DEFAULT_N_JOBS,
         }
     )
     return params
@@ -397,6 +404,8 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
     params = get_default_params()
     params["seed"] = seed
     params["calculator_kwargs"]["default_dtype"] = "float32"
+    # HPC: one knob for every CPU stage (population init, offspring, validation).
+    params["n_jobs"] = -2
 
     # Customize GA parameters for benchmarking
     params["optimizer_params"]["ga"].update(
@@ -405,8 +414,8 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
             "niter_local_relaxation": 200,
             "niter": 10,
             "population_size": 50,
-            "n_jobs_population_init": -2,   # HPC: all but one CPU
-            "n_jobs_offspring": -2,         # HPC: parallel offspring, aligned with init
+            "n_jobs_population_init": -2,  # HPC: all but one CPU (same as top-level)
+            "n_jobs_offspring": -2,  # HPC: parallel offspring, aligned with init
         },
     )
 

@@ -4,6 +4,26 @@
 
 ### Added
 
+- Single top-level `n_jobs` CPU-parallelism knob. It defaults to `1`
+  (sequential) in `get_default_params()` and, when set (e.g. `-2` = all but one
+  CPU, `-1` = all CPUs, or a positive count), scales every CPU-bound stage at
+  once: GA population initialization, GA offspring construction, and post-GO
+  Hessian/force validation. The per-stage keys
+  (`optimizer_params["ga"]["n_jobs_population_init"]`,
+  `optimizer_params["ga"]["n_jobs_offspring"]`, and `validation_n_jobs`) remain
+  valid overrides: `None` inherits the top-level `n_jobs`, an explicit value
+  wins for that stage only. The shared worker-count helper
+  :func:`scgo.utils.parallel_workers.resolve_n_jobs_for_tasks` now caps every
+  pool at the number of tasks and floors at one.
+
+### Fixed
+
+- `run_go` now honors the single `n_jobs` knob for GA runs. GA population init
+  and offspring parallelism (and validation) previously had to be configured
+  per-stage; they now inherit `params["n_jobs"]` through `run_go` as well.
+- `validation_n_jobs` now inherits the top-level `n_jobs` when not set directly
+  (previously it only fell back to a hardcoded `1`).
+
 - :mod:`scgo.metadata` package for structure tags, run-dir records, DB stamps,
   and output-JSON provenance (separate schemas under one namespace).
 - `parallel_neb_max_batch_atoms` TS parameter (`6000` gas / `4000`

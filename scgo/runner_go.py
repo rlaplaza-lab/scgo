@@ -39,6 +39,7 @@ from scgo.utils.output_paths import (
     resolve_go_campaign_searches_dir,
     resolve_go_searches_dir,
 )
+from scgo.utils.parallel_workers import inherit_n_jobs
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.phase_logging import log_phase_header
 from scgo.utils.rng_helpers import ensure_rng
@@ -222,6 +223,7 @@ def _run_go_trials(
         "adsorbate_definition",
         "adsorbate_fragment_template",
         "cluster_adsorbate_config",
+        "n_jobs",
         "validation_n_jobs",
         "seed",  # seed is handled separately at API boundary, not passed to algorithms
     }
@@ -258,7 +260,9 @@ def _run_go_trials(
         fmax_threshold=params.get("fmax_threshold", 0.05),
         check_hessian=params.get("check_hessian", True),
         imag_freq_threshold=params.get("imag_freq_threshold", 50.0),
-        validation_n_jobs=params.get("validation_n_jobs", 1),
+        validation_n_jobs=inherit_n_jobs(
+            params.get("validation_n_jobs"), params.get("n_jobs")
+        ),
         tag_final_minima=params.get("tag_final_minima", True),
         rng=rng,
         verbosity=verbosity,

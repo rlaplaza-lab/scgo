@@ -27,7 +27,7 @@ from scgo.utils.helpers import (
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.phase_logging import InitDiagnosticsCollector, infer_verbosity
 from scgo.utils.validation import validate_composition
 
@@ -1669,7 +1669,7 @@ def create_initial_cluster_batch(
             valid_seed_combinations=valid_seed_combinations,
         )
 
-    max_workers = min(resolve_n_jobs_to_workers(n_jobs), n_structures)
+    max_workers = resolve_n_jobs_for_tasks(n_jobs, n_structures)
     results: list[Atoms | None] = [None] * n_structures
     fallback_info: dict[int, tuple[str, str | None]] = {}
 

@@ -57,7 +57,7 @@ from scgo.utils.combine_atoms import (
     slab_surface_extreme as _shared_slab_surface_extreme,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.parallel_workers import resolve_n_jobs, resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs, resolve_n_jobs_for_tasks
 from scgo.utils.phase_logging import format_count_summary
 from scgo.utils.site_counts import increment_site_type_count
 
@@ -733,7 +733,7 @@ def create_deposited_cluster_batch(
             "try widening height range or increasing max_placement_attempts."
         )
 
-    workers = min(n_structures, resolve_n_jobs_to_workers(n_jobs))
+    workers = resolve_n_jobs_for_tasks(n_jobs, n_structures)
     ordered_results: list[Atoms | None] = [None] * n_structures
     with ThreadPoolExecutor(
         max_workers=workers, thread_name_prefix="scgo_deposit"

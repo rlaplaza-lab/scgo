@@ -74,6 +74,7 @@ def test_get_minimal_ga_params_merged_with_defaults():
         else:
             assert merged_ga[key] == default_value
 
+    # get_minimal_ga_params pins n_jobs_offspring=1 explicitly (sequential runner).
     assert merged_ga["n_jobs_offspring"] == 1
 
 

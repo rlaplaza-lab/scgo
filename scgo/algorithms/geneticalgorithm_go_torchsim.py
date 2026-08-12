@@ -99,7 +99,10 @@ from scgo.utils.logging import (
     should_show_progress,
 )
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
-from scgo.utils.parallel_workers import resolve_n_jobs, resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import (
+    resolve_n_jobs,
+    resolve_n_jobs_for_tasks,
+)
 from scgo.utils.phase_logging import (
     log_generation_offspring_summaries,
     log_phase_subheader,
@@ -122,13 +125,6 @@ from scgo.utils.torchsim_policy import (
 from scgo.utils.validation import validate_composition
 
 logger = get_logger(__name__)
-
-
-def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
-    """Resolve worker count from initialization-style semantics."""
-    if n_tasks <= 1:
-        return 1
-    return min(resolve_n_jobs_to_workers(n_jobs), n_tasks)
 
 
 _PREFILTER_BLMIN_FACTOR = 0.55
@@ -1158,7 +1154,7 @@ def ga_go(
             logger,
             "Generated initial population of %d candidates (batched, parallel: %s)",
             population_size,
-            f"{resolve_n_jobs_to_workers(n_jobs_population_init)} workers",
+            f"{resolve_n_jobs_for_tasks(n_jobs_population_init, population_size)} workers",
             verbosity=verbosity,
         )
 
@@ -1504,7 +1500,7 @@ def ga_go(
                 name_map=name_map,
                 operators_epoch=generation,
             )
-            n_workers_offspring = _resolve_parallel_worker_count(
+            n_workers_offspring = resolve_n_jobs_for_tasks(
                 n_jobs_offspring, max(1, n_offspring)
             )
             # Create the (hoisted) pool once on first need; reuse across generations.
@@ -1551,9 +1547,7 @@ def ga_go(
                     if not jobs:
                         continue
 
-                    n_workers = _resolve_parallel_worker_count(
-                        n_jobs_offspring, len(jobs)
-                    )
+                    n_workers = resolve_n_jobs_for_tasks(n_jobs_offspring, len(jobs))
 
                     t_parallel = perf_counter()
                     job_results: dict[int, dict[str, Any]] = {}

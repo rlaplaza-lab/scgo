@@ -66,7 +66,7 @@ from scgo.utils.helpers import (
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.validation import validate_composition
@@ -658,7 +658,7 @@ def run_trials(
     fmax_threshold: float = 0.05,
     check_hessian: bool = True,
     imag_freq_threshold: float = 50.0,
-    validation_n_jobs: int = 1,
+    validation_n_jobs: int | None = None,
     tag_final_minima: bool = True,
     verbosity: int = 1,
     run_id: str | None = None,
@@ -675,6 +675,11 @@ def run_trials(
         rng: Random number generator.
         calculator_for_global_optimization: ASE calculator.
         validate_with_hessian: Whether to validate with Hessian.
+        check_hessian: Whether to compute the Hessian during validation.
+        imag_freq_threshold: Imaginary-frequency cutoff for validation (cm^-1).
+        validation_n_jobs: Parallel workers for Hessian/force validation; ``None``
+            inherits the top-level ``params["n_jobs"]`` (and defaults to
+            ``DEFAULT_N_JOBS`` when that is also unset).
         verbosity: Verbosity level.
         run_id: Optional run ID.
         clean: Start fresh if True.
@@ -848,15 +853,15 @@ def run_trials(
             calculator_for_global_optimization.directory = val_dir
 
         validated_minima = []
-        n_validate_workers = (
-            resolve_n_jobs_to_workers(validation_n_jobs)
-            if check_hessian and validation_n_jobs != 1
-            else 1
-        )
         payloads = [
             (energy, atoms, fmax_threshold, check_hessian, imag_freq_threshold)
             for energy, atoms in unique_candidates
         ]
+        n_validate_workers = (
+            resolve_n_jobs_for_tasks(validation_n_jobs, len(payloads))
+            if check_hessian
+            else 1
+        )
 
         if (
             n_validate_workers > 1
@@ -868,7 +873,7 @@ def run_trials(
                 n_validate_workers,
             )
             with ProcessPoolExecutor(
-                max_workers=min(n_validate_workers, len(payloads)),
+                max_workers=n_validate_workers,
                 initializer=_init_validation_worker,
                 initargs=(calculator_for_global_optimization,),
             ) as executor:

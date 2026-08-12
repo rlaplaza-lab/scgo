@@ -133,9 +133,16 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``cluster_adsorbate_config``
      - ``None``
      - Adsorbate placement knobs (in ``go_params`` only)
+   * - ``n_jobs``
+     - ``1``
+     - Single CPU parallelism knob. ``1`` = sequential; ``-1`` = all CPUs;
+       ``-2`` = all but one CPU; or a positive worker count. Inherited by GA
+       population init, GA offspring, and post-GO validation unless those
+       stages are set explicitly.
    * - ``validation_n_jobs``
      - (optional)
-     - Parallel workers for post-GO Hessian/force validation
+     - Parallel workers for post-GO Hessian/force validation. ``None`` (default)
+       inherits the top-level ``n_jobs``; an explicit value overrides it.
    * - ``validate_with_hessian``
      - ``False``
      - Run vibrational analysis
@@ -172,14 +179,21 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
 **GA** (``optimizer_params["ga"]``):
 
-Parallelism is opt-in. SCGO runs the GA single-threaded by default
-(``n_jobs_population_init`` / ``n_jobs_offspring`` = ``1``) so it never
-oversubscribes the host alongside the internal BLAS / MACE / TorchSIM thread
-pools. On a multi-core node or HPC job you should set both to ``-2`` (all but
-one CPU) — or ``-1`` for every CPU — to relax the initial population and each
-generation's offspring in parallel; otherwise most of the node sits idle and
-wall-clock time scales with one core. The production/torchsim/UMA/UPET
-benchmark presets already default to ``-2``.
+Parallelism is opt-in and driven by one top-level knob, ``params["n_jobs"]``
+(default ``1``, sequential). Set it to ``-2`` (all but one CPU) or ``-1``
+(every CPU) to parallelize *every* CPU stage at once — GA population
+initialization, GA offspring construction, and post-GO Hessian/force validation.
+SCGO keeps the default sequential so it never oversubscribes the host alongside
+the internal BLAS / MACE / TorchSIM thread pools. The per-stage keys
+(``n_jobs_population_init``, ``n_jobs_offspring``, ``validation_n_jobs``) remain
+available as overrides: ``None`` inherits ``n_jobs``, and an explicit value wins
+for that stage only. The production/torchsim/UMA/UPET benchmark presets already
+default to ``-2``. So in practice:
+
+.. code-block:: python
+
+   params = get_default_params()
+   params["n_jobs"] = -2  # one switch parallelizes population init, offspring, and validation
 
 .. list-table::
    :widths: 25 10 65
@@ -209,11 +223,11 @@ benchmark presets already default to ``-2``.
      - ``10``
      - Stop if no improvement for N generations
    * - ``n_jobs_population_init``
-     - ``1``
-     - Workers for population initialization. Default is sequential (``1``); pass ``-1`` (all CPUs), ``-2`` (all but one), or a positive worker count to enable parallelism.
+     - ``None`` (inherits ``n_jobs``)
+     - Workers for population initialization. ``None`` inherits the top-level ``params["n_jobs"]``; pass ``-1`` (all CPUs), ``-2`` (all but one), or a positive worker count to enable parallelism.
    * - ``n_jobs_offspring``
-     - ``1``
-     - Workers for offspring construction. Same semantics as ``n_jobs_population_init``; default is sequential (``1``).
+     - ``None`` (inherits ``n_jobs``)
+     - Workers for offspring construction. Same semantics as ``n_jobs_population_init``; ``None`` inherits the top-level ``n_jobs``.
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``

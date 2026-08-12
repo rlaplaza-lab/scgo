@@ -37,6 +37,7 @@ from scgo.utils.helpers import (
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
+from scgo.utils.parallel_workers import inherit_n_jobs
 
 logger = get_logger(__name__)
 
@@ -455,7 +456,10 @@ def prepare_algorithm_kwargs(
 
     Resolves "auto" parameter values, converts optimizer string names to
     classes, resolves fitness strategy, and replaces the raw ``niter`` /
-    ``population_size`` entries with their resolved values.
+    ``population_size`` entries with their resolved values. For the GA it also
+    applies the CPU parallelism cascade, so ``n_jobs_population_init`` /
+    ``n_jobs_offspring`` inherit the top-level ``params["n_jobs"]`` when they are
+    not set explicitly (see :mod:`scgo.utils.parallel_workers`).
 
     Args:
         algo_params: Dictionary of algorithm-specific parameters from optimizer_params.
@@ -493,6 +497,17 @@ def prepare_algorithm_kwargs(
     base_kwargs["system_type"] = system_type
     if surface_config is not None:
         base_kwargs["surface_config"] = surface_config
+    if chosen_go == "ga":
+        # CPU parallelism cascade: the per-stage keys inherit the single
+        # top-level ``n_jobs`` unless they are set explicitly. Only the GA takes
+        # these kwargs; ``simple`` / ``bh`` signatures reject them.
+        top_n_jobs = params.get("n_jobs")
+        base_kwargs["n_jobs_population_init"] = inherit_n_jobs(
+            algo_params.get("n_jobs_population_init"), top_n_jobs
+        )
+        base_kwargs["n_jobs_offspring"] = inherit_n_jobs(
+            algo_params.get("n_jobs_offspring"), top_n_jobs
+        )
     policy = get_system_policy(system_type)
     if chosen_go == "ga" and policy.uses_surface:
         nlr = int(base_kwargs["niter_local_relaxation"])
