@@ -86,6 +86,7 @@ from scgo.surface import (
     SurfaceSystemConfig,
     adsorption_energy,
     make_defected_graphite_surface_config,
+    make_graphene_surface_config,
     make_graphite_surface_config,
     make_n_doped_graphite_surface_config,
     make_surface_config,
@@ -139,6 +140,7 @@ __all__ = [
     # Surface
     "SurfaceSystemConfig",
     "adsorption_energy",
+    "make_graphene_surface_config",
     "make_graphite_surface_config",
     "make_defected_graphite_surface_config",
     "make_n_doped_graphite_surface_config",

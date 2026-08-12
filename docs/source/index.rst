@@ -24,6 +24,7 @@ Contents
 
    installation
    quickstart
+   surface_slab_guide
    output_layout
    parameters
    benchmarks

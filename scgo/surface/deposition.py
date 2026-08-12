@@ -335,9 +335,38 @@ def _place_cluster_above_slab(
     rotated_positions = cluster_positions @ rotation.T
     cluster_radius = float(np.max(np.linalg.norm(rotated_positions, axis=1)))
 
-    translated_positions = rotated_positions + _in_plane_translation(
-        slab, axis, rng, cluster_radius
-    )
+    defect_pos = slab.info.get("vacancy_cartesian_angstrom")
+    if (
+        config.defect_bias_probability > 0.0
+        and defect_pos is not None
+        and rng.random() < config.defect_bias_probability
+    ):
+        # Bias the in-plane center onto the vacancy; the z height is still set
+        # below by the shared slab_top + effective_height logic.
+        in_plane = [i for i in range(3) if i != axis]
+        shift = np.zeros(3, dtype=float)
+        shift[in_plane[0]] = defect_pos[in_plane[0]]
+        shift[in_plane[1]] = defect_pos[in_plane[1]]
+
+        offset_scale = cluster_radius * 0.1
+        angle = float(rng.uniform(0.0, 2.0 * np.pi))
+        dx = offset_scale * np.cos(angle)
+        dy = offset_scale * np.sin(angle)
+        if axis == 0:
+            shift[1] += dx
+            shift[2] += dy
+        elif axis == 1:
+            shift[0] += dx
+            shift[2] += dy
+        else:
+            shift[0] += dx
+            shift[1] += dy
+
+        translated_positions = rotated_positions + shift
+    else:
+        translated_positions = rotated_positions + _in_plane_translation(
+            slab, axis, rng, cluster_radius
+        )
 
     # Cap the sampled height so the cluster bottom stays within bonding
     # distance of the slab top.

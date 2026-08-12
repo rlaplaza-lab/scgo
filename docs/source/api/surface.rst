@@ -3,6 +3,10 @@ Surface workflows
 
 Slab configuration, deposition, and validation for supported-cluster runs.
 
+For end-to-end recipes on building graphene and graphite slabs (pristine,
+vacancy-defected, or N-doped) and using them for nanocluster global
+optimization, see :doc:`/surface_slab_guide`.
+
 Deposition and adsorbate initialization
 ---------------------------------------
 
@@ -34,6 +38,9 @@ searches top layers plus adsorbates. Planar graphite/graphene top layers use
 .. autofunction:: scgo.surface.make_graphite_surface_config
 .. autofunction:: scgo.surface.make_defected_graphite_surface_config
 .. autofunction:: scgo.surface.make_n_doped_graphite_surface_config
+.. autofunction:: scgo.surface.build_graphene_slab
+.. autofunction:: scgo.surface.build_monovacancy_graphene_slab
+.. autofunction:: scgo.surface.make_graphene_surface_config
 .. autofunction:: scgo.surface.describe_surface_config
 .. autofunction:: scgo.surface.create_deposited_cluster
 .. autofunction:: scgo.surface.create_deposited_cluster_batch

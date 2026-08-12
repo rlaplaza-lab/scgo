@@ -82,6 +82,7 @@ class SurfaceSystemConfig:
     init_mode: str = "smart"
     max_placement_attempts: int = 200
     structure_connectivity_factor: float = CONNECTIVITY_FACTOR
+    defect_bias_probability: float = 0.0
 
     def __post_init__(self) -> None:
         # Copy slab so post-init pbc adjustments do not mutate a shared Atoms.
@@ -108,6 +109,12 @@ class SurfaceSystemConfig:
             )
         if len(slab) == 0:
             raise SCGOValidationError("slab must contain at least one atom")
+
+        if not (0.0 <= self.defect_bias_probability <= 1.0):
+            raise SCGOValidationError(
+                "defect_bias_probability must be in [0, 1], "
+                f"got {self.defect_bias_probability}"
+            )
 
         if not any(slab.pbc):
             raise SCGOValidationError("Slab must have at least one periodic dimension.")
@@ -180,5 +187,6 @@ def describe_surface_config(cfg: SurfaceSystemConfig) -> str:
         f"n_relax_top_slab_layers={cfg.n_relax_top_slab_layers}, "
         f"comparator_use_mic={cfg.comparator_use_mic}, "
         f"cluster_init_vacuum={cfg.cluster_init_vacuum}, init_mode={cfg.init_mode!r}, "
-        f"max_placement_attempts={cfg.max_placement_attempts})"
+        f"max_placement_attempts={cfg.max_placement_attempts}, "
+        f"defect_bias_probability={cfg.defect_bias_probability})"
     )
