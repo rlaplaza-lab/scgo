@@ -93,8 +93,8 @@ class OptimizerSlotParams(TypedDict, total=False):
     aggressive_burst_multiplier: NotRequired[float]
     max_mutation_probability: NotRequired[float]
     early_stopping_niter: NotRequired[int]
-    n_jobs_population_init: NotRequired[int]
-    n_jobs_offspring: NotRequired[int]
+    n_jobs_population_init: NotRequired[int | None]
+    n_jobs_offspring: NotRequired[int | None]
     batch_size: NotRequired[int | None]
     relaxer: NotRequired[Any]
     energy_tolerance: NotRequired[float]
@@ -130,6 +130,8 @@ class GLOptimizerParams(TypedDict, total=False):
     allow_adsorbate_surface_detachment: bool
     enforce_adsorbate_subgraph_integrity: bool
     freeze_adsorbate_internal_geometry: bool
+    n_jobs: NotRequired[int]
+    validation_n_jobs: NotRequired[int | None]
     seed: NotRequired[int | None]
     tag_final_minima: bool
 

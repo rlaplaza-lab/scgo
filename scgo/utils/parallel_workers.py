@@ -4,6 +4,20 @@ This module owns the single project-wide parallelism default. Library entry
 points take ``n_jobs: int | None = None`` and weave the default in through
 :func:`resolve_n_jobs`, instead of repeating a literal default in every
 signature, so the default can be changed in exactly one place.
+
+**One knob, several CPU stages.** Runner ``params`` carry a single top-level
+``n_jobs`` that every CPU-bound stage inherits: GA population initialization,
+GA offspring construction, and post-GO Hessian/force validation. The per-stage
+keys (``optimizer_params["ga"]["n_jobs_population_init"]``,
+``optimizer_params["ga"]["n_jobs_offspring"]``, and top-level
+``validation_n_jobs``) stay available as overrides: ``None`` means "inherit the
+top-level ``n_jobs``", any explicit value wins for that stage only. That
+cascade is applied with :func:`inherit_n_jobs`. GPU/TorchSim NEB batching
+(``use_parallel_neb`` / ``parallel_neb_max_*``) is a separate, unrelated knob.
+
+Call sites that own a pool convert the resolved setting into a concrete worker
+count with :func:`resolve_n_jobs_for_tasks`, which also caps the pool at the
+number of tasks so small batches never spawn idle workers.
 """
 
 from __future__ import annotations
@@ -73,3 +87,39 @@ def resolve_n_jobs_to_workers(n_jobs: int | None) -> int:
     if resolved == -2:
         return max(1, cpu - 1)
     return resolved
+
+
+def inherit_n_jobs(stage_value: int | None, top_level_value: int | None) -> int | None:
+    """Apply the per-stage override / top-level ``n_jobs`` inheritance rule.
+
+    Args:
+        stage_value: Per-stage setting (e.g. ``n_jobs_population_init``).
+            ``None`` means "inherit".
+        top_level_value: Top-level ``params["n_jobs"]``, itself possibly ``None``.
+
+    Returns:
+        ``stage_value`` when it is set, otherwise ``top_level_value``. The result
+        may be ``None``, which downstream :func:`resolve_n_jobs` turns into
+        ``DEFAULT_N_JOBS``.
+    """
+    return stage_value if stage_value is not None else top_level_value
+
+
+def resolve_n_jobs_for_tasks(n_jobs: int | None, n_tasks: int) -> int:
+    """Resolve ``n_jobs`` to a worker count for ``n_tasks`` queued tasks.
+
+    Wraps :func:`resolve_n_jobs_to_workers` with the cap every pool owner needs:
+    never start more workers than there are tasks, and never fewer than one.
+
+    Args:
+        n_jobs: Parallelism setting (``None`` uses ``DEFAULT_N_JOBS``).
+        n_tasks: Number of tasks about to be dispatched.
+
+    Returns:
+        Worker count in ``[1, max(1, n_tasks)]``.
+
+    Raises:
+        SCGOValidationError: If ``n_jobs`` is not ``None``, ``-1``, ``-2``, or
+            ``>= 1``.
+    """
+    return max(1, min(resolve_n_jobs_to_workers(n_jobs), max(1, n_tasks)))

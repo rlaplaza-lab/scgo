@@ -64,15 +64,26 @@ local logs.
 
 **Processor count (parallelism default):** SCGO defaults to a single worker
 so it never silently oversubscribes the host alongside internal BLAS / MACE /
-TorchSIM thread pools. You control parallelism through ``n_jobs_population_init``
-and ``n_jobs_offspring`` in ``go_params`` (or the corresponding ``params`` dict):
+TorchSIM thread pools. A single top-level knob, ``n_jobs`` in ``go_params`` (or
+the corresponding ``params`` dict), scales every CPU-bound stage at once:
+
+- GA population initialization
+- GA offspring construction
+- post-GO Hessian/force validation
+
+Set it to ``-1`` (all CPUs), ``-2`` (all but one CPU), or a positive worker
+count; ``None`` / omitted means the project default (``DEFAULT_N_JOBS`` =
+sequential). Per-stage keys — ``optimizer_params["ga"]["n_jobs_population_init"]``,
+``optimizer_params["ga"]["n_jobs_offspring"]``, and ``validation_n_jobs`` —
+remain available as overrides: ``None`` inherits the top-level ``n_jobs``, and
+an explicit value wins for that stage only.
 
 - ``1`` (default): sequential — one worker, no parallelism
 - ``-1``: use every logical CPU
 - ``-2``: use every logical CPU except one (good default on shared nodes)
 - ``N`` (positive integer): cap to ``N`` workers
 
-Example (enable parallelism for population initialization):
+Example (one switch parallelizes every CPU stage):
 
 .. code-block:: python
 
@@ -80,13 +91,19 @@ Example (enable parallelism for population initialization):
    from scgo.param_presets import get_default_params
 
    params = get_default_params()
-   params["optimizer_params"]["ga"]["n_jobs_population_init"] = -2
-   params["optimizer_params"]["ga"]["n_jobs_offspring"] = -2
+   params["n_jobs"] = -2
 
    results = run_go("Pt5", params=params, seed=42, system_type="gas_cluster")
 
+If you only want to parallelize a single stage, set that key explicitly; it
+overrides the top-level ``n_jobs`` for that stage:
+
+.. code-block:: python
+
+   params["optimizer_params"]["ga"]["n_jobs_offspring"] = -1  # all CPUs, init stays serial
+
 The same ``n_jobs`` semantics apply to ``validation_n_jobs`` for post-GO
-Hessian/force validation.
+Hessian/force validation; when omitted it inherits the top-level ``n_jobs``.
 
 Direct ``ga_go`` / ``bh_go`` knobs (not accepted in ``run_*`` ``go_params``):
 ``db_enable_expression_indexes``, ``ga_adaptive_retry_enabled``,
