@@ -26,8 +26,6 @@ __all__ = [
     "UMA",
     "UPET",
     "TorchSimBatchRelaxer",
-    "MemoryScalerCache",
-    "get_global_memory_scaler_cache",
 ]
 
 
@@ -48,22 +46,10 @@ def __getattr__(name: str) -> Any:
         from .upet_helpers import UPET
 
         return UPET
-    if name in (
-        "TorchSimBatchRelaxer",
-        "MemoryScalerCache",
-        "get_global_memory_scaler_cache",
-    ):
-        from .torchsim_helpers import (
-            MemoryScalerCache,
-            TorchSimBatchRelaxer,
-            get_global_memory_scaler_cache,
-        )
+    if name == "TorchSimBatchRelaxer":
+        from .torchsim_helpers import TorchSimBatchRelaxer
 
-        return {
-            "TorchSimBatchRelaxer": TorchSimBatchRelaxer,
-            "MemoryScalerCache": MemoryScalerCache,
-            "get_global_memory_scaler_cache": get_global_memory_scaler_cache,
-        }[name]
+        return TorchSimBatchRelaxer
 
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

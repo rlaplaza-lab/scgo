@@ -13,20 +13,17 @@ Important:
 from __future__ import annotations
 
 import copy
+import dataclasses
 import functools
-import json
 import logging
-import time
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 from ase import Atoms
-from ase.build import bulk
 from ase.constraints import FixAtoms as ASEFixAtoms
 
 from scgo.calculators.torch_device import resolve_torch_device
@@ -43,136 +40,12 @@ logger = get_logger(__name__)
 
 _DEFAULT_UPET_VERSION = "1.5.0"
 
-#: Cache namespace used when the caller does not name the probe geometry.
-DEFAULT_GEOMETRY_TAG = "default"
-#: Probe-shape discriminators appended to ``geometry_tag`` in the cache key.
-_PROBE_KIND_BULK = "bulk"
-_PROBE_KIND_ATOMS = "atoms"
-_PROBE_KIND_BUILDER = "builder"
-
 __all__ = [
-    "DEFAULT_GEOMETRY_TAG",
-    "MemoryScalerCache",
     "TorchSimBatchRelaxer",
     "build_torchsim_fixatoms_from_ase_batch",
     "build_torchsim_relaxer",
     "collect_ase_fixatoms_indices",
-    "get_global_memory_scaler_cache",
 ]
-
-
-class MemoryScalerCache:
-    """Disk-backed cache for TorchSim ``max_memory_scaler`` (GPU probing takes ~70s).
-
-    Essential for performance: without caching, each first run in a cluster size
-    forces expensive memory estimation via forward passes. Saves ~70s per campaign.
-
-    Entries are keyed by ``geometry_tag`` in addition to atom count, because the
-    ``n_atoms_x_density`` metric depends on *geometry*, not just size: a dense
-    bulk probe and a sparse slab+vacuum probe with the same atom count produce
-    very different scalers and must never share a cache slot.
-    """
-
-    def __init__(
-        self,
-        cache_dir: str | Path | None = None,
-        cache_file: str = "memory_scaler_cache.json",
-    ):
-        if cache_dir is None:
-            cache_dir = Path.home() / ".cache" / "scgo" / "torchsim"
-        self._cache_dir = Path(cache_dir)
-        self._cache_path = self._cache_dir / cache_file
-        self._cache = self._load_cache()
-
-    def _load_cache(self) -> dict:
-        """Load cache from disk if it exists."""
-        if not self._cache_path.exists():
-            return {}
-        try:
-            with open(self._cache_path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Failed to load memory scaler cache: %s", exc)
-            return {}
-
-    def _save_cache(self) -> None:
-        """Save cache to disk."""
-        try:
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-            with open(self._cache_path, "w") as f:
-                json.dump(self._cache, f, indent=2)
-        except OSError as exc:
-            logger.warning("Failed to save memory scaler cache: %s", exc)
-
-    def _make_key(
-        self,
-        n_atoms: int,
-        model_name: str,
-        memory_scales_with: str,
-        device: str,
-        geometry_tag: str = DEFAULT_GEOMETRY_TAG,
-    ) -> str:
-        """Create a cache key (``n_atoms`` rounded up to a multiple of 5)."""
-        atom_bin = ((n_atoms + 4) // 5) * 5
-        tag = str(geometry_tag or DEFAULT_GEOMETRY_TAG)
-        return f"{model_name}|{memory_scales_with}|{device}|{tag}|atoms_{atom_bin}"
-
-    def get(
-        self,
-        n_atoms: int,
-        model_name: str,
-        memory_scales_with: str,
-        device: str,
-        geometry_tag: str = DEFAULT_GEOMETRY_TAG,
-    ) -> float | None:
-        """Get cached max_memory_scaler if available."""
-        key = self._make_key(
-            n_atoms, model_name, memory_scales_with, device, geometry_tag
-        )
-        return self._cache.get(key)
-
-    def set(
-        self,
-        n_atoms: int,
-        model_name: str,
-        memory_scales_with: str,
-        device: str,
-        value: float,
-        geometry_tag: str = DEFAULT_GEOMETRY_TAG,
-    ) -> None:
-        """Cache a max_memory_scaler value to disk."""
-        key = self._make_key(
-            n_atoms, model_name, memory_scales_with, device, geometry_tag
-        )
-        self._cache[key] = value
-        self._save_cache()
-
-    def delete(
-        self,
-        n_atoms: int,
-        model_name: str,
-        memory_scales_with: str,
-        device: str,
-        geometry_tag: str = DEFAULT_GEOMETRY_TAG,
-    ) -> None:
-        """Remove one cached scaler entry (e.g. when it is too tight for a batch)."""
-        key = self._make_key(
-            n_atoms, model_name, memory_scales_with, device, geometry_tag
-        )
-        if key not in self._cache:
-            return
-        del self._cache[key]
-        self._save_cache()
-
-    def clear(self) -> None:
-        """Clear the in-memory cache and delete the on-disk cache file."""
-        self._cache = {}
-        if self._cache_path.exists():
-            self._cache_path.unlink()
-
-
-# Global cache instance shared across all TorchSimBatchRelaxer instances
-_GLOBAL_MEMORY_SCALER_CACHE = MemoryScalerCache()
 
 
 #: Constraint type names already reported as dropped (warn once per process).
@@ -653,8 +526,33 @@ def build_torchsim_relaxer(
         )
 
     if torchsim_params:
-        base.update(torchsim_params)
+        base.update(_filter_torchsim_params(torchsim_params))
     return TorchSimBatchRelaxer(**base)
+
+
+def _filter_torchsim_params(torchsim_params: dict[str, Any] | None) -> dict[str, Any]:
+    """Drop unknown ``torchsim_params`` keys (stale probe/geometry knobs) with a warning.
+
+    Builds the keep-set from the :class:`TorchSimBatchRelaxer` dataclass fields so
+    it stays correct as fields change. Unknown keys (e.g. the removed
+    ``probe_atoms`` / ``geometry_tag``) are dropped rather than raising, since
+    callers may carry stale presets.
+    """
+    if not torchsim_params:
+        return {}
+    known_fields = {f.name for f in dataclasses.fields(TorchSimBatchRelaxer)}
+    filtered: dict[str, Any] = {}
+    for key, value in torchsim_params.items():
+        if key in known_fields:
+            filtered[key] = value
+        else:
+            warnings.warn(
+                f"Ignoring unknown torchsim_params key {key!r}; it is not a "
+                f"TorchSimBatchRelaxer field and has been dropped.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+    return filtered
 
 
 @dataclass(eq=False, repr=False)
@@ -694,42 +592,30 @@ class TorchSimBatchRelaxer:
         :func:`torch_sim.optimize`. ``None`` (the default) enables it on CUDA and
         disables it on CPU, matching the torch-sim recommendation that
         autobatching is "generally not supported on CPUs". ``True``/``False``
-        force the choice; passing ``True`` on CPU logs a warning at
-        construction time and coerces back to ``False``. Only
-        :class:`InFlightAutoBatcher` is accepted by :func:`torch_sim.optimize`.
+        force the choice. On CPU torch-sim raises for autobatching, so the batcher
+        is always built as ``False`` there. Only the :class:`InFlightAutoBatcher`
+        is accepted by :func:`torch_sim.optimize`; a matching
+        :class:`torch_sim.BinningAutoBatcher` is built for ``ts.static`` (NEB).
     memory_scales_with, max_memory_scaler:
         Advanced knobs forwarded to :class:`torch_sim.InFlightAutoBatcher` when
         autobatching is active.
     expected_max_atoms:
-        Optional atom count (e.g. ``cluster_size * population_size``) used both
-        to warm the on-disk memory-scaler cache at init time and to cap the
-        autobatcher's GPU probe via ``max_atoms_to_try`` (see
+        Optional atom count (e.g. ``cluster_size * population_size``) used to cap
+        the native autobatcher's GPU probe via ``max_atoms_to_try`` (see
         :class:`torch_sim.InFlightAutoBatcher`). Without this cap, the probe
         can geometrically climb to its 500k-atom default and OOM small GPUs.
-        Recommended for GA/BH campaigns with known population sizes.
+        Recommended for GA/BH/TS campaigns with known population sizes. The probe
+        runs on the real workload batches (no synthetic dummy is needed).
     max_atoms_to_try:
         Explicit override for the autobatcher's probe cap. Defaults to
         ``expected_max_atoms`` when that is set; otherwise falls back to
         torch-sim's default (500,000). Always pass a tight value on GPUs
         with limited memory.
-    probe_atoms:
-        Optional representative single structure used to warm the memory
-        scaler instead of the default dense bulk-Cu dummy. The
-        ``n_atoms_x_density`` metric depends on geometry, so probing a dense
-        block for a sparse slab+vacuum workload (NEB bands) yields a scaler
-        that does not describe the real batches. Pass one *actual* workload
-        structure (e.g. a minimum from the TS pool); torch-sim grows the probe
-        batch itself up to ``max_atoms_to_try``.
-    probe_builder:
-        Optional ``callable(n_atoms) -> Atoms`` alternative to ``probe_atoms``
-        for callers that want to synthesize the probe lazily. Takes precedence
-        over ``probe_atoms``.
-    geometry_tag:
-        Cache namespace for the probed scaler. Distinguishes probe shapes (e.g.
-        ``"neb-surface_cluster"`` vs ``"ga-gas_cluster"``) so gas and surface
-        campaigns never read each other's on-disk scaler. The resolved key also
-        records whether the probe was bulk / caller-supplied atoms / a builder,
-        so a stray tag cannot alias two different probe geometries.
+    cutoff:
+        Neighbor cutoff (Å). Only forwarded to the batchers when
+        ``memory_scales_with == "n_edges"``; for the default
+        ``"n_atoms_x_density"`` metric it must NOT be passed (torch-sim 0.6.0
+        raises ``TypeError``). Safe to overestimate when ``n_edges`` is enabled.
     init_kwargs:
         Extra kwargs forwarded to the torch-sim optimizer init function via
         the ``init_kwargs`` argument of :func:`torch_sim.optimize`.
@@ -764,13 +650,12 @@ class TorchSimBatchRelaxer:
     expected_max_atoms: int | None = (
         None  # Probe memory upfront with this atom count (cluster_size * pop_size)
     )
-    # Hard cap on the InFlightAutoBatcher GPU probe. None -> fall back to
-    # expected_max_atoms (if set) or torch-sim's 500k default.
+    # Hard cap on the native InFlightAutoBatcher / BinningAutoBatcher GPU probe.
+    # None -> fall back to expected_max_atoms (if set) or torch-sim's 500k default.
     max_atoms_to_try: int | None = None
-    # Warm-probe geometry. Both None -> dense bulk-Cu dummy (legacy GO behavior).
-    probe_atoms: Atoms | None = None
-    probe_builder: Callable[[int], Atoms] | None = None
-    geometry_tag: str | None = None
+    # Only forwarded to the batchers when memory_scales_with == "n_edges";
+    # ignored (and must not be passed) for the default "n_atoms_x_density" metric.
+    cutoff: float = 6.0
     init_kwargs: dict | None = None
     optimizer_kwargs: dict | None = None  # forwarded as **optimizer_kwargs to step-fn
     runner_kwargs: dict | None = None
@@ -857,28 +742,33 @@ class TorchSimBatchRelaxer:
         self._sync_device_dtype_from_model()
         self._patch_model_for_cuda()
 
-        # Store device string for cache key (e.g., "cuda" or "cpu")
-        self._device_str = str(self.device).split(":")[0]
+        self._on_cpu = str(self.device).split(":")[0] == "cpu"
         self.last_batch_relax_steps: list[int] = []
-        self._resolved_geometry_tag = self._resolve_geometry_tag()
-
         self._runner_kwargs = dict(self.runner_kwargs or {})
 
-        # Resolve autobatcher policy: only InFlightAutoBatcher is accepted by
-        # ts.optimize; on CPU torch-sim recommends disabling it altogether.
-        on_cpu = str(self.device).split(":")[0] == "cpu"
-        if self.autobatcher is None:
-            use_autobatcher = not on_cpu
+        # Resolve autobatcher policy: build the native InFlight/Binning batchers
+        # once on GPU; on CPU (or when autobatcher is explicitly False) disable
+        # autobatching. torch-sim's autobatching is "generally not supported on
+        # CPUs" and raises on CPU, so CPU must pass autobatcher=False.
+        use_in_flight = (self.autobatcher is None and not self._on_cpu) or (
+            self.autobatcher is True and not self._on_cpu
+        )
+        if use_in_flight:
+            cap = int(self.max_atoms_to_try or self.expected_max_atoms or 50_000)
+            kw: dict[str, Any] = {
+                "model": self.model,
+                "memory_scales_with": self.memory_scales_with,
+                "max_memory_scaler": self.max_memory_scaler,  # None -> estimate on first use
+                "max_atoms_to_try": cap,
+                "max_memory_padding": self.max_memory_padding,
+            }
+            if self.memory_scales_with == "n_edges":
+                kw["cutoff"] = self.cutoff
+            self._optimize_batcher: Any = self._ts.InFlightAutoBatcher(**kw)  # type: ignore[call-arg]
+            self._static_batcher: Any = self._ts.BinningAutoBatcher(**kw)  # type: ignore[call-arg]
+            self._runner_kwargs["autobatcher"] = self._optimize_batcher
         else:
-            use_autobatcher = bool(self.autobatcher)
-            if use_autobatcher and on_cpu:
-                logger.warning(
-                    "TorchSim autobatching is not supported on CPU; disabling "
-                    "the autobatcher. Pass autobatcher=False to avoid this warning"
-                )
-                use_autobatcher = False
-        if use_autobatcher and "autobatcher" not in self._runner_kwargs:
-            self._runner_kwargs["autobatcher"] = self._build_autobatcher()
+            self._runner_kwargs["autobatcher"] = False
 
         if self.init_kwargs and "init_kwargs" not in self._runner_kwargs:
             self._runner_kwargs["init_kwargs"] = dict(self.init_kwargs)
@@ -900,208 +790,6 @@ class TorchSimBatchRelaxer:
         if runner_max_steps is not None:
             self.max_steps = runner_max_steps
 
-        # Probe memory upfront when expected_max_atoms is given (keeps the
-        # probing cost out of the first relax_batch call)
-        if self.expected_max_atoms is not None and self.max_memory_scaler is None:
-            self._warm_autobatcher_memory_scaler(self.expected_max_atoms)
-
-    def _probe_kind(self) -> str:
-        """Which probe geometry :meth:`_build_probe_atoms` will produce."""
-        if self.probe_builder is not None:
-            return _PROBE_KIND_BUILDER
-        if self.probe_atoms is not None:
-            return _PROBE_KIND_ATOMS
-        return _PROBE_KIND_BULK
-
-    def _resolve_geometry_tag(self) -> str:
-        """Cache namespace for the probed scaler: ``<caller tag>|<probe kind>``.
-
-        The probe kind is always part of the key so a caller-supplied tag that
-        travels further than its probe (e.g. shared ``torchsim_params``) cannot
-        make a dense bulk probe masquerade as a sparse slab one.
-        """
-        tag = str(self.geometry_tag).strip() if self.geometry_tag else ""
-        return f"{tag or DEFAULT_GEOMETRY_TAG}|{self._probe_kind()}"
-
-    def _memory_scaler_cache_key(self, n_atoms: int) -> dict[str, Any]:
-        return {
-            "n_atoms": n_atoms,
-            "model_name": self._cache_model_name(),
-            "memory_scales_with": self.memory_scales_with,
-            "device": self._device_str,
-            "geometry_tag": getattr(
-                self, "_resolved_geometry_tag", DEFAULT_GEOMETRY_TAG
-            ),
-        }
-
-    def _get_cached_memory_scaler(self, n_atoms: int) -> float | None:
-        return _GLOBAL_MEMORY_SCALER_CACHE.get(**self._memory_scaler_cache_key(n_atoms))
-
-    def _apply_cached_memory_scaler(self, n_atoms: int) -> bool:
-        cached_scaler = self._get_cached_memory_scaler(n_atoms)
-        if cached_scaler is None:
-            return False
-        autobatcher = self._runner_kwargs.get("autobatcher")
-        if autobatcher is None:
-            return False
-        autobatcher.max_memory_scaler = cached_scaler
-        return True
-
-    def _invalidate_memory_scaler_cache(self, n_atoms: int) -> None:
-        """Drop the cached scaler for ``n_atoms`` and for the warm-probe bucket.
-
-        ``relax_batch`` only knows the largest structure in the failing batch,
-        while the warm probe cached its scaler under ``expected_max_atoms``.
-        Deleting both keys makes the "cached scaler too tight" retry actually
-        clear the entry that produced the bad value.
-        """
-        buckets = {int(n_atoms)}
-        if self.expected_max_atoms is not None:
-            buckets.add(int(self.expected_max_atoms))
-        for bucket in buckets:
-            _GLOBAL_MEMORY_SCALER_CACHE.delete(**self._memory_scaler_cache_key(bucket))
-
-    def _build_autobatcher(self) -> object:
-        # Cap the autobatcher's probe at the actual workload so small GPUs
-        # don't get pushed toward the 500k-atom default. Prefer the explicit
-        # knob, then expected_max_atoms; leave unset to inherit torch-sim's
-        # default when the caller can't give us a bound.
-        probe_cap = self.max_atoms_to_try
-        if probe_cap is None and self.expected_max_atoms is not None:
-            probe_cap = int(self.expected_max_atoms)
-        autobatcher_kwargs: dict = {
-            "model": self.model,
-            "memory_scales_with": self.memory_scales_with,
-            "max_memory_scaler": self.max_memory_scaler,
-            "max_memory_padding": self.max_memory_padding,
-        }
-        if probe_cap is not None:
-            autobatcher_kwargs["max_atoms_to_try"] = probe_cap
-        return self._ts.InFlightAutoBatcher(**autobatcher_kwargs)
-
-    def _recreate_autobatcher(self) -> None:
-        if "autobatcher" not in self._runner_kwargs:
-            return
-        self._runner_kwargs["autobatcher"] = self._build_autobatcher()
-
-    def _reset_autobatcher_memory_scaler(self) -> None:
-        self.max_memory_scaler = None
-        self._recreate_autobatcher()
-
-    @staticmethod
-    def _is_max_metric_value_error(exc: BaseException) -> bool:
-        return isinstance(exc, ValueError) and "max_metric" in str(exc)
-
-    def _persist_autobatcher_scaler(self, n_atoms: int) -> None:
-        """Persist the current autobatcher's ``max_memory_scaler`` to the disk cache.
-
-        No-op when the autobatcher is not active or has not produced a scaler.
-        """
-        autobatcher = self._runner_kwargs.get("autobatcher")
-        if autobatcher is None:
-            return
-        scaler = getattr(autobatcher, "max_memory_scaler", None)
-        if not scaler:
-            return
-        _GLOBAL_MEMORY_SCALER_CACHE.set(
-            value=float(scaler),
-            **self._memory_scaler_cache_key(n_atoms),
-        )
-
-    def _build_probe_atoms(self, n_atoms: int) -> tuple[Atoms, str]:
-        """Return ``(probe_structure, description)`` for the memory warm-probe.
-
-        Preference order: ``probe_builder`` → ``probe_atoms`` → dense bulk Cu.
-
-        For the caller-supplied cases a *single representative* structure is
-        returned rather than an ``n_atoms``-sized block: torch-sim's
-        ``determine_max_batch_size`` replicates it geometrically up to
-        ``max_atoms_to_try`` (which defaults to ``expected_max_atoms``), so the
-        resulting scaler is exactly "how many of these real structures fit",
-        which is the quantity the binning autobatcher needs. Sizing the probe by
-        atom count instead (the legacy bulk dummy) measures a geometry the
-        workload never sees and yields a scaler that does not transfer.
-        """
-        if self.probe_builder is not None:
-            return self.probe_builder(int(n_atoms)), "caller-supplied probe builder"
-        if self.probe_atoms is not None:
-            probe = copy_atoms(self.probe_atoms)
-            probe.calc = None
-            # Constraints are irrelevant for a forward pass and would only add
-            # device-placement work inside torch-sim.
-            probe.set_constraint()
-            return probe, f"workload geometry ({len(probe)} atoms/structure)"
-        # Legacy fallback (GO/cluster path): bulk-Cu block truncated to
-        # ``n_atoms``, then padded with 3 Å of vacuum.
-        dummy = bulk("Cu", "fcc", a=3.61, cubic=True)
-        while len(dummy) < n_atoms:
-            dummy = dummy.repeat((2, 2, 2))
-        dummy = dummy[:n_atoms]
-        dummy.center(vacuum=3.0)
-        return dummy, f"dense bulk-Cu dummy ({n_atoms} atoms)"
-
-    def _warm_autobatcher_memory_scaler(self, n_atoms: int) -> None:
-        """Pre-populate the InFlight autobatcher's ``max_memory_scaler``.
-
-        Uses the on-disk cache when present; otherwise runs a one-step dummy
-        optimization so torch-sim's autobatcher probes GPU memory, then stores
-        the resulting scaler on disk so subsequent processes skip probing.
-
-        No-ops when the autobatcher is not active (e.g. CPU runs) or when the
-        user already supplied ``max_memory_scaler``.
-        """
-        autobatcher = self._runner_kwargs.get("autobatcher")
-        if autobatcher is None or self.max_memory_scaler is not None:
-            return
-
-        if self._apply_cached_memory_scaler(n_atoms):
-            logger.info("Used cached memory scaler from disk (avoided probing)")
-            return
-
-        try:
-            probe, probe_desc = self._build_probe_atoms(n_atoms)
-            logger.info(
-                "Probing GPU memory with %s, targeting %d atoms/batch...",
-                probe_desc,
-                n_atoms,
-            )
-            initial_time = time.time()
-            _ = self._ts.optimize(
-                system=[probe],
-                model=self.model,
-                optimizer=self.optimizer,
-                max_steps=1,
-                **{k: v for k, v in self._runner_kwargs.items() if k != "max_steps"},
-            )
-            probe_time = time.time() - initial_time
-
-            if getattr(autobatcher, "max_memory_scaler", None):
-                self._persist_autobatcher_scaler(n_atoms)
-                logger.info(
-                    "Memory probing complete (%.2fs). max_memory_scaler=%.1f "
-                    "cached for %d atoms (%s)",
-                    probe_time,
-                    float(autobatcher.max_memory_scaler),
-                    n_atoms,
-                    self._resolved_geometry_tag,
-                )
-        except (
-            RuntimeError,
-            ValueError,
-            OSError,
-            AttributeError,
-            torch.cuda.OutOfMemoryError,
-        ) as e:
-            self._reset_autobatcher_memory_scaler()
-            # A failed probe can leave the allocator fragmented (or holding the
-            # partially built probe batch); hand the real workload a clean GPU.
-            cleanup_torch_cuda(logger=logger)
-            logger.warning(
-                "Memory probing failed (non-fatal): %s; will retry on the "
-                "first relax_batch() call",
-                e,
-            )
-
     def relax_batch(
         self, atoms_list: Sequence[Atoms], steps: int | None = None
     ) -> list[tuple[float, Atoms]]:
@@ -1120,23 +808,9 @@ class TorchSimBatchRelaxer:
             return []
 
         max_atoms_in_batch = max(len(atoms) for atoms in atoms_list)
-        for attempt in range(2):
-            try:
-                return self._relax_batch_once(
-                    atoms_list, steps=steps, max_atoms_in_batch=max_atoms_in_batch
-                )
-            except ValueError as exc:
-                if attempt == 0 and self._is_max_metric_value_error(exc):
-                    logger.warning(
-                        "Cached or probed max_memory_scaler too tight (%s); "
-                        "invalidating cache and re-estimating",
-                        exc,
-                    )
-                    self._invalidate_memory_scaler_cache(max_atoms_in_batch)
-                    self._reset_autobatcher_memory_scaler()
-                    continue
-                raise
-        raise SCGORuntimeError("relax_batch retry loop exited without returning")
+        return self._relax_batch_once(
+            atoms_list, steps=steps, max_atoms_in_batch=max_atoms_in_batch
+        )
 
     def _prepare_batch_atoms(
         self, atoms_list: Sequence[Atoms]
@@ -1166,74 +840,6 @@ class TorchSimBatchRelaxer:
         else:
             system_in = atoms_seq
         return atoms_seq, reference_atoms, system_in
-
-    def _effective_max_memory_scaler(self) -> float | None:
-        """Best known ``max_memory_scaler`` for this relaxer, or ``None``.
-
-        ``self.max_memory_scaler`` is only set when the *user* supplied one; the
-        value produced by the warm probe (or restored from the disk cache) lives
-        on the InFlight autobatcher instance held in ``_runner_kwargs``. Both are
-        the same quantity, so single-point batching reads whichever is known.
-        """
-        if self.max_memory_scaler:
-            return float(self.max_memory_scaler)
-        runner_kwargs = getattr(self, "_runner_kwargs", None) or {}
-        autobatcher = runner_kwargs.get("autobatcher")
-        scaler = getattr(autobatcher, "max_memory_scaler", None)
-        return float(scaler) if scaler else None
-
-    def _static_autobatcher(self, *, n_structures: int, max_atoms: int) -> object:
-        """Resolve the ``autobatcher`` argument for a ``ts.static`` call.
-
-        When a ``max_memory_scaler`` is already known and we are on GPU, build a
-        :class:`torch_sim.BinningAutoBatcher` seeded with it. ``ts.static`` only
-        accepts ``BinningAutoBatcher | bool`` (the InFlight batcher used by
-        ``ts.optimize`` is rejected), and seeding the scaler means the batcher
-        bins without re-probing. This is what keeps the fused NEB force batch
-        from running as one monolithic ``torch.cat`` forward pass.
-
-        Falls back to :meth:`_static_autobatcher_arg` (a plain bool) on CPU or
-        when no scaler is known.
-        """
-        on_cpu = str(self.device).split(":")[0] == "cpu"
-        if not on_cpu:
-            scaler = self._effective_max_memory_scaler()
-            if scaler:
-                logger.debug(
-                    "Binning %d single-point structures with max_memory_scaler=%.1f",
-                    n_structures,
-                    scaler,
-                )
-                return self._ts.BinningAutoBatcher(
-                    model=self.model,
-                    memory_scales_with=self.memory_scales_with,
-                    max_memory_scaler=scaler,
-                    max_memory_padding=self.max_memory_padding,
-                )
-        return self._static_autobatcher_arg(
-            n_structures=n_structures, max_atoms=max_atoms
-        )
-
-    def _static_autobatcher_arg(self, *, n_structures: int, max_atoms: int) -> bool:
-        """Fallback ``ts.static`` autobatcher flag when no scaler is known.
-
-        ``ts.static(autobatcher=True)`` builds a fresh ``BinningAutoBatcher`` that
-        re-probes GPU memory on *every* call (unlike the cached InFlight
-        autobatcher used by ``optimize``). That probe climbs to thousands of
-        atoms and can burn hours during NEB force loops.
-
-        Default: no autobatcher for single-point (NEB batches are modest). Only
-        enable when the caller explicitly set ``autobatcher=True`` *and* the
-        batch is large enough that packing may matter.
-        """
-        on_cpu = str(self.device).split(":")[0] == "cpu"
-        if on_cpu:
-            return False
-        if self.autobatcher is not True:
-            # None (default) or False → skip probing BinningAutoBatcher.
-            return False
-        # Explicit opt-in: still skip tiny batches where one forward is fine.
-        return n_structures * max_atoms >= 256
 
     def _results_from_static_props(
         self,
@@ -1299,17 +905,100 @@ class TorchSimBatchRelaxer:
         """
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
         logger.debug("Running TorchSim single-point evaluation via static()")
-        props = self._ts.static(  # type: ignore[call-arg]
-            system=system_in,
-            model=self.model,
-            autobatcher=self._static_autobatcher(
-                n_structures=len(atoms_seq),
-                max_atoms=max_atoms_in_batch,
-            ),
-        )
+        # Use the persistent BinningAutoBatcher built in __post_init__ on GPU; fall
+        # back to a plain ``False`` (no batching) on CPU or when autobatching was
+        # explicitly disabled. ``_static_batcher`` only exists when native
+        # batching was enabled, hence the getattr guard.
+        static_batcher = getattr(self, "_static_batcher", None)
+
+        def _static_arg():
+            return (
+                static_batcher
+                if (static_batcher is not None and not self._on_cpu)
+                else False
+            )
+
+        try:
+            props = self._ts.static(  # type: ignore[call-arg]
+                system=system_in,
+                model=self.model,
+                autobatcher=_static_arg(),
+            )
+        except ValueError as exc:
+            if self._is_max_metric_value_error(exc):
+                logger.warning(
+                    "Cached/sticky max_memory_scaler too tight for this single-point "
+                    "batch (%s); resetting batchers and re-probing GPU memory",
+                    exc,
+                )
+                self._reset_and_reprobe()
+                # One retry with a fresh, re-estimated Binning batcher.
+                try:
+                    props = self._ts.static(  # type: ignore[call-arg]
+                        system=system_in,
+                        model=self.model,
+                        autobatcher=_static_arg(),
+                    )
+                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
+                    if self._is_cuda_oom_error(retry_exc):
+                        cleanup_torch_cuda(logger=logger)
+                        raise SCGORuntimeError(
+                            "TorchSim ran out of GPU memory during a NEB single-point "
+                            "force evaluation after re-probing the autobatcher. Reduce "
+                            "expected_max_atoms / max_atoms_to_try or the batch size."
+                        ) from retry_exc
+                    raise
+            else:
+                raise
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
+            if self._is_cuda_oom_error(exc):
+                # The native Binning batcher should catch OOM itself, but if a batch
+                # still overflows, hand the next call a clean allocator and surface
+                # a clear error.
+                cleanup_torch_cuda(logger=logger)
+                raise SCGORuntimeError(
+                    "TorchSim ran out of GPU memory during a NEB single-point force "
+                    "evaluation (ts.static). Reduce expected_max_atoms / "
+                    "max_atoms_to_try or the batch size."
+                ) from exc
+            raise
         return self._results_from_static_props(
             props, atoms_seq=atoms_seq, reference_atoms=reference_atoms
         )
+
+    @staticmethod
+    def _is_max_metric_value_error(exc: BaseException) -> bool:
+        """True for torch-sim's sticky-scaler overflow (``"max_metric"`` ValueError)."""
+        return isinstance(exc, ValueError) and "max_metric" in str(exc)
+
+    @staticmethod
+    def _is_cuda_oom_error(exc: BaseException) -> bool:
+        """True for a genuine GPU OOM: torch's error or cuBLAS/cuDNN text.
+
+        cuBLAS/cuDNN sometimes raise a plain ``RuntimeError`` containing
+        ``"out of memory"`` rather than ``torch.cuda.OutOfMemoryError``; both must
+        be treated as memory degradation so the Kaggle OOM guard cannot be masked.
+        """
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+        return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+    def _reset_and_reprobe(self) -> None:
+        """Drop the sticky native-batcher scalers and re-probe on the next call.
+
+        The native InFlight/Binning ``max_memory_scaler`` is estimated once (on the
+        first workload) and then stays sticky. A later batch whose
+        ``n_atoms_x_density`` metric exceeds the cached scaler raises a hard
+        ``ValueError`` ("... > max_metric ...") instead of being re-binned. Resetting
+        the scalers to ``None`` makes torch-sim re-estimate memory rather than crash.
+        The allocator is also freed so the re-probe starts on a clean GPU.
+        """
+        self.max_memory_scaler = None
+        for batcher_attr in ("_optimize_batcher", "_static_batcher"):
+            batcher = getattr(self, batcher_attr, None)
+            if batcher is not None:
+                batcher.max_memory_scaler = None
+        cleanup_torch_cuda(logger=logger)
 
     def _relax_batch_once(
         self,
@@ -1318,19 +1007,6 @@ class TorchSimBatchRelaxer:
         steps: int | None,
         max_atoms_in_batch: int,
     ) -> list[tuple[float, Atoms]]:
-        # Apply a cached memory scaler when available to avoid expensive
-        # re-probing (~70s per new cluster size).
-        # The batch bucket first (exact workload), then the warm-probe bucket
-        # (``expected_max_atoms``): NEB force batches hold many small images, so
-        # ``max_atoms_in_batch`` rarely matches the probe's cache key.
-        if (
-            self.max_memory_scaler is None
-            and "autobatcher" in self._runner_kwargs
-            and not self._apply_cached_memory_scaler(max_atoms_in_batch)
-            and self.expected_max_atoms is not None
-        ):
-            self._apply_cached_memory_scaler(int(self.expected_max_atoms))
-
         runner_kwargs = self._runner_kwargs.copy()
         # Resolve ``max_steps`` at call time so a post-construction
         # ``relaxer.max_steps = N`` (GA ``niter_local_relaxation``) is honoured.
@@ -1349,16 +1025,52 @@ class TorchSimBatchRelaxer:
 
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
 
-        state = self._ts.optimize(  # type: ignore[call-arg]
-            system=system_in,
-            model=self.model,
-            optimizer=self.optimizer,
-            **runner_kwargs,
-        )
-
-        # Cache the memory scaler if we computed a new estimate (avoid ~70s re-probing)
-        if self.max_memory_scaler is None:
-            self._persist_autobatcher_scaler(max_atoms_in_batch)
+        try:
+            state = self._ts.optimize(  # type: ignore[call-arg]
+                system=system_in,
+                model=self.model,
+                optimizer=self.optimizer,
+                **runner_kwargs,
+            )
+        except (ValueError, torch.cuda.OutOfMemoryError, RuntimeError) as exc:
+            if isinstance(exc, ValueError) and self._is_max_metric_value_error(exc):
+                logger.warning(
+                    "Cached/sticky max_memory_scaler too tight for this batch (%s); "
+                    "resetting batchers and re-probing GPU memory",
+                    exc,
+                )
+                self._reset_and_reprobe()
+                # One retry with a fresh, re-estimated autobatcher.
+                try:
+                    state = self._ts.optimize(  # type: ignore[call-arg]
+                        system=system_in,
+                        model=self.model,
+                        optimizer=self.optimizer,
+                        **runner_kwargs,
+                    )
+                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
+                    if self._is_cuda_oom_error(retry_exc):
+                        cleanup_torch_cuda(logger=logger)
+                        raise SCGORuntimeError(
+                            "TorchSim relaxation ran out of GPU memory during "
+                            "optimization after re-probing the autobatcher. The batch "
+                            "is larger than the GPU can hold: reduce expected_max_atoms / "
+                            "max_atoms_to_try or the batch size."
+                        ) from retry_exc
+                    raise
+            elif self._is_cuda_oom_error(exc):
+                # The native autobatcher should catch OOM itself, but if a batch
+                # still overflows, hand the next call a clean allocator and surface
+                # a clear error.
+                cleanup_torch_cuda(logger=logger)
+                raise SCGORuntimeError(
+                    "TorchSim relaxation ran out of GPU memory during optimization. "
+                    "The sticky max_memory_scaler may be too tight, or the batch is "
+                    "larger than the GPU can hold: reduce expected_max_atoms / "
+                    "max_atoms_to_try or the batch size."
+                ) from exc
+            else:
+                raise
 
         batch_steps = _steps_taken_from_optimize_state(state)
         self.last_batch_relax_steps = (
@@ -1461,19 +1173,6 @@ class TorchSimBatchRelaxer:
                 self.model_kind,
             )
 
-    def _cache_model_name(self) -> str:
-        mk = str(self.model_kind or "mace").strip().lower()
-        if mk == "mace":
-            return str(self.mace_model_name)
-        if mk in ("fairchem", "uma"):
-            return str(self.fairchem_model_name or "fairchem")
-        if mk in ("upet", "metatomic"):
-            if self.upet_checkpoint_path:
-                return str(self.upet_checkpoint_path)
-            ver = self.upet_version or _DEFAULT_UPET_VERSION
-            return f"{self.upet_model_name}-v{ver}"
-        return str(mk)
-
     def __repr__(self) -> str:
         return (
             f"TorchSimBatchRelaxer(model_kind={self.model_kind!r}, "
@@ -1513,8 +1212,3 @@ class TorchSimBatchRelaxer:
 
         self.model.setup_from_system_idx = patched_setup  # type: ignore[assignment]
         type(self.model)._scgo_setup_patched = True
-
-
-def get_global_memory_scaler_cache() -> MemoryScalerCache:
-    """Return the process-wide :class:`MemoryScalerCache` used by default."""
-    return _GLOBAL_MEMORY_SCALER_CACHE
