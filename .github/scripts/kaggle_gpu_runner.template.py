@@ -389,7 +389,18 @@ def _is_unexpected_oom_line(line: str) -> bool:
     lowered = line.lower()
     if SYNTHETIC_FAILURE_TOKEN in lowered:
         return False
-    # These OOM markers are unambiguous GPU memory pressure.
+    # Genuine torch OOM text. ``torch.cuda.OutOfMemoryError`` and the cuBLAS/cuDNN
+    # ``RuntimeError`` both print "out of memory". Do not match generic
+    # "Memory Estimation" probe chatter (no OOM substring appears there).
+    if "out of memory" in lowered or "outofmemory" in lowered:
+        return True
+    # torch-sim's InFlight/BinningAutoBatcher raises a ``ValueError`` whose message
+    # contains "max_metric" when a later batch's metric exceeds the sticky cached
+    # scaler. That is a memory-degradation failure that can masquerade behind a
+    # "band unusable" / example-failure line, so treat it as unexpected.
+    if "max_metric" in lowered:
+        return True
+    # Synthetic degradation markers (kept for backwards-compat log scanning).
     if "hit cuda oom" in lowered or "retry still oom" in lowered:
         return True
     # "Parallel NEB band unusable" is emitted for *any* band failure: non-finite

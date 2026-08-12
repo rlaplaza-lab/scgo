@@ -901,9 +901,10 @@ def run_transition_state_search(
         from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
         # Size the relaxer for the largest fused NEB force batch (mirrors the GO
-        # expected_max_atoms pattern) so the memory-scaler disk cache bucket is
-        # stable and the autobatcher probe stays capped. coerce_ts_params_to_
-        # runner_kwargs normally injects these already; this covers direct callers.
+        # expected_max_atoms pattern) so the native autobatcher probe stays capped
+        # to the actual workload. coerce_ts_params_to_runner_kwargs normally injects
+        # these already; this covers direct callers. Native torch-sim estimation
+        # runs on the real batches, so no synthetic probe geometry is needed.
         relaxer_params = dict(torchsim_params or {})
         if (
             parallel_neb_max_batch_atoms is not None
@@ -915,15 +916,6 @@ def run_transition_state_search(
             relaxer_params.setdefault(
                 "max_atoms_to_try", int(parallel_neb_max_batch_atoms)
             )
-        # Probe GPU memory with a *real* structure from this campaign instead of
-        # the dense bulk-Cu dummy: the ``n_atoms_x_density`` metric is geometry
-        # dependent, and slab+vacuum NEB images are far sparser than bulk, so a
-        # bulk-probed scaler does not describe the batches the NEB actually runs.
-        probe_ref = copy_atoms(minima[0][1])
-        probe_ref.calc = None
-        probe_ref.set_constraint()
-        relaxer_params.setdefault("probe_atoms", probe_ref)
-        relaxer_params.setdefault("geometry_tag", f"neb-{system_type}")
         shared_relaxer = TorchSimBatchRelaxer(**relaxer_params)
 
     if needs_idpp_screen:
