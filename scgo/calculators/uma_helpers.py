@@ -8,7 +8,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from scgo.calculators.torch_device import resolve_torch_device
-from scgo.exceptions import SCGONotImplementedError
+from scgo.exceptions import SCGONotImplementedError, SCGOValidationError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
@@ -140,7 +140,7 @@ def try_extract_torchsim_model_from_uma_calculator(
         model.predictor = predictor
         model.task_name = task_name
         model.implemented_properties = ["energy", "forces"]
-    except (AttributeError, TypeError, RuntimeError) as exc:
+    except (AttributeError, TypeError, RuntimeError, SCGOValidationError) as exc:
         logger.debug(
             "Could not build a TorchSim FairChemModel shell from the live UMA "
             "calculator (%s); TorchSim will reload the checkpoint",

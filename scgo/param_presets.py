@@ -493,7 +493,7 @@ def _attach_upet_torchsim_relaxer(
         max_steps=max_steps,
         device=torch.device("cuda") if on_cuda else torch.device("cpu"),
         dtype=dtype,  # None -> model default; set torch.float32 for speed
-        autobatcher=on_cuda if autobatcher is None else autobatcher,
+        autobatcher=autobatcher,
         expected_max_atoms=expected_max_atoms,
         max_atoms_to_try=expected_max_atoms,
     )
