@@ -4,6 +4,14 @@ ASE's ``vdw_radii`` table has NaN for many transition metals and lanthanides.
 Missing values are resolved once per element via linear interpolation (or
 extrapolation) along atomic number, with a scaled-covalent fallback for VdW.
 Resolved values are cached so production runs do not repeat work or log noise.
+
+Important: interpolation is **VdW-only**. ASE's ``covalent_radii`` table has no
+gaps (every element is present), so there is nothing to interpolate there; the
+``covalent_radii * 1.3`` fallback only applies to VdW lookups. The VdW values
+feed two qualitative geometry estimates only: :func:`compute_cell_side` padding
+and :func:`estimate_fragment_footprint_radius`. They are NOT used for
+quantitative (bonding / clash) purposes — for that use
+``ase.data.vdw_alvarez`` or the gap-filled covalent radii.
 """
 
 from __future__ import annotations
@@ -141,7 +149,13 @@ def get_covalent_radius(symbol: str) -> float:
 
 @lru_cache(maxsize=256)
 def get_vdw_radius(symbol: str) -> float:
-    """Return the van-der-Waals radius for ``symbol`` in Angstroms."""
+    """Return the van-der-Waals radius for ``symbol`` in Angstroms.
+
+    Used only for qualitative geometry padding (cell side / fragment footprint),
+    never for quantitative bonding or clash gating. Missing/NaN values are filled
+    by linear interpolation along atomic number, falling back to
+    ``covalent_radius * 1.3``.
+    """
     try:
         z = atomic_numbers[symbol]
     except KeyError as exc:
@@ -216,7 +230,12 @@ def resolve_steric_floor(
     min_distance_factor: float,
     blmin_ratio: float | None,
 ) -> float:
-    """Minimum clash factor for placement: at least ``blmin_ratio`` when set."""
+    """Minimum clash factor for placement: at least ``blmin_ratio`` when set.
+
+    Returns ``max(min_distance_factor, blmin_ratio)`` so the tighter of the
+    validation fallback (``min_distance_factor``) and the GA steric scale
+    (``blmin_ratio``) wins. When ``blmin_ratio`` is None only the fallback applies.
+    """
     if blmin_ratio is None:
         return min_distance_factor
     return max(min_distance_factor, blmin_ratio)

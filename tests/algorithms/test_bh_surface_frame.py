@@ -12,8 +12,7 @@ from scgo.system_types import get_system_policy
 from scgo.utils.helpers import perform_local_relaxation
 
 
-def test_move_atoms_skips_com_recenter_on_surface() -> None:
-    rng = np.random.default_rng(0)
+def test_move_atoms_skips_com_recenter_on_surface(rng) -> None:
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
     slab.pbc = [True, True, False]
     z0 = float(slab.get_positions()[:, 2].max() + 1.5)
@@ -37,8 +36,7 @@ def test_move_atoms_skips_com_recenter_on_surface() -> None:
     np.testing.assert_allclose(moved.get_positions()[: len(slab)], slab_pos_before)
 
 
-def test_move_atoms_recenters_com_for_gas() -> None:
-    rng = np.random.default_rng(1)
+def test_move_atoms_recenters_com_for_gas(rng) -> None:
     atoms = Atoms(
         "Pt3",
         positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 2.1, 0.0]],
@@ -56,8 +54,7 @@ def test_move_atoms_recenters_com_for_gas() -> None:
     np.testing.assert_allclose(moved.get_center_of_mass(), com_before, atol=1e-8)
 
 
-def test_move_atoms_single_tag_group_displaces_rigidly() -> None:
-    rng = np.random.default_rng(2)
+def test_move_atoms_single_tag_group_displaces_rigidly(rng) -> None:
     atoms = Atoms(
         "OHH",
         positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]],
@@ -83,22 +80,21 @@ def test_move_atoms_single_tag_group_displaces_rigidly() -> None:
     assert "none" not in desc
 
 
-def test_move_atoms_zero_movable_honest_description() -> None:
+def test_move_atoms_zero_movable_honest_description(rng) -> None:
     atoms = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
     before = atoms.get_positions().copy()
     moved, desc = _move_atoms(
         atoms,
         dr=0.5,
         move_fraction=1.0,
-        rng=np.random.default_rng(3),
+        rng=rng,
         movable_indices=[],
     )
     np.testing.assert_allclose(moved.get_positions(), before)
     assert desc == "Moved_atoms: none"
 
 
-def test_move_atoms_single_movable_atom_displaces() -> None:
-    rng = np.random.default_rng(4)
+def test_move_atoms_single_movable_atom_displaces(rng) -> None:
     atoms = Atoms(
         "Pt3",
         positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 2.1, 0.0]],
@@ -180,8 +176,7 @@ def test_move_atoms_adsorbate_scale_does_not_throttle_core() -> None:
     assert max(core_mags) > dr * scale
 
 
-def test_move_atoms_adsorbate_only_respects_global_scale() -> None:
-    rng = np.random.default_rng(6)
+def test_move_atoms_adsorbate_only_respects_global_scale(rng) -> None:
     policy = get_system_policy("gas_cluster_adsorbate")
     scale = policy.adsorbate_move_scale
     atoms = Atoms(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scgo.exceptions import SCGORuntimeError
+from scgo.exceptions import SCGOConfigurationError
 
 
 def test_upet_class_is_ase_calculator():
@@ -58,7 +58,7 @@ def test_multiple_mlip_stacks_raises_when_more_than_one_importable():
 
     from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
-    with pytest.raises(SCGORuntimeError, match="Multiple MLIP stacks"):
+    with pytest.raises(SCGOConfigurationError, match="Multiple MLIP stacks"):
         ensure_mace_uma_not_both_installed()
 
 
@@ -87,9 +87,113 @@ def test_prepare_atoms_for_metatomic_torchsim_zeros_non_pbc_cell():
     assert list(relaxed.pbc) == [False, False, False]
 
 
+def test_prepare_atoms_for_metatomic_torchsim_keeps_periodic_vectors():
+    import numpy as np
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import (
+        _prepare_atoms_for_metatomic_torchsim,
+    )
+
+    # pbc=(True, True, False) with non-zero perpendicular components on the
+    # periodic rows: only the non-periodic (z) vector row must be zeroed; the
+    # periodic rows keep their full components (including off-axis terms).
+    atoms = Atoms(
+        "Pt4",
+        positions=[[0, 0, 0]] * 4,
+        cell=[[3, 0, 0.5], [0, 3, 0.4], [0, 0, 20]],
+        pbc=(True, True, False),
+    )
+    prepared = _prepare_atoms_for_metatomic_torchsim(atoms)
+    cell = np.asarray(prepared.cell.array)
+    assert np.allclose(cell[0], [3, 0, 0.5]), cell[0]
+    assert np.allclose(cell[1], [0, 3, 0.4]), cell[1]
+    assert np.allclose(cell[2], [0, 0, 0]), cell[2]
+
+    # pbc=(False, True, True): the rotated periodic row must not be corrupted.
+    atoms2 = Atoms(
+        "Pt4",
+        positions=[[0, 0, 0]] * 4,
+        cell=[[10, 0, 0], [2.772, 4.801, 0], [0, 0, 3]],
+        pbc=(False, True, True),
+    )
+    prepared2 = _prepare_atoms_for_metatomic_torchsim(atoms2)
+    cell2 = np.asarray(prepared2.cell.array)
+    assert np.allclose(cell2[0], [0, 0, 0]), cell2[0]
+    assert np.isclose(cell2[1, 0], 2.772), cell2[1, 0]
+    assert np.allclose(cell2[2], [0, 0, 3]), cell2[2]
+    # The non-periodic column must not have been zeroed (regression guard).
+    assert not np.allclose(cell2[:, 0], [0, 0, 0]), "periodic column was zeroed"
+
+
 def test_torchsim_batch_relaxer_upet_requires_model_identity():
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
     from scgo.exceptions import SCGOValidationError
 
     with pytest.raises(SCGOValidationError, match="upet_model_name"):
         TorchSimBatchRelaxer(model_kind="upet")
+
+
+@pytest.mark.requires_upet
+def test_upet_calculator_stores_resolved_device(monkeypatch):
+    """K6: an explicit ``device="cpu"`` must be readable from the calculator."""
+    upet_calculator = pytest.importorskip("upet.calculator")
+
+    from scgo.calculators.upet_helpers import UPET
+
+    class _FakeUPETCalculator:
+        implemented_properties = ["energy", "forces"]
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(upet_calculator, "UPETCalculator", _FakeUPETCalculator)
+
+    calc = UPET(model_name="pet-mad-s", device="cpu")
+    assert calc.device == "cpu"
+    assert calc._inner.kwargs["device"] == "cpu"
+
+
+@pytest.mark.requires_upet
+def test_upet_extractor_uses_the_calculator_device(monkeypatch):
+    """K6: the TorchSim extractor must honour the calculator's stored device."""
+    from types import ModuleType
+    from unittest.mock import MagicMock, patch
+
+    import torch
+
+    from scgo.calculators import upet_helpers as uh
+
+    atomistic = object()
+    meta_calc = MagicMock()
+    meta_calc.model = atomistic
+    # No device on the inner calculator: only ``calculator.device`` can rescue
+    # an explicit CPU request on a CUDA-capable box.
+    meta_calc.device = None
+
+    inner = MagicMock()
+    inner.calculator = meta_calc
+    inner.non_conservative = False
+
+    calc = MagicMock()
+    calc._inner = inner
+    calc.non_conservative = False
+    calc.device = "cpu"
+
+    fake_metatomic = MagicMock(return_value="wrapped")
+    neighbors_mod = ModuleType("metatomic_torchsim._neighbors")
+    neighbors_mod.HAS_NVALCHEMIOPS = True
+    root_mod = ModuleType("metatomic_torchsim")
+    root_mod.MetatomicModel = fake_metatomic
+    root_mod._neighbors = neighbors_mod
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "metatomic_torchsim": root_mod,
+            "metatomic_torchsim._neighbors": neighbors_mod,
+        },
+    ):
+        assert uh.try_extract_torchsim_model_from_upet_calculator(calc) == "wrapped"
+
+    assert fake_metatomic.call_args.kwargs["device"] == torch.device("cpu")

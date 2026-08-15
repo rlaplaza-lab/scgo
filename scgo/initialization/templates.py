@@ -1,9 +1,11 @@
 """Template structure generators for high-symmetry cluster motifs.
 
 This module provides functions to generate regular polyhedral structures
-(icosahedra, decahedra, octahedra) using ASE's cluster module. These templates
-are used in the smart initialization mode to ensure exploration of important
-high-symmetry basins in the potential energy surface.
+(icosahedra, decahedra, octahedra) using ASE's cluster module, plus
+analytically constructed motifs (tetrahedron, cube, cuboctahedron, truncated
+octahedron). These templates are used in the smart initialization mode to
+ensure exploration of important high-symmetry basins in the potential energy
+surface.
 
 Based on the Doye group's comprehensive study of Morse/LJ clusters:
 https://doye.chem.ox.ac.uk/jon/structures/Morse/paper/node5.html
@@ -34,6 +36,8 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
+from functools import partial
 from logging import Logger
 from threading import Event, Lock
 from typing import Any, cast
@@ -47,6 +51,7 @@ from ase.symbols import Symbols
 from numpy.random import Generator
 from scipy.spatial.distance import cdist
 
+from scgo.database.cache import get_global_cache
 from scgo.exceptions import (
     SCGOValidationError,
 )
@@ -54,20 +59,23 @@ from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.rng_helpers import ensure_rng_or_create
 
+from .candidate_discovery import get_structure_signature
 from .geometry_helpers import (
     _assign_exact_composition,
     _check_composition_feasibility,
+    _compute_composition_delta,
     _cycle_composition_to_length,
     _generate_batch_positions_on_convex_hull,
+    _generate_rotation_matrix,
     _identify_safe_removal_candidates,
-    _should_check_connectivity,
+    _set_cubic_cell_and_center,
+    _validate_cluster_defaults,
     _verify_exact_composition,
     compute_bond_distance_params,
     get_convex_hull_vertex_indices,
     get_covalent_radius,
     reorder_cluster_to_composition,
     validate_cluster,
-    validate_cluster_structure,
 )
 from .initialization_config import (
     CONNECTIVITY_FACTOR,
@@ -76,17 +84,81 @@ from .initialization_config import (
     MIN_DISTANCE_FACTOR_DEFAULT,
     PLACEMENT_RADIUS_SCALING_DEFAULT,
     POSITION_COMPARISON_TOLERANCE_FACTOR,
+    TEMPLATE_ROTATION_CANDIDATES,
     VACUUM_DEFAULT,
 )
 from .random_spherical import grow_from_seed
 
 logger: Logger = get_logger(__name__)
 
+_TEMPLATE_ROTATIONS_CACHE_NS = "template_rotations"
+
+
+def _get_or_create_rotated_variants(
+    selected: Atoms,
+    cell_side: float,
+) -> list[Atoms]:
+    """Return cached rotation variants for an already cell-set, centered template.
+
+    Generates ``TEMPLATE_ROTATION_CANDIDATES`` deterministic rotations of
+    ``selected`` (keyed by structure signature, chemical symbols, and cell side)
+    and caches them in the global cache for reuse across RNG instances.
+
+    Args:
+        selected: Template Atoms with its cell set and centered. Modified copy is
+            rotated; the original is not mutated.
+        cell_side: Cubic cell side length used as part of the cache key.
+
+    Returns:
+        List of rotated ``Atoms`` variants (each with the cubic cell set).
+    """
+    # Check if we have pre-computed rotations for this template signature
+    template_signature = get_structure_signature(selected)
+    # The signature only encodes sorted interatomic distances, so isostructural
+    # clusters of different elements (e.g. Pt3 vs Au3) share it. Include the
+    # chemical symbols so distinct compositions get distinct cache entries.
+    template_symbols = tuple(selected.get_chemical_symbols())
+    rotation_cache_key = (template_signature, template_symbols, cell_side)
+    rotation_candidates = get_global_cache().get(
+        _TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key
+    )
+
+    if rotation_candidates is not None:
+        return rotation_candidates
+
+    # Generate and cache rotation candidates using a deterministic seed
+    # derived from the template signature to ensure reproducibility
+    # even across different RNG instances.
+    center = selected.get_center_of_mass()
+    signature_seed = abs(hash(template_signature)) % (2**31)
+    rotation_rng = np.random.default_rng(signature_seed)
+
+    rotation_candidates = []
+    for _ in range(TEMPLATE_ROTATION_CANDIDATES):
+        axis = rotation_rng.standard_normal(3)
+        axis /= np.linalg.norm(axis)
+        angle = rotation_rng.uniform(0, 2 * np.pi)
+        R = _generate_rotation_matrix(axis, angle)
+
+        rotated = selected.copy()
+        positions = rotated.get_positions()
+        rotated.set_positions(center + (positions - center) @ R.T)
+        rotation_candidates.append(rotated)
+
+    # Store in cache for future use
+    get_global_cache().set(
+        _TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key, rotation_candidates
+    )
+    return rotation_candidates
+
+
 ICOSAHEDRON_SHELL_TO_ATOMS: dict[int, int] = {1: 1, 2: 13, 3: 55, 4: 147, 5: 309}
 
 _TEMPLATE_REGISTRY = {}
-_VALID_TEMPLATE_TYPES_CACHE: dict[int, tuple[str, ...]] = {}
-_VALID_TEMPLATE_TYPES_INFLIGHT: dict[int, Event] = {}
+# Keyed by (n_atoms, connectivity_factor): the connectivity factor changes both
+# the probed geometry and the validation threshold, so it must be part of the key.
+_VALID_TEMPLATE_TYPES_CACHE: dict[tuple[int, float], tuple[str, ...]] = {}
+_VALID_TEMPLATE_TYPES_INFLIGHT: dict[tuple[int, float], Event] = {}
 _VALID_TEMPLATE_TYPES_LOCK = Lock()
 
 
@@ -100,7 +172,7 @@ def _get_base_element(composition: list[str]) -> str:
         First element symbol
 
     Raises:
-        ValueError: If composition is empty
+        SCGOValidationError: If composition is empty
     """
     if not composition:
         raise SCGOValidationError("Cannot get base element from empty composition")
@@ -121,7 +193,7 @@ def _get_typical_bond_length(composition: list[str]) -> float:
         Typical bond length in Angstroms (2 × average covalent radius)
 
     Raises:
-        ValueError: If composition is empty
+        SCGOValidationError: If composition is empty
     """
     if not composition:
         raise SCGOValidationError("Cannot calculate bond length from empty composition")
@@ -274,10 +346,12 @@ def remove_atoms_from_vertices(
 ) -> Atoms | None:
     """Remove atoms from convex-hull vertices in bulk.
 
-    Uses hull.vertices as the only candidate set. Orders by distance from COM
-    (descending), respects target_composition when given, and supports
-    multi-round removal when n_remove exceeds the number of vertices.
-    Single validation per round (no per-atom connectivity loop).
+    Uses hull.vertices as the only candidate set. Orders vertices by
+    coordination number (ascending), then by distance from the center of mass
+    (descending), with random tie-breaking. Respects target_composition when
+    given (removing one atom per round in that case), and supports multi-round
+    removal when n_remove exceeds the number of vertices. Single validation per
+    round (no per-atom connectivity loop).
 
     Args:
         cluster: The cluster to remove atoms from.
@@ -289,7 +363,12 @@ def remove_atoms_from_vertices(
 
     Returns:
         New Atoms with atoms removed, or None if removal fails (e.g. <4 atoms,
-        cannot satisfy composition from vertices, or validation fails).
+        cannot satisfy composition from vertices, or validation fails). Returns
+        a copy of the input when ``n_remove`` is not positive.
+
+    Raises:
+        SCGOValidationError: If ``n_remove`` is not smaller than the cluster
+            size, or if the requested composition cannot be preserved.
     """
     rng = ensure_rng_or_create(rng)
     if n_remove <= 0:
@@ -382,14 +461,12 @@ def remove_atoms_from_vertices(
         total_to_remove_this: int
 
         if target_composition is not None:
-            assert final_counts is not None
+            if final_counts is None:
+                raise TypeError(
+                    "final_counts must not be None when target_composition is set"
+                )
             current_counts: Counter[str] = get_composition_counts(symbols)
-            rc: dict[str, int] = {}
-            for el in set(symbols) | set(final_counts.keys()):
-                cur: int = current_counts.get(el, 0)
-                fin: int = final_counts.get(el, 0)
-                rc[el] = max(0, cur - fin)
-            remove_counts = {k: v for k, v in rc.items() if v > 0}
+            _, remove_counts = _compute_composition_delta(current_counts, final_counts)
             total_to_remove_this = sum(remove_counts.values())
             if total_to_remove_this != remaining_to_remove:
                 raise SCGOValidationError(
@@ -407,7 +484,10 @@ def remove_atoms_from_vertices(
 
         if target_composition is not None:
             remove_indices = []
-            assert remove_counts is not None
+            if remove_counts is None:
+                raise TypeError(
+                    "remove_counts must not be None when target_composition is set"
+                )
             for el, count in remove_counts.items():
                 el_verts: list[int] = [
                     int(i) for i in sorted_vertices if symbols[i] == el
@@ -457,13 +537,10 @@ def remove_atoms_from_vertices(
             pbc=current.get_pbc(),
         )
 
-        is_valid, err = validate_cluster_structure(
+        is_valid, err = _validate_cluster_defaults(
             new_cluster,
             min_distance_factor,
             connectivity_factor,
-            check_clashes=True,
-            check_connectivity=_should_check_connectivity(new_cluster),
-            use_mic=False,
         )
         if not is_valid:
             logger.debug(
@@ -517,6 +594,10 @@ def grow_template_via_facets(
 
     Returns:
         Grown Atoms with target composition, or None on failure.
+
+    Raises:
+        SCGOValidationError: If growth completed but the composition does not
+            match ``target_composition``.
     """
     base: Atoms = seed_atoms.copy()
     base_composition = base.get_chemical_symbols()
@@ -529,11 +610,10 @@ def grow_template_via_facets(
 
     base_counts: Counter[str] = get_composition_counts(base_composition)
     target_counts: Counter[str] = get_composition_counts(target_composition)
-    atoms_to_add: list[str] = list((target_counts - base_counts).elements())
+    atoms_to_add, _ = _compute_composition_delta(base_counts, target_counts)
 
     if not atoms_to_add:
-        base.set_cell([cell_side, cell_side, cell_side])
-        base.center()
+        _set_cubic_cell_and_center(base, cell_side)
         return base
 
     if len(base) < 4:
@@ -591,10 +671,12 @@ def grow_template_via_facets(
         )
         if not candidates:
             logger.debug(
-                f"grow_template_via_facets: no candidates generated for {template_name}, "
-                f"n_atoms={len(current)}, to_add={len(to_add)}, "
-                f"bond_distance={bond_distance:.3f}, max_conn={max_conn:.3f}"
-                f" (discovery failure: candidate discarded; not a per-structure fallback)"
+                "grow_template_via_facets: no candidates generated for %s, n_atoms=%s, to_add=%s, bond_distance=%.3f, max_conn=%.3f (discovery failure: candidate discarded; not a per-structure fallback)",
+                template_name,
+                len(current),
+                len(to_add),
+                bond_distance,
+                max_conn,
             )
             return None
 
@@ -628,39 +710,41 @@ def grow_template_via_facets(
         if placed_count == 0 and to_add and round_retry_count < max_round_retries:
             round_retry_count += 1
             logger.debug(
-                f"grow_template_via_facets: no atoms placed, retry {round_retry_count}/{max_round_retries}, "
-                f"candidates={len(candidates)}, to_add={len(to_add)}"
+                "grow_template_via_facets: no atoms placed, retry %s/%s, candidates=%s, to_add=%s",
+                round_retry_count,
+                max_round_retries,
+                len(candidates),
+                len(to_add),
             )
             continue
         elif placed_count == 0 and to_add:
             logger.debug(
-                f"grow_template_via_facets: failed to place any atoms after {max_round_retries} retries, "
-                f"candidates={len(candidates)}, to_add={len(to_add)}"
-                f" (discovery failure: candidate discarded; not a per-structure fallback)"
+                "grow_template_via_facets: failed to place any atoms after %s retries, candidates=%s, to_add=%s (discovery failure: candidate discarded; not a per-structure fallback)",
+                max_round_retries,
+                len(candidates),
+                len(to_add),
             )
             return None
 
         round_retry_count = 0
 
-        is_valid, err = validate_cluster_structure(
+        is_valid, err = _validate_cluster_defaults(
             current,
             min_distance_factor,
             connectivity_factor,
-            check_clashes=True,
-            check_connectivity=_should_check_connectivity(current),
-            use_mic=False,
         )
         if not is_valid:
             logger.debug(
-                f"grow_template_via_facets: validation failed after placing {placed_count} atoms, "
-                f"n_atoms={len(current)}, error: {err}"
+                "grow_template_via_facets: validation failed after placing %s atoms, n_atoms=%s, error: %s",
+                placed_count,
+                len(current),
+                err,
             )
             return None
 
         round_retry_count = 0
 
-    current.set_cell([cell_side, cell_side, cell_side])
-    current.center()
+    _set_cubic_cell_and_center(current, cell_side)
 
     if not _verify_exact_composition(current, target_composition):
         expected: Counter[str] = get_composition_counts(target_composition)
@@ -691,7 +775,7 @@ def _create_balanced_base_composition(
         List of element symbols with balanced distribution
 
     Raises:
-        ValueError: If composition is empty
+        SCGOValidationError: If composition is empty
     """
     if not composition:
         raise SCGOValidationError(
@@ -748,16 +832,15 @@ def _deduplicate_positions(
     return unique_positions
 
 
-def _validate_n_atoms(n_atoms: int, expected: int | None, template_name: str) -> bool:
+def _validate_n_atoms(n_atoms: int, expected: int | None) -> bool:
     """Validate that n_atoms matches expected value for a template.
 
     Args:
         n_atoms: Number of atoms to validate
         expected: Expected number of atoms (None means no specific requirement)
-        template_name: Name of template for error messages
 
     Returns:
-        True if valid, False otherwise (logs debug message if invalid)
+        True if n_atoms is positive and matches ``expected``, False otherwise
     """
     if n_atoms <= 0:
         return False
@@ -800,7 +883,7 @@ def _generate_custom_template(
         Atoms object with template structure, or None if generation fails
     """
     if expected_n_atoms is not None:
-        if not _validate_n_atoms(n_atoms, expected_n_atoms, template_name):
+        if not _validate_n_atoms(n_atoms, expected_n_atoms):
             return None
     elif n_atoms <= 0:
         return None
@@ -855,12 +938,13 @@ def _rescale_cluster_to_bond_length(
     covalent radii × connectivity_factor. Rescaling ensures nn distances align
     with our connectivity model so structures pass validation.
 
-    Modifies atoms in place. Keeps center of mass fixed.
+    Modifies atoms in place. Keeps the geometric centroid of the positions fixed.
 
     Args:
         atoms: ASE-generated cluster (e.g. Icosahedron, Decahedron, Octahedron).
         composition: Target composition (used for typical bond length).
-        connectivity_factor: Connectivity factor; kept for API consistency.
+        connectivity_factor: Connectivity factor; the mean nearest-neighbor
+            distance is rescaled to ``a × min(1.0, 0.95 × connectivity_factor)``.
     """
     if len(atoms) < 2:
         return
@@ -1026,6 +1110,9 @@ def _adjust_template_to_target(
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
+    *,
+    allow_shrink_refusal: bool = False,
+    max_removal_attempts: int = 1,
 ) -> Atoms | None:
     """Shared helper to adjust template cluster to target atom count and composition.
 
@@ -1043,6 +1130,10 @@ def _adjust_template_to_target(
             (default: MIN_DISTANCE_FACTOR_DEFAULT)
         cell_side: Cell side length (defaults to cluster cell or VACUUM_DEFAULT * 2)
         placement_radius_scaling: Scaling for placement radius (for growth).
+        allow_shrink_refusal: When True, refuse to shrink if it would remove half or
+            more of the base atoms.
+        max_removal_attempts: Number of times to attempt vertex removal when shrinking;
+            successive attempts reseed deterministically.
 
     Returns:
         Adjusted Atoms object, or None if adjustment fails
@@ -1072,41 +1163,68 @@ def _adjust_template_to_target(
             )
             if grown is None:
                 logger.debug(
-                    f"Failed to add atoms to {template_name} template "
-                    f"while maintaining connectivity"
-                    f" (discovery failure: candidate discarded; not a per-structure fallback)"
+                    "Failed to grow %s template on its facets (discovery failure: candidate discarded; not a per-structure fallback)",
+                    template_name,
                 )
                 return None
             if len(grown) != target_n_atoms:
                 logger.debug(
-                    f"{template_name} template has {len(grown)} atoms after growth, "
-                    f"expected {target_n_atoms}"
+                    "%s template has %s atoms after growth, expected %s",
+                    template_name,
+                    len(grown),
+                    target_n_atoms,
                 )
                 return None
             _set_template_info(grown, template_name)
             return grown
         except (ValueError, SCGOValidationError) as e:
             logger.debug(
-                f"Failed to grow {template_name} template from {base_count} "
-                f"to {target_n_atoms} atoms: {e}"
+                "Failed to grow %s template from %s to %s atoms: %s",
+                template_name,
+                base_count,
+                target_n_atoms,
+                e,
             )
             return None
     elif base_count > target_n_atoms:
         n_remove: int = base_count - target_n_atoms
-        adjusted = remove_atoms_from_vertices(
-            cluster,
-            n_remove,
-            target_composition=composition,
-            connectivity_factor=connectivity_factor,
-            min_distance_factor=min_distance_factor,
-            rng=rng,
-        )
-
-        if adjusted is None:
+        removal_ratio: float = n_remove / base_count
+        if allow_shrink_refusal and removal_ratio >= 0.5:
+            logger.debug(
+                "Template shrink refused: removing %d/%d atoms (%.0f%% >= 50%%) "
+                "from %s base",
+                n_remove,
+                base_count,
+                100.0 * removal_ratio,
+                template_name,
+            )
             return None
 
-        cluster = adjusted
-        _set_template_info(cluster, template_name)
+        attempts: int = max(1, max_removal_attempts)
+        for attempt in range(attempts):
+            attempt_rng: Generator = (
+                rng if attempt == 0 else np.random.default_rng(rng.integers(0, 2**31))
+            )
+            adjusted = remove_atoms_from_vertices(
+                cluster,
+                n_remove,
+                target_composition=composition,
+                connectivity_factor=connectivity_factor,
+                min_distance_factor=min_distance_factor,
+                rng=attempt_rng,
+            )
+            if adjusted is not None:
+                cluster = adjusted
+                _set_template_info(cluster, template_name)
+                return cluster
+            if attempt < attempts - 1:
+                continue
+            logger.debug(
+                "Template shrink failed after %d removal attempts (%s)",
+                attempts,
+                template_name,
+            )
+            return None
     else:
         cluster = _assign_exact_composition(
             cluster, composition, target_n_atoms, rng=rng
@@ -1137,7 +1255,7 @@ def _generate_ase_template_from_registry(
     """
     config = _TEMPLATE_REGISTRY.get(template_name)
     if config is None:
-        logger.warning(f"{template_name.capitalize()} template not registered")
+        logger.warning("%s template not registered", template_name.capitalize())
         return None
 
     find_params = cast(Callable[[int], Any], config["find_params"])
@@ -1154,202 +1272,197 @@ def _generate_ase_template_from_registry(
     )
 
 
-def _generate_icosahedron(
-    composition: list[str],
-    n_atoms: int,
-    rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-) -> Atoms | None:
-    return _generate_ase_template_from_registry(
-        "icosahedron", composition, n_atoms, rng, connectivity_factor
+def _generate_tetrahedron_positions(
+    comp: list[str], n: int, bond_length: float, cf: float
+) -> list[np.ndarray]:
+    return [
+        np.array([0.0, 0.0, 0.0]),
+        np.array([bond_length, 0.0, 0.0]),
+        np.array([bond_length / 2, bond_length * np.sqrt(3) / 2, 0.0]),
+        np.array(
+            [
+                bond_length / 2,
+                bond_length / (2 * np.sqrt(3)),
+                bond_length * np.sqrt(2 / 3),
+            ]
+        ),
+    ]
+
+
+def _validate_cube(n: int) -> tuple[bool, str | None]:
+    cube_root = round(n ** (1 / 3))
+    if cube_root**3 == n:
+        return True, None
+    return False, (
+        f"cube template only supports perfect cubes (n³), got {n}. "
+        f"Returning None instead of falling back to other template."
     )
 
 
-def _generate_decahedron(
-    composition: list[str],
-    n_atoms: int,
-    rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-) -> Atoms | None:
-    return _generate_ase_template_from_registry(
-        "decahedron", composition, n_atoms, rng, connectivity_factor
+def _generate_cube_positions(
+    comp: list[str], n: int, bond_length: float, cf: float
+) -> list[np.ndarray]:
+    cube_root = round(n ** (1 / 3))
+    return [
+        np.array([i * bond_length, j * bond_length, k * bond_length])
+        for i in range(cube_root)
+        for j in range(cube_root)
+        for k in range(cube_root)
+    ]
+
+
+def _generate_cuboctahedron_positions(
+    comp: list[str], n: int, bond_length: float, cf: float
+) -> list[np.ndarray]:
+    s: float = bond_length * cf / 2.0
+    positions = []
+    for sign1 in [-1, 1]:
+        for sign2 in [-1, 1]:
+            positions.append([sign1 * s, sign2 * s, 0.0])
+            positions.append([sign1 * s, 0.0, sign2 * s])
+            positions.append([0.0, sign1 * s, sign2 * s])
+    return _deduplicate_positions(positions, bond_length)
+
+
+def _post_process_cuboctahedron(cluster: Atoms, comp: list[str], n: int) -> Atoms:
+    if n == 13:
+        base_element: str = _get_base_element(comp)
+        center_pos: np.ndarray[tuple[Any, ...], np.dtype[Any]] = np.array(
+            [0.0, 0.0, 0.0]
+        )
+        cluster.append(Atom(base_element, center_pos))
+    return cluster
+
+
+def _generate_truncated_octahedron_positions(
+    comp: list[str], n: int, bond_length: float, cf: float
+) -> list[np.ndarray]:
+    s: float = bond_length * cf / 2.0
+    positions: list[list[float]] = []
+    for x_sign in [-1, 1]:
+        for y_sign in [-1, 1]:
+            for z_sign in [-1, 1]:
+                minus_count: int = sum([x_sign < 0, y_sign < 0, z_sign < 0])
+                if minus_count % 2 == 0:
+                    for perm in [
+                        [2 * s * x_sign, s * y_sign, 0],
+                        [2 * s * x_sign, 0, s * z_sign],
+                        [s * x_sign, 2 * s * y_sign, 0],
+                        [s * x_sign, 0, 2 * s * z_sign],
+                        [0, 2 * s * y_sign, s * z_sign],
+                        [0, s * y_sign, 2 * s * z_sign],
+                    ]:
+                        if not any(np.allclose(perm, p) for p in positions):
+                            positions.append(perm)
+    unique_positions: list[np.ndarray[tuple[Any, ...], np.dtype[Any]]] = (
+        _deduplicate_positions(positions, bond_length)
     )
+    if len(unique_positions) != 24:
+        raise SCGOValidationError(
+            f"truncated_octahedron template requires exactly 24 positions, "
+            f"got {len(unique_positions)}"
+        )
+    return unique_positions[:24]
 
 
-def _generate_octahedron(
-    composition: list[str],
-    n_atoms: int,
-    rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-) -> Atoms | None:
-    return _generate_ase_template_from_registry(
-        "octahedron", composition, n_atoms, rng, connectivity_factor
-    )
+@dataclass
+class _CustomTemplateSpec:
+    """Specification for a custom (position-generator based) template.
+
+    Attributes:
+        position_generator: Function producing unscaled positions for the
+            template given (composition, n_atoms, bond_length, connectivity_factor).
+        expected_n_atoms: Optional exact atom count the template must produce.
+        n_atoms_validator: Optional validator returning (is_valid, error_message).
+        post_process: Optional hook run after composition assignment.
+    """
+
+    position_generator: Callable[
+        [list[str], int, float, float], list[np.ndarray] | list[list[float]]
+    ]
+    expected_n_atoms: int | None = None
+    n_atoms_validator: Callable[[int], tuple[bool, str | None]] | None = None
+    post_process: Callable[[Atoms, list[str], int], Atoms] | None = None
 
 
-def _generate_tetrahedron(
-    composition: list[str],
-    n_atoms: int,
-    rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-) -> Atoms | None:
-    def _generate_tetrahedron_positions(
-        comp: list[str], n: int, bond_length: float, cf: float
-    ) -> list[np.ndarray]:
-        return [
-            np.array([0.0, 0.0, 0.0]),
-            np.array([bond_length, 0.0, 0.0]),
-            np.array([bond_length / 2, bond_length * np.sqrt(3) / 2, 0.0]),
-            np.array(
-                [
-                    bond_length / 2,
-                    bond_length / (2 * np.sqrt(3)),
-                    bond_length * np.sqrt(2 / 3),
-                ]
-            ),
-        ]
-
-    return _generate_custom_template(
-        template_name="tetrahedron",
-        composition=composition,
-        n_atoms=n_atoms,
+_CUSTOM_TEMPLATE_SPECS: dict[str, _CustomTemplateSpec] = {
+    "tetrahedron": _CustomTemplateSpec(
         position_generator=_generate_tetrahedron_positions,
-        rng=rng,
-        connectivity_factor=connectivity_factor,
         expected_n_atoms=4,
-    )
-
-
-def _generate_cube(
-    composition: list[str],
-    n_atoms: int,
-    rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-) -> Atoms | None:
-    def _validate_cube(n: int) -> tuple[bool, str | None]:
-        cube_root = round(n ** (1 / 3))
-        if cube_root**3 == n:
-            return True, None
-        return False, (
-            f"_generate_cube only supports perfect cubes (n³), got {n}. "
-            f"Returning None instead of falling back to other template."
-        )
-
-    def _generate_cube_positions(
-        comp: list[str], n: int, bond_length: float, cf: float
-    ) -> list[np.ndarray]:
-        cube_root = round(n ** (1 / 3))
-        return [
-            np.array([i * bond_length, j * bond_length, k * bond_length])
-            for i in range(cube_root)
-            for j in range(cube_root)
-            for k in range(cube_root)
-        ]
-
-    return _generate_custom_template(
-        template_name="cube",
-        composition=composition,
-        n_atoms=n_atoms,
+    ),
+    "cube": _CustomTemplateSpec(
         position_generator=_generate_cube_positions,
-        rng=rng,
-        connectivity_factor=connectivity_factor,
         n_atoms_validator=_validate_cube,
-    )
-
-
-def _generate_cuboctahedron(
-    composition: list[str],
-    n_atoms: int,
-    rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
-) -> Atoms | None:
-    def _generate_cuboctahedron_positions(
-        comp: list[str], n: int, bond_length: float, cf: float
-    ) -> list[np.ndarray]:
-        s: float = bond_length * cf / 2.0
-        positions = []
-        for sign1 in [-1, 1]:
-            for sign2 in [-1, 1]:
-                positions.append([sign1 * s, sign2 * s, 0.0])
-                positions.append([sign1 * s, 0.0, sign2 * s])
-                positions.append([0.0, sign1 * s, sign2 * s])
-        return _deduplicate_positions(positions, bond_length)
-
-    def _post_process_cuboctahedron(cluster: Atoms, comp: list[str], n: int) -> Atoms:
-        if n == 13:
-            base_element: str = _get_base_element(comp)
-            center_pos: np.ndarray[tuple[Any, ...], np.dtype[Any]] = np.array(
-                [0.0, 0.0, 0.0]
-            )
-            cluster.append(Atom(base_element, center_pos))
-        return cluster
-
-    return _generate_custom_template(
-        template_name="cuboctahedron",
-        composition=composition,
-        n_atoms=n_atoms,
+    ),
+    "cuboctahedron": _CustomTemplateSpec(
         position_generator=_generate_cuboctahedron_positions,
-        rng=rng,
-        connectivity_factor=connectivity_factor,
         post_process=_post_process_cuboctahedron,
-    )
+    ),
+    "truncated_octahedron": _CustomTemplateSpec(
+        position_generator=_generate_truncated_octahedron_positions,
+        expected_n_atoms=24,
+    ),
+}
 
 
-def _generate_truncated_octahedron(
+def _generate_custom_template_by_name(
+    template_name: str,
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    def _generate_truncated_octahedron_positions(
-        comp: list[str], n: int, bond_length: float, cf: float
-    ) -> list[np.ndarray]:
-        s: float = bond_length * cf / 2.0
-        positions: list[list[float]] = []
-        for x_sign in [-1, 1]:
-            for y_sign in [-1, 1]:
-                for z_sign in [-1, 1]:
-                    minus_count: int = sum([x_sign < 0, y_sign < 0, z_sign < 0])
-                    if minus_count % 2 == 0:
-                        for perm in [
-                            [2 * s * x_sign, s * y_sign, 0],
-                            [2 * s * x_sign, 0, s * z_sign],
-                            [s * x_sign, 2 * s * y_sign, 0],
-                            [s * x_sign, 0, 2 * s * z_sign],
-                            [0, 2 * s * y_sign, s * z_sign],
-                            [0, s * y_sign, 2 * s * z_sign],
-                        ]:
-                            if not any(np.allclose(perm, p) for p in positions):
-                                positions.append(perm)
-        unique_positions: list[np.ndarray[tuple[Any, ...], np.dtype[Any]]] = (
-            _deduplicate_positions(positions, bond_length)
-        )
-        if len(unique_positions) != 24:
-            raise SCGOValidationError(
-                f"_generate_truncated_octahedron requires exactly 24 positions, "
-                f"got {len(unique_positions)}"
-            )
-        return unique_positions[:24]
+    """Generate a custom template by consulting the ``_CUSTOM_TEMPLATE_SPECS`` table.
 
+    Args:
+        template_name: Key in ``_CUSTOM_TEMPLATE_SPECS``.
+        composition: List of element symbols.
+        n_atoms: Target number of atoms.
+        rng: Optional random number generator.
+        connectivity_factor: Factor for connectivity threshold.
+
+    Returns:
+        Atoms object with template structure, or None if generation fails.
+    """
+    spec = _CUSTOM_TEMPLATE_SPECS.get(template_name)
+    if spec is None:
+        logger.warning("%s template not registered", template_name.capitalize())
+        return None
     return _generate_custom_template(
-        template_name="truncated_octahedron",
+        template_name=template_name,
         composition=composition,
         n_atoms=n_atoms,
-        position_generator=_generate_truncated_octahedron_positions,
+        position_generator=spec.position_generator,
         rng=rng,
         connectivity_factor=connectivity_factor,
-        expected_n_atoms=24,
+        n_atoms_validator=spec.n_atoms_validator,
+        post_process=spec.post_process,
+        expected_n_atoms=spec.expected_n_atoms,
+    )
+
+
+def _generate_ase_template(
+    template_name: str,
+    composition: list[str],
+    n_atoms: int,
+    rng: np.random.Generator | None = None,
+    connectivity_factor: float = CONNECTIVITY_FACTOR,
+) -> Atoms | None:
+    return _generate_ase_template_from_registry(
+        template_name, composition, n_atoms, rng, connectivity_factor
     )
 
 
 _TEMPLATE_GENERATORS: dict[str, Callable[..., Atoms | None]] = {
-    "icosahedron": _generate_icosahedron,
-    "decahedron": _generate_decahedron,
-    "cuboctahedron": _generate_cuboctahedron,
-    "truncated_octahedron": _generate_truncated_octahedron,
-    "octahedron": _generate_octahedron,
-    "cube": _generate_cube,
-    "tetrahedron": _generate_tetrahedron,
+    "icosahedron": partial(_generate_ase_template, "icosahedron"),
+    "decahedron": partial(_generate_ase_template, "decahedron"),
+    "cuboctahedron": partial(_generate_custom_template_by_name, "cuboctahedron"),
+    "truncated_octahedron": partial(
+        _generate_custom_template_by_name, "truncated_octahedron"
+    ),
+    "octahedron": partial(_generate_ase_template, "octahedron"),
+    "cube": partial(_generate_custom_template_by_name, "cube"),
+    "tetrahedron": partial(_generate_custom_template_by_name, "tetrahedron"),
 }
 
 
@@ -1375,6 +1488,7 @@ def generate_template_structure(
             - "cuboctahedron": Cuboctahedral structure
             - "truncated_octahedron": Truncated octahedral structure
         rng: Optional random number generator
+        connectivity_factor: Factor for connectivity threshold
 
     Returns:
         Atoms object with template structure, or None if generation fails
@@ -1401,19 +1515,24 @@ def generate_template_structure(
 
     gen_func = _TEMPLATE_GENERATORS.get(template_type)
     if gen_func is None:
-        logger.warning(f"Unknown template type: {template_type}")
+        logger.warning("Unknown template type: %s", template_type)
         return None
     return gen_func(composition, n_atoms, rng, connectivity_factor)
 
 
-def _find_valid_template_types(n_atoms: int) -> list[str]:
+def _find_valid_template_types(
+    n_atoms: int, connectivity_factor: float = CONNECTIVITY_FACTOR
+) -> list[str]:
     """Find all template types that can successfully generate a structure with n_atoms.
 
-    Validity probing is deterministic and keyed only by ``n_atoms`` so cached and
-    concurrent calls produce stable results independent of caller RNG state.
+    Validity probing is deterministic and keyed by ``(n_atoms, connectivity_factor)``
+    so cached and concurrent calls produce stable results independent of caller RNG
+    state, while still honouring the connectivity factor actually used downstream.
 
     Args:
         n_atoms: Target number of atoms
+        connectivity_factor: Factor for connectivity threshold used when probing
+            each generator (a stricter factor can make a template type invalid)
 
     Returns:
         List of template type names that can generate this size
@@ -1421,21 +1540,23 @@ def _find_valid_template_types(n_atoms: int) -> list[str]:
     if n_atoms <= 0:
         return []
 
+    cache_key = (n_atoms, float(connectivity_factor))
+
     leader = False
     with _VALID_TEMPLATE_TYPES_LOCK:
-        cached = _VALID_TEMPLATE_TYPES_CACHE.get(n_atoms)
+        cached = _VALID_TEMPLATE_TYPES_CACHE.get(cache_key)
         if cached is not None:
             return list(cached)
-        event = _VALID_TEMPLATE_TYPES_INFLIGHT.get(n_atoms)
+        event = _VALID_TEMPLATE_TYPES_INFLIGHT.get(cache_key)
         if event is None:
             event = Event()
-            _VALID_TEMPLATE_TYPES_INFLIGHT[n_atoms] = event
+            _VALID_TEMPLATE_TYPES_INFLIGHT[cache_key] = event
             leader = True
 
     if not leader:
         event.wait()
         with _VALID_TEMPLATE_TYPES_LOCK:
-            return list(_VALID_TEMPLATE_TYPES_CACHE.get(n_atoms, ()))
+            return list(_VALID_TEMPLATE_TYPES_CACHE.get(cache_key, ()))
 
     deterministic_rng = np.random.default_rng(n_atoms)
     valid_types: list[str] = []
@@ -1448,24 +1569,26 @@ def _find_valid_template_types(n_atoms: int) -> list[str]:
             gen_func: Callable[..., Atoms | None] = _TEMPLATE_GENERATORS[template_type]
             try:
                 result: Atoms | None = gen_func(
-                    test_composition, n_atoms, deterministic_rng
+                    test_composition, n_atoms, deterministic_rng, connectivity_factor
                 )
                 if result is not None and len(result) == n_atoms:
                     valid_types.append(template_type)
             except (ValueError, RuntimeError, TypeError) as exc:
                 logger.debug(
-                    "Template type %s probe failed for n_atoms=%s: %s",
+                    "Template type %s probe failed for n_atoms=%s "
+                    "(connectivity_factor=%s): %s",
                     template_type,
                     n_atoms,
+                    connectivity_factor,
                     exc,
                 )
                 continue
         computed = tuple(sorted(valid_types))
     finally:
         with _VALID_TEMPLATE_TYPES_LOCK:
-            inflight_event = _VALID_TEMPLATE_TYPES_INFLIGHT.pop(n_atoms, None)
+            inflight_event = _VALID_TEMPLATE_TYPES_INFLIGHT.pop(cache_key, None)
             if computed is not None:
-                _VALID_TEMPLATE_TYPES_CACHE[n_atoms] = computed
+                _VALID_TEMPLATE_TYPES_CACHE[cache_key] = computed
             if inflight_event is not None:
                 inflight_event.set()
 
@@ -1485,7 +1608,9 @@ def _generate_template_with_atom_adjustment(
 ) -> Atoms | None:
     """Generate a template structure and adjust atom count to match target.
 
-    Uses seed growth functions to add/remove atoms from the surface.
+    Uses facet-based growth to add atoms, or convex-hull vertex removal to
+    remove them. Shrinking is refused when it would drop half or more of the
+    base atoms.
 
     Args:
         base_template_type: Template type to start from
@@ -1500,6 +1625,9 @@ def _generate_template_with_atom_adjustment(
 
     Returns:
         Atoms object with target composition, or None if generation fails
+
+    Raises:
+        SCGOValidationError: If ``composition`` is empty
     """
     if cell_side is None:
         cell_side = VACUUM_DEFAULT * 2
@@ -1512,7 +1640,7 @@ def _generate_template_with_atom_adjustment(
         raise SCGOValidationError(
             f"Cannot generate template with empty composition for {target_n_atoms} atoms"
         )
-    elif len(composition) >= base_n_atoms:
+    if len(composition) >= base_n_atoms:
         base_composition = composition[:base_n_atoms]
     else:
         base_composition = _cycle_composition_to_length(composition, base_n_atoms)
@@ -1527,7 +1655,9 @@ def _generate_template_with_atom_adjustment(
         )
         return None
 
-    base_cluster: Atoms | None = gen_func(base_composition, base_n_atoms, rng)
+    base_cluster: Atoms | None = gen_func(
+        base_composition, base_n_atoms, rng, connectivity_factor
+    )
     if base_cluster is None:
         logger.debug(
             "Template adjustment skipped: base generator returned None (%s, n=%d)",
@@ -1536,59 +1666,9 @@ def _generate_template_with_atom_adjustment(
         )
         return None
 
-    base_cluster.set_cell([cell_side, cell_side, cell_side])
-    base_cluster.center()
+    _set_cubic_cell_and_center(base_cluster, cell_side)
 
-    n_diff: int = target_n_atoms - base_n_atoms
-
-    if n_diff == 0:
-        result: Atoms = _assign_exact_composition(
-            base_cluster, composition, target_n_atoms, rng=rng
-        )
-        return result
-
-    if n_diff < 0:
-        n_remove: int = -n_diff
-        removal_ratio: float = n_remove / base_n_atoms
-        if removal_ratio >= 0.5:
-            logger.debug(
-                "Template shrink refused: removing %d/%d atoms (%.0f%% >= 50%%) "
-                "from %s base",
-                n_remove,
-                base_n_atoms,
-                100.0 * removal_ratio,
-                base_template_type,
-            )
-            return None
-
-        max_removal_attempts: int = min(3, base_n_atoms)
-        for attempt in range(max_removal_attempts):
-            attempt_rng: Generator = (
-                rng if attempt == 0 else np.random.default_rng(rng.integers(0, 2**31))
-            )
-            adjusted = remove_atoms_from_vertices(
-                base_cluster,
-                n_remove,
-                target_composition=composition,
-                connectivity_factor=connectivity_factor,
-                min_distance_factor=min_distance_factor,
-                rng=attempt_rng,
-            )
-            if adjusted is None:
-                if attempt < max_removal_attempts - 1:
-                    continue
-                logger.debug(
-                    "Template shrink failed after %d removal attempts (%s: %d -> %d)",
-                    max_removal_attempts,
-                    base_template_type,
-                    base_n_atoms,
-                    target_n_atoms,
-                )
-                return None
-            return adjusted
-        return None
-
-    adjusted = _adjust_template_to_target(
+    return _adjust_template_to_target(
         cluster=base_cluster,
         target_n_atoms=target_n_atoms,
         composition=composition,
@@ -1598,10 +1678,9 @@ def _generate_template_with_atom_adjustment(
         min_distance_factor=min_distance_factor,
         cell_side=cell_side,
         placement_radius_scaling=placement_radius_scaling,
+        allow_shrink_refusal=True,
+        max_removal_attempts=min(3, base_n_atoms),
     )
-    if adjusted is not None:
-        return adjusted
-    return None
 
 
 def _validate_and_add_template(
@@ -1617,8 +1696,9 @@ def _validate_and_add_template(
     """Validate a template structure and add it to results if valid.
 
     This helper consolidates the common validation pattern used in template
-    generation functions. It performs geometry validation and cluster structure
-    validation, then adds valid templates to the results list.
+    generation functions. It checks clashes and connectivity, and for valid
+    templates it optionally reorders atoms to the target composition, tags the
+    template type, and appends the structure to the results list.
 
     Args:
         atoms: The Atoms object to validate
@@ -1712,7 +1792,7 @@ def generate_template_matches(
     is_exact_match: bool = nearest_magic == n_atoms
 
     if include_exact and is_exact_match:
-        valid_types = _find_valid_template_types(n_atoms)
+        valid_types = _find_valid_template_types(n_atoms, connectivity_factor)
         for template_type in valid_types:
             try:
                 atoms = _TEMPLATE_GENERATORS[template_type](
@@ -1749,7 +1829,7 @@ def generate_template_matches(
                 )
 
     if include_near and not is_exact_match and is_near_magic_number(n_atoms):
-        valid_types = _find_valid_template_types(nearest_magic)
+        valid_types = _find_valid_template_types(nearest_magic, connectivity_factor)
         for template_type in valid_types:
             try:
                 adjusted: Atoms | None = _generate_template_with_atom_adjustment(

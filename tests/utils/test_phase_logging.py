@@ -13,7 +13,7 @@ from scgo.utils.phase_logging import (
 
 def test_format_count_summary():
     assert format_count_summary({}) == ""
-    assert format_count_summary({"b": 2, "a": 3}) == "a×3, b×2"
+    assert format_count_summary({"b": 2, "a": 3}) == "ax3, bx2"
 
 
 def test_init_diagnostics_collector_emit_summary(caplog):
@@ -29,7 +29,7 @@ def test_init_diagnostics_collector_emit_summary(caplog):
         logger, verbosity=2, n_structures=5, prefix="Test init"
     )
     assert caplog.text.count("Test init:") == 1
-    assert "placement failures×1" in caplog.text
+    assert "placement failuresx1" in caplog.text
     assert "Init fallback: template→random_spherical" in caplog.text
     assert "Placement failure: Could not place atom Pt" in caplog.text
 

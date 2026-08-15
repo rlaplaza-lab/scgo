@@ -15,6 +15,7 @@ durable SQLite JSON column). Use :mod:`scgo.metadata.atoms` exclusively.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Final-minima SQL tagging
 ------------------------
@@ -23,17 +24,21 @@ Final-minima SQL tagging
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Output-JSON provenance header
 -----------------------------
 
-Shared header for ``metadata.json``, NEB/TS summaries, and timing files
-(``schema_version`` = 3).
+Shared header for ``metadata.json``, NEB/TS summaries, timing files, and
+cluster-adsorbate relaxed-structure ``info`` dicts (``schema_version`` = 4). This
+is the single output-JSON version; there is no separate timing or cluster-adsorbate
+schema key.
 
 .. automodule:: scgo.metadata.provenance
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Run-directory records
 ---------------------
@@ -44,6 +49,7 @@ Run-directory records
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 SQLite DB stamp
 ---------------
@@ -55,3 +61,4 @@ This integer is **not** the output-JSON header version.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*

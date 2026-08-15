@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+import pytest
 from ase import Atoms
 
-from scgo.metadata.atoms import get_tag, get_tags, set_tags
+from scgo.metadata.atoms import (
+    filter_by_tags,
+    get_tag,
+    get_tags,
+    set_tags,
+)
+from scgo.utils.logging import TRACE
 
 
 def test_set_tags_writes_run_id():
@@ -62,3 +71,66 @@ def test_numpy_scalar_tags():
     assert get_tag(a, "generation") == 3
     assert get_tag(a, "score") == -1.5
     assert get_tag(a, "flag") is True
+
+
+class TestMetadataManagement:
+    """Metadata helper functions."""
+
+    def test_set_get_tag(self):
+        atoms = Atoms("Pt3")
+        set_tags(
+            atoms,
+            run_id="run_20260204_120000",
+            generation=5,
+            fitness=0.95,
+        )
+
+        assert get_tag(atoms, "run_id") == "run_20260204_120000"
+        assert get_tag(atoms, "generation") == 5
+        assert get_tag(atoms, "fitness") == pytest.approx(0.95)
+
+    def test_get_tags(self):
+        atoms = Atoms("Pt3")
+        set_tags(atoms, run_id="test")
+
+        all_meta = get_tags(atoms)
+        assert "run_id" in all_meta
+
+    def test_set_tags_merges_keys(self):
+        atoms = Atoms("Pt3")
+        set_tags(atoms, run_id="test")
+        set_tags(atoms, generation=10)
+
+        assert get_tag(atoms, "generation") == 10
+        assert get_tag(atoms, "run_id") == "test"
+
+    def test_filter_by_tags(self):
+        atoms_list = []
+        for i in range(5):
+            atoms = Atoms("Pt3")
+            set_tags(atoms, run_id=f"run_{i % 2}")
+            atoms_list.append(atoms)
+
+        filtered = filter_by_tags(atoms_list, run_id="run_0")
+        assert len(filtered) == 3
+
+
+def test_set_tags_emits_trace_per_call(caplog):
+    """Each set_tags call emits a TRACE record (no per-generation debug cache)."""
+    logging.getLogger().setLevel(TRACE)
+    caplog.set_level(TRACE)
+    caplog.clear()
+
+    a1 = Atoms("Pt", positions=[[0, 0, 0]])
+    a2 = Atoms("Pt", positions=[[0, 0, 0]])
+
+    set_tags(a1, generation=7, run_id="run_x", raw_score=-1.0)
+    set_tags(a2, generation=7, run_id="run_x", raw_score=-2.0)
+
+    trace_msgs = [
+        r
+        for r in caplog.records
+        if r.levelno == TRACE and "Set tags on atoms" in r.getMessage()
+    ]
+
+    assert len(trace_msgs) == 2

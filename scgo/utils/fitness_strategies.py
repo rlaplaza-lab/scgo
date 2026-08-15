@@ -21,13 +21,7 @@ if TYPE_CHECKING:
 
 
 class FitnessStrategy(StrEnum):
-    """Available fitness strategies for global optimization.
-
-    Attributes:
-        LOW_ENERGY: Minimize energy (find stable structures)
-        HIGH_ENERGY: Maximize energy (find metastable structures)
-        DIVERSITY: Maximize structural dissimilarity (find diverse structures)
-    """
+    """Available fitness strategies for global optimization."""
 
     LOW_ENERGY = "low_energy"
     HIGH_ENERGY = "high_energy"
@@ -41,7 +35,7 @@ def validate_fitness_strategy(strategy: str) -> None:
         strategy: Fitness strategy name to validate.
 
     Raises:
-        ValueError: If strategy is not a valid choice.
+        SCGOValidationError: If strategy is not a valid choice.
     """
     valid_strategies = [s.value for s in FitnessStrategy]
     validate_in_choices("fitness_strategy", strategy, valid_strategies)
@@ -52,11 +46,6 @@ _UNRESOLVED_FITNESS_STRATEGY_MSG = (
     "Resolve preset inheritance with prepare_algorithm_kwargs() or "
     "resolve_fitness_strategy()."
 )
-
-
-def ensure_fitness_strategy_resolved(strategy: str | None) -> str:
-    """Require a concrete fitness strategy at algorithm and orchestration boundaries."""
-    return resolve_fitness_strategy(strategy, allow_none=False)
 
 
 def resolve_fitness_strategy(

@@ -2,7 +2,8 @@
 """Pt5+OH gas-phase: GO + TS via ``run_go_ts``.
 
 ``system_type="gas_cluster_adsorbate"``: core-only ``COMPOSITION`` plus one
-``adsorbates`` ASE ``Atoms`` fragment.
+``adsorbates`` ASE ``Atoms`` fragment. Pass ``system_type`` / ``adsorbates`` on
+the ``run_go_ts`` call.
 
 Initialization places OH on convex-hull sites of the Pt core (ranked by steric
 deficit). The GA preserves intra-fragment bonds via tag-rigid operators; crossover
@@ -13,8 +14,13 @@ splices the core only. Optional tuning in ``go_params``:
 - ``freeze_adsorbate_internal_geometry=True`` — strict Kabsch restore (this example
   enables it; default is ``False`` and still keeps fragments rigid as units)
 
+Params come from the reduced-budget (~25% of production)
+:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
+:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
+production calculator and NEB physics but shrink the GA and NEB step budgets.
+
 TS: adsorbate presets supply climb, spring ``0.5``, shared ``neb_fmax=0.20``,
-7 images, ``neb_steps=4000``, parallel NEB, ``max_endpoint_mismatch=1.25`` Å,
+7 images, parallel NEB, ``max_endpoint_mismatch=1.25`` Å,
 ``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
 interior maxima). This example only tightens ``max_pairs``.
 
@@ -30,7 +36,11 @@ from pathlib import Path
 
 from ase import Atoms
 
-from scgo import get_torchsim_ga_params, get_ts_search_params, run_go_ts
+from scgo import (
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
+    run_go_ts,
+)
 
 COMPOSITION = "Pt5"
 SEED = 42
@@ -46,10 +56,10 @@ def _resolve_output_stem() -> str:
     )
 
 
-NITER = 8
-POPULATION_SIZE = 40
-# More pairs than surface-adsorbate smoke; gas OH hops need a wider IDPP pool.
-MAX_PAIRS = 12
+# GA/NEB budgets come from the low-effort presets. More pairs than the
+# surface-adsorbate example: gas OH hops need a wider IDPP pool and the cell is
+# small, so each band is cheap.
+MAX_PAIRS = 6
 ADSORBATES = Atoms(
     symbols=["O", "H"],
     positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]],
@@ -57,20 +67,21 @@ ADSORBATES = Atoms(
 
 
 def _build_go_params() -> dict:
-    go_params = get_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
+    go_params = get_low_effort_torchsim_ga_params(system_type=SYSTEM_TYPE, seed=SEED)
     go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
-        niter=NITER,
-        population_size=POPULATION_SIZE,
         write_timing_json=True,
         detailed_timing=True,
     )
+    go_params[
+        "n_jobs"
+    ] = -2  # one switch parallelizes population init, offspring, and validation
     go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 
 
 def _build_ts_params() -> dict:
-    ts_params = get_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
+    ts_params = get_low_effort_ts_search_params(system_type=SYSTEM_TYPE, seed=SEED)
     ts_params["max_pairs"] = MAX_PAIRS
     ts_params["connectivity_factor"] = 1.8
     ts_params["write_timing_json"] = True

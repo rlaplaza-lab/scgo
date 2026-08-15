@@ -16,6 +16,8 @@ from scgo.utils.comparators import (
 )
 from scgo.utils.logging import get_logger
 
+logger = get_logger(__name__)
+
 
 class DiversityScorer:
     """Efficient scorer for diversity-based fitness calculation.
@@ -55,7 +57,9 @@ class DiversityScorer:
             structures: List of Atoms objects to convert.
 
         Returns:
-            (N_refs, descriptor_length) array or None if empty.
+            (N_refs, descriptor_length) array, or None if the input is empty or
+            the descriptors are ragged (inhomogeneous lengths). Ragged input is
+            never handed to ``np.array``, which would raise ``ValueError``.
         """
         if not structures:
             return None
@@ -64,11 +68,12 @@ class DiversityScorer:
 
         lengths = [len(d) for d in descriptors]
         if len(set(lengths)) > 1:
-            logger = get_logger(__name__)
             logger.warning(
-                f"Inconsistent descriptor lengths: {set(lengths)}. "
-                f"May indicate different compositions."
+                f"Inconsistent descriptor lengths: {sorted(set(lengths))}. "
+                f"May indicate different compositions; skipping vectorized "
+                f"descriptor matrix and falling back to pairwise scoring"
             )
+            return None
 
         return np.array(descriptors)
 
@@ -111,16 +116,19 @@ class DiversityScorer:
             Average dissimilarity (higher = more diverse). Returns 0.0 if no references.
         """
         if self._ref_descriptors is None or len(self._ref_descriptors) == 0:
+            if self.reference_structures:
+                # No usable descriptor matrix (e.g. ragged references): score
+                # pairwise instead of failing.
+                return self._score_pairwise(atoms)
             return 0.0
 
         candidate_desc = self._atoms_to_descriptor(atoms)
 
         if len(candidate_desc) != self._ref_descriptors.shape[1]:
-            logger = get_logger(__name__)
             logger.warning(
                 f"Descriptor length mismatch: candidate {len(candidate_desc)} vs "
                 f"references {self._ref_descriptors.shape[1]}. "
-                f"May indicate different compositions."
+                f"May indicate different compositions"
             )
             return self._score_pairwise(atoms)
 
@@ -148,12 +156,17 @@ class DiversityScorer:
         for ref in self.reference_structures:
             try:
                 cum_diff, max_diff = self.comparator.get_differences(atoms, ref)
-                dissimilarities.append(cum_diff + 0.5 * max_diff)
             except (ValueError, RuntimeError, SCGOValidationError) as exc:
                 get_logger(__name__).debug(
                     "Skipping comparator pair in diversity fallback: %s", exc
                 )
                 continue
+            dissimilarity = cum_diff + 0.5 * max_diff
+            if not np.isfinite(dissimilarity):
+                # Different composition (comparator reports an infinite
+                # difference); it carries no usable diversity information.
+                continue
+            dissimilarities.append(dissimilarity)
 
         if not dissimilarities:
             return 0.0
@@ -166,15 +179,16 @@ class DiversityScorer:
         new_desc = self._atoms_to_descriptor(atoms)
 
         if self._ref_descriptors is None:
-            self._ref_descriptors = np.array([new_desc])
+            # Either the reference set was empty or its descriptors were ragged;
+            # recompute (which returns None again if still ragged).
+            self._ref_descriptors = self._compute_descriptors(self.reference_structures)
         else:
             # Verify length matches
             if len(new_desc) != self._ref_descriptors.shape[1]:
-                logger = get_logger(__name__)
                 logger.warning(
                     f"New reference descriptor length {len(new_desc)} doesn't match "
                     f"existing {self._ref_descriptors.shape[1]}. "
-                    f"Recomputing all descriptors."
+                    f"Recomputing all descriptors"
                 )
                 # Recompute all descriptors
                 self._ref_descriptors = self._compute_descriptors(

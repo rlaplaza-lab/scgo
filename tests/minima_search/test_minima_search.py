@@ -14,8 +14,9 @@ from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import set_tags
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.minima_search import run_trials, scgo
+from scgo.system_types import AdsorbateDefinition
 from scgo.utils.helpers import ensure_directory_exists
-from tests.test_utils import create_test_atoms, setup_test_atoms
+from tests.helpers import create_test_atoms, setup_test_atoms
 
 
 class TestRequireCalculator:
@@ -132,7 +133,7 @@ class TestScgoFunction:
             return []
 
         monkeypatch.setattr(main_mod, "bh_go", _fake_bh_go)
-        monkeypatch.setitem(main_mod._ALGORITHM_REGISTRY["bh"], "function", _fake_bh_go)
+        monkeypatch.setitem(main_mod._ALGORITHM_REGISTRY, "bh", _fake_bh_go)
 
         results = scgo(
             composition=["Pt", "O", "H"],
@@ -142,10 +143,10 @@ class TestScgoFunction:
                 "niter_local_relaxation": 1,
                 "system_type": "surface_cluster_adsorbate",
                 "surface_config": surface_config,
-                "adsorbate_definition": {
-                    "core_symbols": ["Pt"],
-                    "adsorbate_symbols": ["O", "H"],
-                },
+                "adsorbate_definition": AdsorbateDefinition(
+                    core_symbols=["Pt"],
+                    adsorbate_symbols=["O", "H"],
+                ),
                 "adsorbate_fragment_template": Atoms(
                     symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]
                 ),
@@ -169,12 +170,13 @@ class TestScgoFunction:
             return []
 
         monkeypatch.setattr(main_mod, "bh_go", _fake_bh_go)
-        monkeypatch.setitem(main_mod._ALGORITHM_REGISTRY["bh"], "function", _fake_bh_go)
+        monkeypatch.setitem(main_mod._ALGORITHM_REGISTRY, "bh", _fake_bh_go)
 
-        ads_def = {
-            "core_symbols": ["Pt", "Pt"],
-            "adsorbate_symbols": ["O"],
-        }
+        ads_def = AdsorbateDefinition(
+            core_symbols=["Pt", "Pt"],
+            adsorbate_symbols=["O"],
+            adsorbate_fragment_lengths=[1],
+        )
         frag = Atoms(symbols=["O"], positions=[[0.0, 0.0, 0.0]])
 
         results = scgo(
@@ -214,10 +216,11 @@ class TestScgoFunction:
                 "niter": 1,
                 "population_size": 2,
                 "system_type": "gas_cluster_adsorbate",
-                "adsorbate_definition": {
-                    "core_symbols": [],
-                    "adsorbate_symbols": ["O", "H"],
-                },
+                "adsorbate_definition": AdsorbateDefinition(
+                    core_symbols=[],
+                    adsorbate_symbols=["O", "H"],
+                    adsorbate_fragment_lengths=[2],
+                ),
                 "adsorbate_fragment_template": Atoms(
                     symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]
                 ),
@@ -550,10 +553,11 @@ class TestRunTrialsSurfaceAlignment:
             main_mod._resolve_n_core_mobile_for_alignment(
                 bare,
                 {
-                    "adsorbate_definition": {
-                        "core_symbols": ["Pt", "Pt"],
-                        "adsorbate_symbols": ["O", "H"],
-                    }
+                    "adsorbate_definition": AdsorbateDefinition(
+                        core_symbols=["Pt", "Pt"],
+                        adsorbate_symbols=["O", "H"],
+                        adsorbate_fragment_lengths=[2],
+                    )
                 },
             )
             == 2
@@ -890,3 +894,184 @@ def test_run_trials_passes_hessian_params_to_is_true_minimum(
     assert captured.get("check_hessian") is False
     assert captured.get("fmax_threshold") == 0.02
     assert captured.get("imag_freq_threshold") == 25.0
+
+
+def test_run_trials_dedupe_uses_search_mobile_count(tmp_path, monkeypatch, rng):
+    """Dedupe n_top must come from search_mobile_count when supplied.
+
+    For slab search the composition (full slab) is large while the mobile
+    region is small/empty; using ``len(composition)`` would collapse distinct
+    mobile-top minima. ``search_mobile_count`` carries the true trailing-mobile
+    atom count the comparator compares on.
+    """
+    from ase.calculators.emt import EMT
+
+    captured: dict[str, object] = {}
+
+    def _fake_scgo(*_args, **_kwargs):
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
+        atoms.calc = EMT()
+        energy = float(atoms.get_potential_energy())
+        return [(energy, atoms)]
+
+    monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+
+    def _spy_filter(candidates, *, n_top, **kwargs):
+        captured["n_top"] = n_top
+        return candidates
+
+    monkeypatch.setattr(main_mod, "filter_unique_minima", _spy_filter)
+
+    outdir = str(tmp_path / "searches")
+    run_trials(
+        composition=["Pt", "Pt"],
+        global_optimizer="bh",
+        global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
+        output_dir=outdir,
+        calculator_for_global_optimization=EMT(),
+        validate_with_hessian=False,
+        rng=rng,
+        clean=True,
+        search_mobile_count=3,
+    )
+
+    assert captured["n_top"] == 3
+
+
+def test_run_trials_dedupe_falls_back_to_composition(tmp_path, monkeypatch, rng):
+    """Without search_mobile_count the dedupe n_top stays len(composition)."""
+    from ase.calculators.emt import EMT
+
+    captured: dict[str, object] = {}
+
+    def _fake_scgo(*_args, **_kwargs):
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
+        atoms.calc = EMT()
+        energy = float(atoms.get_potential_energy())
+        return [(energy, atoms)]
+
+    monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+
+    def _spy_filter(candidates, *, n_top, **kwargs):
+        captured["n_top"] = n_top
+        return candidates
+
+    monkeypatch.setattr(main_mod, "filter_unique_minima", _spy_filter)
+
+    outdir = str(tmp_path / "searches")
+    run_trials(
+        composition=["Pt", "Pt", "Pt"],
+        global_optimizer="bh",
+        global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
+        output_dir=outdir,
+        calculator_for_global_optimization=EMT(),
+        validate_with_hessian=False,
+        rng=rng,
+        clean=True,
+    )
+
+    assert captured["n_top"] == 3
+
+
+class TestValidateCandidatesParallel:
+    """Tests for 4.3: cheap, robust parallel-validation startup.
+
+    The deep-copy picklability probe was removed; instead, parallel startup
+    failures (e.g. a non-picklable calculator) are caught and downgraded to a
+    clean sequential fallback rather than crashing.
+    """
+
+    def _payloads(self, n=4):
+        return [(float(i), Atoms("Pt2"), 0.1, False, 0.0) for i in range(n)]
+
+    def test_single_worker_skips_parallel(self, monkeypatch):
+        """With <=1 worker the helper defers to the sequential caller path."""
+        called = {"submit": False}
+
+        class _Tracked:
+            def __init__(self, *a, **k):
+                called["submit"] = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(main_mod, "ProcessPoolExecutor", _Tracked)
+        ok, minima = main_mod._validate_candidates_parallel(EMT(), self._payloads(), 1)
+        assert ok is False
+        assert minima == []
+        assert called["submit"] is False
+
+    def test_fallback_on_pickling_error(self, monkeypatch):
+        """A non-picklable calculator must fall back, not crash."""
+        import pickle
+
+        class _Boom:
+            def __init__(self, *a, **k):
+                raise pickle.PicklingError("calculator is not picklable")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(main_mod, "ProcessPoolExecutor", _Boom)
+        ok, minima = main_mod._validate_candidates_parallel(EMT(), self._payloads(), 2)
+        assert ok is False
+        assert minima == []
+
+    def test_fallback_on_broken_process_pool(self, monkeypatch):
+        """A broken worker pool at startup must fall back, not crash."""
+
+        class _Boom:
+            def __init__(self, *a, **k):
+                from concurrent.futures.process import BrokenProcessPool
+
+                raise BrokenProcessPool("worker died")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(main_mod, "ProcessPoolExecutor", _Boom)
+        ok, minima = main_mod._validate_candidates_parallel(EMT(), self._payloads(), 2)
+        assert ok is False
+        assert minima == []
+
+    def test_parallel_success(self, monkeypatch):
+        """A working executor returns validated minima with parallel_ok=True."""
+
+        class _FakeFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class _SyncExecutor:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, payload):
+                return _FakeFuture(fn(payload))
+
+        monkeypatch.setattr(main_mod, "ProcessPoolExecutor", _SyncExecutor)
+        monkeypatch.setattr(
+            main_mod, "_validate_minimum_worker", lambda p: (p[0], p[1])
+        )
+
+        ok, minima = main_mod._validate_candidates_parallel(EMT(), self._payloads(), 2)
+        assert ok is True
+        assert len(minima) == 4
+        assert {e for e, _ in minima} == {0.0, 1.0, 2.0, 3.0}

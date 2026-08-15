@@ -5,14 +5,12 @@ This module is the implementation layer behind ``scgo.runner_api`` TS helpers.
 
 from __future__ import annotations
 
-import contextlib
-import os
-import sqlite3
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 from scgo.algorithms.ga_common import resolve_neb_mobile_dims
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
@@ -27,15 +25,13 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
     surface_slab_constraint_summary,
 )
-from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
     SystemType,
-    _adsorbate_fragment_lengths_from_definition,
-    _n_core_mobile_from_adsorbate_definition,
+    as_adsorbate_definition,
     get_system_policy,
     resolve_connectivity_factor,
     resolve_neb_mic,
-    resolve_structure_mic,
+    validate_minimum_structure,
     validate_system_type_settings,
 )
 from scgo.utils.comparators import get_shared_mobile_atom_indices
@@ -44,9 +40,12 @@ from scgo.utils.helpers import (
     copy_atoms,
     filter_unique_minima,
     get_cluster_formula,
-    validate_pair_id,
 )
-from scgo.utils.logging import configure_logging, get_logger
+from scgo.utils.logging import (
+    configure_logging,
+    get_logger,
+    log_info_v,
+)
 from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import ensure_rng
@@ -62,11 +61,10 @@ from scgo.utils.ts_runner_kwargs import NebRunConfig
 from scgo.utils.validation import validate_composition
 
 from .neb_endpoints import prepare_neb_endpoints
-from .parallel_neb import run_parallel_neb_search
+from .parallel_neb import _evaluate_bands_in_chunks, run_parallel_neb_search
 from .transition_state import (
     _detach_calc,
     attach_minima_traceability,
-    evaluate_neb_image_energies,
     find_transition_state,
     idpp_band_optimization_priority,
     interpolate_path,
@@ -83,7 +81,6 @@ from .transition_state_io import (
     write_final_unique_ts,
 )
 from .ts_network import (
-    add_ts_to_database,
     save_ts_network_metadata,
     tag_unique_ts_in_databases,
 )
@@ -91,7 +88,6 @@ from .ts_network import (
 __all__ = [
     "run_transition_state_search",
     "run_transition_state_campaign",
-    "integrate_ts_to_database",
 ]
 
 
@@ -116,14 +112,27 @@ def _prioritize_adsorbate_pairs_by_idpp(
     neb_surface_lattice_rotation: bool,
     neb_surface_max_lattice_shift: int,
     max_endpoint_mismatch: float,
+    neb_prescreen_clash_distance: float,
+    parallel_neb_max_batch_atoms: int | None,
+    parallel_neb_max_bands: int | None,
     logger: Any,
 ) -> list[tuple[int, int]]:
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
 
-    Endpoint-max IDPP paths are retained only when too few robust-interior
-    candidates exist in the oversampled pool (CI-NEB can still salvage some).
+    Endpoint-max IDPP paths are retained only when the oversampled pool holds no
+    robust-interior candidate at all (CI-NEB can still salvage some).
+
+    The per-pair image construction and geometry-only path validation run on the
+    CPU (no GPU). All energy evaluations are then fused into per-band batches and
+    evaluated through :func:`_evaluate_bands_in_chunks`, so the oversampled
+    screen respects the same atom budget / band cap and CUDA-OOM retry used by
+    the main pre-screen (a single unbounded ``relax_batch`` over every candidate
+    image OOM'd the 16 GB T4). ``relaxer`` must be a
+    :class:`TorchSimBatchRelaxer`.
     """
-    ranked: list[tuple[tuple[int, float, float], int, int]] = []
+    # CPU-only stage: build images and validate geometry. Pairs that fail CPU
+    # validation are dropped here so the batched energy eval never sees them.
+    valid_pairs: list[tuple[int, int, list[Any]]] = []
     for i, j in pairs:
         try:
             images = interpolate_path(
@@ -149,8 +158,45 @@ def _prioritize_adsorbate_pairs_by_idpp(
                 n_slab=n_slab,
                 mic=neb_interpolation_mic,
                 max_endpoint_mismatch=max_endpoint_mismatch,
+                clash_distance=neb_prescreen_clash_distance,
             )
-            energies = evaluate_neb_image_energies(images, relaxer)
+        except (SCGOValidationError, ValueError, RuntimeError) as exc:
+            logger.debug(
+                "Adsorbate pair %s_%s dropped during IDPP geometry screen: %s",
+                i,
+                j,
+                exc,
+            )
+            continue
+        valid_pairs.append((i, j, images))
+
+    if not valid_pairs:
+        logger.info(
+            "Adsorbate IDPP priority screen: 0/%d pairs passed geometry screening",
+            len(pairs),
+        )
+        return []
+
+    # Per-band energy evaluation through the atom-budgeted, OOM-retrying chunker
+    # (no single unbounded fused launch, which OOM'd the 16 GB T4). Energy lists
+    # are returned per band, in input order.
+    bands = [images for _i, _j, images in valid_pairs]
+    band_cap = (
+        int(parallel_neb_max_bands)
+        if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
+        else None
+    )
+    band_energy_lists = _evaluate_bands_in_chunks(
+        bands,
+        relaxer,
+        atom_budget=parallel_neb_max_batch_atoms,
+        band_cap=band_cap,
+    )
+
+    # Re-associate per-band energies with each pair.
+    ranked: list[tuple[tuple[int, float, float], int, int]] = []
+    for (i, j, _images), energies in zip(valid_pairs, band_energy_lists, strict=True):
+        try:
             validate_initial_neb_energy_profile(
                 energies,
                 reference_reactant_energy=float(minima[i][0]),
@@ -158,7 +204,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
             )
         except (SCGOValidationError, ValueError, RuntimeError) as exc:
             logger.debug(
-                "Adsorbate pair %s_%s dropped during IDPP priority screen: %s",
+                "Adsorbate pair %s_%s dropped during IDPP energy screen: %s",
                 i,
                 j,
                 exc,
@@ -200,7 +246,11 @@ def _run_serial_neb_search(
     verbosity: int,
     write_timing_json: bool = False,
 ) -> list[dict[str, Any]]:
-    """Run NEBs sequentially via :func:`find_transition_state` (one calc per pair)."""
+    """Run NEBs sequentially via :func:`find_transition_state`.
+
+    Without TorchSim a fresh ASE calculator is built for each pair; the TorchSim
+    path instead shares one ``TorchSimBatchRelaxer`` across all pairs.
+    """
     logger = get_logger(__name__)
     ts_results: list[dict[str, Any]] = []
     torchsim_params = neb_cfg.torchsim_params or {}
@@ -227,8 +277,14 @@ def _run_serial_neb_search(
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
 
-        if verbosity >= 1:
-            logger.info("[%d/%d] Finding TS for pair %s", idx, len(pairs), pair_id)
+        log_info_v(
+            logger,
+            "[%d/%d] Finding TS for pair %s",
+            idx,
+            len(pairs),
+            pair_id,
+            verbosity=verbosity,
+        )
 
         try:
             react_ep, prod_ep = prepare_neb_endpoints(atoms_i, atoms_j, neb_cfg)
@@ -272,30 +328,11 @@ def _run_serial_neb_search(
                 output_dir=str(pair_dir),
                 pair_id=pair_id,
                 rng=rng,
-                n_images=neb_cfg.neb_n_images,
-                spring_constant=neb_cfg.neb_spring_constant,
-                fmax=neb_cfg.neb_fmax,
-                neb_steps=neb_steps,
-                climb=neb_cfg.neb_climb,
-                interpolation_method=neb_cfg.neb_interpolation_method,
-                align_endpoints=neb_cfg.neb_align_endpoints,
-                perturb_sigma=neb_cfg.neb_perturb_sigma,
-                neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
-                neb_tangent_method=neb_cfg.neb_tangent_method,
-                system_type=system_type,
                 use_torchsim=use_torchsim,
-                torchsim_params=torchsim_params,
                 relaxer=shared_relaxer,
                 verbosity=verbosity,
                 write_timing_json=write_timing_json,
-                n_slab=neb_cfg.n_slab,
-                n_core_mobile=neb_cfg.n_core_mobile,
-                n_adsorbate_mobile=neb_cfg.n_adsorbate_mobile,
-                adsorbate_fragment_lengths=neb_cfg.adsorbate_fragment_lengths,
-                max_endpoint_mismatch=neb_cfg.max_endpoint_mismatch,
-                neb_surface_cell_remap=neb_cfg.neb_surface_cell_remap,
-                neb_surface_lattice_rotation=neb_cfg.neb_surface_lattice_rotation,
-                neb_surface_max_lattice_shift=neb_cfg.neb_surface_max_lattice_shift,
+                neb_cfg=neb_cfg,
             )
         except (RuntimeError, ValueError, SCGOValidationError) as e:
             logger.error(
@@ -351,11 +388,12 @@ def _warn_on_surface_mobile_indices(
     system_type: SystemType,
     n_slab: int = 0,
 ) -> None:
-    """Log diagnostics when surface minima lack a usable mobile partition.
+    r"""Log diagnostics when surface minima lack a usable mobile partition.
 
     When ``n_slab > 0`` (from ``surface_config``), pair comparison uses the slab
     prefix from the live surface template, not stored ``n_slab_atoms`` metadata.
-    Warnings about \"all atoms mobile\" apply only when that partition is unavailable.
+    Warnings about ``all atoms mobile`` apply only when that partition is
+    unavailable.
     """
     logger = get_logger(__name__)
     policy = get_system_policy(system_type)
@@ -373,7 +411,7 @@ def _warn_on_surface_mobile_indices(
             except (ValueError, SCGOValidationError):
                 logger.warning(
                     "Surface TS pair (%d,%d) has no shared mobile atoms for comparison; "
-                    "pair similarity may be skipped.",
+                    "pair similarity may be skipped",
                     i,
                     j,
                 )
@@ -382,7 +420,7 @@ def _warn_on_surface_mobile_indices(
                 logger.warning(
                     "Surface TS pair (%d,%d) compares all atoms as mobile; pass "
                     "surface_config so TS can use len(slab) as n_slab, or ensure "
-                    "minima carry FixAtoms / n_slab_atoms metadata.",
+                    "minima carry FixAtoms / n_slab_atoms metadata",
                     i,
                     j,
                 )
@@ -395,9 +433,13 @@ def _apply_surface_ts_geometry_gate(
     system_type: SystemType,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
+    cluster_adsorbate_config: Any | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
+    binding_penetration_tolerance_a: float = 0.1,
+    layer_cluster_threshold_ang: float = 0.4,
+    n_slab_deposit: int | None = None,
 ) -> None:
     """Reject successful TS results that violate supported-deposit geometry."""
     if surface_config is None:
@@ -407,9 +449,11 @@ def _apply_surface_ts_geometry_gate(
         return
 
     n_slab = len(surface_config.slab)
-    use_mic = resolve_structure_mic(system_type, surface_config)
-    axis = int(surface_config.surface_normal_axis)
-    cf = resolve_connectivity_factor(connectivity_factor, surface_config=surface_config)
+    cf = resolve_connectivity_factor(
+        connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        surface_config=surface_config,
+    )
     checks = (
         ("reactant", "reactant_structure"),
         ("product", "product_structure"),
@@ -425,26 +469,25 @@ def _apply_surface_ts_geometry_gate(
                 result["neb_converged"] = False
                 result["error"] = f"Missing {label} structure for surface TS validation"
                 break
-            ok, msg = validate_supported_cluster_deposit(
-                atoms,
-                n_slab,
-                surface_normal_axis=axis,
-                use_mic=use_mic,
-                connectivity_factor=cf,
-                n_core_mobile=_n_core_mobile_from_adsorbate_definition(
-                    adsorbate_definition
-                ),
-                adsorbate_fragment_lengths=_adsorbate_fragment_lengths_from_definition(
-                    adsorbate_definition
-                ),
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            )
-            if not ok:
+            try:
+                validate_minimum_structure(
+                    atoms,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=cf,
+                    cluster_adsorbate_config=cluster_adsorbate_config,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    binding_penetration_tolerance_a=binding_penetration_tolerance_a,
+                    n_slab_deposit=n_slab_deposit,
+                )
+            except SCGOValidationError as exc:
                 result["status"] = "failed"
                 result["neb_converged"] = False
-                result["error"] = f"{label} failed surface geometry validation: {msg}"
+                result["error"] = f"{label} failed surface geometry validation: {exc}"
                 break
 
 
@@ -474,9 +517,16 @@ def run_transition_state_search(
     neb_surface_max_lattice_shift: int = 1,
     neb_tangent_method: str = DEFAULT_NEB_TANGENT_METHOD,
     max_endpoint_mismatch: float | None = None,
+    neb_prescreen_clash_distance: float | None = None,
+    min_saddle_prominence: float | None = None,
+    neb_max_spurious_barrier: float | None = None,
+    binding_penetration_tolerance_a: float | None = None,
+    layer_cluster_threshold_ang: float | None = None,
+    neb_interpolation_bond_tolerance_a: float | None = None,
     use_torchsim: bool = False,
     use_parallel_neb: bool | None = None,
     parallel_neb_max_bands: int | None = None,
+    parallel_neb_max_batch_atoms: int | None = None,
     torchsim_params: dict | None = None,
     # Post-processing controls
     dedupe_minima: bool = True,
@@ -488,6 +538,7 @@ def run_transition_state_search(
     write_timing_json: bool = False,
     adsorbate_definition: Any | None = None,
     connectivity_factor: float | None = None,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
@@ -496,7 +547,7 @@ def run_transition_state_search(
 
     Loads minima from previous global optimization searches, pairs nearby structures,
     and finds transition states connecting them using nudged elastic band (NEB) with
-    geodesic interpolation for initial path generation.
+    IDPP (default) or linear interpolation for initial path generation.
 
     Prefer :func:`scgo.param_presets.get_ts_search_params` (or ``run_ts_search`` /
     ``run_go_ts``) for production defaults: shared ``neb_fmax=0.20`` and parallel
@@ -506,7 +557,7 @@ def run_transition_state_search(
     TorchSim is enabled (``None`` → on with TorchSim, off without). When
     ``neb_n_images``, ``neb_climb``, or ``energy_gap_threshold`` are omitted
     (``None``), values are taken from :func:`~scgo.param_presets.get_ts_defaults`
-    and the same adsorbate-aware gap rule as ``get_ts_search_params``.
+    and the same adsorbate-aware gap rule as :func:`~scgo.get_ts_search_params`.
 
     Args:
         composition: List of atomic symbols for the mobile region. For high-level
@@ -534,7 +585,7 @@ def run_transition_state_search(
         similarity_pair_cor_max: Maximum single distance difference tolerance for similarity.
         neb_n_images: Number of intermediate NEB images. ``None`` selects the
             system-aware preset (``5`` bare / ``7`` adsorbate).
-        neb_spring_constant: Spring constant for NEB band (eV/Ų). Default 0.1.
+        neb_spring_constant: Spring constant for NEB band (eV/Å²). Default 0.1.
         neb_fmax: Maximum force convergence for NEB (eV/Å). Default 0.20
             (shared across system types; same as presets).
         neb_steps: Maximum NEB optimization steps. Default 'auto' (resolved with auto_niter_ts).
@@ -546,15 +597,21 @@ def run_transition_state_search(
         neb_tangent_method: ASE NEB tangent method.
         max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``;
             when set (adsorbate presets), also enables pre-NEB path/energy checks.
-        use_torchsim: Use TorchSim for GPU-efficient batched force evaluation (MACE/UMA only).
+        use_torchsim: Use TorchSim for GPU-efficient batched force evaluation
+            (MACE/UMA/UPET only).
             Low-level default ``False``; presets set ``True``.
         use_parallel_neb: Batch multiple NEB bands (requires TorchSim). Default
             ``None`` resolves to ``True`` when ``use_torchsim=True`` (same as
             presets) and ``False`` otherwise. Explicit ``True`` without TorchSim
             raises.
-        parallel_neb_max_bands: Cap concurrent bands inside parallel NEB (``None`` =
-            all selected pairs). Surface presets use ``1`` to avoid GPU OOM on
-            large slab cells while keeping the parallel NEB path.
+        parallel_neb_max_bands: Cap concurrent bands inside parallel NEB
+            (``None`` = no band cap). Applied together with
+            ``parallel_neb_max_batch_atoms``. Surface presets use ``4`` to avoid
+            GPU OOM on large slab cells while keeping the parallel NEB path.
+        parallel_neb_max_batch_atoms: Atom budget (sum of ``n_images * n_atoms``)
+            for one fused parallel-NEB force batch. Applied together with
+            ``parallel_neb_max_bands``; ``None`` disables the atom budget.
+            Presets use ``6000`` (gas) / ``4000`` (surface).
         torchsim_params: Optional parameters for TorchSimBatchRelaxer when use_torchsim=True.
         surface_config: When set, the same :class:`scgo.surface.config.SurfaceSystemConfig`
             used for GA. Endpoint structures are copied per pair and slab
@@ -563,17 +620,22 @@ def run_transition_state_search(
             when ``neb_align_endpoints`` is True.
 
     Returns:
-        List of result dictionaries from :func:`find_transition_state`.
+        List of per-pair TS result dictionaries (one entry per selected pair,
+        including skipped and failed pairs).
 
     Raises:
-        ValueError: If composition is empty or invalid, or calculator is unavailable.
+        SCGOValidationError: If the composition is invalid, ``params`` is missing
+            or lacks ``"calculator"``, the calculator class cannot be located, or
+            ``use_parallel_neb=True`` is requested without TorchSim.
     """
     configure_logging(verbosity)
     logger = get_logger(__name__)
     cleanup_torch_cuda(logger=logger)
 
     connectivity_factor = resolve_connectivity_factor(
-        connectivity_factor, surface_config=surface_config
+        connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        surface_config=surface_config,
     )
 
     system_policy = get_system_policy(system_type)
@@ -582,6 +644,24 @@ def run_transition_state_search(
         neb_n_images = int(ts_defaults["neb_n_images"])
     if neb_climb is None:
         neb_climb = bool(ts_defaults["neb_climb"])
+    if neb_prescreen_clash_distance is None:
+        neb_prescreen_clash_distance = float(
+            ts_defaults["neb_prescreen_clash_distance"]
+        )
+    if min_saddle_prominence is None:
+        min_saddle_prominence = float(ts_defaults["min_saddle_prominence"])
+    if neb_max_spurious_barrier is None:
+        neb_max_spurious_barrier = float(ts_defaults["neb_max_spurious_barrier"])
+    if binding_penetration_tolerance_a is None:
+        binding_penetration_tolerance_a = float(
+            ts_defaults["binding_penetration_tolerance_a"]
+        )
+    if layer_cluster_threshold_ang is None:
+        layer_cluster_threshold_ang = float(ts_defaults["layer_cluster_threshold_ang"])
+    if neb_interpolation_bond_tolerance_a is None:
+        neb_interpolation_bond_tolerance_a = float(
+            ts_defaults["neb_interpolation_bond_tolerance_a"]
+        )
     if energy_gap_threshold is None:
         energy_gap_threshold = 0.75 if system_policy.has_adsorbate else 2.0
     validate_composition(
@@ -600,8 +680,6 @@ def run_transition_state_search(
         )
     if system_policy.neb_force_mic:
         neb_interpolation_mic = True
-    if system_policy.neb_disable_alignment:
-        neb_align_endpoints = False
     if not system_policy.uses_surface:
         neb_surface_cell_remap = False
         neb_surface_lattice_rotation = False
@@ -617,6 +695,7 @@ def run_transition_state_search(
         if surface_config is not None and system_policy.uses_surface
         else 0
     )
+    slab_search_partition = None
     if (
         system_policy.slab_is_search_target
         and surface_config is not None
@@ -624,10 +703,12 @@ def run_transition_state_search(
     ):
         from scgo.surface.partition import prepare_slab_search_surface_config
 
-        surface_config, partition = prepare_slab_search_surface_config(surface_config)
+        surface_config, slab_search_partition = prepare_slab_search_surface_config(
+            surface_config
+        )
         # Match GA: fixed bottom layers are the NEB ``n_slab`` prefix; top
         # layers (+ adsorbates) remain mobile.
-        neb_n_slab = int(partition.n_fixed)
+        neb_n_slab = int(slab_search_partition.n_fixed)
     neb_n_core_m, neb_n_ads_m, neb_ads_frag_lengths = resolve_neb_mobile_dims(
         system_type,
         adsorbate_composition,
@@ -642,13 +723,11 @@ def run_transition_state_search(
     path_key_formula = resolve_run_path_key(
         adsorbate_composition if system_policy.uses_surface else composition,
         system_type=system_type,
-        adsorbate_definition=(
-            adsorbate_definition if isinstance(adsorbate_definition, dict) else None
-        ),
+        adsorbate_definition=adsorbate_definition,
         surface_config=surface_config if system_policy.uses_surface else None,
     )
     formula = get_cluster_formula(composition)
-    campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
+    _campaign_root, minima_dir, ts_results_root = resolve_ts_campaign_paths(
         output_dir,
         path_key_formula,
         searches_dir=searches_dir,
@@ -678,8 +757,9 @@ def run_transition_state_search(
         logger.error("Failed to locate calculator class %s: %s", calculator_name, e)
         raise SCGOValidationError(f"Cannot initialize calculator: {e}") from e
 
-    if verbosity >= 1:
-        logger.info("Loading minima for composition %s", formula)
+    log_info_v(
+        logger, "Loading minima for composition %s", formula, verbosity=verbosity
+    )
 
     minima_by_formula = load_minima_by_composition(
         str(minima_dir), composition, prefer_final_unique=True
@@ -691,6 +771,13 @@ def run_transition_state_search(
     torchsim_params = {} if torchsim_params is None else dict(torchsim_params)
     if torchsim_params.get("max_steps") in ("auto", None):
         torchsim_params["max_steps"] = auto_niter_ts(composition)
+    # Preset default: TorchSim float32 for the TS path (much faster FP32/TF32
+    # GPU kernels). Callers may override torchsim_params["dtype"] before this
+    # point; only set it when unset to avoid clobbering an explicit choice.
+    if use_torchsim and "dtype" not in torchsim_params:
+        import torch
+
+        torchsim_params["dtype"] = torch.float32
 
     run_context: dict[str, Any] = {
         "system_type": system_type,
@@ -702,6 +789,7 @@ def run_transition_state_search(
         "neb_backend": "torchsim" if use_torchsim else "ase",
         "use_parallel_neb": use_parallel_neb,
         "parallel_neb_max_bands": parallel_neb_max_bands,
+        "parallel_neb_max_batch_atoms": parallel_neb_max_batch_atoms,
         "neb_climb": neb_climb,
         "neb_interpolation_method": neb_interpolation_method,
         "neb_n_images": neb_n_images,
@@ -741,8 +829,13 @@ def run_transition_state_search(
             mic=ts_dedupe_mic,
         )
         if verbosity >= 1 and len(minima) != original_count:
-            logger.info(
-                f"Deduplicated minima for {formula}: {original_count} -> {len(minima)} unique entries"
+            log_info_v(
+                logger,
+                "Deduplicated minima for %s: %d -> %d unique entries",
+                formula,
+                original_count,
+                len(minima),
+                verbosity=verbosity,
             )
 
     if len(minima) < 2:
@@ -750,16 +843,24 @@ def run_transition_state_search(
         cleanup_torch_cuda(logger=logger)
         return []
 
-    if verbosity >= 1:
-        logger.info("Found %d minima for %s", len(minima), formula)
+    log_info_v(
+        logger,
+        "Found %d minima for %s",
+        len(minima),
+        formula,
+        verbosity=verbosity,
+    )
     if verbosity >= 2 and neb_align_endpoints:
-        logger.info(
+        log_info_v(
+            logger,
             "NEB endpoint alignment enabled (align=%s, mic=%s, cell_remap=%s, "
             "lattice_rotation=%s)",
             neb_align_endpoints,
             neb_interpolation_mic,
             neb_surface_cell_remap,
             neb_surface_lattice_rotation,
+            verbosity=verbosity,
+            min_verbosity=2,
         )
     _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 
@@ -792,22 +893,46 @@ def run_transition_state_search(
         cleanup_torch_cuda(logger=logger)
         return []
 
-    if (
+    # The adsorbate IDPP priority screen needs a TorchSim relaxer, and the
+    # parallel NEB runner can reuse the same one. Build it at most once, and only
+    # when something will actually use it: the serial path builds and owns its own
+    # relaxer inside _run_serial_neb_search.
+    needs_idpp_screen = (
         bool(system_policy.has_adsorbate)
         and use_torchsim
         and max_endpoint_mismatch is not None
         and max_pairs is not None
         and int(max_pairs) > 0
         and len(pairs) > int(max_pairs)
-    ):
+    )
+    shared_relaxer = None
+    if use_torchsim and (use_parallel_neb or needs_idpp_screen):
         from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
-        screen_relaxer = TorchSimBatchRelaxer(**(torchsim_params or {}))
+        # Size the relaxer for the largest fused NEB force batch (mirrors the GO
+        # expected_max_atoms pattern) so the native autobatcher probe stays capped
+        # to the actual workload. coerce_ts_params_to_runner_kwargs normally injects
+        # these already; this covers direct callers. Native torch-sim estimation
+        # runs on the real batches, so no synthetic probe geometry is needed.
+        relaxer_params = dict(torchsim_params or {})
+        if (
+            parallel_neb_max_batch_atoms is not None
+            and int(parallel_neb_max_batch_atoms) > 0
+        ):
+            relaxer_params.setdefault(
+                "expected_max_atoms", int(parallel_neb_max_batch_atoms)
+            )
+            relaxer_params.setdefault(
+                "max_atoms_to_try", int(parallel_neb_max_batch_atoms)
+            )
+        shared_relaxer = TorchSimBatchRelaxer(**relaxer_params)
+
+    if needs_idpp_screen:
         pairs = _prioritize_adsorbate_pairs_by_idpp(
             pairs,
             minima,
             max_pairs=int(max_pairs),
-            relaxer=screen_relaxer,
+            relaxer=shared_relaxer,
             neb_n_images=neb_n_images,
             neb_interpolation_method=neb_interpolation_method,
             neb_interpolation_mic=neb_interpolation_mic,
@@ -823,9 +948,11 @@ def run_transition_state_search(
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             max_endpoint_mismatch=float(max_endpoint_mismatch),
+            neb_prescreen_clash_distance=neb_prescreen_clash_distance,
+            parallel_neb_max_batch_atoms=parallel_neb_max_batch_atoms,
+            parallel_neb_max_bands=parallel_neb_max_bands,
             logger=logger,
         )
-        del screen_relaxer
 
         if not pairs:
             logger.error(
@@ -833,8 +960,12 @@ def run_transition_state_search(
             )
             return []
 
-    if verbosity >= 1:
-        logger.info("Selected %d structure pairs for TS search", len(pairs))
+    log_info_v(
+        logger,
+        "Selected %d structure pairs for TS search",
+        len(pairs),
+        verbosity=verbosity,
+    )
 
     ts_results_root.mkdir(parents=True, exist_ok=True)
     run_id = ensure_run_id(None, verbosity=verbosity, logger=logger)
@@ -845,8 +976,9 @@ def run_transition_state_search(
         str(run_dir),
         run_id,
         record={
+            "path_key": path_key_formula,
             "composition": list(composition),
-            "formula": formula,
+            "formula": formula or path_key_formula,
             "params": run_context,
         },
     )
@@ -872,6 +1004,12 @@ def run_transition_state_search(
         n_adsorbate_mobile=neb_n_ads_m,
         adsorbate_fragment_lengths=neb_ads_frag_lengths,
         max_endpoint_mismatch=max_endpoint_mismatch,
+        neb_prescreen_clash_distance=neb_prescreen_clash_distance,
+        min_saddle_prominence=min_saddle_prominence,
+        neb_max_spurious_barrier=neb_max_spurious_barrier,
+        binding_penetration_tolerance_a=binding_penetration_tolerance_a,
+        layer_cluster_threshold_ang=layer_cluster_threshold_ang,
+        neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
         adsorbate_definition=adsorbate_definition,
         connectivity_factor=connectivity_factor,
         allow_cluster_fragmentation=allow_cluster_fragmentation,
@@ -880,10 +1018,12 @@ def run_transition_state_search(
         system_type=system_type,
         surface_config=surface_config,
         torchsim_params=torchsim_params,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        parallel_neb_max_batch_atoms=parallel_neb_max_batch_atoms,
     )
     if use_parallel_neb:
         # Always use the parallel runner when requested; surface presets pass
-        # parallel_neb_max_bands=1 so bands are chunked one-at-a-time (OOM-safe).
+        # parallel_neb_max_bands=4 so bands are chunked (OOM-safe on slabs).
         ts_results, parallel_meta = run_parallel_neb_search(
             pairs,
             minima,
@@ -891,6 +1031,7 @@ def run_transition_state_search(
             run_dir=run_dir,
             rng=rng,
             parallel_neb_max_bands=parallel_neb_max_bands,
+            relaxer=shared_relaxer,
         )
         cleanup_torch_cuda(logger=logger)
     else:
@@ -911,10 +1052,12 @@ def run_transition_state_search(
     neb_sum = float(parallel_meta.get("neb_batch_optimization_s", 0.0))
     if neb_sum <= 0.0:
         logger.debug(
-            "neb_batch_optimization_s unavailable; summing per-pair neb_optimization_s"
+            "Timing key neb_batch_optimization_s unavailable; "
+            "summing per-pair NEB timings"
         )
         neb_sum = sum_neb_seconds_from_ts_results(ts_results)
     ts_rollup: dict[str, float] = {
+        "kind": "neb",
         "total_wall_s": ts_phase_wall,
         "neb_optimization_s": neb_sum,
         "cpu_non_relax_s": max(0.0, ts_phase_wall - neb_sum),
@@ -950,9 +1093,16 @@ def run_transition_state_search(
         system_type=system_type,
         adsorbate_definition=adsorbate_definition,
         connectivity_factor=connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
         allow_cluster_fragmentation=allow_cluster_fragmentation,
         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        binding_penetration_tolerance_a=binding_penetration_tolerance_a,
+        n_slab_deposit=(
+            int(slab_search_partition.n_fixed)
+            if slab_search_partition is not None
+            else None
+        ),
     )
 
     save_transition_state_results(
@@ -971,6 +1121,7 @@ def run_transition_state_search(
         minima=minima,
         minima_base_dir=str(minima_dir),
         run_context=run_context,
+        path_key=path_key_formula,
     )
 
     if dedupe_ts or tag_ts_in_db:
@@ -990,100 +1141,20 @@ def run_transition_state_search(
         if tag_ts_in_db and unique_ts:
             tag_unique_ts_in_databases(unique_ts, minima, str(minima_dir))
 
-    if verbosity >= 1:
-        num_success = sum(1 for r in ts_results if r.get("status") == "success")
-        logger.info(
-            "TS search complete for %s: %d result(s) (%d successful).",
-            formula,
-            len(ts_results),
-            num_success,
-        )
-        logger.info("Results written to: %s", ts_results_root)
+    num_success = sum(1 for r in ts_results if r.get("status") == "success")
+    log_info_v(
+        logger,
+        "TS search complete for %s: %d result(s) (%d successful)",
+        formula,
+        len(ts_results),
+        num_success,
+        verbosity=verbosity,
+    )
+    log_info_v(logger, "Results written to: %s", ts_results_root, verbosity=verbosity)
 
     cleanup_torch_cuda(logger=logger)
 
     return ts_results
-
-
-def integrate_ts_to_database(
-    ts_results: list[dict[str, Any]],
-    minima_database_file: str,
-    verbosity: int = 1,
-) -> int:
-    """Add found transition states to the minima database.
-
-    Iterates over ``ts_results`` and calls the module-level :func:`add_ts_to_database`
-    for each successful TS. Returns the number of TS entries successfully added.
-
-    Row-level failures are logged and skipped; systemic filesystem/DB errors
-    cause an early return (or are re-raised by underlying helpers).
-    """
-    configure_logging(verbosity)
-    logger = get_logger(__name__)
-
-    if not os.path.exists(minima_database_file):
-        logger.warning("Minima database not found: %s", minima_database_file)
-        return 0
-
-    added = 0
-    for result in ts_results:
-        if result.get("status") != "success":
-            continue
-
-        try:
-            pair_id = result.get("pair_id")
-            ts_structure = result.get("transition_state")
-            ts_energy = result.get("ts_energy")
-            barrier = result.get("barrier_height")
-            if ts_structure is None or ts_energy is None or barrier is None:
-                logger.warning(
-                    "Skipping TS %s DB integration due to missing fields: structure=%s ts_energy=%s barrier=%s",
-                    pair_id,
-                    ts_structure is not None,
-                    ts_energy,
-                    barrier,
-                )
-                continue
-
-            minima_idx_1, minima_idx_2 = -1, -1
-            mid = result.get("minima_indices")
-            if isinstance(mid, (list, tuple)) and len(mid) == 2:
-                minima_idx_1, minima_idx_2 = int(mid[0]), int(mid[1])
-            elif pair_id is not None:
-                with contextlib.suppress(ValueError, TypeError):
-                    minima_idx_1, minima_idx_2 = validate_pair_id(str(pair_id))
-
-            success = add_ts_to_database(
-                ts_structure=ts_structure,
-                ts_energy=float(ts_energy),
-                minima_idx_1=int(minima_idx_1),
-                minima_idx_2=int(minima_idx_2),
-                db_file=minima_database_file,
-                pair_id=pair_id,
-                barrier_height=float(barrier),
-                endpoint_provenance=result.get("minima_provenance"),
-                canonical_ts=False,
-                neb_converged=bool(result.get("neb_converged", False)),
-            )
-
-            if success:
-                added += 1
-        except (
-            sqlite3.DatabaseError,
-            sqlite3.OperationalError,
-            OSError,
-            ValueError,
-        ) as e:
-            logger.error(
-                "Failed to add TS %s to DB %s: %s: %s",
-                result.get("pair_id"),
-                minima_database_file,
-                type(e).__name__,
-                e,
-            )
-            continue
-
-    return added
 
 
 def run_transition_state_campaign(
@@ -1095,7 +1166,7 @@ def run_transition_state_campaign(
     verbosity: int = 1,
     ts_kwargs: dict | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Run :func:`run_transition_state_search` for multiple compositions in sequence.
+    """Run :func:`~scgo.ts_search.run_transition_state_search` for multiple compositions in sequence.
 
     ``output_dir`` is the campaign root. Minima are read from
     ``{output_dir}/{path_key}_searches`` (or ``{path_key}_searches`` under the
@@ -1108,11 +1179,19 @@ def run_transition_state_campaign(
     configure_logging(verbosity)
     logger = get_logger(__name__)
 
-    ts_kwargs = ts_kwargs or {}
+    ts_kwargs = dict(ts_kwargs or {})
+    # ``params`` and ``system_type`` are named arguments of this function and are
+    # forwarded explicitly below; duplicates inside ``ts_kwargs`` (e.g. from
+    # ``coerce_ts_params_to_runner_kwargs``) would raise ``TypeError`` at the
+    # ``**ts_kwargs`` expansion. The explicit arguments win.
+    ts_kwargs.pop("system_type", None)
+    ts_kwargs_params = ts_kwargs.pop("params", None)
+    if params is None:
+        params = ts_kwargs_params
     campaign_results: dict[str, list[dict[str, Any]]] = {}
-    ads_def = ts_kwargs.get("adsorbate_definition")
-    if not isinstance(ads_def, dict):
-        ads_def = None
+    ads_def = as_adsorbate_definition(ts_kwargs.get("adsorbate_definition"))
+    if ads_def is not None:
+        ts_kwargs["adsorbate_definition"] = ads_def
     surface_cfg = ts_kwargs.get("surface_config")
     if not isinstance(surface_cfg, SurfaceSystemConfig):
         surface_cfg = None
@@ -1129,8 +1208,12 @@ def run_transition_state_campaign(
             if output_dir is not None
             else None
         )
-        if verbosity >= 1:
-            logger.info("Running TS search campaign for %s", path_key)
+        log_info_v(
+            logger,
+            "Running TS search campaign for %s",
+            path_key,
+            verbosity=verbosity,
+        )
 
         results = run_transition_state_search(
             composition,

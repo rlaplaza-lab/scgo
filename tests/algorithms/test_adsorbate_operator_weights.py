@@ -12,6 +12,7 @@ from scgo.algorithms.ga_common import (
     update_mutation_weights,
 )
 from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.system_types import AdsorbateDefinition
 from scgo.utils.mutation_weights import (
     _apply_stagnation_boost,
     get_adaptive_mutation_config,
@@ -43,11 +44,11 @@ def test_partitioned_operators_inherit_base_weights() -> None:
 
 def test_adsorbate_operator_selector_assigns_weight_to_partitioned_ops() -> None:
     comp = ["Pt", "Pt", "Pt", "O", "H"]
-    ads = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     tmpl = Atoms(symbols=comp, positions=np.zeros((5, 3)), pbc=False)
     blmin = build_blmin_from_zs(tmpl.numbers, ratio=0.7)
     ops, name_map = create_mutation_operators(
@@ -68,11 +69,11 @@ def test_adsorbate_operator_selector_assigns_weight_to_partitioned_ops() -> None
 
 def test_rotational_operator_targets_core_only_for_partition() -> None:
     comp = ["Pt", "Pt", "O", "H"]
-    ads = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     tmpl = Atoms(symbols=comp, positions=np.zeros((4, 3)), pbc=False)
     blmin = build_blmin_from_zs(tmpl.numbers, ratio=0.7)
     ops, name_map = create_mutation_operators(
@@ -88,6 +89,31 @@ def test_rotational_operator_targets_core_only_for_partition() -> None:
     rot = ops[name_map["rotational"]]
     assert rot.target_tags == [0]
     assert rot.use_tags is True
+
+
+def test_zero_weights_uniform_fallback() -> None:
+    """All-zero operator weights fall back to a valid uniform selection."""
+    comp = ["Pt", "Pt", "Pt"]
+    tmpl = Atoms(symbols=comp, positions=np.zeros((3, 3)), pbc=False)
+    blmin = build_blmin_from_zs(tmpl.numbers, ratio=0.7)
+    ops, name_map = create_mutation_operators(
+        composition=comp,
+        n_to_optimize=3,
+        blmin=blmin,
+        rng=default_rng(0),
+        use_adaptive=True,
+    )
+    adaptive = get_adaptive_mutation_config(comp, use_adaptive=True)
+    adaptive["operator_weights"] = dict.fromkeys(name_map, 0.0)
+
+    selector = update_mutation_weights(ops, name_map, adaptive, rng=default_rng(0))
+
+    n_ops = len(ops)
+    increments = np.diff(np.asarray(selector.rho, dtype=float), prepend=0.0)
+    np.testing.assert_allclose(increments, np.full(n_ops, 1.0 / n_ops))
+    # Before the fallback, OperationSelector returned a None index here.
+    for _ in range(20):
+        assert selector.get_operator() is not None
 
 
 def test_stagnation_boost_propagates_to_partitioned_flattening_weight() -> None:

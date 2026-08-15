@@ -1,4 +1,15 @@
-"""Reusable slab and surface presets for runners and benchmarks."""
+"""Reusable slab and surface presets for runners and benchmarks.
+
+Note on the adsorption-height window: every preset fixes
+``adsorption_height_min/max`` to a narrow 0.5-1.0 or 0.5-1.5 Å band above the
+slab top. This is a *deliberate* chemisorption-contact bias — it seeds the mobile
+cluster at typical chemical-bonding distances rather than far out in the
+physisorption tail. It is NOT a free standoff: every accepted placement is still
+gated by ``atoms_too_close_two_sets(adsorbate, slab, blmin)`` (blmin_ratio 0.7,
+so e.g. Pt-C >= 1.48 Å), and the window can be widened or overridden per-run via
+``adsorption_height_min/max``. The tradeoff of the tight window is a hollow /
+vacancy-site bias and no physisorption sampling — intended for bonding searches.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +20,7 @@ from ase.build import graphene
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.surface.layers import _layer_indices_by_clustering
 from scgo.surface.pbc import normalize_slab_pbc
 
 DEFAULT_GRAPHITE_SLAB_LAYERS = 5
@@ -72,10 +84,144 @@ def build_graphite_slab(
     return slab
 
 
+def _central_atom_index(atoms: Atoms, *, surface_normal_axis: int = 2) -> int:
+    """Index of the atom whose in-plane (scaled) position is closest to the cell center."""
+    scaled = atoms.get_scaled_positions(wrap=True)
+    in_plane = [i for i in range(3) if i != surface_normal_axis]
+    center = np.array([0.5, 0.5], dtype=float)
+    pts = scaled[:, in_plane]
+    dist2 = np.sum((pts - center) ** 2, axis=1)
+    return int(np.argmin(dist2))
+
+
+def build_graphene_slab(
+    *,
+    nx: int = 6,
+    ny: int = 6,
+    a: float = 2.46,
+    cell_height: float = 18.0,
+) -> Atoms:
+    """Build a single-layer (monolayer) graphene slab.
+
+    The graphene sheet lies in the ``x-y`` plane and is centered along ``z``.
+    The cell length along the surface normal (``z``) is set explicitly to
+    ``cell_height`` (matching the Chepkasov "cell height normal to graphene"
+    semantics). The slab uses slab-style PBC — periodic in-plane and open along
+    the vacuum axis — consistent with :func:`~scgo.surface.presets.build_graphite_slab` and the rest
+    of the surface pipeline (deposition, constraints, comparators).
+    """
+    if nx < 1:
+        raise SCGOValidationError(f"nx must be >= 1, got {nx}")
+    if ny < 1:
+        raise SCGOValidationError(f"ny must be >= 1, got {ny}")
+    if cell_height <= 0:
+        raise SCGOValidationError(f"cell_height must be > 0, got {cell_height}")
+
+    slab = graphene(a=a, size=(nx, ny, 1), vacuum=0.0)
+    slab.set_pbc((True, True, True))
+
+    cell = slab.get_cell()
+    cell[2, 2] = cell_height
+    slab.set_cell(cell, scale_atoms=False)
+
+    positions = slab.get_positions()
+    positions[:, 2] = cell_height / 2.0
+    slab.set_positions(positions)
+    slab.wrap()
+    normalize_slab_pbc(slab)
+    return slab
+
+
+def build_monovacancy_graphene_slab(
+    *,
+    nx: int = 6,
+    ny: int = 6,
+    a: float = 2.46,
+    cell_height: float = 18.0,
+    reconstruct: bool = False,
+    reconstruction_shift: float = 0.10,
+) -> Atoms:
+    """Build a monolayer graphene slab with a single carbon monovacancy.
+
+    The central atom (closest to the in-plane cell center) is removed. The
+    removed atom's Cartesian position and original index are recorded on the
+    returned ``Atoms.info`` so the deposition pipeline can bias cluster placement
+    onto the vacancy. When ``reconstruct`` is True, the two nearest vacancy
+    neighbors are displaced along their bond axes (Jahn-Teller seed).
+    """
+    pristine = build_graphene_slab(nx=nx, ny=ny, a=a, cell_height=cell_height)
+    removed = _central_atom_index(pristine)
+    vacancy_position = pristine.get_positions()[removed].copy()
+
+    defective = pristine.copy()
+    del defective[removed]
+
+    if reconstruct:
+        pos = defective.get_positions()
+        dists = np.linalg.norm(pos - vacancy_position, axis=1)
+        neighbors = np.argsort(dists)[:3]
+        for k, idx in enumerate(neighbors[:2]):
+            direction = pos[idx] - vacancy_position
+            norm = np.linalg.norm(direction)
+            if norm > 1e-12:
+                direction = direction / norm
+                sign = 1.0 if k % 2 == 0 else -1.0
+                pos[idx] += sign * reconstruction_shift * direction
+        defective.set_positions(pos)
+        defective.wrap()
+
+    defective.info["vacancy_removed_original_index_zero_based"] = int(removed)
+    defective.info["vacancy_cartesian_angstrom"] = vacancy_position.tolist()
+    return defective
+
+
+def make_graphene_surface_config(
+    *,
+    nx: int = 6,
+    ny: int = 6,
+    a: float = 2.46,
+    cell_height: float = 18.0,
+    monovacancy: bool = False,
+    reconstruct: bool = False,
+    reconstruction_shift: float = 0.10,
+    name: str = "graphene",
+    structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
+    defect_bias_probability: float | None = None,
+) -> SurfaceSystemConfig:
+    """Single-layer graphene (or monovacancy) preset for ``surface_cluster`` search."""
+    if defect_bias_probability is None:
+        defect_bias_probability = 0.5 if monovacancy else 0.0
+
+    if monovacancy:
+        slab = build_monovacancy_graphene_slab(
+            nx=nx,
+            ny=ny,
+            a=a,
+            cell_height=cell_height,
+            reconstruct=reconstruct,
+            reconstruction_shift=reconstruction_shift,
+        )
+        if name == "graphene":
+            name = "graphene_monovacancy"
+    else:
+        slab = build_graphene_slab(nx=nx, ny=ny, a=a, cell_height=cell_height)
+
+    return SurfaceSystemConfig(
+        slab=slab,
+        name=name,
+        adsorption_height_min=0.5,
+        adsorption_height_max=1.5,
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+        comparator_use_mic=True,
+        max_placement_attempts=1000,
+        structure_connectivity_factor=structure_connectivity_factor,
+        defect_bias_probability=defect_bias_probability,
+    )
+
+
 def _top_layer_atom_indices(slab: Atoms, *, surface_normal_axis: int = 2) -> list[int]:
     """Indices of atoms in the uppermost distinct layer of ``slab``."""
-    from scgo.surface.constraints import _layer_indices_by_clustering
-
     mobile = _layer_indices_by_clustering(
         np.asarray(slab.get_positions()),
         surface_normal_axis,
@@ -105,9 +251,12 @@ def build_defected_graphite_slab(
     rng = np.random.default_rng(seed)
     remove = sorted(rng.choice(top_idx, size=n_vacancies, replace=False).tolist())
     keep = [i for i in range(len(slab)) if i not in set(remove)]
+    vacancy_position = slab.get_positions()[remove[0]].copy()
     out = slab[keep]
     out.set_cell(slab.get_cell())
     out.set_pbc(slab.get_pbc())
+    out.info["vacancy_removed_original_index_zero_based"] = int(remove[0])
+    out.info["vacancy_cartesian_angstrom"] = vacancy_position.tolist()
     normalize_slab_pbc(out)
     return out
 
@@ -230,6 +379,9 @@ __all__ = [
     "build_graphite_slab",
     "build_defected_graphite_slab",
     "build_n_doped_graphite_slab",
+    "build_graphene_slab",
+    "build_monovacancy_graphene_slab",
+    "make_graphene_surface_config",
     "make_graphite_surface_config",
     "make_defected_graphite_surface_config",
     "make_n_doped_graphite_surface_config",

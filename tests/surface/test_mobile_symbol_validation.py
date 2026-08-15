@@ -10,16 +10,17 @@ from ase.build import fcc111
 from scgo.exceptions import SCGOValidationError
 from scgo.surface.deposition import combine_slab_adsorbate
 from scgo.system_types import (
+    AdsorbateDefinition,
     validate_mobile_symbols_match_adsorbate_definition,
     validate_structure_for_system_type,
 )
 
 
-def _def_pt5_oh() -> dict:
-    return {
-        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-    }
+def _def_pt5_oh() -> AdsorbateDefinition:
+    return AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+    )
 
 
 def _well_spaced_pt5_oh_positions() -> np.ndarray:
@@ -88,10 +89,10 @@ def test_validate_mobile_symbols_after_slab_prefix_accepts() -> None:
         pbc=slab.get_pbc(),
     )
     combined = combine_slab_adsorbate(slab, ads)
-    ad_def: dict = {
-        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-    }
+    ad_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+    )
     validate_mobile_symbols_match_adsorbate_definition(combined, n_s, ad_def)
 
 
@@ -105,9 +106,9 @@ def test_validate_mobile_symbols_after_slab_prefix_rejects_wrong_block_order() -
         pbc=slab.get_pbc(),
     )
     combined = combine_slab_adsorbate(slab, bad_mobile)
-    ad_def: dict = {
-        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-    }
+    ad_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+    )
     with pytest.raises(SCGOValidationError, match="Mobile symbols mismatch"):
         validate_mobile_symbols_match_adsorbate_definition(combined, n_s, ad_def)

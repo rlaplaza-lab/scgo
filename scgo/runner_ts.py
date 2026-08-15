@@ -34,8 +34,8 @@ from scgo.runner_params import (
     _resolved_path,
     _validate_go_ts_param_coherence,
     _validate_go_ts_surface_config,
-    _with_surface_in_optimizers,
-    _with_system_type_in_optimizer_params,
+    _with_surface_on_params,
+    format_completion_details,
     resolve_run_path_key,
     resolve_workflow_seed,
 )
@@ -58,7 +58,11 @@ from scgo.ts_search.transition_state_run import (
 )
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
-from scgo.utils.output_paths import resolve_go_ts_pipeline_paths
+from scgo.utils.output_paths import (
+    calculator_slug_from_go_params,
+    resolve_campaign_root_from_args,
+    resolve_go_ts_pipeline_paths,
+)
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
@@ -74,7 +78,7 @@ from scgo.utils.timing_report import (
 )
 from scgo.utils.validation import validate_composition
 
-_LOGGER = get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _run_go_ts_pipeline(
@@ -99,7 +103,6 @@ def _run_go_ts_pipeline(
     For high-level entry points see :mod:`scgo.runner_api`.
     """
     configure_logging(verbosity)
-    logger = get_logger(__name__)
 
     policy = get_system_policy(system_type)
     allow_empty_comp = policy.slab_is_search_target and not policy.has_adsorbate
@@ -123,7 +126,7 @@ def _run_go_ts_pipeline(
         params=go_params,
     )
     output_path = (
-        Path(output_dir).expanduser().resolve()
+        resolve_campaign_root_from_args(output_dir, path_key=path_key)
         if output_dir is not None
         else _default_go_ts_output_path(
             composition,
@@ -146,8 +149,8 @@ def _run_go_ts_pipeline(
     calculator_for_global_optimization = get_calculator_class(calculator_name)(
         **calculator_kwargs,
     )
+    go_t0 = perf_counter()
     try:
-        go_t0 = perf_counter()
         minima_list = _run_go_trials(
             composition,
             system_type,
@@ -169,6 +172,10 @@ def _run_go_ts_pipeline(
     ts_kwargs_local.pop("seed", None)
     ts_kwargs_local.pop("verbosity", None)
     ts_kwargs_local.pop("system_type", None)
+    # The resolved ``cluster_adsorbate_config`` (from go_params below) is passed
+    # explicitly to ``_ts_search``; drop the passthrough copy to avoid a
+    # duplicate-keyword TypeError.
+    ts_kwargs_local.pop("cluster_adsorbate_config", None)
     write_ts_json = bool(ts_kwargs_local.pop("write_timing_json", False))
 
     connectivity_factor_raw: float | None = ts_kwargs_local.pop(
@@ -196,6 +203,7 @@ def _run_go_ts_pipeline(
         verbosity=verbosity,
         write_timing_json=write_ts_json,
         connectivity_factor=connectivity_factor,
+        cluster_adsorbate_config=cluster_cfg,
         adsorbate_definition=adsorbate_definition,
         system_type=system_type,
         **ts_kwargs_local,
@@ -205,6 +213,7 @@ def _run_go_ts_pipeline(
     ts_neb = sum_neb_seconds_from_ts_results(ts_results)
     elapsed_s = perf_counter() - pipeline_t0
     go_ts_timings: dict[str, float] = {
+        "kind": "go_ts",
         "total_wall_s": elapsed_s,
         "go_phase_s": go_wall_s,
         "ts_neb_sum_s": ts_neb,
@@ -271,47 +280,6 @@ def _run_go_ts_pipeline(
     }
 
 
-def _run_one_element_go_ts_pipeline(
-    element: str,
-    n_atoms: int,
-    system_type: SystemType,
-    *,
-    go_params: dict[str, Any],
-    ts_kwargs: dict[str, Any],
-    seed: int | None = None,
-    verbosity: int = 1,
-    output_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    """Run one-element GO then TS and return a compact run summary."""
-    if not element or not isinstance(element, str):
-        raise SCGOValidationError("element must be a non-empty string")
-    if n_atoms < 1:
-        raise SCGOValidationError("n_atoms must be >= 1")
-    composition = [element] * n_atoms
-    return _run_go_ts_pipeline(
-        composition,
-        system_type,
-        go_params=go_params,
-        ts_kwargs=ts_kwargs,
-        seed=seed,
-        verbosity=verbosity,
-        output_dir=output_dir,
-    )
-
-
-def _execute_run_go_ts(context: RunGOTSContext) -> dict[str, Any]:
-    return _run_go_ts_pipeline(
-        context.composition,
-        context.system_type,
-        go_params=context.go_params,
-        ts_kwargs=context.ts_kwargs,
-        adsorbate_definition=context.adsorbate_definition,
-        seed=context.seed,
-        verbosity=context.verbosity,
-        output_dir=context.output_dir,
-    )
-
-
 def run_go_ts(
     composition: CompositionInput,
     *,
@@ -328,6 +296,9 @@ def run_go_ts(
     log_summary: bool = True,
 ) -> dict[str, Any]:
     """Run global optimization then transition-state search for one composition."""
+    from scgo import configure
+
+    configure()
     try:
         context = _prepare_run_go_ts_context(
             composition,
@@ -346,9 +317,18 @@ def run_go_ts(
         _log_validation_error(exc)
         raise
     t0 = perf_counter()
-    summary = _execute_run_go_ts(context)
+    summary = _run_go_ts_pipeline(
+        context.composition,
+        context.system_type,
+        go_params=context.go_params,
+        ts_kwargs=context.ts_kwargs,
+        adsorbate_definition=context.adsorbate_definition,
+        seed=context.seed,
+        verbosity=context.verbosity,
+        output_dir=context.output_dir,
+    )
     if log_summary:
-        log_go_ts_summary(_LOGGER, summary, wall_time_s=perf_counter() - t0)
+        log_go_ts_summary(logger, summary, wall_time_s=perf_counter() - t0)
     return summary
 
 
@@ -368,6 +348,9 @@ def run_go_ts_campaign(
     log_summary: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Run GO+TS for multiple compositions."""
+    from scgo import configure
+
+    configure()
     try:
         st = _require_system_type(system_type, "run_go_ts_campaign")
         validate_system_type_settings(system_type=st, surface_config=surface_config)
@@ -385,7 +368,7 @@ def run_go_ts_campaign(
         ts_params=ts_params,
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
-    go_prep = _with_surface_in_optimizers(go_mat, surface_config=surface_config)
+    go_prep = _with_surface_on_params(go_mat, surface_config=surface_config)
     _validate_go_ts_param_coherence(
         go_prepared=go_prep,
         ts_params=ts_mat,
@@ -394,6 +377,7 @@ def run_go_ts_campaign(
     )
 
     full_compositions: list[list[str]] = []
+    composition_adsorbate: list = []
     ads_def, ads_temp = None, None
     preset_ads = (
         extract_adsorbate_definition_from_params(go_mat) if adsorbates is None else None
@@ -407,37 +391,47 @@ def run_go_ts_campaign(
             context="run_go_ts_campaign",
         )
         full_compositions.append(full_comp)
+        composition_adsorbate.append((ads_def, ads_temp))
         _validate_go_ts_surface_config(
-            go_prep,
             system_type=st,
             surface_config=surface_config,
-            adsorbate_composition=full_comp,
         )
 
-    go_local = _with_system_type_in_optimizer_params(go_prep, system_type=st)
-    go_local = _merge_adsorbate_context_into_params(
-        go_local,
-        adsorbate_definition=ads_def,
-        adsorbate_fragment_template=ads_temp,
-    )
     ts_kwargs = _coerce_ts_for_runner(
         ts_mat,
         fn_name="run_go_ts_campaign",
         system_type=st,
         surface_config=surface_config,
     )
-    parent = _resolved_path(output_dir) or _default_go_ts_output_path(
-        full_compositions[0],
-        go_params=go_mat,
-        output_stem=output_stem or "go_ts_campaign",
+    campaign_root = resolve_campaign_root_from_args(
+        output_dir,
         output_root=output_root,
-        system_type=st,
-        adsorbate_definition=ads_def,
-        surface_config=surface_config,
+        output_stem=output_stem or "go_ts_campaign",
+        path_key=resolve_run_path_key(
+            full_compositions[0],
+            system_type=st,
+            adsorbate_definition=composition_adsorbate[0][0]
+            if composition_adsorbate
+            else None,
+            surface_config=surface_config,
+            params=go_prep,
+        ),
+        calc_slug=calculator_slug_from_go_params(go_mat),
     )
+    if output_dir is None and output_root is None:
+        logger.info(
+            "No output_dir provided; using default campaign root %s", campaign_root
+        )
     out: dict[str, dict[str, Any]] = {}
     t0 = perf_counter()
-    for comp in full_compositions:
+    for comp, (ads_def, ads_temp) in zip(
+        full_compositions, composition_adsorbate, strict=True
+    ):
+        go_local = _merge_adsorbate_context_into_params(
+            go_prep,
+            adsorbate_definition=ads_def,
+            adsorbate_fragment_template=ads_temp,
+        )
         path_key = resolve_run_path_key(
             comp,
             system_type=st,
@@ -452,17 +446,33 @@ def run_go_ts_campaign(
             ts_kwargs=ts_kwargs,
             seed=eff_seed,
             verbosity=verbosity,
-            output_dir=parent / f"{path_key}_campaign",
+            # Sibling layout, same as ``run_go_ts``: the campaign root is shared
+            # and each composition gets ``{root}/{path_key}_searches`` +
+            # ``{root}/{path_key}_ts_results``.
+            output_dir=campaign_root,
             adsorbate_definition=ads_def,
         )
-        out[path_key] = _execute_run_go_ts(context)
+        out[path_key] = _run_go_ts_pipeline(
+            context.composition,
+            context.system_type,
+            go_params=context.go_params,
+            ts_kwargs=context.ts_kwargs,
+            adsorbate_definition=context.adsorbate_definition,
+            seed=context.seed,
+            verbosity=context.verbosity,
+            output_dir=context.output_dir,
+        )
     if log_summary:
         total = sum(int(s.get("ts_total_count") or 0) for s in out.values())
         ok = sum(int(s.get("ts_success_count") or 0) for s in out.values())
         _log_completion(
             "run_go_ts_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(out)} successful_nebs={ok}/{total}",
+            details=format_completion_details(
+                compositions=len(out),
+                successful_nebs=(ok, total),
+                output_dir=campaign_root,
+            ),
         )
     return out
 
@@ -478,6 +488,7 @@ def run_ts_search(
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     log_summary: bool = True,
 ) -> list[dict[str, Any]]:
     """Run transition-state search for one composition.
@@ -488,6 +499,9 @@ def run_ts_search(
     ``run_*/pair_*/`` subdirectories. If ``output_dir`` points at an existing
     ``*_searches`` directory, its parent is treated as the campaign root.
     """
+    from scgo import configure
+
+    configure()
     try:
         context = _prepare_run_ts_search_context(
             composition,
@@ -512,6 +526,13 @@ def run_ts_search(
         base=context.ts_base,
     )
     t0 = perf_counter()
+    # ``context.ts_kwargs`` already carries ``cluster_adsorbate_config`` (from
+    # ``coerce_ts_params_to_runner_kwargs``); the run-level argument overrides it
+    # when set, otherwise the ts_params value is honored. Pass it exactly once.
+    ts_kwargs = dict(context.ts_kwargs)
+    ts_cac = ts_kwargs.pop("cluster_adsorbate_config", None)
+    if cluster_adsorbate_config is None:
+        cluster_adsorbate_config = ts_cac
     results = _ts_search(
         context.composition,
         output_dir=context.output_dir,
@@ -520,14 +541,18 @@ def run_ts_search(
         verbosity=verbosity,
         adsorbate_definition=context.adsorbate_definition,
         system_type=context.system_type,
-        **context.ts_kwargs,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        **ts_kwargs,
     )
     if log_summary:
         ok = sum(1 for r in results if r.get("status") == "success")
         _log_completion(
             "run_ts_search",
             elapsed_s=perf_counter() - t0,
-            details=f"successful_nebs={ok}/{len(results)} output_dir={context.output_dir}",
+            details=format_completion_details(
+                successful_nebs=(ok, len(results)),
+                output_dir=context.output_dir,
+            ),
         )
     return results
 
@@ -544,6 +569,9 @@ def run_ts_campaign(
     adsorbates: AdsorbatesInput | None = None,
     log_summary: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
+    from scgo import configure
+
+    configure()
     try:
         st = _require_system_type(system_type, "run_ts_campaign")
         validate_system_type_settings(system_type=st, surface_config=surface_config)
@@ -569,6 +597,10 @@ def run_ts_campaign(
         user_params=ts_params,
         base=ts_base,
     )
+    # ``params`` (calculator name/kwargs) is a named argument of the campaign
+    # runner, which forwards it to ``run_transition_state_search`` alongside
+    # ``**ts_kwargs``; leaving it inside ``ts_kwargs`` duplicates the keyword.
+    ts_calc_params = ts_kwargs.pop("params", None)
 
     full_compositions: list[list[str]] = []
     ads_def: AdsorbateDefinition | None = None
@@ -592,6 +624,7 @@ def run_ts_campaign(
         full_compositions,
         st,
         output_dir=out_path,
+        params=ts_calc_params,
         seed=eff_seed,
         verbosity=verbosity,
         ts_kwargs=ts_kwargs,
@@ -604,7 +637,11 @@ def run_ts_campaign(
         _log_completion(
             "run_ts_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(campaign)} successful_nebs={ok}/{total}",
+            details=format_completion_details(
+                compositions=len(campaign),
+                successful_nebs=(ok, total),
+                output_dir=out_path,
+            ),
         )
     return campaign
 

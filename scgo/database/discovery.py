@@ -14,7 +14,7 @@ from pathlib import Path
 from scgo.database.connection import get_connection
 from scgo.database.registry import get_registry
 from scgo.database.streaming import relaxed_rows_where_clause
-from scgo.metadata.db_stamp import clear_db_stamp_cache, is_scgo_db
+from scgo.metadata.db_stamp import is_scgo_db
 from scgo.metadata.run_dir import load_run_dir_record, resolve_run_id_from_db_path
 from scgo.utils.helpers import get_cluster_formula, get_composition_counts
 from scgo.utils.logging import get_logger
@@ -97,16 +97,14 @@ class DatabaseDiscovery:
                 "Filtered non-SCGO DBs: %d -> %d databases", orig_count, len(db_files)
             )
 
-        if use_cache:
+        # Never cache empty results: databases are written while a run is in
+        # progress (GO writes its DB, then TS reads it back in the same
+        # process). Caching a miss recorded before the DB existed would pin
+        # that stale answer for the rest of the process.
+        if use_cache and db_files:
             self._cache[cache_key] = db_files
 
         return db_files
-
-    def clear_cache(self) -> None:
-        """Clear discovery caches after filesystem changes."""
-        self._cache.clear()
-        clear_db_stamp_cache()
-        logger.debug("Cleared database discovery caches")
 
     def _build_cache_key(
         self,
@@ -204,7 +202,7 @@ class DatabaseDiscovery:
 
 
 def _get_discovery(base_dir: str | Path) -> DatabaseDiscovery:
-    """Return a cached :class:`DatabaseDiscovery` for *base_dir*."""
+    """Return a cached :class:`~scgo.database.discovery.DatabaseDiscovery` for *base_dir*."""
     key = os.path.abspath(str(base_dir))
     if key not in _discovery_by_base:
         _discovery_by_base[key] = DatabaseDiscovery(key)
@@ -218,7 +216,7 @@ def list_discovered_db_paths_with_run(
     use_cache: bool = True,
     db_filename: str | None = None,
 ) -> list[tuple[str, str]]:
-    """List DB paths via :class:`DatabaseDiscovery` with run parsed from layout.
+    """List DB paths via :class:`~scgo.database.discovery.DatabaseDiscovery` with run parsed from layout.
 
     Returns tuples ``(absolute_path, run_id)``. ``run_id`` is empty if the path
     is not under a recognizable ``run_*`` directory.

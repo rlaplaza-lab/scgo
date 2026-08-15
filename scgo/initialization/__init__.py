@@ -25,9 +25,13 @@ from .geometry_helpers import (
     validate_cluster_structure,
 )
 from .initializers import (
+    BatchInitPlan,
     compute_cell_side,
     create_initial_cluster,
     create_initial_cluster_batch,
+    emit_init_diagnostics,
+    plan_batch_initialization,
+    reset_init_diagnostics,
 )
 from .random_spherical import (
     grow_from_seed,
@@ -44,6 +48,7 @@ __all__ = [
     # Main functions
     "create_initial_cluster",
     "create_initial_cluster_batch",
+    "plan_batch_initialization",
     "random_spherical",
     "grow_from_seed",
     "combine_seeds",
@@ -53,7 +58,10 @@ __all__ = [
     "validate_cluster",
     "validate_cluster_structure",
     # Diagnostics and utilities
+    "BatchInitPlan",
     "StructureDiagnostics",
+    "emit_init_diagnostics",
+    "reset_init_diagnostics",
     "get_covalent_radius",
     "get_vdw_radius",
     "get_structure_diagnostics",

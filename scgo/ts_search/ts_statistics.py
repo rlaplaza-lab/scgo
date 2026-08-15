@@ -2,23 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
-
-
-class TransitionStateStatistics(TypedDict):
-    """Common TS statistics payload shared across output artifacts."""
-
-    total_ts_found: int
-    converged_ts: int
-    successful_ts: int
-    min_barrier: float | None
-    max_barrier: float | None
-    avg_barrier: float | None
+from typing import Any
 
 
 def compute_ts_statistics(
     ts_results: list[dict[str, Any]],
-) -> TransitionStateStatistics:
+) -> dict[str, Any]:
     """Compute consistent success/convergence/barrier statistics."""
     successful_results = [
         result for result in ts_results if result.get("status", "success") == "success"

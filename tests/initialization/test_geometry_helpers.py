@@ -5,6 +5,8 @@ import pytest
 from ase import Atoms
 
 from scgo.initialization.geometry_helpers import (
+    _check_composition_feasibility,
+    _compute_composition_delta,
     _generate_batch_positions_on_convex_hull,
     analyze_disconnection,
     compute_bond_distance_params,
@@ -12,7 +14,7 @@ from scgo.initialization.geometry_helpers import (
     get_largest_facets,
     place_multi_atom_seed_on_facet,
 )
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 
 class TestComputeBondDistanceParams:
@@ -67,22 +69,22 @@ class TestAnalyzeDisconnection:
     def test_empty_cluster(self):
         """Test analyze_disconnection with empty cluster."""
         atoms = Atoms()
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance == pytest.approx(0.0, abs=1e-8)
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "Single atom or empty cluster" in msg
 
     def test_single_atom(self):
         """Test analyze_disconnection with single atom."""
         atoms = Atoms("Pt", positions=[[0, 0, 0]])
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance == pytest.approx(0.0, abs=1e-8)
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "Single atom or empty cluster" in msg
 
     def test_connected_cluster(self):
         """Test analyze_disconnection with connected cluster."""
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance == pytest.approx(0.0, abs=1e-8)
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "Cluster is connected" in msg
 
     def test_disconnected_cluster_two_components(self):
@@ -90,10 +92,9 @@ class TestAnalyzeDisconnection:
         atoms = Atoms(
             "Pt4", positions=[[0, 0, 0], [2.5, 0, 0], [10, 0, 0], [12.5, 0, 0]]
         )
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance > 0.0
-        assert "2 disconnected components" in msg
+        factor, msg = analyze_disconnection(atoms)
         assert factor > 1.0  # Suggested factor should be reasonable
+        assert "2 disconnected components" in msg
 
     def test_disconnected_cluster_multiple_components(self):
         """Test analyze_disconnection with multiple disconnected components."""
@@ -106,8 +107,8 @@ class TestAnalyzeDisconnection:
             [20, 0, 0],  # Cluster 3 (single atom)
         ]
         atoms = Atoms("Pt5", positions=positions)
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert distance > 0.0
+        factor, msg = analyze_disconnection(atoms)
+        assert isinstance(factor, float)
         assert "3 disconnected components" in msg
 
     def test_exactly_at_threshold(self):
@@ -119,27 +120,24 @@ class TestAnalyzeDisconnection:
         TEST_FACTOR = 2.5  # Specific factor for testing threshold behavior
         threshold = 2 * r_pt * TEST_FACTOR
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [threshold, 0, 0]])
-        distance, factor, msg = analyze_disconnection(
-            atoms, connectivity_factor=TEST_FACTOR
-        )
+        factor, msg = analyze_disconnection(atoms, connectivity_factor=TEST_FACTOR)
         # Should be connected at this threshold
-        assert distance == pytest.approx(0.0, abs=1e-8) or "Cluster is connected" in msg
+        assert "Cluster is connected" in msg
 
     def test_very_large_connectivity_factor(self):
         """Test analyze_disconnection with very large connectivity factor."""
         VERY_LARGE_FACTOR = 10.0  # Very large factor for testing boundary conditions
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [10, 0, 0]])
-        distance, factor, msg = analyze_disconnection(
+        factor, msg = analyze_disconnection(
             atoms, connectivity_factor=VERY_LARGE_FACTOR
         )
         # Should be connected with large factor
-        assert distance == pytest.approx(0.0, abs=1e-8) or "Cluster is connected" in msg
+        assert "Cluster is connected" in msg
 
     def test_mixed_elements(self):
         """Test analyze_disconnection with mixed element types."""
         atoms = Atoms("PtAu", positions=[[0, 0, 0], [10, 0, 0]])
-        distance, factor, msg = analyze_disconnection(atoms)
-        assert isinstance(distance, float)
+        factor, msg = analyze_disconnection(atoms)
         assert isinstance(factor, float)
         assert isinstance(msg, str)
 
@@ -148,14 +146,10 @@ class TestAnalyzeDisconnection:
         # Use a test connectivity factor to verify buffer calculation
         TEST_FACTOR = 1.5
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [5.0, 0, 0]])
-        distance, factor, msg = analyze_disconnection(
-            atoms, connectivity_factor=TEST_FACTOR
-        )
-        if distance > 0:
+        factor, msg = analyze_disconnection(atoms, connectivity_factor=TEST_FACTOR)
+        if "disconnected" in msg:
             # Suggested factor should be at least the required factor
-            assert (
-                factor >= distance / (2 * 1.36) * 1.05
-            )  # 1.36 is approximate Pt radius
+            assert factor >= TEST_FACTOR
 
 
 class TestGetLargestFacets:
@@ -270,7 +264,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([1, 0, 0])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         assert isinstance(placed, Atoms)
         assert len(placed) == 1
@@ -283,7 +277,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([1, 0, 0])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         assert isinstance(placed, Atoms)
         assert len(placed) == 2
@@ -299,7 +293,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         # Function should handle this gracefully
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         assert isinstance(placed, Atoms)
 
@@ -310,7 +304,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([1, 0, 0])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=100.0, rng=rng
+            seed, target_centroid, target_normal, bond_distance=100.0
         )
         assert isinstance(placed, Atoms)
         # Position should be far from target centroid
@@ -327,7 +321,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         # Should handle gracefully (though this case is unusual)
         try:
             placed = place_multi_atom_seed_on_facet(
-                seed, target_centroid, target_normal, bond_distance=2.5, rng=rng
+                seed, target_centroid, target_normal, bond_distance=2.5
             )
             # If it doesn't raise, should return empty Atoms
             assert len(placed) == 0
@@ -344,7 +338,7 @@ class TestPlaceMultiAtomSeedOnFacet:
         target_normal = np.array([0, 0, 1])
 
         placed = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=3.0, rng=rng
+            seed, target_centroid, target_normal, bond_distance=3.0
         )
 
         # Check that structure changed
@@ -353,19 +347,19 @@ class TestPlaceMultiAtomSeedOnFacet:
         assert len(placed) == 3
         assert placed.get_chemical_symbols() == seed.get_chemical_symbols()
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     def test_reproducibility(self, rng):
         """Test that same RNG produces same placement."""
         seed = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
         target_centroid = np.array([5, 0, 0])
         target_normal = np.array([1, 0, 0])
 
-        rng1, rng2 = create_paired_rngs(42)
-
         placed1 = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng1
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
         placed2 = place_multi_atom_seed_on_facet(
-            seed, target_centroid, target_normal, bond_distance=2.5, rng=rng2
+            seed, target_centroid, target_normal, bond_distance=2.5
         )
 
         # Positions should be identical
@@ -494,6 +488,8 @@ class TestGenerateBatchPositionsOnConvexHull:
             assert dist > 0.5  # Not too close
             assert dist < 10.0  # Not too far
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     def test_reproducibility(self, rng):
         """Test that same RNG produces same batch of candidates."""
         atoms = Atoms(
@@ -613,6 +609,8 @@ class TestGeneratePositionsAllFacets:
             assert isinstance(pos, np.ndarray)
             assert pos.shape == (3,)
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     def test_reproducibility_same_rng(self, rng):
         """Same RNG yields identical all-facets positions."""
         atoms = Atoms(
@@ -637,7 +635,7 @@ class TestDisjointedClustersBug:
 
     def test_wrap_with_pbc_false(self):
         """Test that wrap() works correctly with PBC=False after our fix."""
-        from tests.test_utils import setup_test_atoms
+        from tests.helpers import setup_test_atoms
 
         # Create a cluster with atoms outside the cell
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [25, 0, 0]])
@@ -658,7 +656,7 @@ class TestDisjointedClustersBug:
 
     def test_scaled_position_wrapping(self):
         """Test that scaled position wrapping maintains structure integrity."""
-        from tests.test_utils import setup_test_atoms
+        from tests.helpers import setup_test_atoms
 
         # Create a cluster with atoms outside the cell
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [25, 0, 0]])
@@ -703,3 +701,50 @@ class TestGenerateBatchPositionsBasic:
             atoms, n_candidates=5, bond_distance=2.0, rng=rng, use_all_facets=False
         )
         assert len(candidates) > 0
+
+
+class TestCompositionDelta:
+    """Unit tests for shared composition delta helpers."""
+
+    def test_identity_delta(self):
+        add, remove = _compute_composition_delta({"Pt": 3}, {"Pt": 3})
+        assert add == []
+        assert remove == {}
+
+    def test_add_only(self):
+        add, remove = _compute_composition_delta({"Pt": 2}, {"Pt": 3, "O": 1})
+        assert sorted(add) == ["O", "Pt"]
+        assert remove == {}
+
+    def test_remove_only(self):
+        add, remove = _compute_composition_delta({"Pt": 3, "O": 1}, {"Pt": 2})
+        assert add == []
+        assert remove == {"Pt": 1, "O": 1}
+
+    def test_grow_feasible(self):
+        ok, msg = _check_composition_feasibility(
+            ["Pt", "Pt"], ["Pt", "Pt", "O"], "grow"
+        )
+        assert ok is True
+        assert msg == ""
+
+    def test_grow_rejects_excess_base(self):
+        ok, msg = _check_composition_feasibility(
+            ["Pt", "Pt", "O"], ["Pt", "Pt"], "grow"
+        )
+        assert ok is False
+        assert "excess" in msg
+
+    def test_reduce_feasible(self):
+        ok, msg = _check_composition_feasibility(
+            ["Pt", "Pt", "O"], ["Pt", "Pt"], "reduce"
+        )
+        assert ok is True
+        assert msg == ""
+
+    def test_reduce_rejects_larger_target(self):
+        ok, msg = _check_composition_feasibility(
+            ["Pt", "Pt"], ["Pt", "Pt", "O"], "reduce"
+        )
+        assert ok is False
+        assert "more atoms" in msg

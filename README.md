@@ -55,7 +55,10 @@ results = run_go(
 | GO then TS | `run_go_ts` |
 | Multi-composition TS / GO+TS | `run_ts_campaign` / `run_go_ts_campaign` |
 
-`system_type` is always a run argument. Surfaces need `surface_config=`, adsorbates need `adsorbates=`.
+`system_type` is always a run argument (never inside `go_params` /
+`optimizer_params` slots). Surfaces need `surface_config=`, adsorbates need
+`adsorbates=`. Top-level `surface_config` in presets must agree with the run
+argument when both are set.
 
 **Output:** `run_go` writes `{path_key}_searches/` with datetime-tagged `run_*/` subdirectories. GO+TS creates sibling `{path_key}_ts_results/`. The `path_key` combines nanoparticle formula, adsorbate fragments, and surface name (e.g., `Pt5`, `Pt5_OH_OH_graphite`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
@@ -68,7 +71,7 @@ results = run_go(
 ```bash
 pip install -e ".[mace,dev]"   # or [uma,dev] / [upet,dev]
 pre-commit install
-pytest tests/ -m "not slow"
+pytest tests/ -m "not slow and not integration and not requires_cuda and not requires_upet and not requires_uma"
 ```
 
 Long MLIP sweeps: [`benchmark/`](benchmark/).

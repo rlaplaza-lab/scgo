@@ -1,3 +1,5 @@
+"""Vector utilities for ASE GA mutation operators (vendored helpers)."""
+
 from __future__ import annotations
 
 import numpy as np

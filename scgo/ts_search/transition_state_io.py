@@ -9,14 +9,19 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import find_mic
 from ase.io import write as ase_write
 
+from scgo.algorithms.ga_common import (
+    extract_constraint_index_lists,
+    reconstruct_constraints_from_index_lists,
+)
 from scgo.constants import DEFAULT_COMPARATOR_TOL, DEFAULT_ENERGY_TOLERANCE
 from scgo.database import (
     extract_minima_from_database_file,
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run
-from scgo.metadata.atoms import set_tags
+from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
@@ -32,6 +37,8 @@ from .transition_state import (
     calculate_structure_similarity,
     minima_provenance_dict,
 )
+
+logger = get_logger(__name__)
 
 # Absolute ceiling for adsorbate pair oversample before IDPP re-rank.
 _ADSORBATE_PAIR_OVERSAMPLE_CAP = 50
@@ -73,8 +80,6 @@ def load_minima_by_composition(
         >>> list(minima.keys())
         ['Pt3']
     """
-    logger = get_logger(__name__)
-
     if not os.path.exists(base_dir):
         logger.warning("Output directory does not exist: %s", base_dir)
         return {}
@@ -125,6 +130,18 @@ def load_minima_by_composition(
                     run_id=run_id,
                     source_db=os.path.basename(db_file),
                     source_db_relpath=db_relpath,
+                )
+                # Rebuild slab FixAtoms / adsorbate FixBondLengths from the
+                # persisted index lists (the TorchSim GA path otherwise writes an
+                # unconstrained relaxed row). Additive: a constraint already
+                # present on the loaded Atoms (e.g. the native DB round-trip) is
+                # never overwritten.
+                reconstruct_constraints_from_index_lists(
+                    atoms_copy,
+                    fix_atoms_indices=get_tag(atoms_copy, "fix_atoms_indices_json"),
+                    fix_bond_lengths_pairs=get_tag(
+                        atoms_copy, "fix_bond_lengths_pairs_json"
+                    ),
                 )
                 validate_stored_slab_adsorbate_metadata(atoms_copy)
                 validate_stored_mobile_partition_metadata(atoms_copy)
@@ -188,10 +205,10 @@ def _core_rms_displacement(
     )
     dlt = matched_pos - pos_i
     if mic_cell is not None and mic_pbc is not None:
-        inv = np.linalg.inv(mic_cell)
-        frac = dlt @ inv.T
-        frac -= np.round(frac)
-        dlt = frac @ mic_cell
+        # A hand-rolled fractional-round MIC is wrong for skewed cells (the
+        # nearest fractional image is not always the nearest Cartesian image).
+        # ``find_mic`` performs the correct minimum-image search.
+        dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
     return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
 
 
@@ -240,7 +257,6 @@ def select_structure_pairs(
     Returns:
         List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
     """
-    logger = get_logger(__name__)
     mic = bool(use_mic)
 
     if len(minima) < 2:
@@ -389,7 +405,12 @@ def select_structure_pairs(
                     continue
             except (ValueError, RuntimeError) as e:
                 logger.warning(
-                    f"Failed to calculate similarity for pair ({i}, {j}): {type(e).__name__}: {e}"
+                    "Failed to calculate similarity for pair (%s, %s): %s: %s",
+                    i,
+                    j,
+                    type(e).__name__,
+                    e,
+                    exc_info=True,
                 )
                 continue
 
@@ -466,8 +487,6 @@ def save_transition_state_results(
     Returns:
         Path to saved summary file.
     """
-    logger = get_logger(__name__)
-
     os.makedirs(output_dir, exist_ok=True)
 
     formula = get_cluster_formula(composition)
@@ -508,6 +527,27 @@ def save_transition_state_results(
             "barrier_height": result.get("barrier_height"),
             "error": result.get("error"),
         }
+        # Persist the constraint index lists for the reactant/product/TS Atoms so
+        # downstream consumers of results_summary.json can rebuild slab FixAtoms /
+        # adsorbate FixBondLengths. Additive: only present roles are recorded and
+        # only when they actually carry constraints (no Atoms -> no-op).
+        for role, key in (
+            ("reactant", "reactant_structure"),
+            ("product", "product_structure"),
+            ("transition_state", "transition_state"),
+        ):
+            struct = result.get(key)
+            if struct is None:
+                continue
+            lists = extract_constraint_index_lists(struct)
+            if lists["fix_atoms_indices"]:
+                result_json[f"{role}_fix_atoms_indices_json"] = lists[
+                    "fix_atoms_indices"
+                ]
+            if lists["fix_bond_lengths_pairs"]:
+                result_json[f"{role}_fix_bond_lengths_pairs_json"] = lists[
+                    "fix_bond_lengths_pairs"
+                ]
         if result.get("minima_indices") is not None:
             result_json["minima_indices"] = result["minima_indices"]
         if result.get("minima_provenance") is not None:
@@ -610,8 +650,6 @@ def write_final_unique_ts(
 
     This function is best-effort and will not raise on IO errors.
     """
-    logger = get_logger(__name__)
-
     os.makedirs(output_dir, exist_ok=True)
     formula = path_key or get_cluster_formula(composition)
 

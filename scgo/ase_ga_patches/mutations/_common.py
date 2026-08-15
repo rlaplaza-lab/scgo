@@ -1,23 +1,37 @@
+"""Shared helpers used by more than one mutation operator."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Shared helpers used by more than one mutation operator."""
 
 import numpy as np
+
+from ase import Atoms
 
 from scgo.ase_ga_patches._vector_utils import (
     append_unique_unit_vector as _append_unique_unit_vector,
 )
 from scgo.ase_ga_patches._vector_utils import random_unit_vector as _random_unit_vector
+from scgo.initialization.geometry_helpers import validate_cluster_structure
+from scgo.initialization.initialization_config import (
+    CONNECTIVITY_FACTOR,
+    MIN_DISTANCE_FACTOR_DEFAULT,
+)
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
 
 __all__ = [
     "_append_unique_unit_vector",
     "_ensure_rng",
     "_geometry_candidate_directions",
+    "_IDENTITY_ATOL",
+    "_mobile_is_connected",
+    "_preserves_mobile_connectivity",
     "_random_unit_vector",
+    "_reanchor_mobile_to_slab",
 ]
+
+_IDENTITY_ATOL = 1e-8
 
 
 def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):
@@ -72,5 +86,66 @@ def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_can
         attempts += 1
 
     return candidates[:max_candidates]
+
+
+def _reanchor_mobile_to_slab(
+    parent_mobile: Atoms,
+    mutant_mobile: Atoms,
+    slab: Atoms,
+    surface_normal_axis: int,
+) -> Atoms:
+    """Snap ``mutant_mobile`` back to the parent's adsorption height along the normal.
+
+    Translates ``mutant_mobile`` only along ``surface_normal_axis`` so that the
+    lowest-atom coordinate of the mobile region matches that of ``parent_mobile``.
+    In-plane drift is irrelevant because the slab is periodic along the other axes,
+    so this keeps slab contact without wrapping through PBC.
+
+    Returns a new ``Atoms`` with the same numbers/cell/pbc/tags as
+    ``mutant_mobile``. When ``len(slab) == 0`` (gas phase) the helper is a no-op
+    and returns ``mutant_mobile`` unchanged, so gas behaviour is untouched.
+    """
+    if len(slab) == 0:
+        return mutant_mobile
+
+    axis = int(surface_normal_axis)
+    positions = mutant_mobile.get_positions().copy()
+    parent_low = float(np.min(parent_mobile.get_positions()[:, axis]))
+    mutant_low = float(np.min(positions[:, axis]))
+    shift = parent_low - mutant_low
+    positions[:, axis] += shift
+
+    return Atoms(
+        numbers=mutant_mobile.get_atomic_numbers(),
+        positions=positions,
+        cell=mutant_mobile.get_cell(),
+        pbc=mutant_mobile.get_pbc(),
+        tags=mutant_mobile.get_tags(),
+    )
+
+
+def _mobile_is_connected(mobile: Atoms, *, use_mic: bool) -> bool:
+    """Return True when ``mobile`` is a single connected component (or has <2 atoms)."""
+    if len(mobile) < 2:
+        return True
+    ok, _msg = validate_cluster_structure(
+        mobile,
+        MIN_DISTANCE_FACTOR_DEFAULT,
+        CONNECTIVITY_FACTOR,
+        check_clashes=False,
+        check_connectivity=True,
+        use_mic=use_mic,
+    )
+    return bool(ok)
+
+
+def _preserves_mobile_connectivity(
+    parent_mobile: Atoms, mutant_mobile: Atoms, *, use_mic: bool
+) -> bool:
+    """True when the mutant is connected, or the parent was already disconnected."""
+    if _mobile_is_connected(mutant_mobile, use_mic=use_mic):
+        return True
+    return not _mobile_is_connected(parent_mobile, use_mic=use_mic)
+
 
 # fmt: on

@@ -12,6 +12,12 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 
+OPTIMIZERS = {
+    "FIRE": FIRE,
+    "BFGS": BFGS,
+    "LBFGS": LBFGS,
+}
+
 
 def get_optimizer_class(optimizer_name: str) -> type:
     """Convert optimizer string name to ASE optimizer class.
@@ -24,18 +30,12 @@ def get_optimizer_class(optimizer_name: str) -> type:
         The corresponding ASE optimizer class.
 
     Raises:
-        ValueError: If optimizer_name is None or not supported.
+        SCGOValidationError: If optimizer_name is None or not supported.
     """
     if optimizer_name is None:
         raise SCGOValidationError("optimizer_name cannot be None")
 
     # Map optimizer names to classes
-    OPTIMIZERS = {
-        "FIRE": FIRE,
-        "BFGS": BFGS,
-        "LBFGS": LBFGS,
-    }
-
     optimizer_upper = optimizer_name.upper()
     if optimizer_upper not in OPTIMIZERS:
         supported = ", ".join(OPTIMIZERS.keys())

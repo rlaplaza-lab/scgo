@@ -18,7 +18,7 @@ from ase import Atoms
 
 from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.constraints import _layer_indices_by_clustering
+from scgo.surface.layers import _layer_indices_by_clustering
 
 __all__ = [
     "SlabSearchPartition",
@@ -26,21 +26,7 @@ __all__ = [
     "reorder_slab_fixed_then_mobile",
     "prepare_slab_search_surface_config",
     "validate_slab_search_config",
-    "count_distinct_slab_layers",
 ]
-
-
-def count_distinct_slab_layers(
-    slab: Atoms,
-    *,
-    surface_normal_axis: int,
-) -> int:
-    """Return the number of distinct coordinate layers along the surface normal."""
-    if len(slab) == 0:
-        return 0
-    positions = np.asarray(slab.get_positions())
-    rounded = np.round(positions[:, surface_normal_axis], decimals=6)
-    return int(len(np.unique(rounded)))
 
 
 def validate_slab_search_config(config: SurfaceSystemConfig) -> None:
@@ -62,7 +48,7 @@ def validate_slab_search_config(config: SurfaceSystemConfig) -> None:
 
 @dataclass(frozen=True)
 class SlabSearchPartition:
-    """Fixed vs search-mobile split of a slab (and optional adsorbates)."""
+    """Fixed vs search-mobile split of the slab atoms."""
 
     n_slab: int
     n_fixed: int
@@ -70,16 +56,6 @@ class SlabSearchPartition:
     fixed_indices: tuple[int, ...]
     mobile_slab_indices: tuple[int, ...]
     mobile_slab_symbols: tuple[str, ...]
-
-    @property
-    def n_top_bare(self) -> int:
-        """Trailing mobile count with no adsorbates."""
-        return self.n_mobile_slab
-
-    def n_top_with_adsorbates(self, n_adsorbate: int) -> int:
-        if n_adsorbate < 0:
-            raise SCGOValidationError("n_adsorbate must be >= 0")
-        return self.n_mobile_slab + int(n_adsorbate)
 
 
 def resolve_slab_search_partition(
@@ -101,7 +77,10 @@ def resolve_slab_search_partition(
             from_top=True,
         )
     else:
-        assert config.n_fix_bottom_slab_layers is not None
+        if config.n_fix_bottom_slab_layers is None:
+            raise SCGOValidationError(
+                "One of n_relax_top_slab_layers or n_fix_bottom_slab_layers must be set"
+            )
         fixed = _layer_indices_by_clustering(
             positions,
             axis,

@@ -10,20 +10,40 @@ import sys
 import tarfile
 import tomllib
 import traceback
-import urllib.request
 from pathlib import Path
 
-REPO_URL = "https://github.com/rlaplaza-lab/scgo.git"
 GIT_REF = "__GIT_REF__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
 MLIP_EXTRA = "__MLIP_EXTRA__"
 CONDA_ENV = "scgo-gpu"
 # Use /tmp so pytest/pip artifacts are not saved as Kaggle kernel output.
 WORKDIR = Path("/tmp/scgo")
-DATASET_INPUT = Path("/kaggle/input/scgocisrc")
+# Kaggle mounts datasets either at /kaggle/input/<slug> or the newer
+# /kaggle/input/datasets/<owner>/<slug>; _resolve_dataset_dir() probes for
+# whichever layout this kernel actually got.
+DATASET_OWNER = "rlaplaza"
+DATASET_SLUG = "scgocisrc"
+DATASET_INPUT = Path("/kaggle/input") / DATASET_SLUG
 SOURCE_ARCHIVE = "scgo-src.tar.gz"
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu124"
 PYPI_INDEX = "https://pypi.org/simple"
+
+# SCGO log phrases that mark a *real* GPU-memory degradation: a fused NEB force
+# batch that ran out of memory, the half-budget retry failing again, or a band
+# dropped without producing a saddle. Generic torch OOM text is deliberately not
+# matched: torch-sim's autobatcher probes memory by triggering OOM on purpose,
+# and the warm probe logs a non-fatal "Memory probing failed" on the way.
+# Unit tests that simulate these paths tag their message with
+# ``SYNTHETIC_FAILURE_TOKEN`` so they can never trip this guard.
+#
+# A "Parallel NEB band unusable" line is only counted as memory degradation when
+# it also carries a genuine degradation/never-ran substring (e.g. "out of
+# memory", "batched force evaluation", "neb not processed"). Non-finite forces
+# or bad-input ("model weights are corrupt") band failures are physics/numeric,
+# not GPU memory pressure, and a green run that contains them is not a
+# regression. This keeps the guard robust to unit-test simulations even if they
+# forget to tag their message with ``SYNTHETIC_FAILURE_TOKEN``.
+SYNTHETIC_FAILURE_TOKEN = "scgo-simulated-failure"
 
 
 def log(message: str) -> None:
@@ -37,11 +57,6 @@ def run(
     subprocess.run(cmd, check=True, cwd=cwd, env=env)
 
 
-def _python_ok(version: str) -> bool:
-    major, minor, *_ = (int(part) for part in version.split("."))
-    return (major, minor) >= (3, 12)
-
-
 def _log_kaggle_inputs() -> None:
     inputs_root = Path("/kaggle/input")
     if not inputs_root.is_dir():
@@ -53,31 +68,14 @@ def _log_kaggle_inputs() -> None:
             log(f"  {path} ({path.stat().st_size} bytes)")
 
 
-def _system_python() -> list[str] | None:
-    for candidate in ("python3.12", "python3", sys.executable, "python"):
-        if candidate == "python" and not shutil.which("python"):
-            continue
-        try:
-            completed = subprocess.run(
-                [
-                    candidate,
-                    "-c",
-                    "import sys; print('.'.join(map(str, sys.version_info[:3])))",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            continue
-        version = completed.stdout.strip()
-        log(f"Found {candidate} version {version}")
-        if _python_ok(version):
-            return [candidate]
-    return None
+def _conda_exe() -> str | None:
+    """Return a usable conda executable, or ``None`` when conda is unavailable.
 
-
-def _conda_exe() -> str:
+    Kaggle's default GPU image ships a plain CPython at
+    ``/usr/local/lib/python3.12`` with no conda; the newer GPU runtimes in
+    particular omit conda entirely. Callers must fall back to the system
+    interpreter when this returns ``None``.
+    """
     for candidate in (
         os.environ.get("CONDA_EXE", ""),
         "/opt/conda/bin/conda",
@@ -85,13 +83,13 @@ def _conda_exe() -> str:
     ):
         if candidate and (candidate == "conda" or os.path.isfile(candidate)):
             return candidate
-    raise RuntimeError(
-        "conda not found on PATH; set CONDA_EXE or install Miniconda/Anaconda"
-    )
+    return None
 
 
 def _conda_python() -> list[str]:
     conda = _conda_exe()
+    if conda is None:
+        raise RuntimeError("conda required for conda Python path but not found")
     conda_env = os.environ.copy()
     conda_env["CONDA_PLUGINS_AUTO_ACCEPT_TOS"] = "yes"
     for tos_cmd in (
@@ -118,12 +116,11 @@ def _conda_python() -> list[str]:
 
 
 def _resolve_python() -> list[str]:
-    system = _system_python()
-    if system is not None:
-        log("Using system Python (>= 3.12)")
-        return system
-    log("System Python unavailable or < 3.12; creating conda env")
-    return _conda_python()
+    """Prefer the conda env interpreter; fall back to the system interpreter when conda is absent."""
+    if _conda_exe() is not None:
+        return _conda_python()
+    log(f"conda not found; using system interpreter {sys.executable}")
+    return [sys.executable]
 
 
 def _safe_extractall(tar: tarfile.TarFile, path: Path) -> None:
@@ -140,26 +137,54 @@ def _extract_dataset_archive(archive: Path) -> None:
         _safe_extractall(tar, WORKDIR)
 
 
+def _resolve_dataset_dir() -> Path | None:
+    """Locate the mounted CI source dataset regardless of Kaggle's mount layout.
+
+    Kaggle exposes dataset inputs at either ``/kaggle/input/<slug>`` or the
+    newer ``/kaggle/input/datasets/<owner>/<slug>``; probe both, then fall back
+    to a recursive search so a path-layout change can't silently break source
+    discovery (the dataset is published and polled to 'complete' by the
+    kaggle-gpu.yml workflow before the kernel launches).
+    """
+    candidates = [
+        DATASET_INPUT,
+        Path("/kaggle/input/datasets") / DATASET_OWNER / DATASET_SLUG,
+    ]
+    for cand in candidates:
+        if cand.is_dir() and (cand / "pyproject.toml").is_file():
+            return cand
+    root = Path("/kaggle/input")
+    if root.is_dir():
+        for match in sorted(root.rglob(DATASET_SLUG)):
+            if match.is_dir() and (match / "pyproject.toml").is_file():
+                return match
+    return None
+
+
 def _find_dataset_archive() -> Path | None:
-    if not DATASET_INPUT.is_dir():
+    dataset_dir = _resolve_dataset_dir()
+    if dataset_dir is None:
         return None
-    direct = DATASET_INPUT / SOURCE_ARCHIVE
+    direct = dataset_dir / SOURCE_ARCHIVE
     if direct.is_file():
         return direct
-    matches = sorted(DATASET_INPUT.rglob(SOURCE_ARCHIVE))
+    matches = sorted(dataset_dir.rglob(SOURCE_ARCHIVE))
     return matches[0] if matches else None
 
 
 def _dataset_tree_ready() -> bool:
-    return DATASET_INPUT.is_dir() and (DATASET_INPUT / "pyproject.toml").is_file()
+    dataset_dir = _resolve_dataset_dir()
+    return dataset_dir is not None and (dataset_dir / "pyproject.toml").is_file()
 
 
 def _copy_dataset_tree() -> None:
+    dataset_dir = _resolve_dataset_dir()
+    assert dataset_dir is not None
     if WORKDIR.exists():
         shutil.rmtree(WORKDIR)
-    log(f"Copying bundled source tree from {DATASET_INPUT}")
+    log(f"Copying bundled source tree from {dataset_dir}")
     shutil.copytree(
-        DATASET_INPUT,
+        dataset_dir,
         WORKDIR,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
         dirs_exist_ok=True,
@@ -177,58 +202,14 @@ def _fetch_repo_from_dataset() -> bool:
     return False
 
 
-def _ensure_git() -> None:
-    if shutil.which("git"):
-        return
-    if shutil.which("apt-get"):
-        run(["apt-get", "update"])
-        run(["apt-get", "install", "-y", "git"])
-
-
-def _fetch_repo_from_network() -> None:
-    if WORKDIR.exists():
-        shutil.rmtree(WORKDIR)
-    WORKDIR.mkdir(parents=True, exist_ok=True)
-    _ensure_git()
-    if shutil.which("git"):
-        try:
-            run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--branch",
-                    GIT_REF,
-                    REPO_URL,
-                    str(WORKDIR),
-                ]
-            )
-            return
-        except subprocess.CalledProcessError as exc:
-            log(f"git clone failed ({exc}); falling back to source tarball")
-    archive_url = (
-        f"https://github.com/rlaplaza-lab/scgo/archive/refs/heads/{GIT_REF}.tar.gz"
-    )
-    archive_path = Path("/tmp/scgo-src-download.tar.gz")
-    log(f"Downloading {archive_url}")
-    urllib.request.urlretrieve(archive_url, archive_path)
-    extracted = Path(f"/tmp/scgo-{GIT_REF}")
-    if extracted.exists():
-        shutil.rmtree(extracted)
-    with tarfile.open(archive_path, "r:gz") as tar:
-        _safe_extractall(tar, Path("/tmp"))
-    if not extracted.is_dir():
-        raise FileNotFoundError(f"Expected extracted source at {extracted}")
-    shutil.move(str(extracted), str(WORKDIR))
-
-
 def _fetch_repo() -> None:
-    if _fetch_repo_from_dataset():
-        log("Using CI source bundle from Kaggle dataset input")
-        return
-    log("Dataset bundle not found; fetching source over the network")
-    _fetch_repo_from_network()
+    if not _fetch_repo_from_dataset():
+        raise FileNotFoundError(
+            "Kaggle dataset bundle 'rlaplaza/scgocisrc' not found in the kernel "
+            "input; the kaggle-gpu.yml workflow publishes and polls it to "
+            "'complete' before launching the kernel."
+        )
+    log("Using CI source bundle from Kaggle dataset input")
 
 
 def _numpy_requirement() -> str:
@@ -367,6 +348,67 @@ def _assert_cuda_usable(py: list[str]) -> None:
     )
 
 
+def _is_unexpected_oom_line(line: str) -> bool:
+    """True when ``line`` reports a genuine (non-simulated) GPU degradation.
+
+    The genuine-OOM substrings below mirror the canonical rule in
+    ``scgo.metadata.provenance.is_cuda_oom_error`` (``"out of memory"``).
+    """
+    lowered = line.lower()
+    if SYNTHETIC_FAILURE_TOKEN in lowered:
+        return False
+    # Genuine torch OOM text. ``torch.cuda.OutOfMemoryError`` and the cuBLAS/cuDNN
+    # ``RuntimeError`` both print "out of memory". Do not match generic
+    # "Memory Estimation" probe chatter (no OOM substring appears there).
+    if "out of memory" in lowered or "outofmemory" in lowered:
+        return True
+    # torch-sim's InFlight/BinningAutoBatcher raises a ``ValueError`` whose message
+    # contains "max_metric" when a later batch's metric exceeds the sticky cached
+    # scaler. That is a memory-degradation failure that can masquerade behind a
+    # "band unusable" / example-failure line, so treat it as unexpected.
+    if "max_metric" in lowered:
+        return True
+    # Synthetic degradation markers (kept for backwards-compat log scanning).
+    if "hit cuda oom" in lowered or "retry still oom" in lowered:
+        return True
+    # "Parallel NEB band unusable" is emitted for *any* band failure: non-finite
+    # forces, bad-input errors, etc. Only count it as memory degradation when the
+    # band line also names a genuine degradation / never-ran cause (the same
+    # substrings the TS degradation guard matches).
+    if "parallel neb band unusable" in lowered:
+        return any(
+            m in lowered
+            for m in (
+                "out of memory",
+                "outofmemory",
+                "batched force evaluation",
+                "neb not processed",
+            )
+        )
+    return False
+
+
+def _run_pytest_streaming(cmd: list[str], env: dict[str, str]) -> tuple[int, list[str]]:
+    """Run pytest, tee its output, and collect unexpected GPU-degradation lines."""
+    oom_lines: list[str] = []
+    with subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    ) as proc:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            if len(oom_lines) < 20 and _is_unexpected_oom_line(line):
+                oom_lines.append(line.rstrip())
+        returncode = proc.wait()
+    return returncode, oom_lines
+
+
 def main() -> int:
     try:
         _log_kaggle_inputs()
@@ -386,6 +428,15 @@ def main() -> int:
         env = os.environ.copy()
         env["SCGO_BATCH_TEST_SAMPLES"] = "15"
         env.setdefault("PYTHONUNBUFFERED", "1")
+        # Reduce allocator fragmentation on the 16 GB T4: the torch OOM
+        # traceback itself recommends this, and the fused NEB force batches are
+        # exactly the large short-lived allocations it helps with.
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        # e3nn (pulled by scgo[mace]) unpickles constants.pt via torch.load;
+        # PyTorch >=2.6 defaults weights_only=True and rejects it. Force the
+        # legacy default off so MACE imports regardless of the torch version the
+        # cu124 index resolves. Harmless on the UPET suite.
+        env.setdefault("TORCH_FORCE_WEIGHTS_ONLY_LOAD", "0")
 
         pytest_cmd = [
             *py,
@@ -396,6 +447,7 @@ def main() -> int:
             PYTEST_MARKER,
             "-v",
             "--tb=short",
+            "--timeout=1800",
             "--capture=tee-sys",
             "--log-cli-level=INFO",
             "--log-cli-format=%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -403,8 +455,18 @@ def main() -> int:
             "--durations=25",
         ]
         log("+ " + " ".join(pytest_cmd))
-        completed = subprocess.run(pytest_cmd, env=env)
-        return int(completed.returncode)
+        returncode, oom_lines = _run_pytest_streaming(pytest_cmd, env)
+        if oom_lines:
+            log("")
+            log(
+                "SCGO GPU CI: NEB bands were dropped due to GPU memory pressure. "
+                "Green tests are not enough here: this means the transition-state "
+                "stage silently degraded. Failing the job."
+            )
+            for line in oom_lines:
+                log(f"  OOM> {line}")
+            return returncode or 1
+        return int(returncode)
     except Exception:
         log("SCGO Kaggle runner failed:")
         log(traceback.format_exc())

@@ -12,7 +12,11 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
-from ase_ga.utilities import closest_distances_generator, get_all_atom_types
+from ase_ga.utilities import (
+    atoms_too_close_two_sets,
+    closest_distances_generator,
+    get_all_atom_types,
+)
 
 from scgo.ase_ga_patches.cutandsplicepairing import CutAndSplicePairing
 from scgo.ase_ga_patches.mutations import (
@@ -202,6 +206,28 @@ class TestSlabPositionsPreserved:
         assert len(result) == len(combined)
         assert np.allclose(result.positions[:n_slab], slab.positions)
         assert mut.last_attempt_count <= 5
+
+    def test_breathing_rejects_lateral_mic_slab_clash(self):
+        """Keep in-plane PBC for slab–mobile checks (single-atom scale is a no-op)."""
+        cell = np.diag([8.0, 8.0, 20.0])
+        pbc = [True, True, False]
+        slab = Atoms("Pt", positions=[[0.1, 4.0, 5.0]], cell=cell, pbc=pbc)
+        ads = Atoms("Pt", positions=[[7.7, 4.0, 6.5]], cell=cell, pbc=pbc)
+        blmin = {(78, 78): 2.0}
+        assert atoms_too_close_two_sets(slab, ads, blmin)
+        open_slab, open_ads = slab.copy(), ads.copy()
+        open_slab.pbc = open_ads.pbc = False
+        assert not atoms_too_close_two_sets(open_slab, open_ads, blmin)
+        mut = BreathingMutation(
+            blmin,
+            1,
+            system_type="surface_cluster",
+            test_dist_to_slab=True,
+            surface_normal_axis=2,
+            rng=np.random.default_rng(0),
+            max_inner_attempts=20,
+        )
+        assert mut.mutate(slab + ads) is None
 
     @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
     def test_in_plane_slide_preserves_slab(self, surface_system, seed):

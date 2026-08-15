@@ -7,6 +7,7 @@ import pytest
 from ase import Atoms
 from ase.build import molecule
 from ase.calculators.emt import EMT
+from ase.constraints import FixBondLengths
 from numpy.random import default_rng
 
 from scgo import parse_composition_arg
@@ -18,6 +19,7 @@ from scgo.cluster_adsorbate import (
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.system_types import (
+    AdsorbateDefinition,
     resolve_mobile_composition,
     validate_structure_for_system_type,
 )
@@ -44,6 +46,8 @@ def test_place_atomic_oxygen_pt3() -> None:
     cfg = ClusterAdsorbateConfig(max_placement_attempts=250)
     frag = place_fragment_on_cluster(core, o_tmpl, rng, cfg, anchor_index=0)
     assert frag is not None
+    assert len(frag) == 1
+    assert np.all(np.isfinite(frag.get_positions()))
     assert frag.get_chemical_symbols() == ["O"]
 
 
@@ -54,6 +58,8 @@ def test_place_atomic_hydrogen_pt3() -> None:
     cfg = ClusterAdsorbateConfig(max_placement_attempts=250)
     frag = place_fragment_on_cluster(core, h_tmpl, rng, cfg, anchor_index=0)
     assert frag is not None
+    assert len(frag) == 1
+    assert np.all(np.isfinite(frag.get_positions()))
     assert frag.get_chemical_symbols() == ["H"]
 
 
@@ -66,6 +72,8 @@ def test_place_water_pt3() -> None:
         core, h2o, rng, cfg, anchor_index=0, bond_axis=None
     )
     assert frag is not None
+    assert len(frag) == 3
+    assert np.all(np.isfinite(frag.get_positions()))
     assert frag.get_chemical_symbols() == ["O", "H", "H"]
 
 
@@ -104,8 +112,8 @@ def test_relax_water_connected_structure_emt() -> None:
     assert info["structure_ok_final"] is True
     assert info["bond_lengths"] == {}
     assert info["n_frag"] == 3
-    assert "output_provenance" in info
-    assert info["output_provenance"]["formula"] == "H2OPt3"
+    assert "output_provenance" not in info
+    assert info["formula"] == "H2OPt3"
 
 
 def test_attach_fix_bond_lengths_rejects_duplicate() -> None:
@@ -128,11 +136,11 @@ def test_gas_adsorbate_subgraph_integrity_optional_flag() -> None:
         cell=[20.0, 20.0, 20.0],
         pbc=False,
     )
-    adsorbate_definition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
 
     with pytest.raises(SCGOValidationError, match="fragment integrity check failed"):
         validate_structure_for_system_type(
@@ -163,11 +171,11 @@ def test_gas_adsorbate_subgraph_integrity_rejects_cross_fragment_bonding() -> No
         cell=[20.0, 20.0, 20.0],
         pbc=False,
     )
-    adsorbate_definition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "H"],
-        "adsorbate_fragment_lengths": [2, 1],
-    }
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "H"],
+        adsorbate_fragment_lengths=[2, 1],
+    )
 
     with pytest.raises(SCGOValidationError, match="fragment 0 bonded to fragment 1"):
         validate_structure_for_system_type(
@@ -193,11 +201,11 @@ def test_gas_adsorbate_subgraph_integrity_allows_cross_fragment_bonding_when_dis
         cell=[20.0, 20.0, 20.0],
         pbc=False,
     )
-    adsorbate_definition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "H"],
-        "adsorbate_fragment_lengths": [2, 1],
-    }
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "H"],
+        adsorbate_fragment_lengths=[2, 1],
+    )
 
     validate_structure_for_system_type(
         atoms,
@@ -221,18 +229,22 @@ def test_attach_adsorbate_internal_geometry_constraints_freezes_bonds() -> None:
         cell=[20.0, 20.0, 20.0],
         pbc=False,
     )
-    adsorbate_definition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
     attach_adsorbate_internal_geometry_constraints(
         atoms,
         n_slab=0,
         adsorbate_definition=adsorbate_definition,
     )
-    # Two OH fragments, each contributes one constrained pair.
-    assert len(atoms.constraints) == 2
+    # A single FixBondLengths holds every intra-fragment pair (one pair per OH).
+    assert len(atoms.constraints) == 1
+    constraint = atoms.constraints[0]
+    assert isinstance(constraint, FixBondLengths)
+    pairs = {tuple(sorted(int(x) for x in pair)) for pair in constraint.pairs}
+    assert pairs == {(2, 3), (4, 5)}
 
 
 def test_build_adsorbate_definition_allows_shared_oxygen_in_core_and_adsorbate() -> (
@@ -253,8 +265,8 @@ def test_build_adsorbate_definition_allows_shared_oxygen_in_core_and_adsorbate()
         context="test",
     )
 
-    assert ads_def["core_symbols"] == core
-    assert ads_def["adsorbate_symbols"] == ["O", "H"]
+    assert ads_def.core_symbols == core
+    assert ads_def.adsorbate_symbols == ["O", "H"]
     assert full == core + ["O", "H"]
 
 
@@ -267,20 +279,37 @@ def test_build_adsorbate_definition_allows_shared_oxygen_in_core_and_adsorbate()
 )
 def test_resolve_mobile_composition(composition: list[str]) -> None:
     core = ["Ru"] * 9 + ["W", "W", "O"]
-    ads_def = {
-        "core_symbols": core,
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
-    assert resolve_mobile_composition(composition, ads_def) == core + ["O", "H"]
+    ads_def = AdsorbateDefinition(
+        core_symbols=core,
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    assert resolve_mobile_composition(composition, ads_def)[0] == core + ["O", "H"]
+
+
+def test_resolve_mobile_composition_does_not_mutate_input() -> None:
+    """Reconciliation must not mutate the caller's adsorbate_definition."""
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Ru"] * 10 + ["W", "O"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    before = ads_def
+    parsed = parse_composition_arg("HO2Ru9W2")
+    _, reconciled = resolve_mobile_composition(parsed, ads_def)
+    assert ads_def == before
+    assert reconciled.core_symbols != ads_def.core_symbols
+    assert get_composition_counts(reconciled.core_symbols) == get_composition_counts(
+        ["Ru"] * 9 + ["W", "W", "O"]
+    )
 
 
 def test_resolve_mobile_composition_rejects_count_mismatch() -> None:
-    ads_def = {
-        "core_symbols": ["Ru"] * 10 + ["W", "O"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Ru"] * 10 + ["W", "O"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     composition = ["Ru"] * 9 + ["W", "W", "O", "O"]
     with pytest.raises(SCGOValidationError, match="got counts|expected"):
         resolve_mobile_composition(composition, ads_def, context="test")
@@ -288,16 +317,16 @@ def test_resolve_mobile_composition_rejects_count_mismatch() -> None:
 
 def test_resolve_mobile_composition_reconciles_wrong_preset_core() -> None:
     """HO2Ru9W2 with stale Ru10WO preset core is reconciled to Ru9W2O + OH."""
-    ads_def = {
-        "core_symbols": ["Ru"] * 10 + ["W", "O"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Ru"] * 10 + ["W", "O"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     parsed = parse_composition_arg("HO2Ru9W2")
     expected_core = ["Ru"] * 9 + ["W", "W", "O"]
-    result = resolve_mobile_composition(parsed, ads_def)
+    result, reconciled = resolve_mobile_composition(parsed, ads_def)
     assert get_composition_counts(result) == get_composition_counts(parsed)
-    assert get_composition_counts(ads_def["core_symbols"]) == get_composition_counts(
+    assert get_composition_counts(reconciled.core_symbols) == get_composition_counts(
         expected_core
     )
     assert result[-2:] == ["O", "H"]
@@ -306,10 +335,10 @@ def test_resolve_mobile_composition_reconciles_wrong_preset_core() -> None:
 def test_ho2ru9w2_formula_resolves_with_matching_adsorbate_definition() -> None:
     """Campaign formula HO2Ru9W2 must match Ru9W2O core + OH adsorbate, not Ru10W1O."""
     core = ["Ru"] * 9 + ["W", "W", "O"]
-    ads_def = {
-        "core_symbols": core,
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=core,
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     parsed = parse_composition_arg("HO2Ru9W2")
-    assert resolve_mobile_composition(parsed, ads_def) == core + ["O", "H"]
+    assert resolve_mobile_composition(parsed, ads_def)[0] == core + ["O", "H"]

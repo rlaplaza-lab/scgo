@@ -56,7 +56,8 @@ def ensure_rng_or_create(rng: np.random.Generator | None) -> np.random.Generator
         np.random.Generator instance (never None).
 
     Raises:
-        TypeError: If ``rng`` is not ``None`` and not an instance of ``np.random.Generator``.
+        SCGOValidationError: If ``rng`` is not ``None`` and not an instance of
+            ``np.random.Generator``.
     """
     if rng is None:
         return np.random.default_rng()

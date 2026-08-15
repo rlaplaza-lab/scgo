@@ -1,47 +1,56 @@
+"""Mutation that uniformly scales atom positions about the center of positions."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that uniformly scales atom positions relative to the centre of mass."""
 
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
-from scgo.ase_ga_patches.mutations._common import _ensure_rng
+from scgo.ase_ga_patches.mutations._common import (
+    _IDENTITY_ATOL,
+    _ensure_rng,
+    _preserves_mobile_connectivity,
+    _reanchor_mobile_to_slab,
+)
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import get_blmin_distance as _get_blmin_distance
+from scgo.initialization.steric_scoring import _blmin_matrix
 from scgo.system_types import SystemType, get_system_policy
 
 __all__ = ["BreathingMutation"]
 
 
 class BreathingMutation(OffspringCreator):
-    """Uniformly scales all atom positions relative to the centre of mass.
+    """Uniformly scales all atom positions relative to the center of positions.
 
-    Each attempt samples a random scale factor in ``[scale_min, scale_max]``
-    and accepts if no pair of atoms violates *blmin*.
+    Candidate scale factors are enumerated deterministically within
+    ``[scale_min, scale_max]``, always including 1.0 when it is valid, and the
+    first candidate that violates no *blmin* pair is accepted. When no scale in
+    that window can clear *blmin*, the smallest relieving uniform expansion is
+    used even if it exceeds ``scale_max``.
 
     Parameters
     ----------
     blmin : dict
         Minimum allowed interatomic distances.
     n_top : int
-        Number of atoms optimised by the GA.
+        Number of atoms optimized by the GA.
     scale_min, scale_max : float
-        Bounds for the uniform scale-factor distribution.
+        Bounds for the candidate scale factors.
     test_dist_to_slab : bool
         Also check distances to slab atoms.
     rng : numpy.random.Generator or None
         Random number generator.
     max_inner_attempts : int
-        Maximum number of random scale attempts per call.
+        Upper bound on the number of candidate scales per call (capped at 8).
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, scale_min=0.9, scale_max=1.1,
                  test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=1000):
+                 max_inner_attempts=1000, surface_normal_axis=2):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -53,6 +62,7 @@ class BreathingMutation(OffspringCreator):
         self.system_type = system_type
         self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
+        self.surface_normal_axis = surface_normal_axis
         self.last_attempt_count = 0
         self.descriptor = "BreathingMutation"
         self.min_inputs = 1
@@ -69,13 +79,8 @@ class BreathingMutation(OffspringCreator):
         if np.any(distances <= 1e-12):
             return np.inf
 
-        # Compute pairwise blmin requirements
-        blmin_matrix = np.zeros((n_atoms, n_atoms), dtype=float)
-        for i in range(n_atoms):
-            for j in range(i + 1, n_atoms):
-                blmin_matrix[i, j] = _get_blmin_distance(self.blmin, atomic_numbers[i], atomic_numbers[j])
-
-        # We only need the condensed upper triangle for blmin
+        # Compute pairwise blmin requirements (condensed upper triangle)
+        blmin_matrix = _blmin_matrix(atomic_numbers, self.blmin)
         required_condensed = blmin_matrix[np.triu_indices(n_atoms, k=1)]
 
         # Calculate minimum required scale to avoid clashes
@@ -138,35 +143,12 @@ class BreathingMutation(OffspringCreator):
 
         if contraction_candidates and expansion_candidates:
             append_candidate(0.5 * (feasible_lower + self.scale_max))
-        # Always include unit scale (1.0) as a candidate, regardless of interval width,
-        # as long as it's within the valid range. This is important for cases where
-        # the cluster is already in a good configuration and scaling would make it worse.
+        # Always include unit scale (1.0) when valid, since an already-optimal
+        # cluster should not be forced to scale.
         if feasible_lower <= 1.0 <= self.scale_max + tol or allow_unit_scale:
             append_candidate(1.0, force=True)
 
-        # Ensure unit scale (1.0) is included in the final candidates if it's valid,
-        # even if it means slightly exceeding max_candidates. This is important because
-        # scale=1.0 (no scaling) is often the safest option and should always be tried.
-        if feasible_lower <= 1.0 <= self.scale_max + tol and 1.0 not in candidates:
-            # Make room for scale=1.0 by removing the last candidate if necessary
-            if len(candidates) >= max_candidates:
-                candidates = candidates[:max_candidates - 1]
-            append_candidate(1.0, force=True)
-
-        # Ensure scale=1.0 is in the final candidates if it's valid
-        # (it might have been truncated off if it was added last)
-        if feasible_lower <= 1.0 <= self.scale_max + tol and 1.0 not in candidates[:max_candidates]:
-            # Replace the last candidate with scale=1.0
-            if len(candidates) >= max_candidates:
-                candidates = candidates[:max_candidates - 1]
-            else:
-                candidates = candidates[:]
-            append_candidate(1.0, force=True)
-            candidates = candidates[:max_candidates]
-        else:
-            candidates = candidates[:max_candidates]
-
-        return candidates
+        return candidates[:max_candidates]
 
     def get_new_individual(self, parents):
         f = parents[0]
@@ -176,31 +158,53 @@ class BreathingMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
         pos = top.get_positions()
-        cm = np.average(pos, axis=0)
         num = top.get_atomic_numbers()
         cell = top.get_cell()
         pbc = top.get_pbc()
+        tags = top.get_tags() if hasattr(top, "get_tags") else np.arange(N)
+
+        # Determine which tags to target
+        unique_tags = np.unique(tags)
+        if self.target_tags is not None:
+            target_tags_set = set(self.target_tags)
+            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
+            if len(unique_tags) == 0:
+                return None
+
+        # Only the targeted tag groups are scaled; the rest stay put.
+        mask = np.isin(tags, unique_tags)
+        if not np.any(mask):
+            return None
+
+        cm = np.average(pos[mask], axis=0)
+        use_mic = bool(self._policy.uses_surface)
 
         self.last_attempt_count = 0
-        for scale in self._candidate_scales(pos, num, slab):
+        for scale in self._candidate_scales(pos[mask], num[mask], slab):
             self.last_attempt_count += 1
+            if abs(float(scale) - 1.0) <= _IDENTITY_ATOL:
+                continue
             s = scale
-            new_pos = cm + s * (pos - cm)
-            # Check with proper PBC to avoid periodic image violations
-            cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc)
+            new_pos = pos.copy()
+            new_pos[mask] = cm + s * (pos[mask] - cm)
+            cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc, tags=tags)
+            if self._policy.uses_surface:
+                cand = _reanchor_mobile_to_slab(
+                    top, cand, slab, self.surface_normal_axis)
             if atoms_too_close(cand, self.blmin):
                 continue
-            if self.test_dist_to_slab and len(slab) > 0:
-                # Disable PBC for slab-candidate check to avoid periodic image artifacts
-                slab_np = slab.copy()
-                slab_np.pbc = [False, False, False]
-                cand_np = cand.copy()
-                cand_np.pbc = [False, False, False]
-                if atoms_too_close_two_sets(slab_np, cand_np, self.blmin):
-                    continue
-            # Return with original PBC
+            # Keep slab PBC (typically in-plane only) so lateral MIC clashes
+            # are rejected the same way as other surface mutations.
+            if (
+                self.test_dist_to_slab
+                and len(slab) > 0
+                and atoms_too_close_two_sets(slab, cand, self.blmin)
+            ):
+                continue
+            if not _preserves_mobile_connectivity(top, cand, use_mic=use_mic):
+                continue
             return slab + cand
         return None
 

@@ -11,10 +11,14 @@ from scgo.cluster_adsorbate.feasibility import validate_adsorbate_placement_feas
 from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import get_tag
 from scgo.system_types import (
+    AdsorbateDefinition,
     build_adsorbate_definition_from_inputs,
     resolve_adsorbate_fragments,
 )
+
+_SITE_TYPE_VOCABULARY = {"vertex", "edge", "facet", "directional_fallback"}
 
 
 def _oh_template(offset_x: float = 0.0) -> Atoms:
@@ -27,25 +31,24 @@ def _oh_template(offset_x: float = 0.0) -> Atoms:
 
 def test_resolve_rejects_combined_template_for_multiple_fragments() -> None:
     combined = _oh_template(0.0) + _oh_template(2.2)
-    ads_def = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
     with pytest.raises(SCGOValidationError, match="one combined adsorbate template"):
         resolve_adsorbate_fragments(combined, ads_def)
 
 
 def test_gas_hierarchical_places_two_oh_separately() -> None:
     mobile = ["Pt", "Pt", "Pt", "O", "H", "O", "H"]
-    ads_def = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
     rng = default_rng(11)
     out = build_hierarchical_core_fragment_cluster(
-        mobile,
         ads_def,
         rng,
         "**/*.db",
@@ -63,6 +66,12 @@ def test_gas_hierarchical_places_two_oh_separately() -> None:
     assert float(np.linalg.norm(o_positions[0] - o_positions[1])) > 1.0
     ok, err = validate_combined_cluster_structure(out)
     assert ok, err
+    # Per-fragment site metadata must be recorded and drawn from the known
+    # site-type vocabulary (folded from the deleted test_multi_fragment_site_metadata).
+    site_types = get_tag(out, "adsorbate_site_types_json")
+    assert site_types is not None
+    assert len(site_types) == 2
+    assert all(isinstance(t, str) and t in _SITE_TYPE_VOCABULARY for t in site_types)
 
 
 def test_hierarchical_site_core_stays_metal_core(monkeypatch) -> None:
@@ -80,14 +89,12 @@ def test_hierarchical_site_core_stays_metal_core(monkeypatch) -> None:
 
     monkeypatch.setattr(hier, "place_fragment_on_cluster", _tracking_place)
 
-    mobile = ["Pt", "Pt", "Pt", "O", "H", "O", "H"]
-    ads_def = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
     out = build_hierarchical_core_fragment_cluster(
-        mobile,
         ads_def,
         default_rng(11),
         "**/*.db",

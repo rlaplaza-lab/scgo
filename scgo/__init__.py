@@ -1,27 +1,33 @@
-"""SCGO: cluster global optimization tools. See README.md and examples/ for usage."""
+"""SCGO: global optimization and TS search tools. See README.md and examples/."""
 
 from __future__ import annotations
 
-# Configure PyTorch allocator so reserved memory segments can expand instead of
-# fragmenting; recommended for long-running TS campaigns. Set unconditionally so
-# callers do not need to export it in the shell.
 import os
 
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+def configure() -> None:
+    """Apply SCGO runtime configuration.
+
+    Currently sets ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` unless
+    already present in the environment. Skipped entirely when
+    ``SCGO_SKIP_PYTORCH_CONFIG`` is set.
+    """
+    if os.environ.get("SCGO_SKIP_PYTORCH_CONFIG"):
+        return
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 # Algorithms
 from scgo._version import __version__
 from scgo.algorithms import bh_go, ga_go
 
 # Cluster + adsorbate (composable local relax)
-from scgo.cluster_adsorbate import (
-    ClusterAdsorbateConfig,
-    attach_fix_bond_lengths,
-    combine_core_adsorbate,
-    place_fragment_on_cluster,
-    relax_metal_cluster_with_adsorbate,
-    validate_combined_cluster_structure,
-)
+from scgo.cluster_adsorbate.combine import combine_core_adsorbate
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.constraints import attach_fix_bond_lengths
+from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.cluster_adsorbate.relax import relax_metal_cluster_with_adsorbate
+from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 
 # Database
 from scgo.database import (
@@ -57,6 +63,10 @@ from scgo.param_presets import (
     get_default_upet_params,
     get_diversity_params,
     get_high_energy_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
+    get_low_effort_uma_ga_params,
+    get_low_effort_upet_ga_params,
     get_minimal_ga_params,
     get_testing_params,
     get_torchsim_ga_params,
@@ -78,13 +88,13 @@ from scgo.runner_api import (
 )
 
 # Surface / adsorption
-from scgo.surface import (
-    SurfaceSystemConfig,
-    adsorption_energy,
+from scgo.surface.config import SurfaceSystemConfig, make_surface_config
+from scgo.surface.objectives import adsorption_energy
+from scgo.surface.presets import (
     make_defected_graphite_surface_config,
+    make_graphene_surface_config,
     make_graphite_surface_config,
     make_n_doped_graphite_surface_config,
-    make_surface_config,
 )
 
 # Utilities
@@ -120,6 +130,8 @@ __all__ = [
     "SCGODatabaseError",
     "SCGONotImplementedError",
     "SCGOFileError",
+    # Runtime configuration
+    "configure",
     # Algorithms (for advanced users)
     "bh_go",
     "ga_go",
@@ -135,6 +147,7 @@ __all__ = [
     # Surface
     "SurfaceSystemConfig",
     "adsorption_energy",
+    "make_graphene_surface_config",
     "make_graphite_surface_config",
     "make_defected_graphite_surface_config",
     "make_n_doped_graphite_surface_config",
@@ -153,6 +166,10 @@ __all__ = [
     "get_default_params",
     "get_diversity_params",
     "get_high_energy_params",
+    "get_low_effort_torchsim_ga_params",
+    "get_low_effort_upet_ga_params",
+    "get_low_effort_uma_ga_params",
+    "get_low_effort_ts_search_params",
     "get_minimal_ga_params",
     "get_testing_params",
     "get_ts_search_params",

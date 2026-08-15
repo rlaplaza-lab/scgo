@@ -160,3 +160,69 @@ def test_diversity_scorer_len():
 
     scorer.add_reference(Atoms("Pt3", positions=[[0, 0, 0], [3, 0, 0], [0, 3, 0]]))
     assert len(scorer) == 3
+
+
+def test_ragged_descriptors_do_not_raise_value_error():
+    """Inhomogeneous descriptor lengths must not reach np.array (ValueError)."""
+    ref1 = Atoms("Pt2", positions=[[0, 0, 0], [2, 0, 0]])
+    ref2 = Atoms("Pt4", positions=[[0, 0, 0], [2, 0, 0], [1, 2, 0], [0, 0, 2]])
+
+    comparator = PureInteratomicDistanceComparator()
+    scorer = DiversityScorer([ref1, ref2], comparator)
+
+    # Ragged references yield no descriptor matrix instead of crashing.
+    assert scorer._ref_descriptors is None
+    assert len(scorer) == 2
+
+
+def test_compute_descriptors_returns_none_for_mixed_lengths(monkeypatch):
+    """Explicitly mixed-length descriptors return None (zero-diversity path)."""
+    comparator = PureInteratomicDistanceComparator()
+    scorer = DiversityScorer([], comparator)
+
+    structures = [
+        Atoms("Pt3", positions=[[0, 0, 0], [2, 0, 0], [1, 2, 0]]),
+        Atoms("Pt3", positions=[[0, 0, 0], [3, 0, 0], [0, 3, 0]]),
+    ]
+    lengths = iter([3, 5])
+    monkeypatch.setattr(
+        DiversityScorer,
+        "_atoms_to_descriptor",
+        lambda self, atoms: np.ones(next(lengths)),
+    )
+
+    result = scorer._compute_descriptors(structures)
+
+    assert result is None
+
+
+def test_score_with_ragged_references_is_defined():
+    """Scoring against ragged references falls back to a finite pairwise score."""
+    ref1 = Atoms("Pt2", positions=[[0, 0, 0], [2, 0, 0]])
+    ref2 = Atoms("Pt4", positions=[[0, 0, 0], [2, 0, 0], [1, 2, 0], [0, 0, 2]])
+
+    comparator = PureInteratomicDistanceComparator()
+    scorer = DiversityScorer([ref1, ref2], comparator)
+
+    score = scorer.score(
+        Atoms("Pt4", positions=[[0, 0, 0], [3, 0, 0], [0, 3, 0], [0, 0, 3]])
+    )
+
+    assert isinstance(score, float)
+    assert np.isfinite(score)
+    assert score >= 0.0
+
+
+def test_add_reference_recovers_from_ragged_references():
+    """Adding a reference after a ragged set must not crash or mis-shape state."""
+    ref1 = Atoms("Pt2", positions=[[0, 0, 0], [2, 0, 0]])
+    ref2 = Atoms("Pt4", positions=[[0, 0, 0], [2, 0, 0], [1, 2, 0], [0, 0, 2]])
+
+    comparator = PureInteratomicDistanceComparator()
+    scorer = DiversityScorer([ref1, ref2], comparator)
+    assert scorer._ref_descriptors is None
+
+    scorer.add_reference(Atoms("Pt3", positions=[[0, 0, 0], [2, 0, 0], [1, 2, 0]]))
+
+    assert len(scorer) == 3
+    assert scorer._ref_descriptors is None

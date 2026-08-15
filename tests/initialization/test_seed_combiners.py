@@ -5,6 +5,7 @@ them to target compositions in genetic algorithm workflows.
 """
 
 import numpy as np
+import pytest
 from ase import Atoms
 
 from scgo.initialization import combine_and_grow, combine_seeds
@@ -13,7 +14,7 @@ from scgo.initialization.geometry_helpers import (
 )
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import create_paired_rngs
+from tests.helpers import create_paired_rngs
 
 
 def test_combine_seeds_empty_list(rng):
@@ -332,6 +333,8 @@ def test_combine_seeds_connectivity_factor(rng):
         )
 
 
+@pytest.mark.reproducibility
+@pytest.mark.requires_cache_isolation
 def test_combine_seeds_reproducibility():
     """Test that seed combination is reproducible with same RNG seed."""
     seed1 = Atoms("Pt2", positions=[[0, 0, 0], [2.8, 0, 0]])

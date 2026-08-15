@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from scgo.exceptions import SCGORuntimeError
+from scgo.exceptions import SCGODatabaseError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -56,11 +56,12 @@ def database_retry(
 
     When ``exception_types`` is ``None`` (default), only
     :exc:`~sqlite3.OperationalError` messages classified by
-    :func:`is_retryable_error` and any :exc:`OSError` are retried.
+    ``is_retryable_error`` and any :exc:`OSError` are retried.
 
-    When ``exception_types`` is set (e.g. :data:`HPC_DATABASE_EXCEPTIONS`), those
+    When ``exception_types`` is set (e.g. ``HPC_DATABASE_EXCEPTIONS``), those
     exception types are retried without the SQLite message filter — matching the
-    historical behavior when callers pass ``exception_types`` explicitly (e.g. BH/simple).
+    historical behavior when callers pass ``exception_types`` explicitly (e.g.
+    the basin-hopping and simple global-optimization drivers).
     """
     effective_config = config or PRESET_DEFAULT
     n_retries = effective_config.max_retries
@@ -76,7 +77,7 @@ def database_retry(
     for attempt in range(n_retries):
         try:
             return operation()
-        except Exception as e:
+        except Exception as e:  # broad by design: only re-raises non-retryable errors; retryables are retried then re-raised at the end
             if exception_types is None:
                 if isinstance(e, sqlite3.OperationalError):
                     if not is_retryable_error(e):
@@ -101,7 +102,7 @@ def database_retry(
 
 
 def is_retryable_error(error: Exception) -> bool:
-    """True for sqlite OperationalError messages that often clear after a short wait."""
+    """True for SQLite ``OperationalError`` messages that often clear after a wait."""
     if not isinstance(error, sqlite3.OperationalError):
         return False
 
@@ -171,6 +172,12 @@ def retry_transaction(
 
     Returns:
         The return value of ``operation`` on success.
+
+    Raises:
+        sqlite3.OperationalError: If the error is not retryable, or if the last
+            attempt still fails.
+        SCGODatabaseError: If the retry loop ends without a result (should not
+            happen for a positive ``max_retries``).
     """
     from scgo.database.transactions import database_transaction
 
@@ -198,4 +205,4 @@ def retry_transaction(
                     f"{effective_config.max_retries} attempts"
                 )
                 raise
-    raise SCGORuntimeError(f"{operation_name} failed unexpectedly")
+    raise SCGODatabaseError(f"{operation_name} failed unexpectedly")

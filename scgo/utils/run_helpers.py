@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import gc
-from functools import cache
 from typing import Any
 
 import numpy as np
@@ -33,35 +32,113 @@ from scgo.utils.helpers import (
     auto_niter_local_relaxation,
     auto_population_size,
     deep_merge_dicts,
-    filter_dict_keys,
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
+from scgo.utils.parallel_workers import inherit_n_jobs
+
+logger = get_logger(__name__)
+
+# Allowed per-algorithm parameter keys for :func:`validate_algorithm_params`.
+_VALID_ALGO_PARAMS: dict[str, frozenset[str]] = {
+    "simple": frozenset(
+        {
+            "optimizer",
+            "fmax",
+            "niter",
+            "niter_local_relaxation",
+        }
+    ),
+    "bh": frozenset(
+        {
+            "optimizer",
+            "fmax",
+            "niter",
+            "niter_local_relaxation",
+            "temperature",
+            "dr",
+            "move_fraction",
+            "move_strategy",
+            "deduplicate",
+            "energy_tolerance",
+            "comparator_tol",
+            "comparator_pair_cor_max",
+            "comparator_n_top",
+            "fitness_strategy",
+            "diversity_reference_db",
+            "diversity_max_references",
+            "diversity_update_interval",
+            "n_slab",
+            "write_timing_json",
+            "detailed_timing",
+            "enforce_adsorbate_subgraph_integrity",
+            "freeze_adsorbate_internal_geometry",
+        }
+    ),
+    "ga": frozenset(
+        {
+            "optimizer",
+            "fmax",
+            "niter",
+            "niter_local_relaxation",
+            "population_size",
+            "offspring_fraction",
+            "n_jobs_population_init",
+            "n_jobs_offspring",
+            "mutation_probability",
+            "max_mutation_probability",
+            "vacuum",
+            "previous_search_glob",
+            "energy_tolerance",
+            "use_adaptive_mutations",
+            "stagnation_trigger",
+            "stagnation_full_trigger",
+            "aggressive_burst_multiplier",
+            "recovery_window",
+            "early_stopping_niter",
+            "batch_size",
+            "relaxer",
+            "fitness_strategy",
+            "diversity_reference_db",
+            "diversity_max_references",
+            "diversity_update_interval",
+            "write_timing_json",
+            "detailed_timing",
+            "enforce_adsorbate_subgraph_integrity",
+            "freeze_adsorbate_internal_geometry",
+        }
+    ),
+}
 
 
-@cache
+_CALCULATORS: dict[str, Any] | None = None
+
+
 def _get_calculators() -> dict[str, Any]:
     """ASE calculator registry; MLIP entries are None if extras are not installed."""
-    calcs: dict[str, Any] = {"EMT": EMT}
-    try:
-        from scgo.calculators.mace_helpers import MACE
+    global _CALCULATORS
+    if _CALCULATORS is None:
+        calcs: dict[str, Any] = {"EMT": EMT}
+        try:
+            from scgo.calculators.mace_helpers import MACE as _MACE
 
-        calcs["MACE"] = MACE
-    except ImportError:
-        calcs["MACE"] = None
-    try:
-        from scgo.calculators.uma_helpers import UMA
+            calcs["MACE"] = _MACE
+        except ImportError:
+            calcs["MACE"] = None
+        try:
+            from scgo.calculators.uma_helpers import UMA as _UMA
 
-        calcs["UMA"] = UMA
-    except ImportError:
-        calcs["UMA"] = None
-    try:
-        from scgo.calculators.upet_helpers import UPET
+            calcs["UMA"] = _UMA
+        except ImportError:
+            calcs["UMA"] = None
+        try:
+            from scgo.calculators.upet_helpers import UPET as _UPET
 
-        calcs["UPET"] = UPET
-    except ImportError:
-        calcs["UPET"] = None
-    return calcs
+            calcs["UPET"] = _UPET
+        except ImportError:
+            calcs["UPET"] = None
+        _CALCULATORS = calcs
+    return _CALCULATORS
 
 
 def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
@@ -89,7 +166,7 @@ def initialize_ts_params(
     surface_config: SurfaceSystemConfig | None = None,
     go_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Initialize and merge TS params with :func:`get_ts_search_params` defaults.
+    """Initialize and merge TS params with :func:`~scgo.get_ts_search_params` defaults.
 
     When ``go_params`` is provided, calculator settings are aligned with the
     merged GO dict unless overridden in ``ts_params``.
@@ -158,7 +235,6 @@ def log_params_resolution(
     verbosity: int,
 ) -> None:
     """Log how user params were merged onto preset defaults."""
-    logger = get_logger(__name__)
     if verbosity < 1:
         return
     if user_params is None:
@@ -190,7 +266,7 @@ def get_calculator_class(calculator_name: str) -> type:
         Calculator class.
 
     Raises:
-        ValueError: If calculator name is unknown or not available.
+        SCGOValidationError: If calculator name is unknown or not available.
     """
     calculators = _get_calculators()
     if calculator_name not in calculators:
@@ -211,89 +287,18 @@ def get_calculator_class(calculator_name: str) -> type:
 def validate_algorithm_params(
     algo_params: dict[str, Any],
     chosen_go: str,
-    verbosity: int,
 ) -> None:
     """Validate algorithm-specific parameters.
 
     Args:
         algo_params: Dictionary of algorithm-specific parameters.
         chosen_go: Name of chosen algorithm ('simple', 'bh', or 'ga').
-        verbosity: Logging verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
+
+    Raises:
+        SCGOValidationError: If ``algo_params`` contains keys that are not
+            allowed for ``chosen_go``.
     """
-    valid_algo_params = {
-        "simple": {
-            "optimizer",
-            "fmax",
-            "niter",
-            "niter_local_relaxation",
-            "system_type",
-        },
-        "bh": {
-            "optimizer",
-            "fmax",
-            "niter",
-            "niter_local_relaxation",
-            "temperature",
-            "dr",
-            "move_fraction",
-            "move_strategy",
-            "deduplicate",
-            "energy_tolerance",
-            "comparator_tol",
-            "comparator_pair_cor_max",
-            "comparator_n_top",
-            "fitness_strategy",
-            "diversity_reference_db",
-            "diversity_max_references",
-            "diversity_update_interval",
-            "system_type",
-            "surface_config",
-            "n_slab",
-            "write_timing_json",
-            "detailed_timing",
-            "adsorbate_definition",
-            "adsorbate_fragment_template",
-            "cluster_adsorbate_config",
-            "enforce_adsorbate_subgraph_integrity",
-            "freeze_adsorbate_internal_geometry",
-        },
-        "ga": {
-            "optimizer",
-            "fmax",
-            "niter",
-            "niter_local_relaxation",
-            "population_size",
-            "offspring_fraction",
-            "n_jobs_population_init",
-            "n_jobs_offspring",
-            "mutation_probability",
-            "max_mutation_probability",
-            "vacuum",
-            "previous_search_glob",
-            "energy_tolerance",
-            "use_adaptive_mutations",
-            "stagnation_trigger",
-            "stagnation_full_trigger",
-            "aggressive_burst_multiplier",
-            "recovery_window",
-            "early_stopping_niter",
-            "batch_size",
-            "relaxer",
-            "fitness_strategy",
-            "diversity_reference_db",
-            "diversity_max_references",
-            "diversity_update_interval",
-            "surface_config",
-            "system_type",
-            "write_timing_json",
-            "detailed_timing",
-            "adsorbate_definition",
-            "adsorbate_fragment_template",
-            "cluster_adsorbate_config",
-            "enforce_adsorbate_subgraph_integrity",
-            "freeze_adsorbate_internal_geometry",
-        },
-    }
+    valid_algo_params = _VALID_ALGO_PARAMS
 
     if chosen_go in valid_algo_params:
         unexpected_algo_keys = set(algo_params.keys()) - valid_algo_params[chosen_go]
@@ -375,7 +380,7 @@ def _resolve_fitness_strategy(
         Resolved fitness strategy string.
 
     Raises:
-        ValueError: If fitness strategy is invalid.
+        SCGOValidationError: If fitness strategy is invalid.
     """
     top_level_fitness_strategy = params.get("fitness_strategy", "low_energy")
     return resolve_fitness_strategy(
@@ -392,7 +397,7 @@ def resolve_diversity_params(
     """Resolve diversity parameters for fitness strategy.
 
     Extracts diversity parameters from algorithm-specific params or top-level params,
-    with algorithm-specific taking precedence. Raises ValueError if required
+    with algorithm-specific taking precedence. Raises SCGOValidationError if required
     diversity_reference_db is missing.
 
     Args:
@@ -407,7 +412,7 @@ def resolve_diversity_params(
         - diversity_update_interval (default: 5)
 
     Raises:
-        ValueError: If diversity_reference_db is not provided.
+        SCGOValidationError: If diversity_reference_db is not provided.
     """
     diversity_params = {}
 
@@ -451,22 +456,25 @@ def prepare_algorithm_kwargs(
     """Unified parameter preparation for algorithm execution.
 
     Resolves "auto" parameter values, converts optimizer string names to
-    classes, resolves fitness strategy, and filters out top-level keys that
-    shouldn't be passed to algorithms.
+    classes, resolves fitness strategy, and replaces the raw ``niter`` /
+    ``population_size`` entries with their resolved values. For the GA it also
+    applies the CPU parallelism cascade, so ``n_jobs_population_init`` /
+    ``n_jobs_offspring`` inherit the top-level ``params["n_jobs"]`` when they are
+    not set explicitly (see :mod:`scgo.utils.parallel_workers`).
 
     Args:
         algo_params: Dictionary of algorithm-specific parameters from optimizer_params.
         params: Full top-level parameter dictionary (for fitness strategy and diversity resolution).
         composition: List of atomic symbols.
         chosen_go: Name of chosen algorithm ('simple', 'bh', or 'ga').
+        system_type: Resolved system type; validated against ``surface_config``
+            and used to add system-specific keys.
 
     Returns:
         Dictionary ready for direct algorithm execution.
     """
     resolved = resolve_auto_params(algo_params, composition, chosen_go)
-    surface_config = algo_params.get("surface_config")
-    if surface_config is None:
-        surface_config = params.get("surface_config")
+    surface_config = params.get("surface_config")
     if system_type == "gas_cluster" and surface_config is not None:
         raise SCGOValidationError(
             "system_type='gas_cluster' does not allow surface_config. "
@@ -483,11 +491,24 @@ def prepare_algorithm_kwargs(
                 f"simple optimizer only supports system_type='gas_cluster', got {system_type!r}."
             )
 
-    base_kwargs = filter_dict_keys(algo_params, {"niter", "population_size"})
+    base_kwargs = {
+        k: v for k, v in algo_params.items() if k not in {"niter", "population_size"}
+    }
     base_kwargs.update(resolved)
     base_kwargs["system_type"] = system_type
     if surface_config is not None:
         base_kwargs["surface_config"] = surface_config
+    if chosen_go == "ga":
+        # CPU parallelism cascade: the per-stage keys inherit the single
+        # top-level ``n_jobs`` unless they are set explicitly. Only the GA takes
+        # these kwargs; ``simple`` / ``bh`` signatures reject them.
+        top_n_jobs = params.get("n_jobs")
+        base_kwargs["n_jobs_population_init"] = inherit_n_jobs(
+            algo_params.get("n_jobs_population_init"), top_n_jobs
+        )
+        base_kwargs["n_jobs_offspring"] = inherit_n_jobs(
+            algo_params.get("n_jobs_offspring"), top_n_jobs
+        )
     policy = get_system_policy(system_type)
     if chosen_go == "ga" and policy.uses_surface:
         nlr = int(base_kwargs["niter_local_relaxation"])
@@ -535,7 +556,6 @@ def log_ts_configuration(
     base: dict[str, Any] | None = None,
 ) -> None:
     """Log resolved transition-state search configuration."""
-    logger = get_logger(__name__)
     if verbosity < 1:
         return
 
@@ -566,6 +586,7 @@ def log_ts_configuration(
         "use_torchsim",
         "use_parallel_neb",
         "parallel_neb_max_bands",
+        "parallel_neb_max_batch_atoms",
         "neb_align_endpoints",
         "neb_interpolation_mic",
         "neb_n_images",
@@ -604,8 +625,6 @@ def log_configuration(
         user_params: Original user dict before merge (for provenance logging).
         params_base: Base defaults used for merge (defaults to ``get_default_params()``).
     """
-    logger = get_logger(__name__)
-
     if verbosity < 1:
         return
 

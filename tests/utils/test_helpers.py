@@ -26,6 +26,17 @@ from scgo.utils.helpers import (
     get_system_path_key,
     perform_local_relaxation,
 )
+from tests.helpers import _make_minima_atoms
+
+
+def _reference_auto_scale(composition, *, base, scaling, min_val, max_val):
+    """Compute the deterministic auto-scale reference from the live formula.
+
+    Mirrors ``scgo.utils.helpers._auto_scale_parameter`` exactly so the tightened
+    tests cannot silently drift if the source constants change.
+    """
+    n_atoms = max(len(composition), 1)
+    return int(np.clip(base + scaling * np.log1p(n_atoms), min_val, max_val))
 
 
 def test_get_tags_reads_key_value_pairs():
@@ -44,10 +55,7 @@ class TestFilterUniqueMinima:
 
     def test_filter_unique_minima_single(self):
         """Test filtering of single minimum."""
-        atoms = Atoms("Pt", positions=[[0, 0, 0]])
-        atoms.info = {
-            "key_value_pairs": {"raw_score": 1.0, "run_id": "run_test_1"},
-        }
+        atoms = _make_minima_atoms(1.0, "run_test_1")
 
         result = filter_unique_minima([(1.0, atoms)], n_top=1)
         assert len(result) == 1
@@ -55,10 +63,7 @@ class TestFilterUniqueMinima:
     def test_filter_unique_minima_basic(self):
         """Test basic filtering functionality."""
         # Create atoms with required metadata
-        atoms1 = Atoms("Pt", positions=[[0, 0, 0]])
-        atoms1.info = {
-            "key_value_pairs": {"raw_score": 1.0, "run_id": "run_test_1"},
-        }
+        atoms1 = _make_minima_atoms(1.0, "run_test_1")
 
         atoms2 = Atoms("Pt", positions=[[1, 1, 1]])  # Different position
         atoms2.info = {
@@ -124,6 +129,21 @@ class TestFilterUniqueMinima:
         out = filter_unique_minima([(1.0, atoms1), (1.0001, atoms2)], n_top=2, mic=True)
         assert len(out) == 1
 
+    def test_filter_unique_minima_preserves_energy_order(self):
+        """Output is energy-ascending even when input order is non-monotonic.
+
+        Locks the invariant relied on by T1: ``_find_unique_minima_with_binning``
+        appends in the order of the already energy-sorted input, so the result is
+        energy-ascending by construction (no trailing re-sort).
+        """
+        a0 = Atoms("Pt", positions=[[0.0, 0.0, 0.0]])
+        a1 = Atoms("Pt", positions=[[1.0, 0.0, 0.0]])
+        a2 = Atoms("Pt", positions=[[2.0, 0.0, 0.0]])
+        out = filter_unique_minima([(2.0, a2), (-1.0, a0), (0.5, a1)], n_top=1)
+        energies = [e for e, _ in out]
+        assert energies == sorted(energies)
+        assert energies == [-1.0, 0.5, 2.0]
+
 
 class TestEnsureFinalId:
     def test_ensure_final_id_is_idempotent(self):
@@ -143,21 +163,42 @@ class TestAutoNiter:
     """Tests for auto_niter function."""
 
     @pytest.mark.parametrize(
-        "composition,expected_range",
+        "composition,expected",
         [
-            (["Pt"], (3, 1000)),
-            (["Pt", "Pt"], (3, 1000)),
-            (["Pt"] * 5, (3, 1000)),
-            (["Pt"] * 10, (3, 1000)),
-            (["Pt"] * 20, (3, 1000)),
-            (["Pt"] * 50, (100, 200)),
+            (["Pt"], 27),
+            (["Pt", "Pt"], 41),
+            (["Pt"] * 5, 65),
+            (["Pt"] * 10, 86),
+            (["Pt"] * 20, 109),
+            (["Pt"] * 50, 140),
         ],
     )
-    def test_auto_niter_scaling(self, composition, expected_range):
-        """Test that auto_niter scales appropriately with composition size."""
+    def test_auto_niter_scaling(self, composition, expected):
+        """auto_niter must match the deterministic log1p scaling exactly."""
         result = auto_niter(composition)
-        assert expected_range[0] <= result <= expected_range[1]
+        assert result == expected
+        assert result == _reference_auto_scale(
+            composition, base=3, scaling=35, min_val=3, max_val=1000
+        )
 
+    def test_auto_niter_empty_composition(self):
+        """Empty composition yields n_atoms=1 (not 0), so the base offset applies."""
+        assert auto_niter([]) == 27
+
+    def test_auto_niter_monotonic(self):
+        """Scaling must be non-decreasing with cluster size."""
+        prev = -1
+        for k in [1, 2, 5, 10, 20, 50]:
+            val = auto_niter(["Pt"] * k)
+            assert val >= prev
+            prev = val
+
+    def test_auto_niter_clipped(self):
+        """Result stays within [min, max] for extreme compositions."""
+        assert auto_niter(["Pt"]) >= 3
+        assert auto_niter(["Pt"] * 5000) <= 1000
+
+    @pytest.mark.reproducibility
     def test_auto_niter_reproducibility(self):
         """Test that auto_niter is reproducible."""
         composition = ["Pt"] * 5
@@ -185,21 +226,38 @@ class TestAutoPopulationSize:
     """Tests for auto_population_size function."""
 
     @pytest.mark.parametrize(
-        "composition,expected_range",
+        "composition,expected",
         [
-            (["Pt"], (3, 1000)),
-            (["Pt", "Pt"], (3, 1000)),
-            (["Pt"] * 5, (3, 1000)),
-            (["Pt"] * 10, (3, 1000)),
-            (["Pt"] * 20, (3, 1000)),
-            (["Pt"] * 50, (100, 200)),
+            (["Pt"], 27),
+            (["Pt", "Pt"], 41),
+            (["Pt"] * 5, 65),
+            (["Pt"] * 10, 86),
+            (["Pt"] * 20, 109),
+            (["Pt"] * 50, 140),
         ],
     )
-    def test_auto_population_size_scaling(self, composition, expected_range):
-        """Test that auto_population_size scales appropriately with composition size."""
+    def test_auto_population_size_scaling(self, composition, expected):
+        """auto_population_size shares the same deterministic scaling as auto_niter."""
         result = auto_population_size(composition)
-        assert expected_range[0] <= result <= expected_range[1]
+        assert result == expected
+        assert result == _reference_auto_scale(
+            composition, base=3, scaling=35, min_val=3, max_val=1000
+        )
 
+    def test_auto_population_size_monotonic(self):
+        """Scaling must be non-decreasing with cluster size."""
+        prev = -1
+        for k in [1, 2, 5, 10, 20, 50]:
+            val = auto_population_size(["Pt"] * k)
+            assert val >= prev
+            prev = val
+
+    def test_auto_population_size_clipped(self):
+        """Result stays within [min, max] for extreme compositions."""
+        assert auto_population_size(["Pt"]) >= 3
+        assert auto_population_size(["Pt"] * 5000) <= 1000
+
+    @pytest.mark.reproducibility
     def test_auto_population_size_reproducibility(self):
         """Test that auto_population_size is reproducible."""
         composition = ["Pt"] * 5
@@ -226,21 +284,25 @@ class TestAutoNiterLocalRelaxation:
     """Tests for auto_niter_local_relaxation function."""
 
     @pytest.mark.parametrize(
-        "composition,expected_range",
+        "composition,expected",
         [
-            (["Pt"], (50, 2000)),
-            (["Pt", "Pt"], (50, 2000)),
-            (["Pt"] * 5, (100, 200)),
-            (["Pt"] * 10, (150, 250)),
-            (["Pt"] * 20, (200, 300)),
-            (["Pt"] * 50, (240, 300)),
+            (["Pt"], 84),
+            (["Pt", "Pt"], 104),
+            (["Pt"] * 5, 139),
+            (["Pt"] * 10, 169),
+            (["Pt"] * 20, 202),
+            (["Pt"] * 50, 246),
         ],
     )
-    def test_auto_niter_local_relaxation_scaling(self, composition, expected_range):
-        """Test that auto_niter_local_relaxation scales appropriately with composition size."""
+    def test_auto_niter_local_relaxation_scaling(self, composition, expected):
+        """auto_niter_local_relaxation must match the deterministic scaling exactly."""
         result = auto_niter_local_relaxation(composition)
-        assert expected_range[0] <= result <= expected_range[1]
+        assert result == expected
+        assert result == _reference_auto_scale(
+            composition, base=50, scaling=50, min_val=50, max_val=2000
+        )
 
+    @pytest.mark.reproducibility
     def test_auto_niter_local_relaxation_reproducibility(self):
         """Test that auto_niter_local_relaxation is reproducible."""
         composition = ["Pt"] * 5
@@ -269,6 +331,19 @@ class TestAutoNiterLocalRelaxation:
         # Should generally increase (allowing for some non-monotonicity due to rounding)
         assert results[-1] >= results[0]  # Largest should be >= smallest
 
+    def test_auto_niter_local_relaxation_monotonic(self):
+        """Scaling must be non-decreasing with cluster size."""
+        prev = -1
+        for k in [1, 2, 5, 10, 20, 50]:
+            val = auto_niter_local_relaxation(["Pt"] * k)
+            assert val >= prev
+            prev = val
+
+    def test_auto_niter_local_relaxation_clipped(self):
+        """Result stays within [min, max] for extreme compositions."""
+        assert auto_niter_local_relaxation(["Pt"]) >= 50
+        assert auto_niter_local_relaxation(["Pt"] * 5000) <= 2000
+
 
 class TestAutoNiterTS:
     """Tests for `auto_niter_ts` (TS/NEB auto-scaling helper)."""
@@ -289,6 +364,29 @@ class TestAutoNiterTS:
         result = auto_niter_ts(composition)
         assert expected_range[0] <= result <= expected_range[1]
 
+    @pytest.mark.parametrize(
+        "composition,expected",
+        [
+            (["Pt"], 174),
+            (["Pt"] * 5, 372),
+            (["Pt"] * 10, 481),
+            (["Pt"] * 50, 757),
+        ],
+    )
+    def test_auto_niter_ts_exact(self, composition, expected):
+        """auto_niter_ts must match the deterministic scaling exactly."""
+        result = auto_niter_ts(composition)
+        assert result == expected
+        assert result == _reference_auto_scale(
+            composition, base=50, scaling=180, min_val=150, max_val=5000
+        )
+
+    def test_auto_niter_ts_clipped(self):
+        """Result stays within [min, max] for extreme compositions."""
+        assert auto_niter_ts(["Pt"]) >= 150
+        assert auto_niter_ts(["Pt"] * 5000) <= 5000
+
+    @pytest.mark.reproducibility
     def test_auto_niter_ts_reproducibility(self):
         composition = ["Pt"] * 6
         result1 = auto_niter_ts(composition)

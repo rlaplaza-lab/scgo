@@ -6,7 +6,6 @@ when run with the same random seed, ensuring deterministic behavior.
 
 import numpy as np
 import pytest
-from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.optimize import FIRE, LBFGS
 
@@ -20,12 +19,12 @@ from scgo.minima_search import run_trials, scgo
 from scgo.param_presets import get_testing_params
 from scgo.runner_api import build_one_element_compositions
 from scgo.runner_go import _run_go_campaign_compositions
-from scgo.utils.helpers import auto_niter
 from scgo.utils.run_helpers import prepare_algorithm_kwargs
 from tests.constants import REPRODUCIBILITY_ATOL, REPRODUCIBILITY_RTOL
-from tests.test_utils import (
+from tests.helpers import (
     MockRelaxer,
     assert_batch_init_reproducible,
+    assert_minima_structurally_valid,
     compare_minima_lists,
     create_paired_rngs,
     isolated_workflow_cwd,
@@ -69,6 +68,8 @@ from tests.test_utils import (
         ),
     ],
 )
+@pytest.mark.slow
+@pytest.mark.reproducibility
 def test_algorithm_reproducibility(tmp_path, algorithm, seed, kwargs):
     comp = ["Pt", "Pt", "Pt"]
 
@@ -227,7 +228,9 @@ def test_update_mutation_weights_requires_explicit_rng():
         "rattle_strength": 0.5,
         "rattle_prop": 0.5,
     }
-    with pytest.raises(TypeError):
+    with pytest.raises(
+        TypeError, match="missing 1 required positional argument: 'rng'"
+    ):
         update_mutation_weights(ops, name_map, adaptive)  # type: ignore[call-arg]
 
 
@@ -262,11 +265,14 @@ def test_update_mutation_weights_operator_selection_reproducible():
     assert len(set(indices)) > 1, "Expected multiple operators to be selected"
 
 
+@pytest.mark.slow
 def test_bh_go_smoke(tmp_path, rng):
-    """Test bh_go smoke test."""
+    """Test bh_go returns structurally valid, energetically bounded minima."""
     comp = ["Pt", "Pt", "Pt"]
     atoms = create_initial_cluster(comp, rng=rng)
     atoms.calc = EMT()
+    # Capture the starting-cluster energy before the optimizer mutates `atoms`.
+    e0 = atoms.get_potential_energy()
     params = get_testing_params()
     optimizer_kwargs = prepare_algorithm_kwargs(
         algo_params=params["optimizer_params"]["bh"],
@@ -280,15 +286,17 @@ def test_bh_go_smoke(tmp_path, rng):
     minima = bh_go(
         atoms,
         output_dir=str(tmp_path),
-        niter=auto_niter(comp),
+        # Fixed tiny budget: this is a smoke, not an auto_niter budget test.
+        niter=2,
         **{k: v for k, v in optimizer_kwargs.items() if k not in ["niter"]},
         rng=rng,
     )
 
     assert isinstance(minima, list)
-    for e, a in minima:
-        assert np.isfinite(e)
-        assert isinstance(a, Atoms)
+    assert len(minima) >= 1
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
+    # Optimization must not raise the energy above the starting cluster.
+    assert min(e for e, _ in minima) <= e0 + 1e-6
 
 
 def test_scgo_unknown_optimizer(tmp_path, rng):
@@ -322,13 +330,14 @@ def test_bh_go_zero_niter(tmp_path, rng):
     """Test bh_go with zero iterations."""
     atoms = create_initial_cluster(["Pt"], rng=rng)
     atoms.calc = EMT()
+    e0 = atoms.get_potential_energy()
     # With niter=1, should return a list with the initial relaxed structure
     minima = bh_go(atoms, output_dir=str(tmp_path), niter=1, rng=rng)
     assert isinstance(minima, list)
     assert minima, "BH did not return any minima"
-    e, a = minima[0]
-    assert np.isfinite(e)
-    assert isinstance(a, Atoms)
+    assert_minima_structurally_valid(minima, expected_n_atoms=1)
+    # Relaxation must not raise the energy above the starting cluster.
+    assert min(e for e, _ in minima) <= e0 + 1e-6
 
 
 def test_ga_go_zero_niter(tmp_path, rng):
@@ -347,9 +356,7 @@ def test_ga_go_zero_niter(tmp_path, rng):
     )
     assert isinstance(minima, list)
     assert len(minima) > 0  # Should contain the relaxed initial population
-    e, a = minima[0]
-    assert np.isfinite(e)
-    assert isinstance(a, Atoms)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
 def test_nested_rng_spawning_parent_state_preserved(rng):
@@ -481,6 +488,7 @@ def test_rng_state_consistency_across_functions(rng):
     assert not np.allclose(atoms1.get_positions(), atoms2.get_positions())
 
 
+@pytest.mark.reproducibility
 def test_rng_reproducibility_with_same_seed():
     """Test that same seed produces same results across multiple runs."""
     seed = 11111
@@ -495,7 +503,9 @@ def test_rng_reproducibility_with_same_seed():
     atoms2 = create_initial_cluster(comp, rng=rng2)
 
     # Results should be identical
-    assert np.allclose(atoms1.get_positions(), atoms2.get_positions())
+    assert np.allclose(
+        atoms1.get_positions(), atoms2.get_positions(), rtol=1e-12, atol=1e-12
+    )
     assert atoms1.get_chemical_symbols() == atoms2.get_chemical_symbols()
 
 
@@ -520,6 +530,7 @@ def test_rng_different_seeds_different_results(seed1, seed2):
 
 
 @pytest.mark.slow
+@pytest.mark.reproducibility
 def test_database_persistence_reproducibility(tmp_path):
     """Test that database persistence is deterministic across runs."""
     from scgo.database import setup_database
@@ -536,7 +547,7 @@ def test_database_persistence_reproducibility(tmp_path):
         output_dir=str(tmp_path / "run1"),
         db_filename="test.db",
         atoms_template=atoms1,
-        initial_population=[atoms1.copy()],
+        initial_candidate=atoms1,
         remove_existing=True,
     )
 
@@ -557,7 +568,7 @@ def test_database_persistence_reproducibility(tmp_path):
         output_dir=str(tmp_path / "run2"),
         db_filename="test.db",
         atoms_template=atoms2,
-        initial_population=[atoms2.copy()],
+        initial_candidate=atoms2,
         remove_existing=True,
     )
 
@@ -581,6 +592,7 @@ def test_database_persistence_reproducibility(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.reproducibility
 def test_fixed_seed_exact_reproducibility(tmp_path):
     """Test that fixed seed gives bit-for-bit identical results across runs."""
     comp = ["Pt", "Pt"]

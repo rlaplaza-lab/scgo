@@ -65,7 +65,7 @@ class TestGetOptimizerClass:
 
     def test_error_message_suggests_supported_optimizers(self):
         """Test that error message lists supported optimizers."""
-        with pytest.raises(SCGOValidationError) as exc_info:
+        with pytest.raises(SCGOValidationError, match="Unknown optimizer") as exc_info:
             get_optimizer_class("INVALID")
 
         error_msg = str(exc_info.value)

@@ -11,6 +11,7 @@ import os
 import re
 from pathlib import Path
 
+import pytest
 from ase.calculators.emt import EMT
 
 from scgo.constants import (
@@ -24,6 +25,7 @@ from scgo.database import (
 )
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.metadata.run_dir import (
+    RunDirRecord,
     generate_run_id,
     get_run_directories,
     get_run_id_from_dir,
@@ -31,6 +33,7 @@ from scgo.metadata.run_dir import (
     save_run_dir_record,
 )
 from scgo.minima_search import run_trials
+from scgo.surface import make_defected_graphite_surface_config
 
 
 def test_run_id_generation():
@@ -66,11 +69,15 @@ def test_run_id_from_directory():
 
 
 def test_save_and_load_metadata(tmp_path):
-    """Test saving and loading run metadata."""
+    """Round-trip ``metadata.json``: no legacy ``timestamp``, ``path_key`` persisted."""
     run_dir = str(tmp_path / "run_test")
     run_id = "run_20250124_143022_123456"
 
-    metadata = {"composition": ["Pt", "Pt", "Pt"], "params": {"test": "value"}}
+    metadata = {
+        "path_key": "Pt3",
+        "composition": ["Pt", "Pt", "Pt"],
+        "params": {"test": "value"},
+    }
     save_run_dir_record(run_dir, run_id, metadata)
 
     # Verify file exists
@@ -81,15 +88,85 @@ def test_save_and_load_metadata(tmp_path):
     loaded = load_run_dir_record(run_dir)
     assert loaded is not None
     assert loaded.run_id == run_id
+    assert loaded.path_key == "Pt3"
     assert loaded.composition == ["Pt", "Pt", "Pt"]
     assert loaded.params == {"test": "value"}
 
     with open(metadata_file) as f:
         raw = json.load(f)
     assert raw["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
+    assert raw["schema_version"] == 4
     assert isinstance(raw.get("scgo_version"), str) and raw["scgo_version"]
     assert isinstance(raw.get("python_version"), str) and raw["python_version"]
     assert isinstance(raw.get("created_at"), str) and raw["created_at"]
+    assert raw["path_key"] == "Pt3"
+    # ``created_at`` is the single timestamp; the legacy field is gone.
+    assert "timestamp" not in raw
+
+
+def test_from_dict_raises_on_missing_path_key(tmp_path):
+    """Malformed records fail loudly; unreadable files still yield ``None``."""
+    with pytest.raises(KeyError, match="path_key"):
+        RunDirRecord.from_dict({"run_id": "run_20250124_143022_123456"})
+    with pytest.raises(KeyError, match="run_id"):
+        RunDirRecord.from_dict({"path_key": "Pt3"})
+    with pytest.raises(
+        TypeError, match="list indices must be integers or slices, not str"
+    ):
+        RunDirRecord.from_dict(["not", "a", "mapping"])  # type: ignore[arg-type]
+
+    # Missing file -> None
+    assert load_run_dir_record(str(tmp_path / "no_such_run")) is None
+
+    # Unparseable JSON -> None
+    bad_dir = tmp_path / "run_bad"
+    bad_dir.mkdir()
+    (bad_dir / "metadata.json").write_text("{not json", encoding="utf-8")
+    assert load_run_dir_record(str(bad_dir)) is None
+
+    # Well-formed JSON violating the schema -> raises
+    broken_dir = tmp_path / "run_broken"
+    broken_dir.mkdir()
+    (broken_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_20250124_143022_123456"}), encoding="utf-8"
+    )
+    with pytest.raises(KeyError, match="path_key"):
+        load_run_dir_record(str(broken_dir))
+
+
+def test_slab_target_metadata(tmp_path, rng):
+    """Slab-target runs record a non-empty ``formula`` equal to ``path_key``."""
+    surface_config = make_defected_graphite_surface_config(
+        slab_layers=2, slab_repeat_xy=1, n_vacancies=1, seed=0
+    )
+    output_dir = str(tmp_path / "defected_graphite_searches")
+    run_id = "run_20250124_143022_123456"
+
+    run_trials(
+        composition=[],
+        global_optimizer="ga",
+        global_optimizer_kwargs={
+            "niter": 1,
+            "niter_local_relaxation": 1,
+            "population_size": 2,
+            "system_type": "surface",
+            "surface_config": surface_config,
+        },
+        output_dir=output_dir,
+        calculator_for_global_optimization=EMT(),
+        validate_with_hessian=False,
+        rng=rng,
+        verbosity=0,
+        run_id=run_id,
+        clean=True,
+    )
+
+    loaded = load_run_dir_record(str(Path(output_dir) / run_id))
+    assert loaded is not None
+    assert loaded.path_key, "path_key must be persisted and non-empty"
+    assert loaded.formula, "slab-target formula must never be empty"
+    assert loaded.formula == loaded.path_key
+    assert loaded.path_key == surface_config.name == "defected_graphite"
 
 
 def test_run_metadata_includes_run_params(tmp_path, rng):
@@ -229,16 +306,17 @@ def test_load_previous_run_results(tmp_path, pt3_atoms):
 
 def test_result_merging_across_runs(tmp_path, rng):
     """Test that results from multiple runs are merged and deduplicated."""
-    composition = ["Pt", "Pt", "Pt"]
-    output_dir = str(tmp_path / "Pt3_searches")
+    # H2 (EMT keeps the diatomic bonded) so the connectivity gate passes; the
+    # test exercises run_trials merge/dedup logic, not a specific metal.
+    composition = ["H", "H"]
+    output_dir = str(tmp_path / "H2_searches")
 
     # First run
     results1 = run_trials(
         composition=composition,
-        global_optimizer="bh",
+        global_optimizer="simple",
         global_optimizer_kwargs={
-            "niter": 2,
-            "niter_local_relaxation": 5,
+            "niter": 1,
             "system_type": "gas_cluster",
         },
         output_dir=output_dir,
@@ -253,10 +331,9 @@ def test_result_merging_across_runs(tmp_path, rng):
     # Second run (should merge with first)
     results2 = run_trials(
         composition=composition,
-        global_optimizer="bh",
+        global_optimizer="simple",
         global_optimizer_kwargs={
-            "niter": 2,
-            "niter_local_relaxation": 5,
+            "niter": 1,
             "system_type": "gas_cluster",
         },
         output_dir=output_dir,
@@ -289,16 +366,17 @@ def test_result_merging_across_runs(tmp_path, rng):
 
 def test_clean_mode(tmp_path, rng):
     """Test that clean mode ignores previous runs."""
-    composition = ["Pt", "Pt", "Pt"]
-    output_dir = str(tmp_path / "Pt3_searches")
+    # H2 (EMT keeps the diatomic bonded) so the connectivity gate passes; the
+    # test exercises run_trials clean-mode logic, not a specific metal.
+    composition = ["H", "H"]
+    output_dir = str(tmp_path / "H2_searches")
 
     # First run
     run_trials(
         composition=composition,
-        global_optimizer="bh",
+        global_optimizer="simple",
         global_optimizer_kwargs={
-            "niter": 2,
-            "niter_local_relaxation": 5,
+            "niter": 1,
             "system_type": "gas_cluster",
         },
         output_dir=output_dir,
@@ -313,10 +391,9 @@ def test_clean_mode(tmp_path, rng):
     # Second run with clean=True (should ignore first run)
     results2 = run_trials(
         composition=composition,
-        global_optimizer="bh",
+        global_optimizer="simple",
         global_optimizer_kwargs={
-            "niter": 2,
-            "niter_local_relaxation": 5,
+            "niter": 1,
             "system_type": "gas_cluster",
         },
         output_dir=output_dir,
@@ -400,7 +477,7 @@ def test_composition_isolation(tmp_path, rng):
 
 def test_no_duplicates_across_runs(tmp_path):
     """Test that duplicate structures from different runs are filtered out."""
-    from tests.test_utils import create_paired_rngs
+    from tests.helpers import create_paired_rngs
 
     composition = ["Pt", "Pt", "Pt"]
     output_dir = str(tmp_path / "Pt3_searches")

@@ -22,6 +22,18 @@ def test_fcc111_slab_unchanged_by_normalize():
     assert list(slab.pbc) == expected
 
 
+def test_normalize_slab_pbc_disables_degenerate_in_plane_axis():
+    """A zero-length in-plane cell vector must not stay periodic."""
+    slab = Atoms(
+        "Pt",
+        positions=[[0, 0, 0]],
+        cell=[[10.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 10.0]],
+        pbc=True,
+    )
+    normalize_slab_pbc(slab)
+    assert list(slab.pbc) == [True, False, False]
+
+
 def test_surface_system_config_rejects_all_open_pbc():
     from scgo.exceptions import SCGOValidationError
 
@@ -84,3 +96,17 @@ def test_graphite_preset_uses_ab_bernal_stacking():
             for p1 in layer1
         ]
         assert min(dists) < 1e-6
+
+
+def test_surface_and_cluster_adsorbate_packages_defer_heavy_exports():
+    """Heavy names stay behind package ``__getattr__`` (thin ``__init__`` graph)."""
+    import scgo.cluster_adsorbate as ca
+    import scgo.surface as surface
+
+    assert "create_deposited_cluster" in surface._LAZY_ATTRS
+    assert "SurfaceSystemConfig" in surface.__dict__
+    assert "build_hierarchical_core_fragment_cluster" in ca._LAZY_ATTRS
+    assert "ClusterAdsorbateConfig" in ca.__dict__
+    # Former cycle edge: hierarchical ↔ system_types ↔ deposition must co-import.
+    assert callable(surface.create_deposited_cluster)
+    assert callable(ca.build_hierarchical_core_fragment_cluster)

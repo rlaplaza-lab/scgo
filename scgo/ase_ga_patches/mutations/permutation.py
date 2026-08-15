@@ -1,8 +1,9 @@
+"""Mutations that permute atom types between groups."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutations that permute atom types between groups."""
 
 import numpy as np
 from ase import Atoms
@@ -10,9 +11,12 @@ from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import (
     atoms_too_close,
     atoms_too_close_two_sets,
-    gather_atoms_by_tag,
 )
 
+from scgo.ase_ga_patches._tag_gather import (
+    gather_atoms_by_tag,
+    periodic_sheet_tag_to_skip,
+)
 from scgo.ase_ga_patches.mutations._common import _ensure_rng
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
@@ -27,7 +31,8 @@ class PermutationMutation(OffspringCreator):
     ----------
     n_top: Number of atoms optimized by the GA.
 
-    probability: The probability with which an atom is permuted.
+    probability: Fraction of the groups to be permuted; the number of
+        pair swaps performed is ceil(n_groups * probability / 2).
 
     test_dist_to_slab: whether to also make sure that the distances
         between the atoms and the slab satisfy the blmin.
@@ -43,7 +48,7 @@ class PermutationMutation(OffspringCreator):
         no such check is performed.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     verbose: bool
         If True, print verbose output.
@@ -77,9 +82,12 @@ class PermutationMutation(OffspringCreator):
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
         if self.use_tags:
-            gather_atoms_by_tag(atoms)
+            gather_atoms_by_tag(
+                atoms,
+                skip_tag=periodic_sheet_tag_to_skip(self.system_type),
+            )
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()
@@ -137,7 +145,7 @@ class PermutationMutation(OffspringCreator):
                 if not too_close and self.test_dist_to_slab:
                     too_close = atoms_too_close_two_sets(top, slab, self.blmin)
 
-        if count == maxcount:
+        if too_close:
             return None
 
         mutant = slab + top
@@ -148,7 +156,9 @@ class PermutationMutation(OffspringCreator):
 
 
 class CustomPermutationMutation(PermutationMutation):
-    """PermutationMutation that requires ``rng`` to be a ``numpy.random.Generator`` (or None)."""
+    """PermutationMutation preset with a higher default swap probability and
+    slab-distance testing disabled.
+    """
 
     def __init__(
         self,

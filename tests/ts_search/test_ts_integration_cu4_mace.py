@@ -15,8 +15,11 @@ from ase_ga.data import DataConnection
 
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
+# Intentionally excluded from CI/Kaggle: every run selects "not benchmark", and
+# Kaggle selects "not benchmark" too. This heavy MACE single-system regression is
+# meant for local or scheduled GPU runs only, not default pipelines.
 pytestmark = [pytest.mark.requires_mace, pytest.mark.benchmark]
 
 logger = logging.getLogger(__name__)
@@ -456,6 +459,7 @@ def test_full_workflow_cu4_mace_database_persistence():
 
 
 @pytest.mark.slow
+@pytest.mark.reproducibility
 def test_ts_search_reproducibility_with_mace():
     """Test that TS search with MACE produces reproducible results.
 

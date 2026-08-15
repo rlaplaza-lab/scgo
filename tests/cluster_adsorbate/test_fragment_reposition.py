@@ -9,6 +9,7 @@ from numpy.random import default_rng
 from scgo.algorithms.ga_common import apply_mobile_core_ads_tags
 from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
 from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.system_types import AdsorbateDefinition
 
 
 def _pt3_oh_system() -> tuple[Atoms, Atoms]:
@@ -34,11 +35,11 @@ def test_fragment_reposition_preserves_bond_length() -> None:
     template_bond = float(
         np.linalg.norm(oh_template.positions[1] - oh_template.positions[0])
     )
-    ads_def = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     blmin = build_blmin_from_zs(combined.numbers, ratio=0.7)
     op = FragmentRepositionMutation(
         blmin,
@@ -64,11 +65,11 @@ def test_fragment_reposition_preserves_bond_length() -> None:
 
 def test_fragment_reposition_changes_relative_pose() -> None:
     combined, oh_template = _pt3_oh_system()
-    ads_def = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     blmin = build_blmin_from_zs(combined.numbers, ratio=0.7)
     op = FragmentRepositionMutation(
         blmin,

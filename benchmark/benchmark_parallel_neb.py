@@ -23,6 +23,7 @@ from pathlib import Path
 from scgo.ts_search.transition_state_run import run_transition_state_search
 from scgo.utils.logging import get_logger
 from scgo.utils.output_paths import formula_ts_results_dir
+from scgo.utils.timing_report import sum_neb_seconds_from_ts_results
 
 logger = get_logger(__name__)
 
@@ -52,10 +53,7 @@ def _run_variant(
         params={"calculator": "MACE"},
     )
     wall_s = time.perf_counter() - t0
-    neb_sum = sum(
-        float((r.get("timings_s") or {}).get("neb_optimization_s", 0.0))
-        for r in results
-    )
+    neb_sum = sum_neb_seconds_from_ts_results(results)
     default_result = formula_ts_results_dir(campaign_root, PT5_FORMULA)
     renamed = default_result.with_name(f"{PT5_FORMULA}_ts_results_{label}")
     if default_result.exists():

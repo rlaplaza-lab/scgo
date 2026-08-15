@@ -17,6 +17,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+import torch
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.optimize import FIRE
@@ -33,6 +34,7 @@ from scgo.algorithms.ga_common import (
     create_ga_pairing,
     create_mutation_operators,
     create_structure_comparator,
+    extract_constraint_index_lists,
     ga_run_metadata_extras,
     log_early_stopping_info,
     maybe_apply_mobile_core_ads_tags,
@@ -49,6 +51,7 @@ from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
+    _assert_offspring_integrity,
 )
 from scgo.ase_ga_patches.population import Population
 from scgo.calculators.ase_batch_relaxer import AseBatchRelaxer
@@ -57,9 +60,7 @@ from scgo.calculators.torchsim_helpers import (
     build_torchsim_relaxer,
 )
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-from scgo.cluster_adsorbate.constraints import (
-    attach_adsorbate_internal_geometry_constraints,
-)
+from scgo.cluster_adsorbate.constraints import prepare_atoms_for_local_relax
 from scgo.cluster_adsorbate.rigid import enforce_frozen_adsorbate_geometry
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.database import (
@@ -75,15 +76,15 @@ from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.metadata.atoms import filter_by_tags, get_tag, get_tags, set_tags
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.constraints import attach_slab_constraints
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
+    get_system_policy,
     resolve_search_mobile_composition,
     resolve_structure_mic,
     uses_surface,
-    validate_structure_for_system_type,
+    validate_minimum_structure,
 )
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
@@ -91,9 +92,17 @@ from scgo.utils.fitness_strategies import (
 from scgo.utils.helpers import (
     extract_minima_from_database,
 )
-from scgo.utils.logging import get_logger, should_show_progress
+from scgo.utils.logging import (
+    get_logger,
+    log_debug_v,
+    log_info_v,
+    should_show_progress,
+)
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import (
+    resolve_n_jobs,
+    resolve_n_jobs_for_tasks,
+)
 from scgo.utils.phase_logging import (
     log_generation_offspring_summaries,
     log_phase_subheader,
@@ -115,34 +124,7 @@ from scgo.utils.torchsim_policy import (
 )
 from scgo.utils.validation import validate_composition
 
-
-def _resolve_parallel_worker_count(n_jobs: int, n_tasks: int) -> int:
-    """Resolve worker count from initialization-style semantics."""
-    if n_tasks <= 1:
-        return 1
-    return min(resolve_n_jobs_to_workers(n_jobs), n_tasks)
-
-
-def _sorted_unrelaxed_gaids(da: DataConnection) -> list[int]:
-    """Return unrelaxed configuration IDs in deterministic ascending order."""
-    all_unrelaxed = {row.gaid for row in da.c.select(relaxed=0)}
-    all_relaxed = {row.gaid for row in da.c.select(relaxed=1)}
-    all_queued = {row.gaid for row in da.c.select(queued=1)}
-    return sorted(
-        gaid
-        for gaid in all_unrelaxed
-        if gaid not in all_relaxed and gaid not in all_queued
-    )
-
-
-def _load_unrelaxed_by_gaid(da: DataConnection, gaid: int) -> Atoms:
-    """Load the latest trajectory for an unrelaxed configuration ID."""
-    rows = list(da.c.select(gaid=gaid))
-    rows.sort(key=lambda row: row.mtime)
-    atoms = da.get_atoms(rows[-1].id)
-    atoms.info["confid"] = gaid
-    atoms.info.setdefault("data", {})
-    return atoms
+logger = get_logger(__name__)
 
 
 _PREFILTER_BLMIN_FACTOR = 0.55
@@ -157,17 +139,25 @@ def _blmin_threshold_matrix(
     n_u = len(unique_z)
     z_int = unique_z.astype(int)
 
-    def _lookup_min(zi: int, zj: int) -> float:
-        return float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
-
-    vlookup = np.vectorize(_lookup_min)
-    min_allowed = vlookup(z_int[:, None], z_int[None, :])
+    min_allowed = np.zeros((n_u, n_u), dtype=float)
+    for i, zi in enumerate(z_int):
+        for j, zj in enumerate(z_int):
+            min_allowed[i, j] = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
     mask = min_allowed > 0.0
     thresh = np.zeros((n_u, n_u), dtype=float)
     thresh[mask] = _PREFILTER_BLMIN_FACTOR * min_allowed[mask]
 
     index = np.array([z_to_i[int(z)] for z in atomic_numbers], dtype=int)
     return thresh, index
+
+
+# Cache of upper-triangle index pairs for the mobile–mobile clash prefilter,
+# avoiding a fresh O(n²) boolean mask allocation on every offspring.
+_TRIU_CACHE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _triu_cache(n: int) -> tuple[np.ndarray, np.ndarray]:
+    return _TRIU_CACHE.setdefault(n, np.triu_indices(n, k=1))
 
 
 def _fails_fast_geometric_prefilter(
@@ -192,12 +182,14 @@ def _fails_fast_geometric_prefilter(
     mobile_pos = positions[n_slab_i:]
     mobile_idx = z_index[n_slab_i:]
 
-    # Mobile–mobile pairs (upper triangle).
+    # Mobile–mobile pairs (upper triangle, cached index pass).
     if n_mobile >= 2:
         mm = cdist(mobile_pos, mobile_pos)
         pair_thresh = thresh[np.ix_(mobile_idx, mobile_idx)]
-        upper = np.triu(np.ones((n_mobile, n_mobile), dtype=bool), k=1)
-        if np.any(upper & (pair_thresh > 0.0) & (mm < pair_thresh)):
+        iu, ju = _triu_cache(n_mobile)
+        mm_u = mm[iu, ju]
+        pt_u = pair_thresh[iu, ju]
+        if np.any((pt_u > 0.0) & (mm_u < pt_u)):
             return True
 
     # Mobile–slab pairs.
@@ -247,6 +239,7 @@ class OffspringBuildContext:
     blmin: dict
     system_type: SystemType
     n_slab: int
+    n_frozen_prefix: int
     slab_for_pairing: Atoms | None
     surface_normal_axis: int
     adsorbate_definition: AdsorbateDefinition | None
@@ -292,6 +285,11 @@ def _load_offspring_worker_state(ctx: OffspringBuildContext) -> None:
     _OFFSPRING_WORKER_STATE["operators_epoch"] = ctx.operators_epoch
     _OFFSPRING_WORKER_STATE["pairing"] = pairing
     _OFFSPRING_WORKER_STATE["operators"] = copy.deepcopy(ctx.operators_list)
+    _OFFSPRING_WORKER_STATE["name_map"] = dict(ctx.name_map)
+    # The full static context is retained so per-job payloads (which only carry
+    # the dynamic adaptive_config / mutation probability / epoch) can resolve
+    # the static pairing/operator inputs without being re-pickled each job.
+    _OFFSPRING_WORKER_STATE["static_ctx"] = ctx
 
 
 def _offspring_worker_bootstrap_init(ctx: OffspringBuildContext) -> None:
@@ -304,13 +302,6 @@ def _ensure_offspring_worker_state(ctx: OffspringBuildContext) -> None:
         _load_offspring_worker_state(ctx)
 
 
-def _offspring_worker_has_cached_state(ctx: OffspringBuildContext) -> bool:
-    return (
-        _OFFSPRING_WORKER_STATE.get("operators_epoch") == ctx.operators_epoch
-        and "pairing" in _OFFSPRING_WORKER_STATE
-    )
-
-
 def _offspring_worker_init() -> None:
     """Limit BLAS threading in process-pool offspring workers."""
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -320,32 +311,30 @@ def _offspring_worker_init() -> None:
 
 def _build_offspring_worker(
     job: dict[str, Any],
-    ctx: OffspringBuildContext,
 ) -> dict[str, Any]:
-    """Build one GA offspring (crossover + optional mutation) in an isolated worker."""
+    """Build one GA offspring (crossover + optional mutation) in an isolated worker.
+
+    The static build context (pairing, operator list, name map) is held in the
+    worker process via ``_OFFSPRING_WORKER_STATE`` (loaded once at bootstrap or
+    per generation for the in-process path). Only the lightweight per-job payload
+    (parent frames, task seed, and the dynamic adaptive config / mutation
+    probability / epoch) is pickled per ``submit``, avoiding the per-job pickle
+    of the slab ``Atoms`` and the operator list.
+    """
+    ctx: OffspringBuildContext = _OFFSPRING_WORKER_STATE["static_ctx"]
     pairing_rng, operator_rng, decision_rng = offspring_rng_triple(job["task_seed"])
     setup_t0 = perf_counter()
-    if _offspring_worker_has_cached_state(ctx):
-        local_pairing = _OFFSPRING_WORKER_STATE["pairing"]
-        _reseed_pairing_rng(local_pairing, pairing_rng)
-        local_ops = _OFFSPRING_WORKER_STATE["operators"]
-        reseed_mutation_operator_rngs(local_ops, operator_rng)
-    else:
-        local_pairing = create_ga_pairing(
-            ctx.atoms_template,
-            ctx.n_to_optimize,
-            pairing_rng,
-            slab_atoms=ctx.slab_for_pairing,
-            system_type=ctx.system_type,
-            composition=ctx.composition,
-            adsorbate_definition=ctx.adsorbate_definition,
-        )
-        local_ops = copy.deepcopy(ctx.operators_list)
-        reseed_mutation_operator_rngs(local_ops, operator_rng)
+    # Refresh the cached pairing/operators only when the generation (epoch) advances.
+    if _OFFSPRING_WORKER_STATE.get("operators_epoch") != job["operators_epoch"]:
+        _load_offspring_worker_state(ctx)
+    local_pairing = _OFFSPRING_WORKER_STATE["pairing"]
+    _reseed_pairing_rng(local_pairing, pairing_rng)
+    local_ops = _OFFSPRING_WORKER_STATE["operators"]
+    reseed_mutation_operator_rngs(local_ops, operator_rng)
     local_mutations = update_mutation_weights(
         operators_list=local_ops,
-        name_map=ctx.name_map,
-        adaptive_config=ctx.adaptive_config,
+        name_map=_OFFSPRING_WORKER_STATE["name_map"],
+        adaptive_config=job["adaptive_config"],
         rng=decision_rng,
     )
     operator_setup_s = perf_counter() - setup_t0
@@ -365,7 +354,7 @@ def _build_offspring_worker(
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
         }
-    if _fails_fast_geometric_prefilter(child, ctx.blmin, n_slab=ctx.n_slab):
+    if _fails_fast_geometric_prefilter(child, ctx.blmin, n_slab=ctx.n_frozen_prefix):
         return {
             "index": job["index"],
             "child": None,
@@ -376,7 +365,7 @@ def _build_offspring_worker(
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
         }
-    if decision_rng.random() < ctx.current_mutation_probability:
+    if decision_rng.random() < job["current_mutation_probability"]:
         mutation_t0 = perf_counter()
         mutated = local_mutations.get_operator().mutate(child)
         mutation_s = perf_counter() - mutation_t0
@@ -397,10 +386,12 @@ def _build_offspring_worker(
         ctx.adsorbate_definition,
         ctx.system_type,
     )
+    # Post-operator atom-count + stoichiometry guard (covers crossover + mutation).
+    _assert_offspring_integrity(child, job["a1"])
     try:
         # Pre-relax geometric screen (raw frame); eligibility is decided post-relax
         # via validate_structure_for_ga_storage after canonicalization.
-        validate_structure_for_system_type(
+        validate_minimum_structure(
             child,
             system_type=ctx.system_type,
             surface_config=ctx.surface_config,
@@ -445,31 +436,16 @@ def _torchsim_prepare_relaxed_copy(
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
 ) -> Atoms:
-    """Copy candidate and attach slab constraints before TorchSim relaxation."""
-    c = cand.copy()
-    if freeze_adsorbate_internal_geometry:
-        enforce_frozen_adsorbate_geometry(
-            c,
-            n_slab=(n_slab if surface_mode else 0),
-            adsorbate_definition=adsorbate_definition,
-            fragment_templates=adsorbate_fragment_templates,
-        )
-    if surface_mode and surface_config is not None and n_slab > 0:
-        attach_slab_constraints(
-            c,
-            n_slab,
-            fix_all_slab_atoms=surface_config.fix_all_slab_atoms,
-            n_fix_bottom_slab_layers=surface_config.n_fix_bottom_slab_layers,
-            n_relax_top_slab_layers=surface_config.n_relax_top_slab_layers,
-            surface_normal_axis=surface_config.surface_normal_axis,
-        )
-    if freeze_adsorbate_internal_geometry:
-        attach_adsorbate_internal_geometry_constraints(
-            c,
-            n_slab=(n_slab if surface_mode else 0),
-            adsorbate_definition=adsorbate_definition,
-        )
-    return c
+    """Copy a candidate and attach slab / adsorbate constraints before relaxation."""
+    return prepare_atoms_for_local_relax(
+        cand,
+        surface_mode=surface_mode,
+        surface_config=surface_config,
+        n_slab=n_slab,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+        adsorbate_definition=adsorbate_definition,
+        adsorbate_fragment_templates=adsorbate_fragment_templates,
+    )
 
 
 def _record_relax_batch_steps(
@@ -495,53 +471,68 @@ def _record_relax_batch_steps(
         )
 
 
+@dataclass(frozen=True)
+class GAWriteContext:
+    """Tunneled context for :func:`_write_relaxed_candidate`."""
+
+    n_slab: int
+    n_frozen_prefix: int
+    composition: list[str] | None
+    adsorbate_definition: AdsorbateDefinition | None
+    system_type: SystemType
+    surface_mode: bool
+    surface_config: SurfaceSystemConfig | None
+    connectivity_factor: float | None
+    allow_cluster_fragmentation: bool
+    allow_adsorbate_surface_detachment: bool
+    enforce_adsorbate_subgraph_integrity: bool
+    freeze_adsorbate_internal_geometry: bool = False
+    adsorbate_fragment_templates: AdsorbateFragmentInput | None = None
+
+
 def _write_relaxed_candidate(
     da: DataConnection,
     original: Atoms,
     relaxed: Atoms,
     energy: float,
+    ctx: GAWriteContext,
     *,
-    n_slab: int,
-    composition: list[str] | None,
-    adsorbate_definition: AdsorbateDefinition | None,
-    system_type: SystemType,
-    surface_mode: bool,
-    surface_config: SurfaceSystemConfig | None,
-    connectivity_factor: float | None,
-    allow_cluster_fragmentation: bool,
-    allow_adsorbate_surface_detachment: bool,
-    enforce_adsorbate_subgraph_integrity: bool,
     generation: int | None = None,
     run_id: str | None = None,
 ) -> str | None:
     """Write a single relaxed candidate to the database.
 
-    Returns the validation error string when the structure is disconnected,
-    or ``None`` when it is eligible for GA evolution.
+    Returns the validation error string when the structure fails GA storage
+    validation, or ``None`` when it is eligible for GA evolution.
     """
     original.set_cell(relaxed.get_cell(), scale_atoms=True)
     original.set_pbc(relaxed.get_pbc())
     original.set_positions(relaxed.get_positions())
 
-    if composition is not None:
+    if ctx.composition is not None:
         maybe_apply_mobile_core_ads_tags(
             original,
-            n_slab,
-            composition,
-            adsorbate_definition,
-            system_type,
+            ctx.n_slab,
+            ctx.composition,
+            ctx.adsorbate_definition,
+            ctx.system_type,
         )
     validation_error = validate_structure_for_ga_storage(
         original,
-        surface_mode=surface_mode,
-        n_slab=n_slab,
-        system_type=system_type,
-        surface_config=surface_config,
-        adsorbate_definition=adsorbate_definition,
-        connectivity_factor=connectivity_factor,
-        allow_cluster_fragmentation=allow_cluster_fragmentation,
-        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        surface_mode=ctx.surface_mode,
+        n_slab=ctx.n_slab,
+        n_slab_deposit=(
+            ctx.n_frozen_prefix
+            if get_system_policy(ctx.system_type).slab_is_search_target
+            else None
+        ),
+        system_type=ctx.system_type,
+        surface_config=ctx.surface_config,
+        adsorbate_definition=ctx.adsorbate_definition,
+        connectivity_factor=ctx.connectivity_factor,
+        allow_cluster_fragmentation=ctx.allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=ctx.allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
     )
 
     if "forces" in relaxed.arrays:
@@ -561,13 +552,45 @@ def _write_relaxed_candidate(
             ga_ineligible_reason=validation_error,
         )
 
-    comp_meta = list(composition) if composition is not None else []
+    comp_meta = list(ctx.composition) if ctx.composition is not None else []
+    constraint_lists = extract_constraint_index_lists(relaxed)
+    fix_atoms_indices = constraint_lists["fix_atoms_indices"]
+    fix_bond_lengths_pairs = constraint_lists["fix_bond_lengths_pairs"]
+    if not fix_atoms_indices and not fix_bond_lengths_pairs and ctx.surface_mode:
+        try:
+            derived = prepare_atoms_for_local_relax(
+                original,
+                surface_mode=ctx.surface_mode,
+                surface_config=ctx.surface_config,
+                n_slab=ctx.n_slab,
+                freeze_adsorbate_internal_geometry=ctx.freeze_adsorbate_internal_geometry,
+                adsorbate_definition=ctx.adsorbate_definition,
+                adsorbate_fragment_templates=ctx.adsorbate_fragment_templates,
+            )
+            derived_lists = extract_constraint_index_lists(derived)
+            fix_atoms_indices = derived_lists["fix_atoms_indices"]
+            fix_bond_lengths_pairs = derived_lists["fix_bond_lengths_pairs"]
+        except (
+            SCGOValidationError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+            AttributeError,
+            RuntimeError,
+        ):
+            logger.debug(
+                "Could not derive constraint index lists from context; "
+                "storing only the constraints found on the relaxed structure"
+            )
     extra = ga_run_metadata_extras(
-        surface_config,
-        n_slab,
-        system_type,
+        ctx.surface_config,
+        ctx.n_slab,
+        ctx.system_type,
         comp_meta,
-        adsorbate_definition=adsorbate_definition,
+        adsorbate_definition=ctx.adsorbate_definition,
+        fix_atoms_indices=fix_atoms_indices,
+        fix_bond_lengths_pairs=fix_bond_lengths_pairs,
     )
     if generation is not None:
         set_tags(
@@ -579,9 +602,54 @@ def _write_relaxed_candidate(
     elif run_id is not None:
         set_tags(original, run_id=run_id, **extra)
 
+    # Root-cause fix: the unrelaxed ``original`` carried no constraints, so the
+    # native DB round-trip otherwise discards the slab FixAtoms / adsorbate
+    # FixBondLengths that relaxation enforced. Persisting them here aligns the
+    # TorchSim GA path with the basinhopping path (which writes the constrained
+    # ``a_trial`` directly). The metadata tags above are a reorder-safe backstop
+    # consumed on load.
+    if relaxed.constraints:
+        original.set_constraint(copy.deepcopy(relaxed.constraints))
+
     original.calc = SinglePointCalculator(original, energy=energy)
     da.add_relaxed_step(original)
     return validation_error
+
+
+def _read_candidate_batch(da: DataConnection, to_take: int) -> list[Atoms]:
+    """Read a batch of unrelaxed candidates under a single DB connection.
+
+    A single ``select()`` scan builds the per-gaid row list; for each requested
+    gaid the latest trajectory (max mtime, tie-broken by max id) is loaded. This
+    replaces the previous per-gaid ``select(gaid=...)`` loop, which was an O(N²)
+    scan over a JSON key_value column with no index.
+
+    Rows without a ``gaid`` (e.g. the stoichiometry template row written at
+    database setup) are skipped. A gaid is excluded when *any* of its rows is
+    relaxed or queued, because ``add_relaxed_step`` appends a new ``relaxed=1``
+    row and leaves the original ``relaxed=0`` row in place. Up to ``to_take``
+    gaids, sorted by gaid, are returned as ``Atoms`` with ``confid`` set.
+    """
+    with da.c:
+        rows_by_gaid: dict[int, list] = {}
+        excluded_gaids: set[int] = set()
+        for r in da.c.select():
+            gaid = getattr(r, "gaid", None)
+            if gaid is None:
+                continue
+            if getattr(r, "relaxed", 0) or getattr(r, "queued", 0):
+                excluded_gaids.add(gaid)
+                continue
+            rows_by_gaid.setdefault(gaid, []).append(r)
+        gaids = sorted(rows_by_gaid.keys() - excluded_gaids)[:to_take]
+        out: list[Atoms] = []
+        for gaid in gaids:
+            latest = max(rows_by_gaid[gaid], key=lambda row: (row.mtime, row.id))
+            atoms = da.get_atoms(latest.id)
+            atoms.info["confid"] = gaid
+            atoms.info.setdefault("data", {})
+            out.append(atoms)
+        return out
 
 
 def _relax_unrelaxed_candidates(
@@ -595,6 +663,7 @@ def _relax_unrelaxed_candidates(
     run_id: str | None = None,
     surface_config: SurfaceSystemConfig | None = None,
     n_slab: int = 0,
+    n_frozen_prefix: int = 0,
     system_type: SystemType = "gas_cluster",
     profiling: dict[str, float] | None = None,
     counters: dict[str, int] | None = None,
@@ -620,21 +689,18 @@ def _relax_unrelaxed_candidates(
 
     if available == 0:
         return (0, 0)
-    if not force and max_batch is not None and available < max_batch:
-        return (0, 0)
+    # Relax every currently available candidate instead of returning early when
+    # `available < max_batch`. A generation that produced few children no longer
+    # defers work and starves the GPU; candidates left over after this call stay
+    # unrelaxed and are picked up by the next call.
+    # A user-set `max_batch` still caps the take via `min` below unless `force`.
 
     to_take = available if force or max_batch is None else min(available, max_batch)
 
     # Batch read candidates under a single database connection
-    def _read_batch_under_connection():
-        """Read batch of candidates under a single connection in sorted gaid order."""
-        with da.c:
-            gaids = _sorted_unrelaxed_gaids(da)[:to_take]
-            return [_load_unrelaxed_by_gaid(da, gaid) for gaid in gaids]
-
     t0 = perf_counter()
     batch = database_retry(
-        _read_batch_under_connection,
+        lambda: _read_candidate_batch(da, to_take),
         config=RetryConfig(max_retries=5),
         operation_name="read_candidate_batch",
     )
@@ -669,10 +735,10 @@ def _relax_unrelaxed_candidates(
         raise SCGORuntimeError("TorchSim relaxer returned mismatched batch size")
 
     # Batch write results under a single database connection.
-    # Disconnected structures are persisted but marked ineligible for GA evolution.
+    # Structures failing validation are persisted but marked ineligible for GA
+    # evolution.
     successful_count = 0
     ineligible_count = 0
-    logger = get_logger(__name__)
 
     def _write_batch_under_connection():
         """Write relaxed results under a single connection."""
@@ -686,16 +752,21 @@ def _relax_unrelaxed_candidates(
                     original,
                     relaxed,
                     energy,
-                    n_slab=n_slab,
-                    composition=composition,
-                    adsorbate_definition=adsorbate_definition,
-                    system_type=system_type,
-                    surface_mode=surface_mode,
-                    surface_config=surface_config,
-                    connectivity_factor=connectivity_factor,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    GAWriteContext(
+                        n_slab=n_slab,
+                        n_frozen_prefix=n_frozen_prefix,
+                        composition=composition,
+                        adsorbate_definition=adsorbate_definition,
+                        system_type=system_type,
+                        surface_mode=surface_mode,
+                        surface_config=surface_config,
+                        connectivity_factor=connectivity_factor,
+                        allow_cluster_fragmentation=allow_cluster_fragmentation,
+                        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                        adsorbate_fragment_templates=adsorbate_fragment_templates,
+                    ),
                     generation=generation,
                     run_id=run_id,
                 )
@@ -705,7 +776,8 @@ def _relax_unrelaxed_candidates(
                         "Offspring" if generation is not None else "Initial candidate"
                     )
                     logger.debug(
-                        "%s %d/%d disconnected after relaxation; storing but excluding from GA population: %s",
+                        "%s %d/%d failed validation after relaxation; storing "
+                        "but excluding from GA population: %s",
                         label,
                         idx + 1,
                         len(batch),
@@ -750,8 +822,8 @@ def ga_go(
     mutation_probability: float = 0.4,
     population_size: int = 10,
     offspring_fraction: float = 0.5,
-    n_jobs_population_init: int = -2,
-    n_jobs_offspring: int = -2,
+    n_jobs_population_init: int | None = None,
+    n_jobs_offspring: int | None = None,
     vacuum: float = 10.0,
     previous_search_glob: str = "**/*.db",
     use_adaptive_mutations: bool = True,
@@ -763,6 +835,7 @@ def ga_go(
     early_stopping_niter: int = 10,
     relaxer: TorchSimBatchRelaxer | None = None,
     batch_size: int | None = None,
+    torchsim_dtype: str | None = None,
     verbosity: int = 1,
     elite_fraction: float = 0.1,
     run_id: str | None = None,
@@ -794,15 +867,22 @@ def ga_go(
     """Run the GA using TorchSim for batched relaxations.
 
     Genetic algorithm with batched relaxations (TorchSim for MLIPs, ASE batch otherwise).
-    The ``relaxer`` argument controls TorchSim batching; when omitted the
-    function instantiates a default :class:`TorchSimBatchRelaxer` using the
-    provided ``fmax`` as a force tolerance.
+    The ``relaxer`` argument controls batching; when omitted the function builds a
+    :class:`TorchSimBatchRelaxer` for MLIP calculators and an
+    :class:`~scgo.calculators.ase_batch_relaxer.AseBatchRelaxer` otherwise, using
+    ``fmax`` as the force tolerance and ``niter_local_relaxation`` as the step cap.
 
     Args:
         composition: List of element symbols defining the cluster composition.
         calculator: ASE calculator for energy/force evaluations.
         previous_search_glob: Glob pattern used to discover previous database
             files for seed-based initialization.
+        n_jobs_population_init: Parallel workers for population initialization.
+            ``None`` uses the project default (single worker; opt in with ``-1``
+            for all CPUs or ``-2`` for all but one). ``>= 1`` sets an explicit
+            worker count.
+        n_jobs_offspring: Parallel workers for offspring construction, with the
+            same semantics as ``n_jobs_population_init``.
         early_stopping_niter: Number of consecutive generations with no improvement
                               before stopping early. Uses fitness for non-low_energy
                               strategies, energy for low_energy. If 0, no early stopping
@@ -811,7 +891,8 @@ def ga_go(
         elite_fraction: Fraction of population to preserve as elite candidates
                          (top performers by fitness). Default 0.1 (top 10%).
         run_id: Optional run ID for tracking.
-        clean: If True, start fresh (ignore previous databases).
+        clean: If True, remove an existing GA database and auxiliary files in the
+            output directory.
         fitness_strategy: Fitness strategy to use. One of: "low_energy", "high_energy", "diversity".
             Defaults to "low_energy" (minimize energy).
         diversity_reference_db: Glob pattern for reference structure databases (for diversity strategy).
@@ -826,8 +907,12 @@ def ga_go(
         timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``).
             ``run_trials`` sets this to the run directory alongside ``metadata.json``.
         timing_collector: Optional list appended with the timing payload after the run.
+        torchsim_dtype: Optional TorchSim compute dtype, ``"float32"`` or ``"float64"``.
+            Defaults to ``None``, which keeps the :class:`TorchSimBatchRelaxer`
+            default of ``float64``. Set ``"float32"`` for much faster FP32/TF32 GPU
+            kernels at the cost of some numerical accuracy. Only applies when this
+            function builds the relaxer; ignored when ``relaxer`` is supplied.
     """
-    logger = get_logger(__name__)
     profile_t0 = perf_counter()
     profile_timings: dict[str, float] = {}
     profile_counters: dict[str, int] = {
@@ -856,6 +941,12 @@ def ga_go(
         allow_empty=policy.slab_is_search_target and not policy.has_adsorbate,
         allow_tuple=False,
     )
+    # Weave the project-wide parallelism default in once, here at the top-level
+    # knob, so every downstream helper receives a concrete worker setting.
+    n_jobs_population_init = resolve_n_jobs(
+        n_jobs_population_init, "n_jobs_population_init"
+    )
+    n_jobs_offspring = resolve_n_jobs(n_jobs_offspring, "n_jobs_offspring")
     validate_ga_common_params(
         niter=niter,
         population_size=population_size,
@@ -866,13 +957,20 @@ def ga_go(
         vacuum=vacuum,
         fmax=fmax,
     )
-    if n_jobs_offspring not in (-1, -2) and n_jobs_offspring < 1:
-        raise SCGOValidationError(
-            f"n_jobs_offspring must be -1, -2, or >= 1, got {n_jobs_offspring}"
-        )
 
     if batch_size is not None and batch_size <= 0:
         batch_size = None
+
+    # Resolve the optional TorchSim dtype knob for the auto-built relaxer.
+    # ``None`` keeps the TorchSimBatchRelaxer default (float64). Callers that
+    # pass their own ``relaxer`` set its dtype directly and ignore this.
+    if torchsim_dtype is not None and torchsim_dtype not in ("float32", "float64"):
+        raise SCGOValidationError(
+            f"torchsim_dtype must be 'float32' or 'float64', got {torchsim_dtype!r}"
+        )
+    torchsim_dtype_resolved = (
+        getattr(torch, torchsim_dtype) if torchsim_dtype is not None else None
+    )
 
     # Normalize RNG early and enforce Generator-only policy
     rng = ensure_rng_or_create(rng)
@@ -903,7 +1001,7 @@ def ga_go(
             )
             if policy.has_adsorbate:
                 ads = (
-                    adsorbate_definition.get("adsorbate_symbols", [])
+                    adsorbate_definition.adsorbate_symbols
                     if adsorbate_definition
                     else []
                 )
@@ -970,6 +1068,7 @@ def ga_go(
                 fmax=fmax,
                 max_steps=niter_local_relaxation,
                 expected_max_atoms=expected_max_atoms,
+                dtype=torchsim_dtype_resolved,
             )
         else:
             relaxer = AseBatchRelaxer(
@@ -977,6 +1076,8 @@ def ga_go(
                 optimizer=optimizer,
                 force_tol=fmax,
                 max_steps=niter_local_relaxation,
+                surface_mode=surface_mode,
+                n_slab=n_fixed,
             )
     elif (
         isinstance(niter_local_relaxation, int) and niter_local_relaxation > 0
@@ -1059,7 +1160,8 @@ def ga_go(
 
     t0_batch_build = perf_counter()
     if surface_mode:
-        assert slab_ref is not None
+        if slab_ref is None:
+            raise TypeError("slab_ref is required in surface_mode")
         if policy.slab_is_search_target and not policy.has_adsorbate:
             start_generator = SurfaceSlabStartGenerator(
                 slab_ref,
@@ -1111,35 +1213,39 @@ def ga_go(
     profile_timings["initial_population_generation_s"] = perf_counter() - t0
 
     if verbosity >= 1:
-        n_workers = (
-            "all CPUs"
-            if n_jobs_population_init == -1
-            else "all but one CPU"
-            if n_jobs_population_init == -2
-            else f"{n_jobs_population_init} workers"
-        )
-        logger.info(
-            f"Generated initial population of {population_size} candidates "
-            f"(batched, parallel n_jobs={n_workers})"
+        log_info_v(
+            logger,
+            "Generated initial population of %d candidates (batched, parallel: %s)",
+            population_size,
+            f"{resolve_n_jobs_for_tasks(n_jobs_population_init, population_size)} workers",
+            verbosity=verbosity,
         )
 
-    # Do not pass initial_population to SetupDB (avoids formula keys in key_value_pairs).
-    # Insert unrelaxed starters via the low-level API, then batch-relax with TorchSim and tag generation=0.
+    # Do not pass initial_population to setup_database (avoids formula keys in
+    # key_value_pairs). Insert unrelaxed starters via the low-level API, then
+    # batch-relax them and tag generation=0.
     da = setup_database(
         output_dir=output_dir,
         db_filename="ga_go.db",
         atoms_template=atoms_template,
-        initial_population=None,
         remove_existing=clean,
         remove_aux_files=clean,
         enable_expression_indexes=db_enable_expression_indexes,
         run_id=run_id,
     )
 
+    # Declared before the `try` so the `finally` cleanup below can never raise
+    # UnboundLocalError (which would mask an earlier failure, e.g. one raised
+    # during the initial population relaxation). Created lazily in the loop.
+    offspring_executor: ProcessPoolExecutor | None = None
+
     try:
         if verbosity >= 1:
-            logger.info(
-                f"Relaxing initial population of {population_size} candidates..."
+            log_info_v(
+                logger,
+                "Relaxing initial population of up to %d candidates",
+                population_size,
+                verbosity=verbosity,
             )
 
         logger.debug(
@@ -1188,6 +1294,7 @@ def ga_go(
                     cand,
                     surface_mode=surface_mode,
                     n_slab=n_slab,
+                    n_slab_deposit=(n_fixed if policy.slab_is_search_target else None),
                     system_type=system_type,
                     surface_config=surface_config,
                     adsorbate_definition=adsorbate_definition,
@@ -1199,7 +1306,7 @@ def ga_go(
                 if validation_error is not None:
                     initial_discarded_count += 1
                     logger.debug(
-                        "Discarding disconnected initial candidate before DB insert: %s",
+                        "Discarding invalid initial candidate before DB insert: %s",
                         validation_error,
                     )
                     continue
@@ -1230,23 +1337,30 @@ def ga_go(
                         original,
                         relaxed,
                         energy,
-                        n_slab=n_slab,
-                        composition=composition,
-                        adsorbate_definition=adsorbate_definition,
-                        system_type=system_type,
-                        surface_mode=surface_mode,
-                        surface_config=surface_config,
-                        connectivity_factor=connectivity_factor,
-                        allow_cluster_fragmentation=allow_cluster_fragmentation,
-                        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                        GAWriteContext(
+                            n_slab=n_slab,
+                            n_frozen_prefix=n_fixed,
+                            composition=composition,
+                            adsorbate_definition=adsorbate_definition,
+                            system_type=system_type,
+                            surface_mode=surface_mode,
+                            surface_config=surface_config,
+                            connectivity_factor=connectivity_factor,
+                            allow_cluster_fragmentation=allow_cluster_fragmentation,
+                            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                            freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                            adsorbate_fragment_templates=adsorbate_fragment_template,
+                        ),
                         generation=0,
                         run_id=run_id,
                     )
                     if validation_error is not None:
                         initial_ineligible_relaxed_count += 1
                         logger.debug(
-                            "Initial candidate disconnected after relaxation; storing but excluding from GA population: %s",
+                            "Initial candidate failed validation after "
+                            "relaxation; storing but excluding from GA "
+                            "population: %s",
                             validation_error,
                         )
 
@@ -1326,17 +1440,21 @@ def ga_go(
         population._write_log()
         if verbosity >= 1:
             eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
-            logger.info(
+            log_info_v(
+                logger,
                 "Initial population: size=%d, %d GA-eligible, %d discarded pre-relax, %d ineligible post-relax",
                 len(population.pop),
                 eligible_initial,
                 initial_discarded_count,
                 initial_ineligible_relaxed_count,
+                verbosity=verbosity,
             )
         if verbosity >= 2:
-            logger.debug(
-                "Initial Population confids=%s",
+            log_debug_v(
+                logger,
+                "Initial population confids=%s",
                 [a.info.get("confid") for a in population.pop],
+                verbosity=verbosity,
             )
 
         log_early_stopping_info(
@@ -1351,6 +1469,12 @@ def ga_go(
         best_value = None  # Energy for low_energy, fitness for others
         generations_without_improvement = 0
         recent_acceptance_ratios: list[float] = []
+
+        # The offspring ProcessPoolExecutor is hoisted above the `try` and created
+        # lazily below, so it is forked + pickled once instead of every generation.
+        # Workers reload their pairing/operator state per generation via
+        # `_build_offspring_worker` (keyed on `operators_epoch`), so reuse is
+        # correctness-preserving.
 
         for generation in tqdm(
             range(niter),
@@ -1424,6 +1548,7 @@ def ga_go(
                 blmin=blmin if ga_fast_prefilter_enabled else {},
                 system_type=system_type,
                 n_slab=n_slab,
+                n_frozen_prefix=n_fixed,
                 slab_for_pairing=_picklable_atoms_copy(slab_for_pairing),
                 surface_normal_axis=(
                     surface_config.surface_normal_axis if surface_mode else 2
@@ -1444,18 +1569,20 @@ def ga_go(
                 name_map=name_map,
                 operators_epoch=generation,
             )
-            n_workers_offspring = _resolve_parallel_worker_count(
+            n_workers_offspring = resolve_n_jobs_for_tasks(
                 n_jobs_offspring, max(1, n_offspring)
             )
-            offspring_executor: ProcessPoolExecutor | None = None
-            if n_workers_offspring > 1:
+            # Create the (hoisted) pool once on first need; reuse across generations.
+            if n_workers_offspring > 1 and offspring_executor is None:
                 offspring_executor = ProcessPoolExecutor(
                     max_workers=n_workers_offspring,
                     initializer=_offspring_worker_bootstrap_init,
                     initargs=(offspring_ctx,),
                 )
-            else:
-                _ensure_offspring_worker_state(offspring_ctx)
+            # The parent process also needs its own state: a batch that yields a
+            # single job falls back to the in-process path below, which calls
+            # ``_build_offspring_worker`` here rather than in a pool worker.
+            _ensure_offspring_worker_state(offspring_ctx)
 
             try:
                 while created < n_offspring and attempts < max_attempts:
@@ -1479,14 +1606,17 @@ def ga_go(
                                 "a1": a1.copy(),
                                 "a2": a2.copy(),
                                 "task_seed": task_seed,
+                                "operators_epoch": offspring_ctx.operators_epoch,
+                                "adaptive_config": offspring_ctx.adaptive_config,
+                                "current_mutation_probability": (
+                                    offspring_ctx.current_mutation_probability
+                                ),
                             }
                         )
                     if not jobs:
                         continue
 
-                    n_workers = _resolve_parallel_worker_count(
-                        n_jobs_offspring, len(jobs)
-                    )
+                    n_workers = resolve_n_jobs_for_tasks(n_jobs_offspring, len(jobs))
 
                     t_parallel = perf_counter()
                     job_results: dict[int, dict[str, Any]] = {}
@@ -1494,10 +1624,7 @@ def ga_go(
                     if n_workers == 1:
                         for job in jobs:
                             try:
-                                result = _build_offspring_worker(
-                                    job,
-                                    offspring_ctx,
-                                )
+                                result = _build_offspring_worker(job)
                             except (RuntimeError, ValueError, TypeError) as exc:
                                 worker_failures_gen += 1
                                 err_name = type(exc).__name__
@@ -1516,11 +1643,12 @@ def ga_go(
                                 continue
                             job_results[result["index"]] = result
                     else:
-                        assert offspring_executor is not None
-                        futures = [
-                            offspring_executor.submit(
-                                _build_offspring_worker, job, offspring_ctx
+                        if offspring_executor is None:
+                            raise SCGORuntimeError(
+                                "offspring_executor is None but n_jobs_offspring > 1"
                             )
+                        futures = [
+                            offspring_executor.submit(_build_offspring_worker, job)
                             for job in jobs
                         ]
                         for future in as_completed(futures):
@@ -1602,8 +1730,8 @@ def ga_go(
                                 created += 1
                         t_db_unrelaxed_gen += perf_counter() - t0
             finally:
-                if offspring_executor is not None:
-                    offspring_executor.shutdown(wait=True)
+                # The pool is reused across generations; only clear the cached
+                # worker state. Shutdown happens once after the generational loop.
                 _OFFSPRING_WORKER_STATE.clear()
 
             generation_acceptance = created / max(attempts, 1)
@@ -1651,10 +1779,16 @@ def ga_go(
             )
 
             # Ask TorchSim relaxer to process available unrelaxed candidates now.
-            # Enforce a per-generation limit: when `batch_size` is None, treat the
-            # per-call limit as the GA `n_offspring` so a single relax call does not
-            # drain an unrelated backlog and make logs look cumulative.
-            per_gen_max = batch_size if batch_size is not None else n_offspring
+            # Enforce a per-generation limit: when `batch_size` is None, target the
+            # full population so a single relax_batch submission keeps the autobatcher's
+            # in-flight swap reservoir full (its budget tracks the systems handed to
+            # one call). This maximizes GPU utilization; a user-set `batch_size`
+            # (non-None) still caps the call as before.
+            per_gen_max = (
+                batch_size
+                if batch_size is not None
+                else max(n_offspring, population_size)
+            )
             pre_db_read = float(profile_timings.get("db_read_s", 0.0))
             pre_relax = float(profile_timings.get("relax_batch_s", 0.0))
             pre_db_write = float(profile_timings.get("db_write_s", 0.0))
@@ -1669,6 +1803,7 @@ def ga_go(
                 run_id=run_id,
                 surface_config=surface_config,
                 n_slab=n_slab,
+                n_frozen_prefix=n_fixed,
                 system_type=system_type,
                 profiling=profile_timings,
                 counters=profile_counters,
@@ -1693,11 +1828,13 @@ def ga_go(
             gen_pop_update_s_from_relax = max(0.0, post_pop_update - pre_pop_update)
             pop_update_s = gen_pop_update_s_from_relax
             if verbosity >= 1 and (eligible_count + ineligible_count) > 0:
-                logger.info(
+                log_info_v(
+                    logger,
                     "Relaxation: %d/%d GA-eligible, %d ineligible",
                     eligible_count,
                     eligible_count + ineligible_count,
                     ineligible_count,
+                    verbosity=verbosity,
                 )
             if offspring_count > 0:
                 profile_counters["offspring_relaxed"] += int(offspring_count)
@@ -1747,10 +1884,14 @@ def ga_go(
                             if fitness_strategy != FitnessStrategy.LOW_ENERGY
                             else "energy"
                         )
-                        logger.info(
-                            f"Early stopping triggered: no {stopping_metric} improvement for "
-                            f"{generations_without_improvement} generations "
-                            f"(best {stopping_metric}: {best_value:.6f})"
+                        log_info_v(
+                            logger,
+                            "Early stopping triggered: no %s improvement for %d generations (best %s: %.6f)",
+                            stopping_metric,
+                            generations_without_improvement,
+                            stopping_metric,
+                            best_value,
+                            verbosity=verbosity,
                         )
                     break
 
@@ -1763,6 +1904,7 @@ def ga_go(
             run_id=run_id,
             surface_config=surface_config,
             n_slab=n_slab,
+            n_frozen_prefix=n_fixed,
             system_type=system_type,
             profiling=profile_timings,
             counters=profile_counters,
@@ -1791,8 +1933,11 @@ def ga_go(
         all_minima = extract_minima_from_database(all_candidates)
 
         if verbosity >= 1:
-            logger.info(
-                f"GA evolution complete. Found {len(all_minima)} unique minima."
+            log_info_v(
+                logger,
+                "GA evolution complete: found %d minima",
+                len(all_minima),
+                verbosity=verbosity,
             )
 
         # Sort by fitness (highest first) for non-default strategies
@@ -1802,6 +1947,7 @@ def ga_go(
             logger=logger,
         )
         profile_timings["total_wall_s"] = perf_counter() - profile_t0
+        profile_timings["kind"] = "ga"
         relax_total = ga_relax_seconds_from_timings(profile_timings)
         profile_timings["relax_total_s"] = relax_total
         profile_timings["cpu_non_relax_s"] = cpu_non_relax_seconds_from_timings(
@@ -1833,4 +1979,8 @@ def ga_go(
         return all_minima
 
     finally:
+        # Shut down the hoisted offspring pool once (it was created lazily and
+        # reused across generations) before closing the data connection.
+        if offspring_executor is not None:
+            offspring_executor.shutdown(wait=True)
         close_data_connection(da, log_errors=False)

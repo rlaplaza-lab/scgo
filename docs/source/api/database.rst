@@ -15,3 +15,35 @@ Structure tags, DB stamps, and run-dir JSON live in :doc:`metadata`.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
+
+.. autoclass:: scgo.database.discovery.DatabaseDiscovery
+   :members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.database.helpers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.database.transactions
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. autofunction:: scgo.database.connection.get_connection
+
+.. automodule:: scgo.database.registry
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.database.cache
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*

@@ -1,19 +1,24 @@
+"""Mutation that flattens a nanoparticle by projecting onto a random plane."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that flattens a nanoparticle by projecting onto a random plane."""
 
 import numpy as np
+from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
+    _IDENTITY_ATOL,
     _ensure_rng,
     _geometry_candidate_directions,
+    _preserves_mobile_connectivity,
+    _reanchor_mobile_to_slab,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import get_blmin_distance as _get_blmin_distance
+from scgo.initialization.steric_scoring import _blmin_matrix
 from scgo.system_types import SystemType, get_system_policy
 
 __all__ = ["FlatteningMutation"]
@@ -21,8 +26,10 @@ __all__ = ["FlatteningMutation"]
 
 class FlatteningMutation(OffspringCreator):
     """A mutation that flattens the nanoparticle by projecting the coordinates
-    to a plane that cuts the structure in a random angle.
-    Atoms are then perturbed perpendicular to the plane within a given thickness.
+    onto a plane derived from the structure geometry (outward slab
+    direction, principal axes, and random fill).
+    Offsets along the plane normal are compressed to a target thickness and then
+    pushed back out only as far as needed to satisfy the blmin.
 
     Parameters
     ----------
@@ -32,19 +39,19 @@ class FlatteningMutation(OffspringCreator):
     n_top: Number of atoms the GA optimizes.
 
     thickness_factor: Factor to multiply with the average blmin to determine
-        the thickness of the slab for projection.
+        the target thickness of the flattened structure.
 
     test_dist_to_slab: Whether also the distances to the slab
         should be checked to satisfy the blmin.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, thickness_factor=0.5,
                  test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=12):
+                 max_inner_attempts=12, surface_normal_axis=2):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -54,6 +61,7 @@ class FlatteningMutation(OffspringCreator):
         self.target_tags = target_tags
         self.max_inner_attempts = max_inner_attempts
         self.system_type = system_type
+        self.surface_normal_axis = surface_normal_axis
         self._policy = get_system_policy(system_type)
         self.last_attempt_count = 0
 
@@ -91,11 +99,11 @@ class FlatteningMutation(OffspringCreator):
         # Vectorize lateral distance calculations
         lateral_distances = squareform(pdist(ordered_positions))
 
-        # Vectorize blmin lookup
+        # Vectorize blmin lookup (upper triangle only, matching the original double loop)
+        blmin_u = _blmin_matrix(ordered_numbers, self.blmin)
+        iu = np.triu_indices(n_atoms, k=1)
         blmin_matrix = np.zeros((n_atoms, n_atoms), dtype=float)
-        for i in range(n_atoms):
-            for j in range(i + 1, n_atoms):
-                blmin_matrix[i, j] = _get_blmin_distance(self.blmin, ordered_numbers[i], ordered_numbers[j])
+        blmin_matrix[iu] = blmin_u[iu]
 
         required_distances = blmin_matrix + clearance_margin
 
@@ -167,13 +175,12 @@ class FlatteningMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
 
         mutant = top.copy()
         pos = mutant.get_positions()
         atomic_numbers = mutant.get_atomic_numbers()
         tags = mutant.get_tags() if hasattr(mutant, "get_tags") else np.arange(N)
-        cm = np.average(pos, axis=0)
 
         # Determine which tags to target
         unique_tags = np.unique(tags)
@@ -183,25 +190,50 @@ class FlatteningMutation(OffspringCreator):
             if len(unique_tags) == 0:
                 return None
 
+        # Only the targeted tag groups are flattened; the rest stay put.
+        mask = np.isin(tags, unique_tags)
+        if not np.any(mask):
+            return None
+
+        target_pos = pos[mask]
+        target_numbers = atomic_numbers[mask]
+        cm = np.average(target_pos, axis=0)
+
         avg_blmin = np.mean(list(self.blmin.values()))
         desired_thickness = max(0.05 * avg_blmin, avg_blmin * self.thickness_factor)
 
-        candidate_positions = [
-            self._build_flatten_candidate(
-                pos,
+        candidate_positions = []
+        for normal in self._candidate_normals(target_pos, cm, slab):
+            score, flattened = self._build_flatten_candidate(
+                target_pos,
                 cm,
                 normal,
-                atomic_numbers,
+                target_numbers,
                 desired_thickness,
                 avg_blmin,
             )
-            for normal in self._candidate_normals(pos, cm, slab)
-        ]
+            new_positions = pos.copy()
+            new_positions[mask] = flattened
+            candidate_positions.append((score, new_positions))
 
         candidate_positions.sort(key=lambda item: item[0])
         self.last_attempt_count = 0
+        use_mic = bool(self._policy.uses_surface)
         for _score, new_positions in candidate_positions:
             self.last_attempt_count += 1
+            rms = (
+                np.linalg.norm(new_positions - pos)
+                / max(1, len(new_positions)) ** 0.5
+            )
+            if rms <= _IDENTITY_ATOL:
+                continue
+            if self._policy.uses_surface:
+                new_positions = _reanchor_mobile_to_slab(
+                    top, Atoms(numbers=atomic_numbers, positions=new_positions,
+                               cell=top.get_cell(),
+                               pbc=top.get_pbc(), tags=top.get_tags()),
+                    slab, self.surface_normal_axis,
+                ).get_positions()
             mutant.set_positions(new_positions)
             # Only center gas-phase clusters; surface adsorbates must keep
             # their positions relative to the slab.
@@ -211,9 +243,11 @@ class FlatteningMutation(OffspringCreator):
             too_close = atoms_too_close(mutant, self.blmin)
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
-
-            if not too_close:
-                return slab + mutant
+            if too_close:
+                continue
+            if not _preserves_mobile_connectivity(top, mutant, use_mic=use_mic):
+                continue
+            return slab + mutant
 
         if len(candidate_positions) == 0:
             self.last_attempt_count = 0

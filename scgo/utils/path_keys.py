@@ -1,6 +1,6 @@
 """Component-aware path-key resolution for GO / TS / campaign directories.
 
-:func:`get_system_path_key` is the pure formatter; :func:`resolve_run_path_key`
+:func:`~scgo.get_system_path_key` is the pure formatter; :func:`resolve_run_path_key`
 is the single place that decides how composition + params/system_type map to
 a path key.
 """
@@ -47,10 +47,6 @@ def resolve_run_path_key(
     ads_def = adsorbate_definition
     if ads_def is None and params is not None:
         ads_def = extract_adsorbate_definition_from_params(params)
-        if ads_def is None:
-            raw = params.get("adsorbate_definition")
-            if isinstance(raw, dict):
-                ads_def = raw  # type: ignore[assignment]
     sc = surface_config
     if sc is None and params is not None:
         raw_sc = params.get("surface_config")
@@ -58,6 +54,6 @@ def resolve_run_path_key(
             sc = raw_sc
     return get_system_path_key(
         composition,
-        adsorbate_definition=ads_def,  # type: ignore[arg-type]
+        adsorbate_definition=ads_def,
         surface_name=_surface_name_for_path(system_type, sc),
     )

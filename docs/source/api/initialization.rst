@@ -17,7 +17,7 @@ deposition:
    :header-rows: 1
 
    * - Mode
-     - Behaviour
+     - Behavior
    * - ``smart`` (default)
      - Metropolis allocation across templates, seed+growth, and random_spherical.
        Batch generation discovers strategies once, then assigns per-structure
@@ -113,5 +113,18 @@ Module reference
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*, initialization_config
+
+.. autoclass:: scgo.initialization.BatchInitPlan
+   :members:
+   :show-inheritance:
+   :exclude-members: _*
+   :no-index:
+
+.. automodule:: scgo.initialization.initialization_config
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
 
 .. autofunction:: scgo.initialization.geometry_helpers.reorder_cluster_to_composition

@@ -1,10 +1,11 @@
+"""Implementation of a population for maintaining a GA population and
+proposing structures to pair.
+"""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Implementation of a population for maintaining a GA population and
-proposing structures to pair.
-"""
 from math import sqrt, tanh
 
 import numpy as np
@@ -21,7 +22,11 @@ from scgo.utils.fitness_strategies import (
 
 
 def _raw_score(a):
-    """Return GA raw_score from structure tags."""
+    """Return GA raw_score from structure tags.
+
+    Raises:
+        SCGOValidationError: If the candidate carries no ``raw_score`` tag.
+    """
     raw = get_tag(a, "raw_score", default=None)
     if raw is None:
         raise SCGOValidationError(
@@ -84,6 +89,13 @@ class Population:
 
     rng: Random number generator
         Must be an instance of ``np.random.Generator`` or ``None``.
+
+    elite_fraction: float
+        Fraction of the population protected from replacement, counted
+        from the best raw_score downwards.
+
+    run_id: str or None
+        When given, only candidates tagged with this run_id are considered.
 
     """
 
@@ -194,39 +206,16 @@ class Population:
         self.__calc_participation__()
         self._write_log()
 
-    def get_current_population(self):
-        """Returns a copy of the current population."""
-        self.update()
-        return [a.copy() for a in self.pop]
-
-    def get_population_after_generation(self, gen):
-        """Returns a copy of the population as it where
-        after generation gen
-        """
-        if self.logfile is not None:
-            with open(self.logfile) as fd:
-                gens = {}
-                for line in fd:
-                    _, no, popul = line.split(":")
-                    gens[int(no)] = [int(i) for i in popul.split(",")]
-            return [c.copy() for c in self.all_cand[::-1]
-                    if c.info["relax_id"] in gens[gen]]
-
-        all_candidates = [c for c in self.all_cand
-                          if get_tag(c, "generation", default=float("inf")) <= gen]
-        cands = [all_candidates[0]]
-        for b in all_candidates:
-            if b not in cands:
-                for a in cands:
-                    if self.comparator.looks_like(a, b):
-                        break
-                else:
-                    cands.append(b)
-        pop = cands[: self.population_size]
-        return [a.copy() for a in pop]
-
     def __add_candidate__(self, a):
         """Adds a single candidate to the population."""
+        # An empty population accepts the candidate unconditionally.
+        if not self.pop:
+            a.info["looks_like"] = count_looks_like(a,
+                                                    self.all_cand,
+                                                    self.comparator)
+            self.pop.append(a)
+            return
+
         # check if the structure is too low in raw score
         raw_score_a = _raw_score(a)
         raw_score_worst = _raw_score(self.pop[-1])
@@ -238,12 +227,11 @@ class Population:
         # replace a similar structure in the population
         for (i, b) in enumerate(self.pop):
             if self.comparator.looks_like(a, b):
+                # Replace a duplicate only when the newcomer is strictly better;
+                # elites are no exception, otherwise a better copy of the best
+                # candidate would be discarded and the population could never
+                # improve past it. Ties keep the incumbent.
                 if _raw_score(b) < raw_score_a:
-                    # Only replace if the structure being removed is not elite
-                    # Elite candidates are the top elite_size by raw_score
-                    if i < self.elite_size:
-                        # Trying to replace an elite candidate - keep the elite
-                        return
                     del self.pop[i]
                     a.info["looks_like"] = count_looks_like(a,
                                                             self.all_cand,
@@ -255,7 +243,8 @@ class Population:
         # the new candidate needs to be added, so ensure we have room
         # Always keep top elite_size candidates
         if len(self.pop) == self.population_size:
-            # Remove worst candidate to make room (it can't be elite since population is sorted)
+            # Remove the worst candidate to make room (the population is
+            # kept sorted by raw_score, best first).
             del self.pop[-1]
 
         # add the new candidate
@@ -297,9 +286,11 @@ class Population:
         """Returns two candidates for pairing employing the
         fitness criteria from
         L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
-        and the roulete wheel selection scheme described in
+        and the roulette wheel selection scheme described in
         R.L. Johnston Dalton Transactions,
         Vol. 22, No. 22. (2003), pp. 4193-4207
+
+        Returns None if the population holds fewer than two candidates.
         """
         if len(self.pop) < 2:
             self.update()
@@ -313,82 +304,24 @@ class Population:
             # All fitness values are near-zero; fall back to uniform random selection
             idx = self.rng.choice(len(self.pop), size=2, replace=False)
             return (self.pop[idx[0]].copy(), self.pop[idx[1]].copy())
-        c1 = self.pop[0]
-        c2 = self.pop[0]
-        used_before = False
-        _maxiter = 10000
-        _outer_iter = 0
-        while c1.info.get("confid") == c2.info.get("confid") or used_before:
-            _outer_iter += 1
-            if _outer_iter > _maxiter:
-                # Exhausted attempts; return best effort pair.
-                break
-            nnf = True
-            _inner = 0
-            while nnf:
-                _inner += 1
-                if _inner > _maxiter:
-                    # Fall back to uniform random selection.
-                    t = self.rng.integers(len(self.pop))
-                    c1 = self.pop[t]
-                    break
-                t = self.rng.integers(len(self.pop))
-                if fit[t] > self.rng.random() * fmax:
-                    c1 = self.pop[t]
-                    nnf = False
-            nnf = True
-            _inner = 0
-            while nnf:
-                _inner += 1
-                if _inner > _maxiter:
-                    t = self.rng.integers(len(self.pop))
-                    c2 = self.pop[t]
-                    break
-                t = self.rng.integers(len(self.pop))
-                if fit[t] > self.rng.random() * fmax:
-                    c2 = self.pop[t]
-                    nnf = False
 
+        # Fitness-proportional selection without replacement: the two indices
+        # are distinct by construction, so a confid collision is impossible.
+        p = np.clip(np.asarray(fit, dtype=float), 0.0, None)
+        p = p / p.sum()
+        c1 = self.pop[0]
+        c2 = self.pop[1]
+        # Bounded retry: only the pairing history can reject a drawn pair.
+        for _attempt in range(100):
+            idx = self.rng.choice(len(self.pop), size=2, replace=False, p=p)
+            c1 = self.pop[int(idx[0])]
+            c2 = self.pop[int(idx[1])]
             c1id = c1.info.get("confid")
             c2id = c2.info.get("confid")
             used_before = (min([c1id, c2id]), max([c1id, c2id])) in self.pairs
-        return (c1.copy(), c2.copy())
-
-    def get_one_candidate(self, with_history=True):
-        """Returns one candidate for mutation employing the
-        fitness criteria from
-        L.B. Vilhelmsen et al., JACS, 2012, 134 (30), pp 12807-12816
-        and the roulete wheel selection scheme described in
-        R.L. Johnston Dalton Transactions,
-        Vol. 22, No. 22. (2003), pp. 4193-4207
-        """
-        if len(self.pop) < 1:
-            self.update()
-
-        if len(self.pop) < 1:
-            return None
-
-        fit = self.__get_fitness__(range(len(self.pop)), with_history)
-        fmax = max(fit)
-        if fmax < 1e-12:
-            # All fitness values are near-zero; fall back to uniform random selection
-            t = self.rng.integers(len(self.pop))
-            return self.pop[t].copy()
-        nnf = True
-        _inner = 0
-        _maxiter = 10000
-        while nnf:
-            _inner += 1
-            if _inner > _maxiter:
-                t = self.rng.integers(len(self.pop))
-                c1 = self.pop[t]
+            if not used_before:
                 break
-            t = self.rng.integers(len(self.pop))
-            if fit[t] > self.rng.random() * fmax:
-                c1 = self.pop[t]
-                nnf = False
-
-        return c1.copy()
+        return (c1.copy(), c2.copy())
 
     def _write_log(self):
         """Writes the population to a logfile.
@@ -411,45 +344,6 @@ class Population:
             with open(self.logfile, "a") as fd:
                 if ids:
                     fd.write(f"{now()}: {max_gen}: {','.join(ids)}\n")
-
-    def is_uniform(self, func, min_std, pop=None):
-        """Tests whether the current population is uniform or diverse.
-        Returns True if uniform, False otherwise.
-
-        Parameters
-        ----------
-        func: function
-            that takes one argument an atoms object and returns a value that
-            will be used for testing against the rest of the population.
-
-        min_std: int or float
-            The minimum standard deviation, if the population has a lower
-            std dev it is uniform.
-
-        pop: list, optional
-            use this list of Atoms objects instead of the current population.
-
-        """
-        if pop is None:
-            pop = self.pop
-        vals = [func(a) for a in pop]
-        stddev = np.std(vals)
-        return stddev < min_std
-
-    def mass_extinction(self, ids):
-        """Kills every candidate in the database with gaid in the
-        supplied list of ids. Typically used on the main part of the current
-        population if the diversity is to small.
-
-        Parameters
-        ----------
-        ids: list
-            list of ids of candidates to be killed.
-
-        """
-        for confid in ids:
-            self.dc.kill_candidate(confid)
-        self.pop = []
 
 
 class FitnessStrategyPopulation(Population):
@@ -480,6 +374,8 @@ class FitnessStrategyPopulation(Population):
         Random number generator for stochastic operations.
     elite_fraction: float
         Fraction of population to preserve as elite (top performers).
+    run_id: str or None
+        When given, only candidates tagged with this run_id are considered.
     """
 
     def __init__(
@@ -492,7 +388,7 @@ class FitnessStrategyPopulation(Population):
         comparator=None,
         logfile=None,
         use_extinct=False,
-        rng=np.random,
+        rng=None,
         elite_fraction=0.1,
         run_id: str | None = None,
     ):

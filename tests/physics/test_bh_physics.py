@@ -9,6 +9,7 @@ from ase.optimize import LBFGS
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.initialization import create_initial_cluster
 from scgo.utils.helpers import perform_local_relaxation
+from tests.helpers import assert_minima_structurally_valid
 
 
 @pytest.mark.slow
@@ -30,6 +31,7 @@ def test_bh_temperature_zero_rejects_uphill(tmp_path, rng) -> None:
         rng=rng,
     )
     assert len(minima) >= 1
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
     best_energy = min(float(e) for e, _a in minima)
     assert best_energy <= reference_energy + 1e-5
 
@@ -54,6 +56,7 @@ def test_bh_finds_lower_energy_than_initial(tmp_path, rng) -> None:
         rng=rng,
     )
     assert len(minima) >= 1
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
     finite_energies = [float(e) for e, _a in minima if float(e) < 1e5]
     assert finite_energies, "BH returned only penalty-energy structures"
     best_energy = min(finite_energies)

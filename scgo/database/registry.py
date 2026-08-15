@@ -1,10 +1,13 @@
 """Database registry for fast database lookups.
 
-Simplified in-memory registry for database discovery without filesystem scanning.
+Simplified in-memory registry for database discovery: lookups never scan the
+filesystem, they only stat the registered paths.
 """
 
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +15,10 @@ from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Maximum number of registry instances retained; oldest is evicted on insertion
+# beyond this cap to bound memory in long-running, multi-directory sessions.
+_REGISTRY_MAX_SIZE = 16
 
 
 class DatabaseRegistry:
@@ -31,15 +38,16 @@ class DatabaseRegistry:
         db_path: Path,
         composition: list[str] | None = None,
         run_id: str | None = None,
-        extra: dict | None = None,
     ) -> None:
         """Register a database in the index.
+
+        Databases outside ``base_dir`` cannot be keyed relative to it, so they
+        are skipped with a warning instead of being registered.
 
         Args:
             db_path: Path to database file
             composition: Composition (e.g., ["Pt", "Pt"])
             run_id: Run identifier
-            extra: Additional registry fields to store
         """
         # Build database entry
         db_path_resolved = db_path.resolve()
@@ -60,31 +68,10 @@ class DatabaseRegistry:
             "composition": composition or [],
             "composition_str": self._make_composition_key(composition or []),
             "run_id": run_id,
-            "extra": extra or {},
         }
 
         self._data["databases"][db_key] = entry
         logger.debug("Registered database: %s", db_key)
-
-    def unregister_database(self, db_path: Path) -> bool:
-        """Remove database from registry.
-
-        Args:
-            db_path: Path to database file
-
-        Returns:
-            True if database was in registry and removed
-        """
-        try:
-            db_key = str(db_path.resolve().relative_to(self.base_dir.resolve()))
-        except ValueError:
-            return False
-
-        if db_key in self._data["databases"]:
-            del self._data["databases"][db_key]
-            logger.debug("Unregistered database: %s", db_key)
-            return True
-        return False
 
     def find_databases(
         self,
@@ -98,7 +85,8 @@ class DatabaseRegistry:
             run_id: Filter by run ID
 
         Returns:
-            List of matching database paths
+            List of matching database paths, skipping entries whose file no
+            longer exists on disk
         """
         matches = []
         comp_key = self._make_composition_key(composition) if composition else None
@@ -120,7 +108,7 @@ class DatabaseRegistry:
         """Get all registered databases.
 
         Returns:
-            List of all database paths
+            List of registered database paths that still exist on disk
         """
         paths = []
         for entry in self._data["databases"].values():
@@ -129,73 +117,10 @@ class DatabaseRegistry:
                 paths.append(db_path)
         return paths
 
-    def get_database_entry(self, db_path: Path) -> dict | None:
-        """Get registry entry for a database.
-
-        Args:
-            db_path: Path to database
-
-        Returns:
-            Registry entry dict or None if not found
-        """
-        try:
-            db_key = str(db_path.resolve().relative_to(self.base_dir.resolve()))
-        except ValueError:
-            return None
-        return self._data["databases"].get(db_key)
-
     def clear(self) -> None:
         """Clear all registry entries."""
         self._data["databases"] = {}
         logger.info("Cleared registry")
-
-    def rebuild_from_filesystem(
-        self,
-        pattern: str = "**/*.db",
-    ) -> int:
-        """Rebuild registry by scanning filesystem.
-
-        Args:
-            pattern: Glob pattern for database files
-
-        Returns:
-            Number of databases registered
-        """
-        db_files = list(self.base_dir.glob(pattern))
-        logger.info("Scanning %s database files...", len(db_files))
-
-        registered = 0
-        for db_path in db_files:
-            try:
-                # Simple registration without metadata detection
-                self.register_database(db_path)
-                registered += 1
-            except (ValueError, OSError) as e:
-                # Skip files that cannot be registered (filesystem issues)
-                logger.warning("Failed to register %s: %s", db_path, e)
-
-        logger.info("Registered %s databases", registered)
-        return registered
-
-    def invalidate_stale_entries(self) -> int:
-        """Remove entries for databases that no longer exist.
-
-        Returns:
-            Number of entries removed
-        """
-        stale_keys = []
-        for db_key, entry in self._data["databases"].items():
-            db_path = self.base_dir / entry["path"]
-            if not db_path.exists():
-                stale_keys.append(db_key)
-
-        for key in stale_keys:
-            del self._data["databases"][key]
-
-        if stale_keys:
-            logger.info("Removed %s stale entries", len(stale_keys))
-
-        return len(stale_keys)
 
     @staticmethod
     def _make_composition_key(composition: list[str]) -> str:
@@ -205,7 +130,8 @@ class DatabaseRegistry:
             composition: List of element symbols
 
         Returns:
-            Canonical composition string (e.g., "Pt2" or "PdPt")
+            Canonical composition string with explicit counts
+            (e.g., "Pt2" or "Pd1Pt1")
         """
         if not composition:
             return ""
@@ -218,7 +144,8 @@ class DatabaseRegistry:
 
 
 # Global registry instance cache
-_global_registries: dict[Path, DatabaseRegistry] = {}
+_global_registries: OrderedDict[Path, DatabaseRegistry] = OrderedDict()
+_global_registries_lock = threading.Lock()
 
 
 def get_registry(base_dir: str | Path) -> DatabaseRegistry:
@@ -236,11 +163,21 @@ def get_registry(base_dir: str | Path) -> DatabaseRegistry:
     """
     base_path = Path(base_dir).resolve()
 
-    if base_path not in _global_registries:
-        _global_registries[base_path] = DatabaseRegistry(base_path)
-    return _global_registries[base_path]
+    with _global_registries_lock:
+        if base_path in _global_registries:
+            # Mark as most-recently-used.
+            _global_registries.move_to_end(base_path)
+            return _global_registries[base_path]
+
+        registry = DatabaseRegistry(base_path)
+        _global_registries[base_path] = registry
+        _global_registries.move_to_end(base_path)
+        if len(_global_registries) > _REGISTRY_MAX_SIZE:
+            _global_registries.popitem(last=False)
+        return registry
 
 
-def clear_registry_cache() -> None:
-    """Clear the global registry cache."""
-    _global_registries.clear()
+def clear_registry() -> None:
+    """Discard all cached registry instances (useful for tests/sessions)."""
+    with _global_registries_lock:
+        _global_registries.clear()

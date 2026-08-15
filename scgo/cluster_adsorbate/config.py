@@ -52,7 +52,7 @@ class ClusterAdsorbateConfig:
 def resolve_cluster_adsorbate_config(
     config: ClusterAdsorbateConfig | None,
 ) -> ClusterAdsorbateConfig:
-    """Return *config* or the package default (single allowed default site)."""
+    """Return *config* unchanged, or a default config when it is ``None``."""
     if config is None:
         return ClusterAdsorbateConfig()
     return config

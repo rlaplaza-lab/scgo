@@ -15,6 +15,7 @@ from ase_ga.data import DataConnection
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
+from scgo.system_types import AdsorbateDefinition
 from scgo.ts_search.transition_state_io import (
     load_minima_by_composition,
     save_transition_state_results,
@@ -23,7 +24,7 @@ from scgo.ts_search.transition_state_io import (
 from scgo.ts_search.transition_state_run import (
     run_transition_state_search,
 )
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 
 @pytest.fixture
@@ -183,7 +184,9 @@ def test_save_transition_state_results_skipped_pair():
 def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_database_dir):
     params = {"calculator": "EMT"}
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(
+        SCGOValidationError, match="use_parallel_neb requires use_torchsim=True"
+    ):
         run_transition_state_search(
             composition=["Cu", "Cu"],
             system_type="gas_cluster",
@@ -202,8 +205,8 @@ def test_run_transition_state_search_parallel_neb_requires_torchsim(mock_databas
 def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
     """``use_parallel_neb=True`` always dispatches to the parallel runner.
 
-    Surface presets pass ``parallel_neb_max_bands=1`` so the runner chunks
-    bands one-at-a-time; that must not fall back to the serial path.
+    Surface presets pass ``parallel_neb_max_bands=4`` so the runner chunks
+    bands four-at-a-time; that must not fall back to the serial path.
     """
     from ase import Atoms
 
@@ -223,6 +226,29 @@ def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
     def _fake_parallel(*_a, **kwargs):
         parallel_calls.append(kwargs)
         return [], {}
+
+    class FakeRelaxer:
+        """Stand-in for the shared TorchSim relaxer.
+
+        This test only asserts serial-vs-parallel dispatch, so it must not
+        depend on any MLIP extra. Without this the real relaxer would load a
+        MACE model and the test would fail on the UMA/UPET CI suites.
+        """
+
+        def __init__(self, **kwargs):
+            pass
+
+        def relax_batch(self, atoms_list, steps=0):
+            results = []
+            for a in atoms_list:
+                ra = a.copy()
+                ra.arrays["forces"] = np.zeros((len(a), 3))
+                results.append((0.0, ra))
+            return results
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer", FakeRelaxer
+    )
 
     monkeypatch.setattr(
         ts_run_mod,
@@ -729,6 +755,7 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.requires_cuda
+@pytest.mark.requires_mace
 def test_run_transition_state_search_torchsim(mock_database_dir):
     """Test TS search with TorchSim batched forces (requires GPU)."""
 
@@ -883,3 +910,95 @@ def test_run_transition_state_search_auto_tags_mixed_db_formats(tmp_path):
     else:
         # No TS found — ensure tagging did not erroneously add markers
         assert not _has_ts_marker(bh_db) and not _has_ts_marker(simple_db)
+
+
+def test_surface_ts_geometry_gate_uses_fixed_prefix_for_slab_search(monkeypatch):
+    """P1 regression: the post-run deposit/connectivity GATE must bound the mobile
+    region by the frozen prefix (``n_fixed``), not the total slab, for slab-as-search-
+    target system types (``surface_adsorbate``).
+
+    For ``surface_adsorbate`` the slab is reordered so fixed layers are ``0..n_fixed-1``
+    and the top layers (+ adsorbate) stay mobile. Passing the total slab count as the
+    deposit boundary shrinks the mobile region to the adsorbate-only slice, so
+    ``n_core_mobile`` (the mobile top-slab count) exceeds the mobile length and every
+    result is falsely rejected. The gate must instead forward the fixed prefix.
+    """
+    from ase.build import fcc111
+
+    from scgo.surface.config import SurfaceSystemConfig
+    from scgo.surface.partition import prepare_slab_search_surface_config
+    from scgo.ts_search.transition_state_run import _apply_surface_ts_geometry_gate
+
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    cfg = SurfaceSystemConfig(
+        slab=slab, fix_all_slab_atoms=False, n_relax_top_slab_layers=1
+    )
+    cfg, part = prepare_slab_search_surface_config(cfg)
+    n_fixed = int(part.n_fixed)
+    total = len(cfg.slab)
+    assert n_fixed < total  # mobile top layers exist for this system type
+
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=list(part.mobile_slab_symbols),
+        adsorbate_symbols=["O"],
+    )
+    mobile = Atoms(
+        list(part.mobile_slab_symbols) + ["O"],
+        positions=np.zeros(((part.n_mobile_slab) + 1, 3)),
+    )
+    combined = cfg.slab.copy() + mobile
+    combined.set_tags([0] * total + [1] * part.n_mobile_slab + [2] * 1)
+
+    captured: dict[str, int] = {}
+
+    def _fake_deposit(atoms, n_slab, *, surface_normal_axis, **kw):
+        captured["n_slab"] = int(n_slab)
+        return True, ""
+
+    monkeypatch.setattr(
+        "scgo.surface.validation.validate_supported_cluster_deposit", _fake_deposit
+    )
+    monkeypatch.setattr(
+        "scgo.surface.validation.validate_surface_config_slab_prefix",
+        lambda *a, **k: None,
+    )
+
+    ts_result = [
+        {
+            "status": "success",
+            "reactant_structure": combined,
+            "product_structure": combined,
+            "transition_state": combined,
+        }
+    ]
+
+    # With the fixed-prefix override the gate must forward n_fixed and not reject.
+    _apply_surface_ts_geometry_gate(
+        ts_result,
+        surface_config=cfg,
+        system_type="surface_adsorbate",
+        adsorbate_definition=adsorbate_definition,
+        n_slab_deposit=n_fixed,
+    )
+    assert captured["n_slab"] == n_fixed
+    assert ts_result[0]["status"] == "success"
+
+    # Without the override the gate would fall back to the total slab (the bug).
+    captured.clear()
+    ts_result = [
+        {
+            "status": "success",
+            "reactant_structure": combined,
+            "product_structure": combined,
+            "transition_state": combined,
+        }
+    ]
+    _apply_surface_ts_geometry_gate(
+        ts_result,
+        surface_config=cfg,
+        system_type="surface_adsorbate",
+        adsorbate_definition=adsorbate_definition,
+        n_slab_deposit=None,
+    )
+    assert captured["n_slab"] == total

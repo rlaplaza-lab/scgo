@@ -7,11 +7,9 @@ SCGO Documentation
        <img src="_static/scgo_logo.svg" alt="SCGO" style="width: 200px;">
    </div>
 
-SCGO: Simple Cluster Global Optimization
-=========================================
-
-Global optimization of atomic clusters with ASE: Basin Hopping, Genetic
-Algorithms, NEB transition-state search, and MLIPs (MACE, UMA, UPET).
+**SCGO: Simple Cluster Global Optimization** — global optimization of atomic
+clusters with ASE: Basin Hopping, Genetic Algorithms, NEB transition-state
+search, and MLIPs (MACE, UMA, UPET).
 
 See :doc:`/quickstart` to get started.
 
@@ -24,8 +22,10 @@ Contents
 
    installation
    quickstart
+   surface_slab_guide
    output_layout
    parameters
+   validation_and_constraints
    benchmarks
 
 .. toctree::
@@ -33,6 +33,9 @@ Contents
    :caption: API Reference
 
    api/runner_api
+   api/runners
+   api/scgo
+   api/calculators
    api/database
    api/metadata
    api/exceptions
@@ -40,6 +43,8 @@ Contents
    api/surface
    api/cluster_adsorbate
    api/param_presets
+   api/validation_and_constraints_api
+   api/system_types_guide
    api/system_types
    api/utils
 

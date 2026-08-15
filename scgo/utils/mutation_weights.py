@@ -238,6 +238,18 @@ def get_adaptive_mutation_config(
         current_generation: Current GA generation number.
         total_generations: Total number of generations.
         use_adaptive: If False, returns default/static configuration.
+        generations_without_improvement: Consecutive generations without a new
+            best structure, used to scale the stagnation boost.
+        stagnation_trigger: Generations without improvement before the boost
+            starts ramping up.
+        stagnation_full_trigger: Generations without improvement at which the
+            boost reaches full strength.
+        recovery_window: Generations used to ramp the boost back in after an
+            improvement resets the stagnation counter.
+        aggressive_burst_multiplier: Upper multiplier applied to boosted
+            operator weights and mutation strengths at full stagnation.
+        max_mutation_probability: Upper clip for the resolved mutation
+            probability.
 
     Returns:
         Dictionary containing:
@@ -246,6 +258,10 @@ def get_adaptive_mutation_config(
         - 'mutation_probability': Overall mutation probability.
         - 'rattle_strength': Rattle mutation strength parameter.
         - 'rattle_prop': Rattle mutation proportion parameter.
+        - 'anisotropic_in_plane_strength': In-plane anisotropic rattle strength.
+        - 'anisotropic_normal_strength': Surface-normal anisotropic rattle
+          strength.
+        - 'anisotropic_rattle_prop': Anisotropic rattle proportion parameter.
     """
     if not use_adaptive:
         # Return default static configuration

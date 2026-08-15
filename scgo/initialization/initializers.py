@@ -12,38 +12,39 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 from ase import Atoms
 
-from scgo.database.cache import get_global_cache
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
+from scgo.metadata.atoms import set_tags
 from scgo.utils.helpers import (
+    get_cluster_formula,
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.phase_logging import InitDiagnosticsCollector, infer_verbosity
 from scgo.utils.validation import validate_composition
 
 from .atomic_radii import get_vdw_radius
 from .candidate_discovery import (
+    _discover_all_candidates,
     _find_smaller_candidates,
     get_structure_signature,
     is_composition_subset,
 )
 from .geometry_helpers import (
     _classify_seed_geometry,
-    _generate_rotation_matrix,
-    _should_check_connectivity,
+    _set_cubic_cell_and_center,
+    _validate_cluster_defaults,
     reorder_cluster_to_composition,
     validate_cluster,
-    validate_cluster_structure,
 )
 from .initialization_config import (
     BOLTZMANN_TEMPERATURE_MAX,
@@ -59,17 +60,19 @@ from .initialization_config import (
     SEED_COMBINATION_STRATEGY_COUNT,
     TEMPLATE_BASE_WEIGHTS,
     TEMPLATE_DIVERSITY_BOOST_FACTOR,
-    TEMPLATE_ROTATION_CANDIDATES,
     VACUUM_DEFAULT,
 )
 from .random_spherical import grow_from_seed, random_spherical
 from .seed_combiners import combine_and_grow
 from .strategy_allocation import _allocate_initialization_strategies
-from .templates import generate_template_matches
-
-TEMPLATE_ROTATIONS_CACHE_NS = "template_rotations"
+from .templates import (
+    _get_or_create_rotated_variants,
+    generate_template_matches,
+)
 
 logger = get_logger(__name__)
+
+__all__: list[str] = []
 
 
 class _SeedSamplingLogCollector:
@@ -109,26 +112,18 @@ class _SeedSamplingLogCollector:
             total = sum(counter.values())
             if len(counter) == 1:
                 (reason,) = counter
-                parts.append(f"{formula}×{total} [{reason}]")
+                parts.append(f"{formula}x{total} [{reason}]")
             else:
                 reason_detail = ", ".join(
-                    f"{reason}×{count}" for reason, count in counter.most_common()
+                    f"{reason}x{count}" for reason, count in counter.most_common()
                 )
-                parts.append(f"{formula}×{total} [{reason_detail}]")
+                parts.append(f"{formula}x{total} [{reason_detail}]")
 
         logger.info(
-            "seed+growth: no suitable seed (%d failures): %s",
+            "Seed+growth: no suitable seed (%d failures): %s",
             len(records),
             ", ".join(parts),
         )
-
-
-class InitStrategy(Enum):
-    """Initialization strategies used by allocation and generation logic."""
-
-    TEMPLATE = "template"
-    SEED_GROWTH = "seed+growth"
-    RANDOM_SPHERICAL = "random_spherical"
 
 
 def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) -> float:
@@ -163,8 +158,8 @@ def compute_cell_side(composition: list[str], vacuum: float = VACUUM_DEFAULT) ->
     if cell_side > MAX_REASONABLE_CELL_SIDE:
         logger.warning(
             f"Computed cell_side ({cell_side:.1f} Å) exceeds reasonable threshold "
-            f"({MAX_REASONABLE_CELL_SIDE} Å) for {len(composition)} atoms. "
-            f"This may indicate very large composition or vacuum value."
+            f"({MAX_REASONABLE_CELL_SIDE} Å) for {len(composition)} atoms; "
+            f"this may indicate a very large composition or vacuum value"
         )
 
     return cell_side
@@ -189,6 +184,10 @@ def _boltzmann_sample(
 
     Returns:
         A randomly sampled (energy, atoms) tuple, or None if no candidates provided
+
+    Raises:
+        SCGOValidationError: If the candidates do not all share the same element
+            counts, or if an explicit ``temperature`` is not positive.
 
     """
     if not candidates:
@@ -231,9 +230,8 @@ def _boltzmann_sample(
         )
 
     # At this point, temperature is guaranteed to be a float, but mypy can't narrow the type
-    assert temperature is not None, (
-        "Temperature should never be None after the above block"
-    )
+    if temperature is None:
+        raise TypeError("temperature must be a float after adaptive clamping")
 
     # Validate temperature
     if temperature <= 0:
@@ -253,7 +251,6 @@ def _boltzmann_sample(
 
 def _calculate_template_weight(
     template_type: str,
-    n_atoms: int,
     n_unique_elements: int,
     template_type_counts: dict[str, int],
     total_candidates: int,
@@ -267,13 +264,13 @@ def _calculate_template_weight(
 
     Args:
         template_type: Type of template (e.g., "icosahedron")
-        n_atoms: Number of atoms
         n_unique_elements: Number of unique elements in composition
         template_type_counts: Dictionary counting occurrences of each template type
         total_candidates: Total number of template candidates
 
     Returns:
-        Weight for this template type
+        Weight for this template type; always non-negative so the weights can be
+        normalized into a probability vector for ``rng.choice``.
     """
     # Extract base weight from TEMPLATE_BASE_WEIGHTS
     base_weight = TEMPLATE_BASE_WEIGHTS.get(template_type, 1.0)
@@ -291,7 +288,10 @@ def _calculate_template_weight(
         MULTI_ELEMENT_TEMPLATE_PENALTY if n_unique_elements > 1 else 0.0
     )
 
-    return base_weight + diversity_boost - multi_element_penalty
+    # Clamp at zero: the penalty can exceed the base weight of low-ranked template
+    # types (e.g. cube/tetrahedron at 0.8 vs a 0.9 penalty), and negative weights
+    # would produce negative probabilities in rng.choice(p=...).
+    return max(0.0, base_weight + diversity_boost - multi_element_penalty)
 
 
 def _get_template_type(atoms: Atoms) -> str:
@@ -305,6 +305,86 @@ def _get_template_type(atoms: Atoms) -> str:
     """
     info = getattr(atoms, "info", None)
     return info.get("template_type", "unknown") if info else "unknown"
+
+
+def _template_sort_key(atoms: Atoms) -> tuple:
+    """Deterministic sort key for template candidates.
+
+    Sorts by template type, then by rounded center-of-mass coordinates, then by
+    atom count so candidate ordering (and thus template indices) is stable and
+    reproducible across discovery and generation.
+
+    Args:
+        atoms: Template Atoms object to derive a sort key from.
+
+    Returns:
+        Tuple usable as a ``list.sort`` key.
+    """
+    template_type = _get_template_type(atoms)
+    com = atoms.get_center_of_mass()
+    return (
+        template_type,
+        round(com[0], 8),
+        round(com[1], 8),
+        round(com[2], 8),
+        len(atoms),
+    )
+
+
+def _prepare_template_candidates(
+    composition: list[str],
+    n_atoms: int,
+    rng: np.random.Generator,
+    cell_side: float,
+    placement_radius_scaling: float,
+    min_distance_factor: float,
+    connectivity_factor: float,
+) -> list[Atoms]:
+    """Build the deduplicated, deterministically sorted template candidate list.
+
+    Generates exact and near-match template candidates via
+    :func:`generate_template_matches`, removes duplicates shared between the two
+    match kinds, and sorts them deterministically for reproducible indexing.
+
+    Args:
+        composition: Target composition list.
+        n_atoms: Number of atoms.
+        rng: Random number generator.
+        cell_side: Cubic cell side length.
+        placement_radius_scaling: Scaling for placement radius.
+        min_distance_factor: Factor for minimum distance checks.
+        connectivity_factor: Factor for connectivity threshold.
+
+    Returns:
+        Sorted, deduplicated list of template candidate ``Atoms`` (empty if none
+        were generated).
+    """
+    template_candidates = generate_template_matches(
+        composition=composition,
+        n_atoms=n_atoms,
+        rng=rng,
+        cell_side=cell_side,
+        placement_radius_scaling=placement_radius_scaling,
+        min_distance_factor=min_distance_factor,
+        connectivity_factor=connectivity_factor,
+        include_exact=True,
+        include_near=True,
+    )
+    if not template_candidates:
+        return []
+
+    original_count = len(template_candidates)
+    template_candidates = _deduplicate_template_structures(template_candidates)
+    if len(template_candidates) < original_count:
+        logger.debug(
+            "Deduplicated templates: %d -> %d unique structures "
+            "(duplicates between exact and near matches removed)",
+            original_count,
+            len(template_candidates),
+        )
+
+    template_candidates.sort(key=_template_sort_key)
+    return template_candidates
 
 
 def _deduplicate_template_structures(
@@ -384,55 +464,18 @@ def _apply_template_rotation_and_validate(
         Validated Atoms with rotation applied, or None if validation fails.
     """
     selected = selected.copy()
-    selected.set_cell([cell_side, cell_side, cell_side])
-    selected.center()
+    _set_cubic_cell_and_center(selected, cell_side)
 
-    center = selected.get_center_of_mass()
-
-    # Check if we have pre-computed rotations for this template signature
-    template_signature = get_structure_signature(selected)
-    rotation_cache_key = (template_signature, cell_side)
-    rotation_candidates = get_global_cache().get(
-        TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key
-    )
-
-    if rotation_candidates is None:
-        # Generate and cache rotation candidates using a deterministic seed
-        # derived from the template signature to ensure reproducibility
-        # even across different RNG instances
-        signature_seed = abs(hash(template_signature)) % (2**31)
-        rotation_rng = np.random.default_rng(signature_seed)
-
-        rotation_candidates = []
-        for _ in range(TEMPLATE_ROTATION_CANDIDATES):
-            axis = rotation_rng.standard_normal(3)
-            axis /= np.linalg.norm(axis)
-            angle = rotation_rng.uniform(0, 2 * np.pi)
-            R = _generate_rotation_matrix(axis, angle)
-
-            rotated = selected.copy()
-            positions = rotated.get_positions()
-            rotated.set_positions(center + (positions - center) @ R.T)
-            rotation_candidates.append(rotated)
-
-        # Store in cache for future use
-        get_global_cache().set(
-            TEMPLATE_ROTATIONS_CACHE_NS, rotation_cache_key, rotation_candidates
-        )
-
+    rotation_candidates = _get_or_create_rotated_variants(selected, cell_side)
     selected = rotation_candidates[rng.integers(0, len(rotation_candidates))].copy()
 
-    is_valid, error_message = validate_cluster_structure(
-        selected,
-        min_distance_factor,
-        connectivity_factor,
-        check_clashes=True,
-        check_connectivity=_should_check_connectivity(selected),
-        use_mic=False,
+    is_valid, error_message = _validate_cluster_defaults(
+        selected, min_distance_factor, connectivity_factor
     )
     if not is_valid:
         logger.warning(
-            f"Template structure validation failed: {error_message}. Falling back to random_spherical."
+            f"Template structure validation failed: {error_message}; "
+            f"discarding this template candidate"
         )
         return None
     if composition is not None:
@@ -499,7 +542,7 @@ def _try_template_generation(
         template_index = None
 
     # Get all template candidates (exact and near matches) using unified function
-    template_candidates = generate_template_matches(
+    template_candidates = _prepare_template_candidates(
         composition=composition,
         n_atoms=n_atoms,
         rng=rng,
@@ -507,80 +550,38 @@ def _try_template_generation(
         placement_radius_scaling=placement_radius_scaling,
         min_distance_factor=min_distance_factor,
         connectivity_factor=connectivity_factor,
-        include_exact=True,
-        include_near=True,
     )
 
     if not template_candidates:
         logger.debug(
-            "template: no usable templates for %d atoms (composition=%s)",
+            "Template: no usable templates for %d atoms (composition=%s)",
             n_atoms,
             composition,
         )
         return None
 
-    # Deduplicate templates to remove duplicates between exact and near-match templates
-    # (e.g., cube, tetrahedron, and octahedron all producing octahedral structures,
-    # or near-match templates producing structures identical to exact matches)
-    original_count = len(template_candidates)
-    template_candidates = _deduplicate_template_structures(template_candidates)
-    if len(template_candidates) < original_count:
-        logger.debug(
-            f"Deduplicated templates: {original_count} -> {len(template_candidates)} "
-            f"unique structures (removed duplicates between exact and near-match templates)"
-        )
-
     # Enhanced diversity: create weighted pool of ALL candidates across all types
-    # Sort candidates deterministically for reproducibility
-    def get_sort_key(atoms):
-        template_type = _get_template_type(atoms)
-        com = atoms.get_center_of_mass()
-        return (
-            template_type,
-            round(com[0], 8),
-            round(com[1], 8),
-            round(com[2], 8),
-            len(atoms),
-        )
-
-    template_candidates.sort(key=get_sort_key)
-
-    # Calculate weights for all candidates based on template type quality
     n_unique_elements = len(set(composition))
-    weighted_candidates = []
-
-    # Count template types in candidates for systematic diversity (compute once)
-    template_type_counts = {}
-    for candidate in template_candidates:
-        template_type = _get_template_type(candidate)
-        template_type_counts[template_type] = (
-            template_type_counts.get(template_type, 0) + 1
+    template_types = [_get_template_type(c) for c in template_candidates]
+    template_type_counts = Counter(template_types)
+    template_type_weights = {
+        t: _calculate_template_weight(
+            t, n_unique_elements, template_type_counts, len(template_candidates)
         )
-
-    # Pre-compute weights per template type to avoid redundant calculations
-    template_type_weights = {}
-    for template_type in template_type_counts:
-        template_type_weights[template_type] = _calculate_template_weight(
-            template_type,
-            n_atoms,
-            n_unique_elements,
-            template_type_counts,
-            len(template_candidates),
-        )
-
-    # Apply pre-computed weights to candidates
-    for candidate in template_candidates:
-        template_type = _get_template_type(candidate)
-        weight = template_type_weights.get(template_type, 1.0)
-        weighted_candidates.append((weight, candidate, template_type))
+        for t in template_type_counts
+    }
+    weighted_candidates = [
+        (template_type_weights[t], c, t)
+        for c, t in zip(template_candidates, template_types, strict=True)
+    ]
 
     # Select from weighted pool
     if template_index is not None:
         # Use specific template index if provided
         if template_index < 0 or template_index >= len(weighted_candidates):
             logger.warning(
-                f"Invalid template_index {template_index}, "
-                f"must be in range [0, {len(weighted_candidates)}). Using random selection."
+                f"Invalid template_index {template_index}, must be in range "
+                f"[0, {len(weighted_candidates)}); using random selection"
             )
             selected_idx = int(rng.integers(0, len(weighted_candidates)))
         else:
@@ -610,7 +611,9 @@ def _try_template_generation(
     if result is None:
         return None
     logger.debug(
-        f"Smart mode: using template {selected_type} ({n_unique_template_types} unique types available, {len(template_candidates)} total candidates)"
+        f"Smart mode: using template {selected_type} "
+        f"({n_unique_template_types} unique type(s) available, "
+        f"{len(template_candidates)} total candidates)"
     )
     return result
 
@@ -661,7 +664,10 @@ def _sample_seed_with_strategy(
         rng: Random number generator
 
     Returns:
-        Selected (energy, atoms) tuple, or None if no suitable candidate found
+        Selected (energy, atoms) tuple, or None if ``candidates`` is empty
+
+    Raises:
+        SCGOValidationError: If ``strategy`` is not one of the indices 0-4
     """
     if not candidates:
         return None
@@ -694,9 +700,11 @@ def _grow_from_random_seed(
 ) -> Atoms | None:
     """Generate a small random seed and grow it to the target composition.
 
-    This function is used when no external seeds from previous runs are available.
-    It creates a small random cluster (about 1/4 of target size, minimum 3 atoms)
-    and grows it to the target composition using convex-hull-based placement.
+    This function is used when no usable database seeds are available, or when
+    every database seed combination failed. It creates a small random cluster
+    (about 1/4 of the target size, clamped to 3-15 atoms, and never exceeding
+    the per-element counts of the target) and grows it to the target
+    composition using convex-hull-based placement.
 
     The growth approach provides different structural characteristics than pure
     random_spherical, as the initial seed geometry influences the final structure.
@@ -710,7 +718,8 @@ def _grow_from_random_seed(
         connectivity_factor: Factor for connectivity threshold
 
     Returns:
-        Atoms object if successful, None otherwise
+        Atoms object if successful, None otherwise (empty composition, seed
+        generation failure, or growth failure)
     """
     n_atoms = len(composition)
 
@@ -765,7 +774,7 @@ def _grow_from_random_seed(
         return result
     except (ValueError, SCGOValidationError):
         logger.debug(
-            "grow_from_seed failed for composition %s",
+            "Growth from random seed failed for composition %s",
             composition,
         )
         return None
@@ -776,6 +785,10 @@ def _find_valid_seed_combinations(
     target_counts: dict[str, int],
 ) -> list[tuple[str, ...]]:
     """Find all valid seed formula combinations that are sub-compositions of target.
+
+    Combinations contain between one and three distinct formulas (each formula
+    is used at most once) and are kept only when their summed element counts
+    fit within ``target_counts``.
 
     Args:
         candidates_by_formula: Dictionary mapping formulas to candidate lists
@@ -896,7 +909,10 @@ def _try_seed_growth(
     """Try to generate a cluster using seed+growth strategy.
 
     This helper function encapsulates seed+growth logic for the smart mode.
-    It finds suitable seeds from previous runs and grows them to the target composition.
+    It combines seeds found in previous runs and grows them to the target
+    composition. When no database seeds or no valid seed combinations are
+    available, and also when every combination strategy fails, it falls back
+    to growing from a freshly generated random seed.
 
     Args:
         composition: Target composition list
@@ -909,7 +925,8 @@ def _try_seed_growth(
         valid_combinations: Precomputed valid seed formula combinations
 
     Returns:
-        Atoms object if successful, None otherwise
+        Atoms object if successful, None otherwise (including compositions
+        with two atoms or fewer, which are left to other strategies)
     """
     if len(composition) <= 2:
         return None
@@ -922,12 +939,12 @@ def _try_seed_growth(
         "connectivity_factor": connectivity_factor,
     }
     if not candidates_by_formula:
-        logger.info("seed+growth: no database seeds found; using random seed growth")
+        logger.info("Seed+growth: no database seeds found; using random seed growth")
         return _grow_from_random_seed(**random_seed_kwargs)
 
     if not valid_combinations:
         logger.info(
-            "seed+growth: no valid DB seed combinations; using random seed growth"
+            "Seed+growth: no valid DB seed combinations; using random seed growth"
         )
         return _grow_from_random_seed(**random_seed_kwargs)
 
@@ -954,7 +971,7 @@ def _try_seed_growth(
                 reason = failure_reason or "unknown"
                 _SeedSamplingLogCollector.record(formula, reason)
                 logger.trace(
-                    "seed+growth: no suitable seed for %s (%s)",
+                    "Seed+growth: no suitable seed for %s (%s)",
                     formula,
                     reason,
                 )
@@ -984,7 +1001,7 @@ def _try_seed_growth(
     # All DB combination strategies failed; still try random-seed growth before
     # yielding None (outer chain may then fall back to random_spherical).
     logger.info(
-        "seed+growth: all %d combination strategies failed; "
+        "Seed+growth: all %d combination strategies failed; "
         "DB combinations exhausted; trying random-seed growth",
         SEED_COMBINATION_STRATEGY_COUNT,
     )
@@ -1001,6 +1018,7 @@ def _discover_available_strategies(
     connectivity_factor: float,
     candidates_by_formula: dict[str, list[tuple[float, Atoms]]],
     valid_combinations: list[tuple[str, ...]],
+    n_exact: int = 0,
 ) -> dict[str, Any]:
     """Discover available templates and seeds for Metropolis allocation.
 
@@ -1023,7 +1041,7 @@ def _discover_available_strategies(
         - 'n_seed_combinations': number of valid seed combinations
     """
     # Discover templates using unified function
-    all_templates = generate_template_matches(
+    templates = _prepare_template_candidates(
         composition=composition,
         n_atoms=n_atoms,
         rng=rng,
@@ -1031,26 +1049,7 @@ def _discover_available_strategies(
         placement_radius_scaling=placement_radius_scaling,
         min_distance_factor=min_distance_factor,
         connectivity_factor=connectivity_factor,
-        include_exact=True,
-        include_near=True,
     )
-
-    # Deduplicate templates
-    templates = _deduplicate_template_structures(all_templates)
-
-    # Sort templates to ensure consistent indexing with _try_template_generation
-    def get_sort_key(atoms):
-        template_type = _get_template_type(atoms)
-        com = atoms.get_center_of_mass()
-        return (
-            template_type,
-            round(com[0], 8),
-            round(com[1], 8),
-            round(com[2], 8),
-            len(atoms),
-        )
-
-    templates.sort(key=get_sort_key)
 
     # Discover seeds
     n_seed_formulas = len(candidates_by_formula)
@@ -1065,6 +1064,7 @@ def _discover_available_strategies(
         "n_templates": len(templates),
         "n_seed_formulas": n_seed_formulas,
         "n_seed_combinations": n_seed_combinations,
+        "n_exact": n_exact,
     }
 
 
@@ -1088,14 +1088,20 @@ def _try_strategies_in_order(
         composition: Target composition (for validation)
         connectivity_factor: Factor for connectivity threshold (for validation)
         min_distance_factor: Factor for minimum distance checks (for validation)
+        return_strategy: When True, also return the strategy that produced the
+            result and the primary strategy it fell back from (``None`` when
+            the primary strategy succeeded).
 
     Returns:
         Atoms object if successful. When ``return_strategy=True``, returns
         a tuple of (Atoms, used_strategy, fallback_from).
 
     Raises:
-        ValueError: If the final fallback strategy fails
-        RuntimeError: If the final fallback strategy fails
+        SCGOValidationError: If ``strategies`` is empty, or propagated from the
+            final fallback strategy or its validation.
+        SCGORuntimeError: If every strategy returned None.
+        ValueError: Propagated from the final fallback strategy.
+        RuntimeError: Propagated from the final fallback strategy.
     """
     if not strategies:
         raise SCGOValidationError("No strategies provided to _try_strategies_in_order")
@@ -1170,6 +1176,11 @@ def create_initial_cluster(
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
     connectivity_factor: float = CONNECTIVITY_FACTOR,
+    *,
+    plan: BatchInitPlan | None = None,
+    allocation: tuple[str, int | None] | None = None,
+    emit_diagnostics: bool = True,
+    reuse_exact_matches: bool = True,
 ) -> Atoms:
     """Create an initial cluster using several strategies.
 
@@ -1188,6 +1199,7 @@ def create_initial_cluster(
 
     Args:
         composition: target list of element symbols.
+        rng: numpy ``Generator`` providing all randomness for this call.
         placement_radius_scaling: scale factor for radii in random placement.
         min_distance_factor: scale factor for minimum distance
             checks; the placement loop relaxes it slightly if repeated
@@ -1199,18 +1211,27 @@ def create_initial_cluster(
             ``random_spherical``, or ``template``.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold. Defaults to ``CONNECTIVITY_FACTOR`` (1.4).
-        rng: numpy ``Generator`` providing all randomness for this call.
+        plan: A pre-computed :class:`BatchInitPlan` (discovery + allocation).
+            When provided, this call reuses the already-resolved templates,
+            seeds, and strategy allocation instead of re-running discovery. Use
+            :func:`plan_batch_initialization` to build one plan per batch so
+            discovery and allocation run a single time per batch.
+        allocation: Override the ``(strategy, template_index)`` allocation for
+            this single structure. Only meaningful together with ``plan``;
+            without it the plan's first allocation is used.
+        emit_diagnostics: When ``False``, suppress the per-call diagnostic
+            summary logging (the batch owner emits the aggregate summary).
 
     Returns:
         An :class:`ase.Atoms` instance with the initial cluster. When
         ``composition`` is empty, returns an empty ``Atoms`` object.
 
     Raises:
-        TypeError: If ``composition`` is ``None`` or not a list/tuple of
-            strings.
-        ValueError: If numeric parameters are invalid or a valid cluster
-            satisfying the distance/connectivity constraints cannot be
-            constructed.
+        SCGOValidationError: If ``composition`` is ``None``, is not a
+            list/tuple of element symbols, if numeric parameters are invalid,
+            if ``mode`` is unsupported, or if a valid cluster satisfying the
+            distance/connectivity constraints cannot be constructed.
+        SCGORuntimeError: If every initialization strategy returned ``None``.
 
     Note:
         This function is implemented as a wrapper around
@@ -1219,26 +1240,6 @@ def create_initial_cluster(
         directly for better performance and deterministic strategy allocation.
 
     """
-    # Validate composition type
-    validate_composition(composition, allow_empty=True, allow_tuple=True)
-
-    # Handle empty composition
-    if not composition:
-        return Atoms()
-
-    if placement_radius_scaling <= 0:
-        raise SCGOValidationError(
-            f"placement_radius_scaling must be positive, got {placement_radius_scaling}"
-        )
-
-    if min_distance_factor < 0:
-        raise SCGOValidationError(
-            f"min_distance_factor must be non-negative, got {min_distance_factor}"
-        )
-
-    if vacuum < 0:
-        raise SCGOValidationError(f"vacuum must be non-negative, got {vacuum}")
-
     results = create_initial_cluster_batch(
         composition=composition,
         n_structures=1,
@@ -1250,8 +1251,87 @@ def create_initial_cluster(
         mode=mode,
         connectivity_factor=connectivity_factor,
         n_jobs=1,  # Single structure, no parallelization needed
+        plan=plan,
+        allocation=allocation,
+        emit_diagnostics=emit_diagnostics,
+        reuse_exact_matches=reuse_exact_matches,
     )
     return results[0]
+
+
+def _try_exact_match(
+    composition: list[str],
+    exact_candidates: dict[str, list[tuple[float, Atoms]]],
+    rng: np.random.Generator,
+) -> Atoms | None:
+    """Reuse a previous exact-composition minimum as an initial seed.
+
+    Selects a diverse candidate for the formula matching ``composition`` (cycling
+    through the energy-sorted, geometry-deduplicated list via ``rng``), strips the
+    ``final_unique_minimum`` / ``raw_score`` tags so it does not leak into the new
+    run's database, stamps it as a reused seed, reorders it to the target
+    composition, and validates it like any freshly built cluster.
+
+    Args:
+        composition: Target composition list.
+        exact_candidates: Mapping of formula -> ``(energy, atoms)`` candidates as
+            produced by :func:`_find_exact_candidates` / :func:`_discover_all_candidates`.
+        rng: Random number generator for diverse candidate selection.
+
+    Returns:
+        A validated ``Atoms`` object, or ``None`` if no usable exact candidate
+        exists or the chosen one fails validation (caller should fall back).
+    """
+    if not composition:
+        return None
+    formula = get_cluster_formula(composition)
+    candidates = exact_candidates.get(formula)
+    if not candidates:
+        return None
+    if len(composition) <= 2:
+        return None
+
+    # Diverse selection across calls: cycle through the (energy-sorted,
+    # geometry-deduplicated) list using rng, so a batch of "exact" allocations
+    # does not all reuse the very same global minimum.
+    idx = int(rng.integers(0, len(candidates))) if len(candidates) > 1 else 0
+    _energy, atoms = candidates[idx]
+
+    atoms = atoms.copy()
+    # Atoms.copy() shares the nested key_value_pairs bag with the cached source
+    # atoms, so build a fresh bag before mutating it; otherwise stripping the
+    # tags would corrupt the global candidate cache reused across the batch.
+    bag = dict(atoms.info.get("key_value_pairs", {}))
+    atoms.info["key_value_pairs"] = bag
+    bag.pop("final_unique_minimum", None)
+    bag.pop("raw_score", None)
+    source_db = bag.get("scgo_source_db")
+    source_run = bag.get("scgo_source_run_id")
+    set_tags(
+        atoms,
+        scgo_reused_from_previous_search=True,
+        scgo_source_db=source_db,
+        scgo_source_run_id=source_run,
+    )
+
+    try:
+        ordered = reorder_cluster_to_composition(atoms, composition)
+        validated_atoms, _, _ = validate_cluster(
+            ordered,
+            composition=composition,
+            min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
+            connectivity_factor=CONNECTIVITY_FACTOR,
+            sort_atoms=True,
+            raise_on_failure=True,
+            source="exact",
+        )
+    except (ValueError, RuntimeError, SCGOValidationError):
+        logger.debug(
+            "Exact-match reuse candidate for %s failed validation; skipping",
+            formula,
+        )
+        return None
+    return validated_atoms
 
 
 def _generate_single_structure_internal(
@@ -1267,6 +1347,7 @@ def _generate_single_structure_internal(
     precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]]
     | None = None,
     valid_seed_combinations: list[tuple[str, ...]] | None = None,
+    exact_candidates: dict[str, list[tuple[float, Atoms]]] | None = None,
 ) -> tuple[Atoms, str, str | None]:
     """Internal helper to generate a single structure using a specific strategy."""
     cell_side = compute_cell_side(composition, vacuum=vacuum)
@@ -1301,6 +1382,15 @@ def _generate_single_structure_internal(
             valid_combinations=valid_seed_combinations or [],
         )
 
+    def _run_exact_strategy() -> Atoms | None:
+        if n_atoms <= 2:
+            return None
+        return _try_exact_match(
+            composition=composition,
+            exact_candidates=exact_candidates or {},
+            rng=structure_rng,
+        )
+
     def _run_random_spherical_strategy() -> Atoms:
         return random_spherical(
             composition=composition,
@@ -1314,6 +1404,7 @@ def _generate_single_structure_internal(
     strategies = {
         "template": _run_template_strategy,
         "seed+growth": _run_seed_growth_strategy,
+        "exact": _run_exact_strategy,
         "random_spherical": _run_random_spherical_strategy,
     }
 
@@ -1353,6 +1444,7 @@ def _generate_structure_batch_item(
     precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]]
     | None = None,
     valid_seed_combinations: list[tuple[str, ...]] | None = None,
+    exact_candidates: dict[str, list[tuple[float, Atoms]]] | None = None,
 ) -> tuple[int, Atoms, str, str | None]:
     """Helper for batch processing an individual structure assignment."""
     idx, strategy, template_index, structure_seed = assignment
@@ -1369,8 +1461,167 @@ def _generate_structure_batch_item(
         discovery_templates=discovery_templates,
         precomputed_candidates_by_formula=precomputed_candidates_by_formula,
         valid_seed_combinations=valid_seed_combinations,
+        exact_candidates=exact_candidates,
     )
     return idx, atoms, used_strategy, fallback_from
+
+
+def reset_init_diagnostics() -> None:
+    """Clear the per-batch initialization diagnostic collectors.
+
+    The owner of a population batch calls this before generating, passes
+    ``emit_diagnostics=False`` to the inner single-structure calls, and finishes
+    with :func:`emit_init_diagnostics`, so a run logs one aggregate summary
+    instead of one per candidate.
+    """
+    _SeedSamplingLogCollector.reset()
+    InitDiagnosticsCollector.reset()
+
+
+def emit_init_diagnostics(
+    n_structures: int,
+    *,
+    verbosity: int | None = None,
+    extra: str = "",
+) -> None:
+    """Emit the aggregated initialization summaries collected for one batch."""
+    _SeedSamplingLogCollector.emit_summary_if_any()
+    InitDiagnosticsCollector.emit_summary(
+        logger,
+        verbosity=infer_verbosity(logger, verbosity),
+        n_structures=n_structures,
+        extra=extra,
+    )
+
+
+@dataclass
+class BatchInitPlan:
+    """Resolved, reusable outcome of discovery + strategy allocation for a batch.
+
+    Computing this is the expensive (and noisy) part of initialization: it scans
+    previous-search databases and decides how many structures use templates,
+    seed+growth, and random placement. It is produced exactly once per batch and
+    then reused across every structure, so discovery and allocation run a single
+    time instead of once per generated candidate.
+    """
+
+    allocations: list[tuple[str, int | None]]
+    discovery_templates: list[Atoms] | None
+    precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]]
+    valid_seed_combinations: list[tuple[str, ...]]
+    exact_candidates: dict[str, list[tuple[float, Atoms]]] = field(default_factory=dict)
+
+    def allocation_for(self, index: int) -> tuple[str, int | None]:
+        """Return the ``(strategy, template_index)`` allocation for ``index``.
+
+        Indices cycle through the plan, so single-structure calls and retries
+        that reuse a batch plan keep sampling the planned strategy mix instead
+        of always repeating the first allocation.
+        """
+        return self.allocations[index % len(self.allocations)]
+
+
+def plan_batch_initialization(
+    composition: list[str],
+    n_structures: int,
+    rng: np.random.Generator,
+    *,
+    vacuum: float = VACUUM_DEFAULT,
+    previous_search_glob: str = "**/*.db",
+    mode: str = "smart",
+    placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
+    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    reuse_exact_matches: bool = True,
+) -> BatchInitPlan:
+    """Run discovery + strategy allocation once for a whole batch.
+
+    Returns a :class:`BatchInitPlan` that downstream batched generators reuse,
+    so the (noisy, DB-scanning) discovery step and the strategy allocation
+    happen a single time per batch rather than once per generated structure.
+
+    The discovery/allocation INFO logs ("Candidate discovery:", "Initialization
+    for N-atom clusters:", "Strategy allocation (...)") are emitted exactly once
+    here, when the plan is built.
+
+    Raises:
+        SCGOValidationError: If ``n_structures`` is below 1, if ``composition``
+            is invalid, or if ``mode`` is not one of ``smart``, ``template``,
+            ``seed+growth``, or ``random_spherical``.
+    """
+    if n_structures < 1:
+        raise SCGOValidationError(f"n_structures must be >= 1, got {n_structures}")
+    validate_composition(composition, allow_empty=True, allow_tuple=True)
+    if not composition:
+        return BatchInitPlan(
+            allocations=[("random_spherical", None)] * n_structures,
+            discovery_templates=None,
+            precomputed_candidates_by_formula={},
+            valid_seed_combinations=[],
+        )
+
+    n_atoms = len(composition)
+    cell_side = compute_cell_side(composition, vacuum=vacuum)
+
+    precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
+    valid_seed_combinations: list[tuple[str, ...]] = []
+    exact_candidates: dict[str, list[tuple[float, Atoms]]] = {}
+    if mode in ("smart", "seed+growth") and n_atoms > 2:
+        # In smart mode, the exact-match tier is discovered together with the
+        # sub-composition (seed) tier in a single DB scan. Other modes never
+        # allocate exact matches, so we keep using the cheaper sub-only scan.
+        if mode == "smart" and n_atoms > 2 and reuse_exact_matches:
+            sub, exact_candidates = _discover_all_candidates(
+                composition, previous_search_glob
+            )
+        else:
+            sub = _find_smaller_candidates(composition, previous_search_glob)
+            exact_candidates = {}
+        precomputed_candidates_by_formula = _filter_candidates_by_geometry(sub)
+        if precomputed_candidates_by_formula:
+            target_counts = get_composition_counts(composition)
+            valid_seed_combinations = _find_valid_seed_combinations(
+                precomputed_candidates_by_formula, target_counts
+            )
+        exact_candidates = _filter_candidates_by_geometry(exact_candidates)
+
+    discovery_templates = None
+    n_exact = sum(len(cands) for cands in exact_candidates.values())
+    if mode == "smart":
+        discovery = _discover_available_strategies(
+            composition=composition,
+            n_atoms=n_atoms,
+            cell_side=cell_side,
+            rng=rng,
+            placement_radius_scaling=placement_radius_scaling,
+            min_distance_factor=min_distance_factor,
+            connectivity_factor=connectivity_factor,
+            candidates_by_formula=precomputed_candidates_by_formula,
+            valid_combinations=valid_seed_combinations,
+            n_exact=n_exact,
+        )
+        allocations = _allocate_initialization_strategies(
+            n_structures=n_structures,
+            templates=discovery["templates"],
+            n_seed_formulas=discovery["n_seed_formulas"],
+            n_seed_combinations=discovery["n_seed_combinations"],
+            rng=rng,
+            n_atoms=n_atoms,
+            n_exact=n_exact,
+        )
+        discovery_templates = discovery["templates"]
+    elif mode in ("template", "seed+growth", "random_spherical"):
+        allocations = [(mode, None)] * n_structures
+    else:
+        raise SCGOValidationError(f'Unsupported mode: "{mode}"')
+
+    return BatchInitPlan(
+        allocations=allocations,
+        discovery_templates=discovery_templates,
+        precomputed_candidates_by_formula=precomputed_candidates_by_formula,
+        valid_seed_combinations=valid_seed_combinations,
+        exact_candidates=exact_candidates,
+    )
 
 
 def create_initial_cluster_batch(
@@ -1383,7 +1634,12 @@ def create_initial_cluster_batch(
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
     connectivity_factor: float = CONNECTIVITY_FACTOR,
-    n_jobs: int = 1,
+    n_jobs: int | None = None,
+    *,
+    plan: BatchInitPlan | None = None,
+    allocation: tuple[str, int | None] | None = None,
+    emit_diagnostics: bool = True,
+    reuse_exact_matches: bool = True,
 ) -> list[Atoms]:
     """Create multiple initial clusters with deterministic per-structure RNG.
 
@@ -1394,6 +1650,36 @@ def create_initial_cluster_batch(
     when the parent ``rng`` state matches.
 
     Validated structures are reordered to match ``composition`` for GA pairing.
+
+    Discovery (previous-search DB scan) and strategy allocation run exactly once
+    for the batch. Pass a :class:`BatchInitPlan` produced by
+    :func:`plan_batch_initialization` via ``plan=`` to reuse an already-resolved
+    plan (the recommended path for all batched initialization, so discovery and
+    allocation happen a single time per batch rather than once per structure).
+
+    Args:
+        n_jobs: Parallelism for structure generation; ``None`` uses the
+            project default (``DEFAULT_N_JOBS`` from
+            :mod:`scgo.utils.parallel_workers`, single worker; opt in with -1/-2
+            for parallelism).
+        plan: Pre-computed :class:`BatchInitPlan`; when given, discovery and
+            allocation are NOT re-run and their INFO logs are emitted only when
+            the plan itself is built.
+        allocation: Override the ``(strategy, template_index)`` allocation for
+            every structure in this call. Only meaningful together with ``plan``
+            (used to steer a single retry without rebuilding the plan).
+        emit_diagnostics: When ``False``, suppress the per-batch diagnostic
+            summary (the batch owner emits the aggregate summary instead).
+
+    Returns:
+        List of ``n_structures`` :class:`ase.Atoms` objects. When
+        ``composition`` is empty, the list contains empty ``Atoms`` objects.
+
+    Raises:
+        SCGOValidationError: If ``n_structures`` is below 1, if ``composition``
+            is invalid, if numeric parameters are invalid, or if ``mode`` is
+            not one of ``smart``, ``template``, ``seed+growth``, or
+            ``random_spherical``.
     """
     if n_structures < 1:
         raise SCGOValidationError(f"n_structures must be >= 1, got {n_structures}")
@@ -1403,52 +1689,42 @@ def create_initial_cluster_batch(
     if not composition:
         return [Atoms() for _ in range(n_structures)]
 
-    n_atoms = len(composition)
-    cell_side = compute_cell_side(composition, vacuum=vacuum)
+    if placement_radius_scaling <= 0:
+        raise SCGOValidationError(
+            f"placement_radius_scaling must be positive, got {placement_radius_scaling}"
+        )
 
-    precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
-    valid_seed_combinations: list[tuple[str, ...]] = []
-    if mode in ("smart", "seed+growth") and n_atoms > 2:
-        precomputed_candidates_by_formula = _find_smaller_candidates(
+    if min_distance_factor < 0:
+        raise SCGOValidationError(
+            f"min_distance_factor must be non-negative, got {min_distance_factor}"
+        )
+
+    if vacuum < 0:
+        raise SCGOValidationError(f"vacuum must be non-negative, got {vacuum}")
+
+    if plan is None:
+        plan = plan_batch_initialization(
             composition,
-            previous_search_glob,
-        )
-        precomputed_candidates_by_formula = _filter_candidates_by_geometry(
-            precomputed_candidates_by_formula
-        )
-        if precomputed_candidates_by_formula:
-            target_counts = get_composition_counts(composition)
-            valid_seed_combinations = _find_valid_seed_combinations(
-                precomputed_candidates_by_formula, target_counts
-            )
-
-    discovery_templates = None
-    if mode == "smart":
-        discovery = _discover_available_strategies(
-            composition=composition,
-            n_atoms=n_atoms,
-            cell_side=cell_side,
-            rng=rng,
+            n_structures,
+            rng,
+            vacuum=vacuum,
+            previous_search_glob=previous_search_glob,
+            mode=mode,
             placement_radius_scaling=placement_radius_scaling,
             min_distance_factor=min_distance_factor,
             connectivity_factor=connectivity_factor,
-            candidates_by_formula=precomputed_candidates_by_formula,
-            valid_combinations=valid_seed_combinations,
+            reuse_exact_matches=reuse_exact_matches,
         )
 
-        allocations = _allocate_initialization_strategies(
-            n_structures=n_structures,
-            templates=discovery["templates"],
-            n_seed_formulas=discovery["n_seed_formulas"],
-            n_seed_combinations=discovery["n_seed_combinations"],
-            rng=rng,
-            n_atoms=n_atoms,
-        )
-        discovery_templates = discovery["templates"]
-    elif mode in ("template", "seed+growth", "random_spherical"):
-        allocations = [(mode, None)] * n_structures
+    if allocation is not None:
+        allocations = [allocation] * n_structures
     else:
-        raise SCGOValidationError(f'Unsupported mode: "{mode}"')
+        allocations = [plan.allocation_for(i) for i in range(n_structures)]
+
+    discovery_templates = plan.discovery_templates
+    precomputed_candidates_by_formula = plan.precomputed_candidates_by_formula
+    valid_seed_combinations = plan.valid_seed_combinations
+    exact_candidates = plan.exact_candidates
 
     batch_base_seed = rng.integers(0, 2**31)
     structure_assignments = []
@@ -1456,9 +1732,10 @@ def create_initial_cluster_batch(
         structure_seed = (batch_base_seed + i * 7919) % (2**31)
         structure_assignments.append((i, strategy, template_index, structure_seed))
 
-    _SeedSamplingLogCollector.reset()
-    if n_structures > 1:
-        InitDiagnosticsCollector.reset()
+    if emit_diagnostics:
+        _SeedSamplingLogCollector.reset()
+        if n_structures > 1:
+            InitDiagnosticsCollector.reset()
 
     def _worker_wrapper(assignment):
         return _generate_structure_batch_item(
@@ -1471,9 +1748,10 @@ def create_initial_cluster_batch(
             discovery_templates=discovery_templates,
             precomputed_candidates_by_formula=precomputed_candidates_by_formula,
             valid_seed_combinations=valid_seed_combinations,
+            exact_candidates=exact_candidates,
         )
 
-    max_workers = min(resolve_n_jobs_to_workers(n_jobs), n_structures)
+    max_workers = resolve_n_jobs_for_tasks(n_jobs, n_structures)
     results: list[Atoms | None] = [None] * n_structures
     fallback_info: dict[int, tuple[str, str | None]] = {}
 
@@ -1496,13 +1774,14 @@ def create_initial_cluster_batch(
         if fallback is not None:
             InitDiagnosticsCollector.record_fallback(used_strat, fallback)
 
-    _SeedSamplingLogCollector.emit_summary_if_any()
+    if emit_diagnostics:
+        _SeedSamplingLogCollector.emit_summary_if_any()
 
-    if n_structures > 1:
-        InitDiagnosticsCollector.emit_summary(
-            logger,
-            verbosity=infer_verbosity(logger),
-            n_structures=n_structures,
-        )
+        if n_structures > 1:
+            InitDiagnosticsCollector.emit_summary(
+                logger,
+                verbosity=infer_verbosity(logger),
+                n_structures=n_structures,
+            )
 
     return results  # type: ignore[return-value]

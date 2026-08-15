@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
+import shutil
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
-from logging import Logger
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase.calculators.singlepoint import SinglePointCalculator
+from ase.constraints import FixAtoms as ASEFixAtoms
 from ase.optimize.optimize import Optimizer
 from ase.vibrations import Vibrations
 from scipy.spatial import KDTree
@@ -35,7 +39,11 @@ from scgo.metadata.atoms import (
     get_tag,
     set_tags,
 )
+from scgo.utils.comparators import PureInteratomicDistanceComparator
+from scgo.utils.composition import get_composition_counts
 from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _assign_penalty_energy(atoms: Atoms) -> float:
@@ -98,9 +106,9 @@ def canonicalize_storage_frame(
     the geometric center of the simulation cell.
 
     Slab + adsorbate (``pbc_aware=True`` and ``n_slab > 0``): shift all atoms by
-    integer lattice translations so the adsorbate center of mass sits in the
-    primary cell on periodic axes, then wrap. When ``n_slab == 0``, falls back to
-    the gas-like path (wrap + optional centering).
+    integer lattice translations so the mobile-region (indices ``n_slab:``)
+    center of mass sits in the primary cell on periodic axes, then wrap. When
+    ``n_slab == 0``, falls back to the gas-like path (wrap + optional centering).
     """
     if pbc_aware and n_slab > 0:
         n = len(atoms)
@@ -137,7 +145,7 @@ def canonicalize_relaxed_for_storage(
     Gas clusters use ``atoms.center()`` so the cluster bounding box sits at the
     cell midpoint, matching :func:`perform_local_relaxation`. Slab+adsorbate
     systems use :func:`canonicalize_storage_frame` with ``pbc_aware=True`` to
-    place the adsorbate in the primary cell without recentring the slab.
+    place the mobile region in the primary cell without recentering the slab.
     """
     if surface_mode and n_slab > 0:
         canonicalize_storage_frame(atoms, pbc_aware=True, center=False, n_slab=n_slab)
@@ -171,7 +179,7 @@ def perform_local_relaxation(
         logfile: Optional path to a file for logging optimizer output.
         trajectory: Optional path to a file for saving the optimization trajectory.
         center_after_relax: If True (default), call
-            :func:`canonicalize_relaxed_for_storage` after relaxation (gas frame).
+            :func:`.canonicalize_relaxed_for_storage` after relaxation (gas frame).
             Use False with ``surface_mode=True`` for slab+adsorbate systems.
         surface_mode: When True and ``center_after_relax`` is False, apply the
             slab-aware storage canonicalize (no bare PBC wrap / COM recenter).
@@ -180,8 +188,6 @@ def perform_local_relaxation(
     Returns:
         The potential energy of the relaxed structure. Returns penalty energy if relaxation fails.
     """
-    logger: Logger = get_logger(__name__)
-
     atoms.calc = calculator
     dyn: Optimizer = optimizer(atoms, trajectory=trajectory, logfile=logfile)
 
@@ -193,7 +199,7 @@ def perform_local_relaxation(
             min_distance = np.min(distances[:, 1])
             if min_distance < MIN_ATOMIC_DISTANCE_WARNING:
                 logger.warning(
-                    f"Atoms dangerously close (min distance: {min_distance:.3f} Å)"
+                    "Atoms dangerously close (min distance: %.3f Å)", min_distance
                 )
                 logger.warning(
                     "This may cause numerical issues with some calculators (especially EMT)"
@@ -216,8 +222,8 @@ def perform_local_relaxation(
     except KeyboardInterrupt:
         raise
     except (RuntimeError, ValueError, FloatingPointError) as e:
-        logger.warning(f"Local relaxation failed: {e}")
-        logger.warning("Assigning large penalty energy to this structure.")
+        logger.warning("Local relaxation failed: %s", e)
+        logger.warning("Assigning large penalty energy to this structure")
         return _assign_penalty_energy(atoms)
 
 
@@ -306,7 +312,7 @@ def validate_pair_id(pair_id: str) -> tuple[int, int]:
     r"""Validate canonical pair identifier 'i_j' and return (i, j).
 
     Raises:
-        ValueError: if `pair_id` is not a string matching "^\d+_\d+$".
+        SCGOValidationError: If `pair_id` is not a string matching "^\d+_\d+$".
     """
     if not isinstance(pair_id, str):
         raise SCGOValidationError(f"Invalid pair_id type: {pair_id!r}")
@@ -340,11 +346,6 @@ def extract_minima_from_database(
         if energy is not None:
             all_minima.append((energy, row))
     return sorted(all_minima, key=lambda x: x[0])
-
-
-def get_composition_counts(composition: list[str]) -> Counter[str]:
-    """Return element counts for a composition."""
-    return Counter(composition)
 
 
 def get_cluster_formula(composition: list[str]) -> str:
@@ -385,7 +386,7 @@ def get_ordered_formula(symbols: list[str]) -> str:
 def get_system_path_key(
     composition: list[str],
     *,
-    adsorbate_definition: dict[str, Any] | None = None,
+    adsorbate_definition: Any = None,
     surface_name: str | None = None,
 ) -> str:
     """Build an underscore-separated path key for campaign / formula directories.
@@ -394,20 +395,25 @@ def get_system_path_key(
     (order-preserving), then surface name. Examples:
     ``Pt5``, ``Pt5_OH_OH``, ``Pt5_OH_OH_graphite``, ``Pt5_slab``.
 
-    Chemical composition matching still uses :func:`get_cluster_formula`.
+    Chemical composition matching still uses :func:`.get_cluster_formula`.
+    ``adsorbate_definition`` may be a plain dict or an
+    :class:`~scgo.system_types.AdsorbateDefinition`.
     """
+    # Deferred: ``system_types`` loads while ``utils.__init__`` is still importing
+    # this module (via geometry_helpers → database → utils), so a top-level
+    # import of ``as_adsorbate_definition`` would see a partial ``system_types``.
+    from scgo.system_types import as_adsorbate_definition
+
     parts: list[str] = []
-    if adsorbate_definition is not None:
-        core_raw = adsorbate_definition.get("core_symbols", [])
-        ads_raw = adsorbate_definition.get("adsorbate_symbols", [])
-        core = [str(s) for s in core_raw] if isinstance(core_raw, list) else []
-        ads = [str(s) for s in ads_raw] if isinstance(ads_raw, list) else []
+    ads_def = as_adsorbate_definition(adsorbate_definition)
+    if ads_def is not None:
+        core = list(ads_def.core_symbols)
+        ads = list(ads_def.adsorbate_symbols)
         if core:
             parts.append(get_cluster_formula(core))
-        lengths_raw = adsorbate_definition.get("adsorbate_fragment_lengths")
+        lengths = list(ads_def.adsorbate_fragment_lengths)
         if ads:
-            if isinstance(lengths_raw, list) and lengths_raw:
-                lengths = [int(x) for x in lengths_raw]
+            if lengths:
                 if sum(lengths) != len(ads):
                     raise SCGOValidationError(
                         "adsorbate_fragment_lengths must sum to "
@@ -444,9 +450,38 @@ def is_true_minimum(
     check_hessian: bool = True,
     imag_freq_threshold: float = 50.0,
 ) -> bool:
-    """Return True if `atoms` is a local minimum (force + optional Hessian checks)."""
-    logger: Logger = get_logger(__name__)
+    """Return True if ``atoms`` is a local minimum (force + optional Hessian check).
 
+    The Hessian check is a Γ-point (single-supercell) analysis of the mobile
+    subspace, which is the correct minimum-verification criterion for the
+    supercell objective SCGO optimizes — it is **not** a phonon dispersion
+    calculation and must not be read as one. A constrained structure (ASE
+    ``FixAtoms``) therefore yields a *constrained* Hessian: only the free
+    degrees of freedom are displaced, and the resulting immobile-block zero modes
+    are the expected translational/rotational modes of the frozen block, not
+    spurious saddle points.
+
+    ASE ≥ 3.22 ``Vibrations`` derives its displaced-atom indices from internal
+    ``FixAtoms`` constraints automatically, but the index derivation differs
+    across versions and is not always reliable. To be version-independent we
+    compute the vibration indices explicitly from ``atoms``' ``FixAtoms``
+    constraints and pass them as ``Vibrations(atoms_check, indices=..., ...)``.
+
+    ``imag_freq_threshold=50`` cm-1 is a finite-difference noise tolerance for
+    MLIP force evaluations; callers with tighter needs may lower it.
+
+    Args:
+        atoms: Candidate structure (its ``FixAtoms`` constraints are honored).
+        calculator: ASE calculator providing forces (and displaced forces).
+        fmax_threshold: Maximum per-atom force magnitude (eV/Å) to accept.
+        check_hessian: When False, only the force check runs.
+        imag_freq_threshold: Imaginary-frequency magnitude (cm-1) above which a
+            mode counts as a saddle-point signature.
+
+    Returns:
+        True when the structure passes the force check (and, if requested, the
+        constrained-Hessian check).
+    """
     atoms_check: Atoms = atoms.copy()
     atoms_check.calc = calculator
 
@@ -455,50 +490,131 @@ def is_true_minimum(
 
     if max_force > fmax_threshold:
         logger.debug(
-            f"Check failed: Max force ({max_force:.4f} eV/Å) > threshold ({fmax_threshold:.4f} eV/Å).",
+            "Check failed: Max force (%.4f eV/Å) > threshold (%.4f eV/Å)",
+            max_force,
+            fmax_threshold,
         )
         return False
 
     if not check_hessian:
         logger.debug(
-            "Check passed: Max force is below threshold (Hessian check skipped)."
+            "Check passed: Max force is below threshold (Hessian check skipped)"
         )
         return True
 
-    logger.debug("Max force is OK. Performing vibrational analysis to check Hessian...")
+    logger.debug("Max force is OK. Performing vibrational analysis to check Hessian")
 
+    # Derive vibration indices explicitly from any FixAtoms constraints on the
+    # input so the Hessian is the constrained Hessian of the mobile subspace,
+    # independent of ASE Vibrations' internal constraint handling (which changed
+    # across 3.22 → 3.28). All atoms free -> full range; all atoms fixed ->
+    # nothing to displace, skip the analysis.
+    fixed_indices: set[int] = set()
+    for constraint in atoms.constraints:
+        if isinstance(constraint, ASEFixAtoms):
+            fixed_indices.update(int(i) % len(atoms) for i in constraint.index)
+    if fixed_indices:
+        vib_indices = [i for i in range(len(atoms)) if i not in fixed_indices]
+    else:
+        vib_indices = list(range(len(atoms)))
+
+    if len(vib_indices) == 0:
+        logger.debug(
+            "All atoms are fixed by constraints; skipping Hessian check "
+            "(structure accepted as a constrained minimum on the force check)"
+        )
+        return True
+
+    if (
+        any(atoms.get_pbc())
+        and not fixed_indices
+        and logger.isEnabledFor(logging.WARNING)
+    ):
+        n_image_modes = 3 * len(atoms)
+        logger.warning(
+            "Hessian check on a periodic structure with no fixed atoms: SCGO "
+            "evaluates the Γ-point supercell Hessian (%d modes). This is the "
+            "correct minimum criterion for the supercell objective but is "
+            "O(N) expensive; consider attaching FixAtoms for a cheaper "
+            "constrained-Hessian check on slabs.",
+            n_image_modes,
+        )
+
+    # A unique cache name per call (and a private temp dir) keeps concurrent
+    # ProcessPoolExecutor workers from sharing/clobbering the same vib cache.
+    vib_dir = tempfile.mkdtemp(prefix="scgo_vib_")
+    vib_name = os.path.join(vib_dir, f"vib_check_{os.getpid()}_{uuid4().hex[:8]}")
+    vib: Vibrations | None = None
     try:
-        vib: Vibrations = Vibrations(atoms_check, name="vib_check")
+        vib = Vibrations(atoms_check, indices=vib_indices, name=vib_name)
         vib.run()
-        frequencies: np.ndarray[tuple[Any, ...], np.dtype[Any]] = vib.get_frequencies()
-        vib.clean()
+        frequencies: np.ndarray[tuple[Any, ...], np.dtype[Any]] = np.atleast_1d(
+            np.asarray(vib.get_frequencies())
+        )
     except (RuntimeError, OSError, ValueError) as e:
         # Treat vibrational analysis failures as a non-minimum condition
-        logger.warning(f"Vibrational analysis failed with error: {e}")
+        logger.warning("Vibrational analysis failed with error: %s", e)
         return False
+    finally:
+        if vib is not None:
+            with contextlib.suppress(OSError, RuntimeError, ValueError):
+                vib.clean()
+        shutil.rmtree(vib_dir, ignore_errors=True)
 
-    problematic_freqs = frequencies[frequencies < -imag_freq_threshold]
-    if problematic_freqs.size > 0:
+    # ASE returns *complex* frequencies for imaginary modes (e.g. 0+965j), so a
+    # plain ``frequencies < -threshold`` comparison never fires. Check the
+    # imaginary part explicitly (magnitude, to stay sign-convention agnostic)
+    # and keep a real-negative fallback for callers (and tests) that supply
+    # purely real frequency arrays.
+    imag_parts = np.abs(np.imag(frequencies))
+    real_parts = np.real(frequencies)
+    problematic_mask = (imag_parts > imag_freq_threshold) | (
+        real_parts < -imag_freq_threshold
+    )
+    imag_count = int(np.sum(problematic_mask))
+    if imag_count > 0:
+        problematic_freqs = frequencies[problematic_mask]
         logger.debug(
-            f"Check failed: Found {problematic_freqs.size} imaginary frequencies "
-            f"below -{imag_freq_threshold:.1f} cm-1: {np.round(problematic_freqs, 2)}.",
+            "Check failed: Found %s imaginary frequencies beyond %.1f cm-1: %s",
+            imag_count,
+            imag_freq_threshold,
+            np.round(problematic_freqs, 2),
         )
-        logger.debug("Structure is likely a saddle point.")
+        logger.debug("Structure is likely a saddle point")
         return False
 
-    total_imag_count = int(np.sum(frequencies < 0.0))
-    moi = atoms_check.get_moments_of_inertia(vectors=False)
-    is_linear: bool = any(np.isclose(moi, 0, atol=1e-5))
-    expected_zero_modes: int = 5 if is_linear else 6
+    total_imag_count = int(np.sum((imag_parts > 0.0) | (real_parts < 0.0)))
+    # Moments of inertia (and the 5/6 expected zero-mode count) only make sense
+    # for an isolated, unconstrained, non-periodic structure. For slab/periodic
+    # systems or constrained structures the free-block zero modes are a fixed
+    # (and geometry-dependent) set, so we log the count as 0 and do not assert
+    # on a fixed-mode expectation.
+    is_constrained = bool(fixed_indices)
+    is_periodic = bool(np.any(atoms.get_pbc()))
+    if is_constrained or is_periodic:
+        expected_zero_modes = 0
+        moi = None
+        is_linear = False
+    else:
+        moi = atoms_check.get_moments_of_inertia(vectors=False)
+        is_linear = bool(any(np.isclose(moi, 0, atol=1e-5)))
+        expected_zero_modes = 5 if is_linear else 6
 
     logger.debug(
-        f"Check passed: Found 0 imaginary frequencies above threshold ({imag_freq_threshold:.1f} cm-1).",
+        "Check passed: Found 0 imaginary frequencies below -%.1f cm-1",
+        imag_freq_threshold,
     )
     logger.debug(
-        f"Total of {total_imag_count} imaginary/zero frequencies found (within threshold), "
-        f"which is consistent with the {expected_zero_modes} expected translational/rotational modes.",
+        "Total of %s imaginary/zero frequencies found (within threshold); "
+        "expected %s translational/rotational zero modes "
+        "(constrained=%s, periodic=%s, linear=%s)",
+        total_imag_count,
+        expected_zero_modes,
+        is_constrained,
+        is_periodic,
+        is_linear,
     )
-    logger.debug("Structure is confirmed as a true local minimum.")
+    logger.debug("Structure is confirmed as a true local minimum")
     return True
 
 
@@ -580,14 +696,17 @@ def _find_unique_minima_with_binning(
     """Find unique minima using energy binning optimization.
 
     Args:
-        sorted_minima: List of (energy, Atoms) tuples sorted by trial and energy.
+        sorted_minima: List of (energy, Atoms) tuples sorted by energy
+            (lowest first).
         comparer: Structure comparator object.
         energy_tolerance: Maximum energy difference for potential duplicates.
         get_bin_index: Function to get bin index for an energy value.
         energy_bins: Dictionary mapping bin indices to lists of (energy, Atoms) tuples.
 
     Returns:
-        List of unique (energy, Atoms) tuples.
+        List of unique (energy, Atoms) tuples, preserving the input ``sorted_minima``
+        energy order (energy-ascending by construction, since minima are appended in
+        the order they appear in the already energy-sorted input).
     """
     unique_minima = []
     first_energy, first_atoms = sorted_minima[0]
@@ -629,6 +748,10 @@ def filter_unique_minima(
         n_top: Number of trailing atoms to compare (same as GA ``n_to_optimize``).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC),
              matching :func:`scgo.algorithms.ga_common.create_structure_comparator`.
+        comparator_tol: Cumulative structural difference tolerance passed to
+             :class:`~scgo.utils.comparators.PureInteratomicDistanceComparator`.
+        comparator_pair_cor_max: Maximum single-distance difference tolerance
+             passed to the comparator.
 
     Returns:
         A new list of (energy, Atoms) tuples containing only the unique
@@ -647,8 +770,6 @@ def filter_unique_minima(
     for energy, atoms in valid_minima:
         if get_tag(atoms, "raw_score") is None:
             set_tags(atoms, raw_score=-float(energy))
-
-    from scgo.utils.comparators import PureInteratomicDistanceComparator
 
     comparer = PureInteratomicDistanceComparator(
         n_top=n_top,
@@ -671,8 +792,7 @@ def filter_unique_minima(
         sorted_minima, comparer, energy_tolerance, get_bin_index, energy_bins
     )
 
-    # Sort by energy (lowest first)
-    unique_minima.sort(key=lambda x: x[0])
+    # Result is already energy-ascending (input was sorted; binning appends in order).
 
     return unique_minima
 
@@ -778,11 +898,6 @@ def auto_niter_ts(
     )
 
 
-def filter_dict_keys(d: dict[str, Any], exclude: set[str]) -> dict[str, Any]:
-    """Return ``d`` without keys in ``exclude``."""
-    return {k: v for k, v in d.items() if k not in exclude}
-
-
 def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge override dict into base dict.
 
@@ -810,39 +925,3 @@ def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 def ensure_directory_exists(path: str | Path) -> None:
     """Ensure a directory exists, creating it if necessary."""
     os.makedirs(path, exist_ok=True)
-
-
-def _prepare_calculator_calculations(
-    unique_minima: list[tuple[float, Atoms]],
-    base_dir: str,
-    calculator_name: str,
-    write_function: Callable[..., None],
-    **write_kwargs: Any,
-) -> None:
-    """Generic helper for preparing calculator input files for multiple structures.
-
-    This function handles the common pattern of iterating through unique minima,
-    creating subdirectories, and calling a write function for each structure.
-
-    Args:
-        unique_minima: A list of (energy, Atoms) tuples representing the
-            unique structures to be calculated.
-        base_dir: The base directory where subdirectories for each calculation
-            will be created.
-        calculator_name: Name of the calculator (for logging purposes).
-        write_function: Function to call for each structure. Must accept
-            `atoms` and `output_dir` as the first two positional arguments,
-            followed by any additional kwargs.
-        **write_kwargs: Additional keyword arguments to pass to write_function.
-    """
-    ensure_directory_exists(base_dir)
-    logger: Logger = get_logger(__name__)
-    logger.info(
-        f"Preparing {calculator_name} inputs for {len(unique_minima)} unique minima in '{base_dir}'",
-    )
-
-    for i, (_energy, atoms) in enumerate(unique_minima):
-        formula: str = get_cluster_formula(atoms.get_chemical_symbols())
-        dir_name: str = f"minimum_{i + 1:02d}_{formula}"
-        calc_dir: str = os.path.join(base_dir, dir_name)
-        write_function(atoms=atoms, output_dir=calc_dir, **write_kwargs)

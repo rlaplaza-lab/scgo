@@ -19,7 +19,7 @@ from tests.constants import (
     EMT_PT2_BOND_TOL_ANG,
     PT4_EMT_BARRIER_EV,
 )
-from tests.test_utils import assert_nn_distances_in_band, assert_ts_result_valid
+from tests.helpers import assert_nn_distances_in_band, assert_ts_result_valid
 
 
 def _oh_template() -> Atoms:

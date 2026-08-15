@@ -3,7 +3,6 @@ All Parameters
 
 This page lists all parameters you can use in SCGO. For preset functions and their defaults, see :doc:`/api/param_presets`.
 
---------------------
 Parameter resolution
 --------------------
 
@@ -20,15 +19,24 @@ All high-level ``run_*`` functions share the same contract:
    :header-rows: 1
 
    * - Dict
-     - Merge behaviour
+     - Merge behavior
    * - ``params`` / ``go_params``
      - Deep-merge onto :func:`~scgo.param_presets.get_default_params` via :func:`~scgo.utils.run_helpers.initialize_params`. Nested dicts (e.g. ``optimizer_params["ga"]``, ``calculator_kwargs``) merge recursively; user keys win.
    * - ``ts_params``
      - Deep-merge onto :func:`~scgo.param_presets.get_ts_search_params` via :func:`~scgo.utils.run_helpers.initialize_ts_params`. Not merged with GO defaults. For ``run_go_ts*``, calculator settings align with merged ``go_params`` unless overridden in ``ts_params``.
    * - Forbidden in dicts
-     - Top-level ``system_type`` in ``go_params`` / ``ts_params`` (use the run ``system_type=`` argument). Factory-default ``optimizer_params[*]["system_type"]`` values are ignored when they match :func:`~scgo.param_presets.get_default_params`; explicit non-default values must match the run argument.
+     - Top-level ``system_type`` in ``go_params`` / ``ts_params`` (use the run
+       ``system_type=`` argument). Identity keys
+       (``system_type``, ``surface_config``, ``adsorbate_definition``,
+       ``adsorbate_fragment_template``, ``cluster_adsorbate_config``) are also
+       forbidden inside ``optimizer_params`` slots — those slots hold algorithm
+       hyperparameters only.
    * - Run kwargs
-     - ``system_type``, ``surface_config``, ``adsorbates``, ``seed``, ``verbosity``, ``output_*`` belong on the ``run_*`` call, not inside preset dicts (except ``surface_config`` may also appear in presets when it must agree with the run argument).
+     - ``system_type``, ``surface_config``, ``adsorbates``, ``seed``,
+       ``verbosity``, ``output_*`` belong on the ``run_*`` call.
+       Top-level ``surface_config`` / adsorbate keys in ``go_params`` (or
+       ``ts_params`` for ``surface_config``) are allowed when they agree with
+       the run argument.
 
 **Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list of user overrides, then the resolved GO optimizer settings or TS NEB configuration. See :doc:`/api/utils`.
 
@@ -39,7 +47,7 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
    :header-rows: 1
 
    * - Level
-     - Behaviour
+     - Behavior
    * - 0
      - Warnings and errors only; no progress bars
    * - 1
@@ -74,7 +82,6 @@ development (see :doc:`/installation`).
        seed=7,
    )
 
--------------
 GO Parameters
 -------------
 
@@ -113,7 +120,16 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``connectivity_factor``
      - ``1.4``
      - Connectivity threshold (covalent radii multiplier) for initialization
-       validation and post-operator GA checks; see :doc:`/api/initialization`
+       validation and post-operator GA checks; see :doc:`/api/initialization`.
+       For surface/adsorbate runs the *effective* factor resolves through
+       :func:`~scgo.system_types.resolve_connectivity_factor` with precedence
+       ``connectivity_factor`` → ``ClusterAdsorbateConfig.structure_connectivity_factor``
+       → ``SurfaceSystemConfig.structure_connectivity_factor`` → ``1.4``; set the
+       config-level values on ``cluster_adsorbate_config`` / ``surface_config``
+       (not as a top-level key). The algorithm gates pass ``connectivity_factor``
+       explicitly, while the ``run_trials`` final structural gate resolves it from
+       the same precedence without the explicit top-level override — see
+       :doc:`/validation_and_constraints`.
    * - ``allow_cluster_fragmentation``
      - ``False``
      - Allow cluster to split (surface only)
@@ -133,9 +149,16 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``cluster_adsorbate_config``
      - ``None``
      - Adsorbate placement knobs (in ``go_params`` only)
+   * - ``n_jobs``
+     - ``1``
+     - Single CPU parallelism knob. ``1`` = sequential; ``-1`` = all CPUs;
+       ``-2`` = all but one CPU; or a positive worker count. Inherited by GA
+       population init, GA offspring, and post-GO validation unless those
+       stages are set explicitly.
    * - ``validation_n_jobs``
      - (optional)
-     - Parallel workers for post-GO Hessian/force validation
+     - Parallel workers for post-GO Hessian/force validation. ``None`` (default)
+       inherits the top-level ``n_jobs``; an explicit value overrides it.
    * - ``validate_with_hessian``
      - ``False``
      - Run vibrational analysis
@@ -151,6 +174,11 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``imag_freq_threshold``
      - ``50.0``
      - Imaginary frequency cutoff (cm\ :sup:`-1`)
+
+The subsections below list **algorithm hyperparameters** only
+(``optimizer_params["simple"|"bh"|"ga"]``). Do not put ``system_type``,
+``surface_config``, or adsorbate identity keys in these slots — see
+*Parameter resolution* above.
 
 **Simple** (``optimizer_params["simple"]``) — used for 1–2 atom gas clusters only:
 
@@ -171,6 +199,22 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Local relaxation budget
 
 **GA** (``optimizer_params["ga"]``):
+
+Parallelism is opt-in and driven by one top-level knob, ``params["n_jobs"]``
+(default ``1``, sequential). Set it to ``-2`` (all but one CPU) or ``-1``
+(every CPU) to parallelize *every* CPU stage at once — GA population
+initialization, GA offspring construction, and post-GO Hessian/force validation.
+SCGO keeps the default sequential so it never oversubscribes the host alongside
+the internal BLAS / MACE / TorchSIM thread pools. The per-stage keys
+(``n_jobs_population_init``, ``n_jobs_offspring``, ``validation_n_jobs``) remain
+available as overrides: ``None`` inherits ``n_jobs``, and an explicit value wins
+for that stage only. The production/torchsim/UMA/UPET benchmark presets already
+default to ``-2``. So in practice:
+
+.. code-block:: python
+
+   params = get_default_params()
+   params["n_jobs"] = -2  # one switch parallelizes population init, offspring, and validation
 
 .. list-table::
    :widths: 25 10 65
@@ -200,11 +244,11 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``10``
      - Stop if no improvement for N generations
    * - ``n_jobs_population_init``
-     - ``-2``
-     - Parallel jobs for population init (-2 = all but 1)
+     - ``None`` (inherits ``n_jobs``)
+     - Workers for population initialization. ``None`` inherits the top-level ``params["n_jobs"]``; pass ``-1`` (all CPUs), ``-2`` (all but one), or a positive worker count to enable parallelism.
    * - ``n_jobs_offspring``
-     - ``-2``
-     - Parallel jobs for offspring
+     - ``None`` (inherits ``n_jobs``)
+     - Workers for offspring construction. Same semantics as ``n_jobs_population_init``; ``None`` inherits the top-level ``n_jobs``.
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
@@ -272,7 +316,6 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``False``
      - Include per-iteration timing breakdown
 
--------------
 TS Parameters
 -------------
 
@@ -341,12 +384,29 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - ``True``
      - Batch multiple NEB bands in one TorchSim force eval (all system types)
    * - ``parallel_neb_max_bands``
-     - ``None`` / ``1`` (surface)
-     - Cap concurrent bands in the parallel NEB runner; surface defaults to
-       ``1`` (chunked one-at-a-time) to avoid GPU OOM on large slab cells
+     - ``None`` / ``4`` (surface)
+     - Explicit cap on concurrent bands in the parallel NEB runner. Surface
+       defaults to ``4`` bands per force batch for OOM safety on large slab
+       cells. When ``None``, bands are chunked by
+       ``parallel_neb_max_batch_atoms`` instead
+   * - ``parallel_neb_max_batch_atoms``
+     - ``6000`` / ``4000`` (surface)
+     - Atom budget (sum of ``n_images * n_atoms``) per fused parallel NEB force
+       batch, used only when ``parallel_neb_max_bands`` is ``None``. Also sizes
+       the TorchSim relaxer's ``expected_max_atoms`` / ``max_atoms_to_try``. A
+       chunk that hits CUDA OOM is retried once at half the budget
    * - ``max_endpoint_mismatch``
-     - ``None`` / ``1.25`` (gas adsorbate) / ``1.5`` (surface adsorbate)
-     - Å geometric gate on comparator ``max_diff``; when set, also enables pre-NEB clash/IDPP energy checks
+     - ``None`` / ``1.25`` (gas adsorbate) / ``1.25`` (surface) / ``1.5`` (surface adsorbate)
+     - Å geometric gate on comparator ``max_diff``; when set, also enables the pre-NEB endpoint-displacement check. Surface presets newly gain this (was unset).
+   * - ``neb_prescreen_clash_distance``
+     - ``1.0`` (bare gas) / ``0.7`` (surface + adsorbate)
+     - Interior NEB image min mobile pairwise distance (Å) below which the initial path is rejected.
+   * - ``min_saddle_prominence``
+     - ``0.10`` (bare gas) / ``0.40`` (surface + adsorbate)
+     - Minimum interior-max prominence (eV) above both endpoints for a band to pass the pre-NEB energy profile gate.
+   * - ``neb_max_spurious_barrier``
+     - ``8.0`` (all types)
+     - Maximum allowed IDPP barrier (eV) before a band is rejected as discontinuous.
    * - ``neb_align_endpoints``
      - ``True``
      - Align endpoints before interpolation
@@ -369,17 +429,35 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - ``"auto"`` / ``2000`` (bare surface) / ``4000`` (adsorbate)
      - TorchSim step budget (mapped internally)
 
-**Adsorbate NEB extras** (beyond the table defaults above):
+**NEB pre-screen gates:**
+
+Before any NEB optimization, ``validate_initial_neb_path`` runs for **every**
+system type (bare gas, adsorbate, and surface; TorchSim and serial ASE paths).
+``validate_initial_neb_energy_profile`` runs only when ``max_endpoint_mismatch``
+is set (bare ``gas_cluster`` leaves it ``None`` and skips the energy-profile
+screen):
+
+- Interior-image clash check (min mobile pairwise distance vs
+  ``neb_prescreen_clash_distance``) always runs; the aligned endpoint-displacement
+  gate additionally runs when ``max_endpoint_mismatch`` is set.
+- Energy-profile check (barrier cap ``neb_max_spurious_barrier``; endpoint-energy
+  drift ``> 0.5`` eV and interior-max prominence below ``min_saddle_prominence``)
+  runs only when ``max_endpoint_mismatch`` is set and canonical endpoint energies
+  are available. Bands with fewer than three images skip the prominence/drift
+  check.
+
+Per-system-type defaults for the three pre-screen knobs are listed under
+:doc:`/validation_and_constraints` (bare gas is looser:
+``neb_prescreen_clash_distance=1.0`` / ``min_saddle_prominence=0.10``;
+surface and adsorbate are tighter: ``0.7`` / ``0.40``).
+
+**Adsorbate NEB specifics** (beyond the gates above):
 
 - Fragment-wise adsorbate matching and core-anchored alignment
 - Pair selection prefers activated hops (moderate mismatch / core RMS),
   oversamples candidates (``10× max_pairs``), and re-ranks by IDPP profile so
   the NEB budget favors robust interior maxima when any exist
-- Pre-NEB rejection of clashing / high-residual IDPP paths, absurd barriers
-  (``> 8`` eV), endpoint energy drift after alignment (``> 0.5`` eV), and
-  one-sided interior maxima (prominence ``< 0.40`` eV). Endpoint-max IDPP is
-  used only when the oversampled pool has no robust-interior candidates
-- Climbing NEB: two-stage only when IDPP has a robust interior maximum
+- Climbing NEB: two-stage only when the IDPP path has a robust interior maximum
   (barrier ``≥ 1.0`` eV); endpoint-max and soft interior IDPP climb from step 0
 - Finalize also rejects barriers ``> 8`` eV
 
@@ -391,10 +469,12 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
   ``surface``; ``False`` for ``surface_cluster_adsorbate`` /
   ``surface_adsorbate`` (registry-safe)
 - ``neb_surface_max_lattice_shift=1``
-- ``parallel_neb_max_bands=1`` (parallel NEB path stays on; bands are
-  chunked one-at-a-time for OOM safety on large slab cells)
+- ``parallel_neb_max_bands=4`` (parallel NEB path stays on; bands are
+  chunked four-at-a-time for OOM safety on large slab cells)
+- ``parallel_neb_max_batch_atoms=4000`` (atom budget used when the band cap is
+  cleared to ``None``; kept at/below the previous 4-band path so the TorchSim
+  memory-scaler disk cache bucket is reused)
 
---------------
 Surface Config
 --------------
 
@@ -426,27 +506,43 @@ Surface Config
    * - ``n_fix_bottom_slab_layers``
      - ``None``
      - Bottom layers to freeze
+   * - ``defect_bias_probability``
+     - ``0.0`` (class) / ``0.5`` if ``monovacancy`` else ``0.0`` (preset)
+     - Fraction (0.0–1.0) of placements biased onto a recorded slab vacancy;
+       ignored when the slab has no vacancy (see :doc:`/surface_slab_guide`).
    * - ``comparator_use_mic``
      - ``True``
      - Use MIC in structure comparator on surfaces
    * - ``cluster_init_vacuum``
-     - (optional)
+     - ``8.0``
      - Extra vacuum for cluster init on slab
    * - ``init_mode``
      - ``"smart"``
      - Surface cluster init mode: ``smart``, ``seed+growth``, ``random_spherical``,
        or ``template`` (see :doc:`/api/initialization`)
    * - ``max_placement_attempts``
-     - (optional)
+     - ``200`` (class) / ``500`` (``make_surface_config``); presets use ``1000``
      - Max cluster placement attempts on slab
    * - ``structure_connectivity_factor``
-     - (optional)
-     - Connectivity factor for slab validation
+     - ``1.4``
+     - Connectivity factor for surface slab validation. Read by
+       :func:`~scgo.system_types.resolve_connectivity_factor` after any explicit
+       ``connectivity_factor`` and the ``ClusterAdsorbateConfig`` value, before the
+       module default. Used for slab-contact / supported-deposit checks, not only
+       placement.
 
 .. note::
    Use only one of the layer options, not both. See :doc:`/api/surface`.
 
-----------------
+.. note::
+   The graphite preset functions override ``adsorption_height_min`` /
+   ``adsorption_height_max``: ``make_graphite_surface_config`` and
+   ``make_defected_graphite_surface_config`` use **0.5 / 1.0 Å**, while
+   ``make_graphene_surface_config`` and ``make_n_doped_graphite_surface_config``
+   use **0.5 / 1.5 Å**. The values above are the class and
+   ``make_surface_config`` defaults, which apply only when you build a config
+   directly rather than through a preset. See :doc:`/surface_slab_guide`.
+
 Adsorbate Config
 ----------------
 
@@ -466,10 +562,10 @@ Adsorbate Config
      - ``0.7``
      - Clash threshold
 
-----------
 See Also
 ----------
 
 - :doc:`/quickstart` - How to use these parameters
 - :doc:`/api/param_presets` - Preset functions and their defaults
 - :doc:`/api/runner_api` - API function documentation
+- :doc:`/validation_and_constraints` - How validation and constraints interact

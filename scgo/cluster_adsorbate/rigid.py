@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 from ase import Atoms
+from ase.constraints import FixBondLengths
 
 from scgo.cluster_adsorbate.constraints import (
     attach_adsorbate_internal_geometry_constraints,
@@ -50,11 +51,9 @@ def restore_rigid_adsorbate_fragments(
 
     Each fragment keeps its current center and best-fit rigid orientation.
     """
-    core_symbols = adsorbate_definition.get("core_symbols", [])
-    if not isinstance(core_symbols, list):
-        return
+    core_symbols = adsorbate_definition.core_symbols
     lengths = parse_positive_fragment_lengths(
-        adsorbate_definition.get("adsorbate_fragment_lengths", [])
+        adsorbate_definition.adsorbate_fragment_lengths
     )
     if len(lengths) != len(fragment_templates):
         return
@@ -96,7 +95,12 @@ def enforce_frozen_adsorbate_geometry(
         fragment_templates=fragments,
     )
     if reattach_constraints:
-        atoms.set_constraint([])
+        # Drop only the previously attached adsorbate bond-length constraints;
+        # every other constraint (notably the slab ``FixAtoms``) must survive.
+        kept = [
+            c for c in (atoms.constraints or []) if not isinstance(c, FixBondLengths)
+        ]
+        atoms.set_constraint(kept)
         attach_adsorbate_internal_geometry_constraints(
             atoms,
             n_slab=n_slab,

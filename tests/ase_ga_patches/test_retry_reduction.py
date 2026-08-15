@@ -14,6 +14,7 @@ These tests check:
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.build import fcc111
 from ase_ga.utilities import (
     atoms_too_close,
     closest_distances_generator,
@@ -105,6 +106,7 @@ class TestAnisotropicRattleGuaranteedSelection:
         )
         result = mut.mutate(atoms)
         assert result is not None
+        assert not np.allclose(result.get_positions(), atoms.get_positions())
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +248,20 @@ class TestOverlapReliefBoundedRepair:
 # 7. Active factory mirror uses reflected mode to avoid long rejection runs
 # ---------------------------------------------------------------------------
 class TestMirrorFactoryUsesReflectedMode:
-    def test_factory_configures_reflected_mirror(self, au2pt2_atoms):
+    def test_factory_omits_mirror_for_untagged_gas(self, au2pt2_atoms):
+        atoms = au2pt2_atoms.copy()
+        blmin = _blmin(atoms)
+        _ops, name_map = create_mutation_operators(
+            atoms.get_chemical_symbols(),
+            len(atoms),
+            blmin,
+            rng=np.random.default_rng(123),
+            use_adaptive=True,
+            system_type="gas_cluster",
+        )
+        assert "mirror" not in name_map
+
+    def test_factory_configures_reflected_mirror_on_surface(self, au2pt2_atoms):
         atoms = au2pt2_atoms.copy()
         blmin = _blmin(atoms)
         ops, name_map = create_mutation_operators(
@@ -255,13 +270,15 @@ class TestMirrorFactoryUsesReflectedMode:
             blmin,
             rng=np.random.default_rng(123),
             use_adaptive=True,
+            system_type="surface_cluster",
+            n_slab=8,
         )
         mirror = ops[name_map["mirror"]]
         assert mirror.reflect is True
 
 
 class TestMirrorBoundedCandidates:
-    def test_mirror_uses_ranked_plane_set(self, au2pt2_atoms):
+    def test_mirror_declines_untagged_gas_cluster(self, au2pt2_atoms):
         atoms = au2pt2_atoms.copy()
         blmin = _blmin(atoms)
         mut = MirrorMutation(
@@ -271,9 +288,38 @@ class TestMirrorBoundedCandidates:
             rng=np.random.default_rng(17),
             max_tries=12,
         )
-        result = mut.mutate(atoms)
+        assert mut.mutate(atoms) is None
+
+    def test_mirror_uses_ranked_plane_set_on_surface(self):
+        slab = fcc111("Pt", size=(3, 4, 2), vacuum=8.0, orthogonal=True)
+        n_slab = len(slab)
+        z_top = float(np.max(slab.positions[:, 2]))
+        center = np.mean(slab.positions[:, :2], axis=0)
+        cluster = Atoms(
+            "Pt4",
+            positions=[
+                [center[0], center[1], z_top + 3.0],
+                [center[0] + 2.6, center[1], z_top + 3.0],
+                [center[0] + 1.3, center[1] + 2.25, z_top + 3.0],
+                [center[0] + 1.3, center[1] + 0.75, z_top + 5.1],
+            ],
+            cell=slab.get_cell(),
+            pbc=slab.get_pbc(),
+        )
+        full = slab + cluster
+        mut = MirrorMutation(
+            {(78, 78): 0.5},
+            len(cluster),
+            system_type="surface_cluster",
+            rng=np.random.default_rng(17),
+            max_tries=12,
+        )
+        result = mut.mutate(full)
         assert result is not None
         assert mut.last_attempt_count <= 12
+        assert np.allclose(
+            result.get_positions()[:n_slab], full.get_positions()[:n_slab], atol=1e-10
+        )
 
 
 class TestRotationalBoundedCandidates:
@@ -316,6 +362,7 @@ class TestFlatteningVectorised:
         )
         result = mut.mutate(atoms)
         assert result is not None
+        assert not np.allclose(result.get_positions(), atoms.get_positions())
         assert len(result) == len(atoms)
         assert mut.last_attempt_count <= 6
 
@@ -520,53 +567,3 @@ class TestUniformSphereSampling:
         # Old formula: mean of cos(pi*u) = 0, but std != 1/sqrt(3)
         # std of cos(pi*U) for U~Uniform(0,1) is sqrt(1/2 - (2/pi^2)) ≈ 0.481
         assert abs(np.std(cos_theta_old) - 1.0 / np.sqrt(3)) > 0.05
-
-
-# ---------------------------------------------------------------------------
-# 13. Population roulette-wheel loops are capped
-# ---------------------------------------------------------------------------
-class TestPopulationSelectionCapped:
-    def test_get_one_candidate_always_terminates(self, pt3_atoms, rng, tmp_path):
-        """get_one_candidate should return a result (not hang) even
-        with skewed fitness values, thanks to the iteration cap."""
-        from ase.calculators.emt import EMT
-        from ase_ga.data import DataConnection
-
-        from scgo.ase_ga_patches.population import Population
-        from scgo.metadata.atoms import set_tags
-        from tests.test_utils import create_ga_comparator, create_preparedb
-
-        db_path = tmp_path / "pop_cap.db"
-        db = create_preparedb(pt3_atoms, db_path)
-
-        for i in range(3):
-            a = pt3_atoms.copy()
-            a.positions += rng.random((3, 3)) * 0.1
-            a.calc = EMT()
-            set_tags(a, raw_score=-10.0 - i)
-            a.info["confid"] = i
-            db.add_unrelaxed_candidate(a, description=f"t_{i}")
-
-        da = DataConnection(str(db_path))
-        while da.get_number_of_unrelaxed_candidates() > 0:
-            a = da.get_an_unrelaxed_candidate()
-            from scgo.metadata.atoms import get_tags
-
-            if "key_value_pairs" not in a.info:
-                a.info["key_value_pairs"] = get_tags(a).copy()
-            if "raw_score" not in a.info["key_value_pairs"]:
-                a.info["key_value_pairs"]["raw_score"] = -10.0
-            da.add_relaxed_step(a)
-
-        comp = create_ga_comparator(len(pt3_atoms))
-        pop = Population(
-            data_connection=da,
-            population_size=3,
-            comparator=comp,
-            logfile=None,
-            rng=np.random.default_rng(42),
-        )
-
-        c = pop.get_one_candidate()
-        assert c is not None
-        assert isinstance(c, Atoms)

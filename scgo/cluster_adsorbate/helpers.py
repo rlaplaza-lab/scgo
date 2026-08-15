@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from scgo.exceptions import SCGOValidationError
 
+if TYPE_CHECKING:
+    from scgo.system_types import AdsorbateDefinition
+
 
 def resolve_fragment_anchor_and_bond_axis(
-    adsorbate_definition: Mapping[str, object],
+    adsorbate_definition: AdsorbateDefinition,
 ) -> tuple[int, tuple[int, int] | None]:
     """Return fragment anchor index and optional bond-axis pair from adsorbate metadata."""
-    anchor = int(adsorbate_definition.get("fragment_anchor_index", 0))
-    fba = adsorbate_definition.get("fragment_bond_axis")
-    bond_axis: tuple[int, int] | None = None
-    if fba is not None:
-        bond_axis = (int(fba[0]), int(fba[1]))
-    return anchor, bond_axis
+    anchor = adsorbate_definition.fragment_anchor_index
+    anchor = int(anchor) if anchor is not None else 0
+    bond_axis = adsorbate_definition.fragment_bond_axis
+    return anchor, (tuple(bond_axis) if bond_axis is not None else None)
 
 
 def parse_positive_fragment_lengths(raw: object) -> list[int]:

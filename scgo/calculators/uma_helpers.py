@@ -1,4 +1,4 @@
-"""UMA (Universal Material Approximation) calculator via fairchem-core."""
+"""UMA (Universal Models for Atoms) calculator via fairchem-core."""
 
 from __future__ import annotations
 
@@ -8,8 +8,11 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.exceptions import SCGONotImplementedError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+
+logger = get_logger(__name__)
 
 _MISSING_FAIRCHEM_MSG = (
     "fairchem-core is not installed. Install with: pip install 'scgo[uma]' "
@@ -18,7 +21,7 @@ _MISSING_FAIRCHEM_MSG = (
 
 
 class UMA(Calculator):
-    """ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
+    r"""ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
     is a fairchem pretrained name or path; ``task_name`` selects the UMA task
@@ -37,20 +40,21 @@ class UMA(Calculator):
         try:
             from fairchem.core import FAIRChemCalculator
         except ImportError as e:
-            raise ImportError(_MISSING_FAIRCHEM_MSG) from e
+            raise SCGONotImplementedError(_MISSING_FAIRCHEM_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
 
-        name = f"UMA-{model_name}"
-        super().__init__(name=name, **kwargs)
+        super().__init__(**kwargs)
 
-        logger = get_logger(__name__)
         logger.info(
             'Initializing UMA calculator ("%s") on device: "%s"', model_name, dev
         )
 
         self.model_name = model_name
         self.task_name = task_name
+        # Store the resolved device so downstream helpers (e.g. TorchSim model
+        # extraction) can honour an explicit device="cpu" instead of guessing.
+        self.device = dev
         self._inner = FAIRChemCalculator.from_model_checkpoint(
             model_name,
             task_name=task_name,
@@ -95,6 +99,9 @@ def try_extract_torchsim_model_from_uma_calculator(
     ``torch_sim.models.fairchem.FairChemModel`` only accepts a checkpoint name
     or path in its public constructor, so this builds a TorchSim-ready shell
     around the live ``predictor`` instead of reloading weights.
+
+    Returns ``None`` when the shell cannot be built (the caller then lets
+    TorchSim reload the checkpoint).
     """
     try:
         import torch
@@ -114,19 +121,30 @@ def try_extract_torchsim_model_from_uma_calculator(
     if task_name is None:
         task_name = getattr(inner, "task_name", None)
 
-    device = getattr(predictor, "device", None)
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    elif not isinstance(device, torch.device):
-        device = torch.device(str(device))
+    try:
+        device = getattr(predictor, "device", None)
+        device = torch.device(
+            resolve_torch_device(device, allow_mps=False, backend_name="UMA")
+        )
 
-    model = FairChemModel.__new__(FairChemModel)
-    model._dtype = torch.float32
-    model._compute_stress = False
-    model._compute_forces = True
-    model._memory_scales_with = "n_atoms"
-    model._device = device
-    model.predictor = predictor
-    model.task_name = task_name
-    model.implemented_properties = ["energy", "forces"]
+        model = FairChemModel.__new__(FairChemModel)
+        # ``__new__`` skips ``nn.Module.__init__``, so the module bookkeeping
+        # dicts are missing and assigning ``predictor`` (an ``nn.Module``)
+        # raises "cannot assign module before Module.__init__() call".
+        torch.nn.Module.__init__(model)
+        model._dtype = torch.float32
+        model._compute_stress = False
+        model._compute_forces = True
+        model._memory_scales_with = "n_atoms"
+        model._device = device
+        model.predictor = predictor
+        model.task_name = task_name
+        model.implemented_properties = ["energy", "forces"]
+    except (AttributeError, TypeError, RuntimeError) as exc:
+        logger.debug(
+            "Could not build a TorchSim FairChemModel shell from the live UMA "
+            "calculator (%s); TorchSim will reload the checkpoint",
+            exc,
+        )
+        return None
     return model

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+# This module-level flag is process-local; it does not propagate to subprocesses.
 _FILTERS_INSTALLED = False
 
 

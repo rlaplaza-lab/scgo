@@ -14,7 +14,7 @@ from scgo.initialization.templates import (
     grow_template_via_facets,
     remove_atoms_from_vertices,
 )
-from tests.test_utils import assert_cluster_valid
+from tests.helpers import assert_cluster_valid
 
 
 class TestRemoveAtomsFromVertices:

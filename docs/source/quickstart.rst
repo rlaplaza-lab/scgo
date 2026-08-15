@@ -32,7 +32,6 @@ Slab-as-target modes (``surface`` / ``surface_adsorbate``) also require
 ``fix_all_slab_atoms=False`` and ``n_relax_top_slab_layers`` (or
 ``n_fix_bottom_slab_layers``).
 
------------
 Gas Cluster
 -----------
 
@@ -77,7 +76,6 @@ across the population. Details: :doc:`/api/initialization`.
        system_type="gas_cluster",
    )
 
---------------
 On a Surface
 --------------
 
@@ -162,7 +160,6 @@ Do not use ``n_relax_top_slab_layers`` together with ``n_fix_bottom_slab_layers`
        system_type="surface_cluster",
    )
 
----------------
 With Adsorbates
 ---------------
 
@@ -244,7 +241,6 @@ Any ASE ``Atoms`` object is a valid adsorbate fragment. The GA will:
 Use :func:`~scgo.is_true_minimum` or :func:`~scgo.perform_local_relaxation` to
 validate or re-relax candidates outside a full GO run.
 
---------------------
 Surface + Adsorbates
 --------------------
 
@@ -268,7 +264,6 @@ Combine surface and adsorbates.
        adsorbates=oh,
    )
 
------------------------
 Slab as search target
 -----------------------
 
@@ -321,7 +316,6 @@ filesystem ``name`` for path keys.
        adsorbates=oh,
    )
 
-------------------
 Transition States
 ------------------
 
@@ -363,7 +357,12 @@ Find transition states between optimized structures.
    from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
 
    go_params = get_torchsim_ga_params(system_type="gas_cluster", seed=42)
-   go_params["optimizer_params"]["ga"].update(niter=10, population_size=50)
+   go_params["n_jobs"] = -2   # one switch parallelizes population init, offspring, and validation
+   go_params["optimizer_params"]["ga"].update(
+       niter=10,
+       population_size=50,
+   )
+
 
    ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
    ts_params["max_pairs"] = 15
@@ -390,6 +389,8 @@ Find transition states between optimized structures.
        surface_config=surface_config,
        seed=42,
    )
+   go_params["n_jobs"] = -2   # all but one CPU for population init, offspring, and validation
+
 
    ts_params = get_ts_search_params(
        system_type="surface_cluster",
@@ -407,7 +408,6 @@ Find transition states between optimized structures.
        system_type="surface_cluster",
    )
 
-------------
 Campaigns
 ------------
 
@@ -438,7 +438,7 @@ Run multiple compositions in one call. Composition builders
 Failed compositions (e.g. initialization ``SCGOValidationError`` on extreme
 stoichiometries) are logged, recorded as empty lists under their ``path_key``,
 and skipped so the rest of the campaign continues. See :doc:`/api/initialization`
-for multi-element atom ordering and placement behaviour.
+for multi-element atom ordering and placement behavior.
 
 **Binary compositions:**
 
@@ -497,7 +497,6 @@ for multi-element atom ordering and placement behaviour.
 
 See :doc:`/api/runner_api` for full signatures.
 
-----------
 Output
 ----------
 
@@ -509,7 +508,6 @@ run IDs, and file formats. Key points:
 - ``path_key`` combines nanoparticle formula, adsorbate fragments, and surface name
   (e.g., ``Pt5``, ``Pt5_OH_OH_graphite``)
 
-----------
 Parameters
 ----------
 
@@ -532,10 +530,9 @@ Quick parameter selection:
 
 See :doc:`/parameters` for all options and :doc:`/api/param_presets` for details.
 
-----------
 Examples
 ----------
 
-Working examples in the repository — see [`examples/README.md`](https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md)
+Working examples in the repository — see `examples/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md>`_
 for the full list and usage notes. Each example enables ``write_timing_json``
 so per-run ``timing.json`` and campaign ``go_ts_timing.json`` are written.

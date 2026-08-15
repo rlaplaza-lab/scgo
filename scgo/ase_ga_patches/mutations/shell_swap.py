@@ -1,8 +1,9 @@
+"""Mutation that swaps atom groups between inner and outer radial shells."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that swaps atom groups between inner and outer radial shells."""
 
 import numpy as np
 from ase import Atoms
@@ -10,9 +11,12 @@ from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import (
     atoms_too_close,
     atoms_too_close_two_sets,
-    gather_atoms_by_tag,
 )
 
+from scgo.ase_ga_patches._tag_gather import (
+    gather_atoms_by_tag,
+    periodic_sheet_tag_to_skip,
+)
 from scgo.ase_ga_patches.mutations._common import _ensure_rng
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
@@ -67,9 +71,12 @@ class ShellSwapMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        top = atoms[-N:].copy()
+        top = atoms[len(atoms) - N:].copy()
         if self.use_tags:
-            gather_atoms_by_tag(top)
+            gather_atoms_by_tag(
+                top,
+                skip_tag=periodic_sheet_tag_to_skip(self.system_type),
+            )
 
         tags = top.get_tags() if self.use_tags else np.arange(N)
         positions = top.get_positions().copy()

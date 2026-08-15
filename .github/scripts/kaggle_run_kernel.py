@@ -5,62 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-_REDACT_PATTERNS = (
-    re.compile(r"KGAT_[A-Za-z0-9_-]+"),
-    re.compile(r"(?i)(api[_-]?token|access[_-]?token|kaggle[_-]?key)\s*[:=]\s*\S+"),
-)
-
-
-def redact_text(text: str) -> str:
-    redacted = text
-    for pattern in _REDACT_PATTERNS:
-        redacted = pattern.sub("***", redacted)
-    return redacted
-
-
-def parse_kaggle_log(text: str) -> str:
-    text = text.strip()
-    if not text:
-        return text
-
-    entries: list[dict] = []
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, list):
-            entries = [item for item in payload if isinstance(item, dict)]
-        elif isinstance(payload, dict):
-            entries = [payload]
-    except json.JSONDecodeError:
-        decoder = json.JSONDecoder()
-        idx = 0
-        while idx < len(text):
-            while idx < len(text) and text[idx] in ", \n\r\t":
-                idx += 1
-            if idx >= len(text):
-                break
-            try:
-                obj, end = decoder.raw_decode(text, idx)
-            except json.JSONDecodeError:
-                return text
-            if isinstance(obj, dict):
-                entries.append(obj)
-            idx = end
-
-    if not entries:
-        return text
-
-    chunks: list[str] = []
-    for entry in entries:
-        data = entry.get("data")
-        if isinstance(data, str):
-            chunks.append(data)
-    return "".join(chunks) if chunks else text
+from kaggle_log_common import parse_kaggle_log, redact_text
 
 
 def run_cmd(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:

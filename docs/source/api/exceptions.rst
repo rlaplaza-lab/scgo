@@ -7,3 +7,4 @@ SCGO-defined exception hierarchy for typed error handling.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*

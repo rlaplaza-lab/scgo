@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 
 from scgo.exceptions import (
@@ -25,11 +26,10 @@ from scgo.exceptions import (
 from scgo.metadata.provenance import output_json_provenance
 from scgo.utils.logging import get_logger
 
-_logger = get_logger(__name__)
+logger = get_logger(__name__)
 
 TIMING_JSON_FILENAME = "timing.json"
 GO_TS_TIMING_JSON_FILENAME = "go_ts_timing.json"
-RUN_TIMING_SCHEMA_VERSION = 1
 
 _DB_IO_SUM_KEYS: tuple[str, ...] = (
     "db_read_s",
@@ -53,25 +53,36 @@ def ga_relax_seconds_from_timings(timings: dict[str, float]) -> float:
     )
 
 
+# Discriminate the relax/NEB extractor by the payload's ``kind`` so each runner
+# reports its own wall-time semantics without guessing from magic keys.
+_RELAX_SECONDS_EXTRACTORS: dict[str, Callable[[dict], float]] = {
+    "ga": ga_relax_seconds_from_timings,
+    "bh": ga_relax_seconds_from_timings,
+    "neb": lambda t: float(t.get("neb_optimization_s", 0.0))
+    or float(t.get("neb_optimization_avg_s", 0.0)),
+    "go_ts": lambda t: float(t.get("go_phase_s", 0.0))
+    + float(t.get("ts_neb_sum_s", 0.0)),
+}
+
+
 def relax_seconds_from_timings(timings: dict[str, float]) -> float:
-    """Return total relax/NEB wall time inferred from a timing payload."""
-    if "go_phase_s" in timings or "ts_neb_sum_s" in timings:
-        return float(timings.get("go_phase_s", 0.0)) + float(
-            timings.get("ts_neb_sum_s", 0.0)
+    """Return total relax/NEB wall time, dispatched by the payload ``kind``.
+
+    The discriminator is one of ``"ga"``, ``"bh"``, ``"neb"``, ``"go_ts"``.
+    """
+    kind = timings.get("kind")
+    if kind is None:
+        raise SCGOValidationError(
+            "Timing payload is missing the required 'kind' discriminator "
+            "(expected one of 'ga', 'bh', 'neb', 'go_ts')."
         )
-    if "neb_optimization_s" in timings:
-        return float(timings.get("neb_optimization_s", 0.0))
-    if "initial_relax_batch_s" in timings or (
-        "relax_batch_s" in timings and "initial_local_relaxation_s" not in timings
-    ):
-        return ga_relax_seconds_from_timings(timings)
-    if "local_relaxation_s" in timings and "relax_batch_s" not in timings:
-        return float(timings.get("local_relaxation_s", 0.0))
-    if "relax_batch_s" in timings:
-        return float(timings.get("relax_batch_s", 0.0))
-    return float(timings.get("initial_local_relaxation_s", 0.0)) + float(
-        timings.get("offspring_local_relaxation_s", 0.0)
-    )
+    extractor = _RELAX_SECONDS_EXTRACTORS.get(kind)
+    if extractor is None:
+        raise SCGOValidationError(
+            f"Unknown timing kind {kind!r}; expected one of "
+            f"{sorted(_RELAX_SECONDS_EXTRACTORS)}."
+        )
+    return extractor(timings)
 
 
 def cpu_non_relax_seconds_from_timings(timings: dict[str, float]) -> float:
@@ -128,7 +139,7 @@ def read_timing_file(path: str) -> dict[str, Any] | None:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        _logger.warning("Failed to read timing file %s: %s", path, exc)
+        logger.warning("Failed to read timing file %s: %s", path, exc)
         return None
 
 
@@ -158,10 +169,13 @@ def build_timing_payload(
     run_id: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a structured timing document with provenance header and schema version."""
+    """Build a structured timing document with the shared provenance header.
+
+    The header's ``schema_version`` is the single output-JSON version; there is
+    no separate timing schema key.
+    """
     payload: dict[str, Any] = {
         **output_json_provenance(),
-        "timing_schema_version": RUN_TIMING_SCHEMA_VERSION,
         "backend": backend,
         "timings_s": timings_s,
     }
@@ -172,33 +186,22 @@ def build_timing_payload(
     return payload
 
 
-def build_run_timing_document(
-    *,
-    run_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Attach run_id to a single-run timing payload."""
-    out = dict(payload)
-    out.setdefault("run_id", run_id)
-    return out
+def neb_seconds_from_pair_timings(timings: dict[str, Any]) -> float:
+    """Return a pair's NEB wall time from serial or parallel timing keys.
 
-
-def write_run_timing_file(
-    run_dir: str,
-    payload: dict[str, Any],
-    *,
-    run_id: str | None = None,
-) -> str:
-    if run_id is not None:
-        payload = build_run_timing_document(run_id=run_id, payload=payload)
-    return write_timing_file(run_dir, payload)
+    Serial NEB records a true per-pair ``neb_optimization_s``. Parallel NEB
+    records ``neb_optimization_avg_s`` (chunk wall time divided across the
+    pairs in the chunk), so summing it across a chunk recovers the chunk time.
+    """
+    if "neb_optimization_s" in timings:
+        return float(timings.get("neb_optimization_s", 0.0))
+    return float(timings.get("neb_optimization_avg_s", 0.0))
 
 
 def sum_neb_seconds_from_ts_results(
     ts_results: list[dict[str, Any]],
 ) -> float:
-    """Sum per-pair ``neb_optimization_s`` values from TS result dicts."""
+    """Sum per-pair NEB wall time from TS result dicts."""
     return sum(
-        float((r.get("timings_s") or {}).get("neb_optimization_s", 0.0))
-        for r in ts_results
+        neb_seconds_from_pair_timings(r.get("timings_s") or {}) for r in ts_results
     )

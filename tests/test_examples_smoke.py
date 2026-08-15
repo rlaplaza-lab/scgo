@@ -75,8 +75,8 @@ def test_example_main_calls_run_go_ts_with_current_api(
         )
 
     module = _load_example_module(script_path)
-    monkeypatch.setattr(module, "get_torchsim_ga_params", _fake_go_params)
-    monkeypatch.setattr(module, "get_ts_search_params", _fake_ts_params)
+    monkeypatch.setattr(module, "get_low_effort_torchsim_ga_params", _fake_go_params)
+    monkeypatch.setattr(module, "get_low_effort_ts_search_params", _fake_ts_params)
     monkeypatch.setattr(module, "run_go_ts", _fake_run_go_ts)
     for maker in (
         "make_graphite_surface_config",
@@ -94,11 +94,45 @@ def test_example_main_calls_run_go_ts_with_current_api(
     assert kwargs["go_params"] is not None
     assert kwargs["ts_params"] is not None
     assert kwargs["system_type"] is not None
+    assert "system_type" not in kwargs["go_params"]
+    assert "system_type" not in kwargs["ts_params"]
     assert kwargs.get("verbosity", 1) >= 1
     assert kwargs["seed"] == kwargs["go_params"]["seed"] == kwargs["ts_params"]["seed"]
     assert kwargs["output_root"] == tmp_path / "results"
     assert kwargs["output_stem"] == _EXPECTED_OUTPUT_STEMS[script_path.name]
     ga = kwargs["go_params"]["optimizer_params"]["ga"]
+    identity_keys = {
+        "system_type",
+        "surface_config",
+        "adsorbate_definition",
+        "adsorbate_fragment_template",
+        "cluster_adsorbate_config",
+    }
+    assert identity_keys.isdisjoint(ga)
     assert ga["write_timing_json"] is True
     assert ga["detailed_timing"] is True
     assert kwargs["ts_params"]["write_timing_json"] is True
+    if kwargs.get("surface_config") is not None:
+        # Surface examples may stamp top-level surface_config via the preset;
+        # it must agree with the run argument when both are set.
+        go_sc = kwargs["go_params"].get("surface_config")
+        if go_sc is not None:
+            assert go_sc is kwargs["surface_config"]
+        ts_sc = kwargs["ts_params"].get("surface_config")
+        if ts_sc is not None:
+            assert ts_sc is kwargs["surface_config"]
+
+
+@pytest.mark.parametrize("script_path", EXAMPLE_SCRIPTS, ids=lambda p: p.name)
+def test_example_uses_low_effort_presets(script_path: Path) -> None:
+    """Examples must build params from the shared low-effort presets.
+
+    The Kaggle GPU matrix in
+    ``tests/integration/test_gpu_examples_integration.py`` consumes the same two
+    functions; importing them here is what keeps the two in sync. An example
+    that falls back to ``get_torchsim_ga_params`` / ``get_ts_search_params``
+    would silently run at full production budget.
+    """
+    source = script_path.read_text(encoding="utf-8")
+    assert "get_low_effort_torchsim_ga_params(" in source
+    assert "get_low_effort_ts_search_params(" in source

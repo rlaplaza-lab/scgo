@@ -3,10 +3,14 @@ Surface workflows
 
 Slab configuration, deposition, and validation for supported-cluster runs.
 
+For end-to-end recipes on building graphene and graphite slabs (pristine,
+vacancy-defected, or N-doped) and using them for nanocluster global
+optimization, see :doc:`/surface_slab_guide`.
+
 Deposition and adsorbate initialization
 ---------------------------------------
 
-:func:`~scgo.surface.deposition.create_deposited_cluster` builds initial
+:func:`~scgo.surface.create_deposited_cluster` builds initial
 structures for ``surface_cluster`` and ``surface_cluster_adsorbate``:
 
 - **Plain cluster** — gas-phase seed via :mod:`scgo.initialization` (``init_mode``
@@ -28,15 +32,49 @@ searches top layers plus adsorbates. Planar graphite/graphene top layers use
 .. autoclass:: scgo.surface.config.SurfaceSystemConfig
    :members:
    :show-inheritance:
+   :exclude-members: _*
 
 .. autofunction:: scgo.surface.make_surface_config
 .. autofunction:: scgo.surface.make_graphite_surface_config
 .. autofunction:: scgo.surface.make_defected_graphite_surface_config
 .. autofunction:: scgo.surface.make_n_doped_graphite_surface_config
+.. autofunction:: scgo.surface.build_graphene_slab
+.. autofunction:: scgo.surface.build_monovacancy_graphene_slab
+.. autofunction:: scgo.surface.make_graphene_surface_config
 .. autofunction:: scgo.surface.describe_surface_config
 .. autofunction:: scgo.surface.create_deposited_cluster
 .. autofunction:: scgo.surface.create_deposited_cluster_batch
 .. autofunction:: scgo.surface.adsorption_energy
+
+Slab search partitioning
+------------------------
+
+.. automodule:: scgo.surface.partition
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. autofunction:: scgo.cluster_adsorbate.sites.planar_layer_site_candidates
+   :no-index:
+
+Deposition
+----------
+
+.. automodule:: scgo.surface.deposition
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+Presets
+-------
+
+.. automodule:: scgo.surface.presets
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
 
 Composition builders for campaigns live in :mod:`scgo.runner_api`
 (``build_one_element_compositions``, ``build_two_element_compositions``);

@@ -91,52 +91,54 @@ def _slab_search_cfg() -> SurfaceSystemConfig:
 
 
 @pytest.mark.parametrize(
-    "fn,args",
+    "fn,args,error_match",
     [
         pytest.param(
             build_one_element_compositions,
-            ("", 2, 4),
-            id="one_element_empty_symbol",
-        ),
-        pytest.param(
-            build_one_element_compositions,
             ("Pt", 0, 3),
+            "min_atoms must be >= 1",
             id="one_element_min_atoms_zero",
         ),
         pytest.param(
             build_one_element_compositions,
             ("Pt", 5, 3),
+            "max_atoms must be >= min_atoms",
             id="one_element_min_gt_max",
         ),
         pytest.param(
             build_two_element_compositions,
             ("", "Pt", 2, 4),
+            "element1 must be a non-empty string",
             id="two_elements_empty_first_symbol",
         ),
         pytest.param(
             build_two_element_compositions,
             ("Pt", "", 2, 4),
+            "element2 must be a non-empty string",
             id="two_elements_empty_second_symbol",
         ),
         pytest.param(
             build_two_element_compositions,
             ("Pt", "Au", 0, 3),
+            "min_atoms must be >= 1",
             id="two_elements_min_atoms_zero",
         ),
         pytest.param(
             build_two_element_compositions,
             ("Pt", "Au", 5, 3),
+            "max_atoms must be >= min_atoms",
             id="two_elements_min_gt_max",
         ),
         pytest.param(
             _run_go_campaign_compositions,
             ([], "gas_cluster"),
+            "compositions iterable must not be empty",
             id="arbitrary_compositions_empty",
         ),
     ],
 )
-def test_run_campaign_invalid_inputs(fn, args):
-    with pytest.raises(SCGOValidationError):
+def test_run_campaign_invalid_inputs(fn, args, error_match):
+    with pytest.raises(SCGOValidationError, match=error_match):
         fn(*args)
 
 
@@ -144,14 +146,16 @@ def test_rng_in_optimizer_params_raises():
     params = get_default_params()
     params["optimizer_params"]["ga"] = params["optimizer_params"].get("ga", {})
     params["optimizer_params"]["ga"]["rng"] = "not-allowed"
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match='"rng" should not be in params'):
         _run_go_trials(["Pt"] * 4, "gas_cluster", params=params)
 
 
 def test_scgo_validations(rng):
     from scgo.minima_search import scgo
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(
+        SCGOValidationError, match="rng must be a numpy.random.Generator"
+    ):
         scgo(["Pt"], "ga", {}, "out_dir", None)
 
     with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
@@ -176,14 +180,22 @@ def test_scgo_validations(rng):
 
 
 def test_run_trials_validations(rng):
-    with pytest.raises(SCGOValidationError):
-        run_trials([], "ga", {}, "out", rng)
-    with pytest.raises(SCGOValidationError):
-        run_trials(["Pt"], "ga", {}, "", rng)
-    with pytest.raises(SCGOValidationError):
-        run_trials(["Pt"], "ga", {}, "out", None)
-    with pytest.raises(SCGOValidationError):
-        run_trials(["Pt"], "ga", {}, "out", rng, verbosity=5)
+    with pytest.raises(SCGOValidationError, match="Composition cannot be empty"):
+        run_trials([], "ga", {"system_type": "gas_cluster"}, "out", rng)
+    with pytest.raises(
+        SCGOValidationError, match="output_dir must be a non-empty string"
+    ):
+        run_trials(["Pt"], "ga", {"system_type": "gas_cluster"}, "", rng)
+    with pytest.raises(
+        SCGOValidationError, match="rng must be a numpy.random.Generator"
+    ):
+        run_trials(["Pt"], "ga", {"system_type": "gas_cluster"}, "out", None)
+    with pytest.raises(
+        SCGOValidationError, match="verbosity must be one of 0, 1, 2, or 3"
+    ):
+        run_trials(
+            ["Pt"], "ga", {"system_type": "gas_cluster"}, "out", rng, verbosity=5
+        )
     with pytest.raises(SCGOValidationError, match="system_type must be set"):
         run_trials(["Pt"], "ga", {}, "out", rng)
 
@@ -230,9 +242,12 @@ def test_run_go_system_type_matrix(monkeypatch, system_type):
         **kwargs,
     )
     params = captured["params"]
-    assert params["optimizer_params"]["simple"]["system_type"] == system_type
-    assert params["optimizer_params"]["ga"]["system_type"] == system_type
-    assert params["optimizer_params"]["bh"]["system_type"] == system_type
+    # Identity lives on top-level params / run args, not in optimizer slots.
+    for algo in ("simple", "ga", "bh"):
+        assert "system_type" not in params["optimizer_params"][algo]
+        assert "surface_config" not in params["optimizer_params"][algo]
+    if surface is not None:
+        assert params["surface_config"] == surface
     if policy.slab_is_search_target and not policy.has_adsorbate:
         assert captured["composition"] == []
 
@@ -259,6 +274,88 @@ def test_system_policy_surface_neb_defaults():
     assert slab_ads.has_adsorbate is True
     assert slab_ads.neb_surface_lattice_rotation is False
     assert slab_ads.needs_supported_deposit_validation is True
+
+
+def test_run_go_partial_params_backfills_preset_defaults(monkeypatch, tmp_path):
+    """Partial ``params`` overrides must be merged onto the preset defaults.
+
+    Regression: a partial dict such as ``{"calculator": "EMT"}`` used to reach
+    the optimizer with every other key missing.
+    """
+    captured: dict[str, object] = {}
+
+    def _fake_run_trials(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("scgo.runner_go.run_trials", _fake_run_trials)
+
+    minima = run_go(
+        ["Pt", "Pt", "Pt", "Pt"],
+        params={"calculator": "EMT"},
+        system_type="gas_cluster",
+        verbosity=0,
+        output_dir=tmp_path,
+    )
+
+    assert minima == []
+    defaults = get_default_params()
+    ga_defaults = defaults["optimizer_params"]["ga"]
+    gok = captured["global_optimizer_kwargs"]
+    assert gok["mutation_probability"] == ga_defaults["mutation_probability"]
+    assert gok["offspring_fraction"] == ga_defaults["offspring_fraction"]
+    assert gok["energy_tolerance"] == ga_defaults["energy_tolerance"]
+    assert gok["early_stopping_niter"] == ga_defaults["early_stopping_niter"]
+    assert gok["optimizer"] is not None
+    assert int(gok["population_size"]) > 0
+    assert captured["fmax_threshold"] == defaults["fmax_threshold"]
+    assert captured["check_hessian"] == defaults["check_hessian"]
+
+
+def test_run_go_partial_params_without_calculator_key_is_not_a_key_error(
+    monkeypatch, tmp_path
+):
+    """A partial ``params`` dict without ``calculator`` must never raise ``KeyError``."""
+    captured: dict[str, object] = {}
+
+    def _fake_run_trials(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("scgo.runner_go.run_trials", _fake_run_trials)
+    monkeypatch.setattr("scgo.runner_go.get_calculator_class", lambda name: EMT)
+
+    try:
+        minima = run_go(
+            ["Pt", "Pt"],
+            params={"fmax_threshold": 0.01},
+            system_type="gas_cluster",
+            verbosity=0,
+            output_dir=tmp_path,
+        )
+    except KeyError as exc:  # pragma: no cover - regression guard
+        pytest.fail(f"run_go leaked a bare KeyError for partial params: {exc!r}")
+    except SCGOValidationError:
+        return  # acceptable: the resolved default calculator may be unavailable
+
+    assert minima == []
+    assert captured["fmax_threshold"] == 0.01
+
+
+def test_run_go_partial_params_end_to_end_emt(tmp_path):
+    """End-to-end EMT smoke test for the partial-``params`` entry point."""
+    minima = run_go(
+        ["Pt", "Pt"],
+        params={"calculator": "EMT"},
+        system_type="gas_cluster",
+        verbosity=0,
+        output_dir=tmp_path,
+    )
+
+    assert minima
+    energy, atoms = minima[0]
+    assert isinstance(float(energy), float)
+    assert atoms.get_chemical_symbols() == ["Pt", "Pt"]
 
 
 def test_run_go_requires_system_type():
@@ -327,6 +424,7 @@ def test_run_go_campaign_reconciles_wrong_preset_core() -> None:
         run_id=None,
         clean=False,
         output_dir=None,
+        calculator_for_global_optimization=None,
         surface_config=None,
         system_type="gas_cluster_adsorbate",
         adsorbates=None,
@@ -335,6 +433,40 @@ def test_run_go_campaign_reconciles_wrong_preset_core() -> None:
     assert get_composition_counts(context.compositions[0]) == get_composition_counts(
         parsed
     )
+    assert len(context.composition_adsorbate) == 1
+    ads_def, _ = context.composition_adsorbate[0]
+    assert ads_def is not None
+    assert list(ads_def.adsorbate_symbols) == ["O", "H"]
+    # Reconciled core matches the composition minus adsorbate symbols.
+    assert get_composition_counts(
+        list(ads_def.core_symbols) + list(ads_def.adsorbate_symbols)
+    ) == get_composition_counts(parsed)
+
+
+def test_run_go_campaign_resolves_adsorbate_per_composition() -> None:
+    """Mixed-core adsorbate campaigns keep a distinct definition per composition."""
+    oh = _adsorbates_oh(n=1)[0]
+    context = _prepare_run_go_campaign_context(
+        [["Pt", "Pt", "Pt"], ["Pt"] * 5],
+        params=None,
+        seed=1,
+        verbosity=0,
+        run_id=None,
+        clean=False,
+        output_dir=None,
+        calculator_for_global_optimization=None,
+        surface_config=None,
+        system_type="gas_cluster_adsorbate",
+        adsorbates=oh,
+    )
+    assert len(context.composition_adsorbate) == 2
+    ads0, _ = context.composition_adsorbate[0]
+    ads1, _ = context.composition_adsorbate[1]
+    assert ads0 is not None and ads1 is not None
+    assert list(ads0.core_symbols) == ["Pt", "Pt", "Pt"]
+    assert list(ads1.core_symbols) == ["Pt"] * 5
+    # Shared params must not pin a single last-write-wins adsorbate_definition.
+    assert "adsorbate_definition" not in context.params
 
 
 def test_run_go_campaign_reconciles_wrong_preset_core_surface() -> None:
@@ -354,6 +486,7 @@ def test_run_go_campaign_reconciles_wrong_preset_core_surface() -> None:
         run_id=None,
         clean=False,
         output_dir=None,
+        calculator_for_global_optimization=None,
         surface_config=_surface_cfg(),
         system_type="surface_cluster_adsorbate",
         adsorbates=None,
@@ -362,6 +495,13 @@ def test_run_go_campaign_reconciles_wrong_preset_core_surface() -> None:
     assert get_composition_counts(context.compositions[0]) == get_composition_counts(
         parsed
     )
+    assert len(context.composition_adsorbate) == 1
+    ads_def, _ = context.composition_adsorbate[0]
+    assert ads_def is not None
+    assert list(ads_def.adsorbate_symbols) == ["O", "H"]
+    assert get_composition_counts(
+        list(ads_def.core_symbols) + list(ads_def.adsorbate_symbols)
+    ) == get_composition_counts(parsed)
 
 
 def test_run_go_campaign_empty_raises():
@@ -434,6 +574,70 @@ def test_run_go_campaign_skips_failed_composition_uses_path_key(monkeypatch, tmp
     assert results["Au2_pt_slab"]
 
 
+def test_run_go_campaign_reuses_supplied_calculator(monkeypatch, tmp_path):
+    """A caller-supplied calculator is passed to every composition and never built."""
+    captured_calcs: list[object] = []
+
+    def fake_trials(composition, system_type, params, **kwargs):
+        captured_calcs.append(kwargs["calculator_for_global_optimization"])
+        return []
+
+    sentinel = MagicMock()
+
+    def _factory_called(name):
+        raise AssertionError(
+            "get_calculator_class must not be called when a calc is supplied"
+        )
+
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", fake_trials)
+    monkeypatch.setattr("scgo.runner_go.get_calculator_class", _factory_called)
+    results = run_go_campaign(
+        [["Pt", "Pt"], ["Au", "Au"]],
+        params=get_testing_params(),
+        seed=0,
+        verbosity=0,
+        system_type="gas_cluster",
+        output_dir=tmp_path,
+        clean=True,
+        calculator_for_global_optimization=sentinel,
+    )
+    assert captured_calcs == [sentinel, sentinel]
+    assert set(results) == {"Pt2", "Au2"}
+
+
+def test_run_go_campaign_default_builds_one_calculator(monkeypatch, tmp_path):
+    """Without a supplied calculator the campaign builds exactly one and reuses it."""
+    captured_calcs: list[object] = []
+    built: list[object] = []
+
+    def counting_factory(name):
+        # A class-like mock: instantiating it (``cls(**kwargs)``) always returns
+        # the same constructed instance, mirroring how the campaign builds one
+        # calculator object and reuses it for every composition.
+        cls = MagicMock(name=f"CalculatorClass-{name}")
+        built.append(cls)
+        return cls
+
+    def fake_trials(composition, system_type, params, **kwargs):
+        captured_calcs.append(kwargs["calculator_for_global_optimization"])
+        return []
+
+    monkeypatch.setattr("scgo.runner_go._run_go_trials", fake_trials)
+    monkeypatch.setattr("scgo.runner_go.get_calculator_class", counting_factory)
+    run_go_campaign(
+        [["Pt", "Pt"], ["Au", "Au"]],
+        params=get_testing_params(),
+        seed=0,
+        verbosity=0,
+        system_type="gas_cluster",
+        output_dir=tmp_path,
+        clean=True,
+    )
+    assert len(built) == 1
+    # Both compositions received the single constructed instance (cls(**kwargs)).
+    assert captured_calcs == [built[0].return_value, built[0].return_value]
+
+
 def test_run_ts_search_requires_system_type():
     with pytest.raises(SCGOValidationError, match="system_type is required"):
         run_ts_search("Pt2", ts_params=_emt_ts_gasc(), verbosity=0)
@@ -496,10 +700,12 @@ def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
         system_type="gas_cluster",
     )
     assert len(calls) == 2
+    # Unified sibling layout: each composition runs against the shared campaign
+    # root (no ``{path_key}_campaign/`` wrapper).
     assert calls[0][0] == ["Pt", "Pt"]
-    assert calls[0][1] == root / "Pt2_campaign"
+    assert calls[0][1] == root
     assert calls[1][0] == ["Au", "Au"]
-    assert calls[1][1] == root / "Au2_campaign"
+    assert calls[1][1] == root
 
 
 def test_run_go_ts_campaign_requires_system_type():
@@ -560,8 +766,8 @@ def test_run_ts_search_rejects_ts_system_type_mismatch():
         )
 
 
-def test_run_go_ts_rejects_go_optimizer_system_type_mismatch():
-    with pytest.raises(SCGOValidationError, match="coherence error"):
+def test_run_go_ts_rejects_go_optimizer_slot_system_type():
+    with pytest.raises(SCGOValidationError, match="identity keys"):
         run_go_ts(
             "Pt2",
             go_params={
@@ -572,6 +778,41 @@ def test_run_go_ts_rejects_go_optimizer_system_type_mismatch():
                 }
             },
             ts_params=_emt_ts_gasc(),
+            verbosity=0,
+            system_type="gas_cluster",
+        )
+
+
+@pytest.mark.parametrize(
+    "slot_key",
+    [
+        "system_type",
+        "surface_config",
+        "adsorbate_definition",
+        "adsorbate_fragment_template",
+        "cluster_adsorbate_config",
+    ],
+)
+def test_run_go_rejects_optimizer_slot_identity_keys(slot_key):
+    value: object
+    if slot_key == "system_type":
+        value = "gas_cluster"
+    elif slot_key == "surface_config":
+        value = _surface_cfg()
+    elif slot_key == "adsorbate_definition":
+        value = {
+            "core_symbols": ["Pt", "Pt", "Pt"],
+            "adsorbate_symbols": ["O", "H"],
+            "adsorbate_fragment_lengths": [2],
+        }
+    elif slot_key == "adsorbate_fragment_template":
+        value = _adsorbates_oh(n=1)[0]
+    else:
+        value = object()
+    with pytest.raises(SCGOValidationError, match="identity keys"):
+        run_go(
+            "Pt3",
+            params={"optimizer_params": {"ga": {slot_key: value}}},
             verbosity=0,
             system_type="gas_cluster",
         )
@@ -693,4 +934,5 @@ def test_run_go_ts_accepts_run_surface_config_without_go_top_level(monkeypatch):
     )
     go_params = captured["go_params"]
     assert go_params["surface_config"] == cfg
-    assert go_params["optimizer_params"]["ga"]["surface_config"] == cfg
+    assert "surface_config" not in go_params["optimizer_params"]["ga"]
+    assert "system_type" not in go_params["optimizer_params"]["ga"]

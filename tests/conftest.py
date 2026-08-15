@@ -4,29 +4,22 @@ import os
 
 import numpy as np
 import pytest
-import torch
 from ase import Atoms
 from ase.build import fcc111
 from ase.calculators.emt import EMT
 
 from scgo.surface.config import SurfaceSystemConfig
-from tests.test_utils import setup_test_atoms
+from tests.helpers import create_test_atoms
 
 
 def pytest_runtest_setup(item):
-    if item.get_closest_marker("requires_cuda") and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
+    if item.get_closest_marker("requires_cuda"):
+        import torch
+
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
     if item.get_closest_marker("requires_multicore") and (os.cpu_count() or 1) < 2:
         pytest.skip("Requires >=2 CPUs")
-
-
-def skip_uma_in_github_actions(allow_module_level: bool = False):
-    """Skip test if running in GitHub Actions and test requires UMA authentication."""
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        pytest.skip(
-            "Skipping UMA test in GitHub Actions - requires HuggingFace authentication",
-            allow_module_level=allow_module_level,
-        )
 
 
 @pytest.fixture(scope="function")
@@ -48,24 +41,24 @@ def default_rel_tol():
 @pytest.fixture
 def pt3_atoms():
     """Create a simple Pt3 cluster for testing."""
-    atoms = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]])
-    return setup_test_atoms(atoms)
+    return create_test_atoms(
+        "Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]]
+    )
 
 
 @pytest.fixture
 def au2pt2_atoms():
     """Create a bimetallic Au2Pt2 cluster for testing."""
-    atoms = Atoms(
+    return create_test_atoms(
         "Au2Pt2",
         positions=[[0, 0, 0], [2.5, 0, 0], [0, 2.5, 0], [0, 0, 2.5]],
     )
-    return setup_test_atoms(atoms)
 
 
 @pytest.fixture
 def pt4_tetrahedron():
     """Create a Pt4 tetrahedron for testing."""
-    atoms = Atoms(
+    return create_test_atoms(
         "Pt4",
         positions=[
             [0, 0, 0],
@@ -74,14 +67,12 @@ def pt4_tetrahedron():
             [1.25, 0.721, 2.357],  # sqrt(2/3) * 2.5
         ],
     )
-    return setup_test_atoms(atoms)
 
 
 @pytest.fixture
 def pt2_atoms():
     """Create a simple Pt2 dimer for testing."""
-    atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-    return setup_test_atoms(atoms)
+    return create_test_atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
 
 
 @pytest.fixture
@@ -97,8 +88,8 @@ def surface_config_pt111(pt_slab_small):
     """Standard Pt(111) surface config used across surface GA tests."""
     return SurfaceSystemConfig(
         slab=pt_slab_small,
-        adsorption_height_min=1.0,
-        adsorption_height_max=2.8,
+        adsorption_height_min=1.6,
+        adsorption_height_max=2.2,
         fix_all_slab_atoms=True,
         comparator_use_mic=False,
         max_placement_attempts=400,
@@ -123,7 +114,7 @@ def ts_minima_db(tmp_path):
     """Temporary GA database with marked final minima for TS integration tests."""
     from ase import Atoms
 
-    from tests.test_utils import create_preparedb, mark_test_minima_as_final
+    from tests.helpers import create_preparedb, mark_test_minima_as_final
 
     db_path = tmp_path / "ts_minima.db"
     db = create_preparedb(Atoms("Pt2"), db_path, population_size=10)
@@ -243,22 +234,19 @@ def ir4_tetrahedron_atom_swapped():
 @pytest.fixture
 def empty_atoms():
     """Create an empty Atoms object for testing."""
-    atoms = Atoms()
-    return setup_test_atoms(atoms)
+    return create_test_atoms("")
 
 
 @pytest.fixture
 def single_atom():
     """Create a single Pt atom for testing."""
-    atoms = Atoms("Pt", positions=[[0, 0, 0]])
-    return setup_test_atoms(atoms)
+    return create_test_atoms("Pt", positions=[[0, 0, 0]])
 
 
 @pytest.fixture
 def pt2_with_calc():
     """Create a Pt2 dimer with EMT calculator attached."""
-    atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-    setup_test_atoms(atoms)
+    atoms = create_test_atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
     atoms.calc = EMT()
     return atoms
 
@@ -266,8 +254,9 @@ def pt2_with_calc():
 @pytest.fixture
 def pt3_with_calc():
     """Create a Pt3 cluster with EMT calculator attached."""
-    atoms = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]])
-    setup_test_atoms(atoms)
+    atoms = create_test_atoms(
+        "Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]]
+    )
     atoms.calc = EMT()
     return atoms
 
@@ -318,11 +307,10 @@ def test_database(tmp_path):
 def _needs_initialization_cache_isolation(request: pytest.FixtureRequest) -> bool:
     """Return True when a test is likely to depend on clean initialization caches."""
     node = request.node
-    if node.get_closest_marker("requires_cache_isolation") is not None:
-        return True
-    if node.get_closest_marker("reproducibility") is not None:
-        return True
-    return "reproducibility" in node.nodeid
+    return (
+        node.get_closest_marker("requires_cache_isolation") is not None
+        or node.get_closest_marker("reproducibility") is not None
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -333,14 +321,15 @@ def clear_initialization_caches(request: pytest.FixtureRequest):
         return
 
     from scgo.database.cache import get_global_cache
-    from scgo.initialization import geometry_helpers, initializers
+    from scgo.initialization import geometry_helpers
     from scgo.initialization.initialization_config import _COMPOSITION_CACHE_NS
+    from scgo.initialization.templates import _TEMPLATE_ROTATIONS_CACHE_NS
 
-    get_global_cache().clear_namespace(initializers.TEMPLATE_ROTATIONS_CACHE_NS)
+    get_global_cache().clear_namespace(_TEMPLATE_ROTATIONS_CACHE_NS)
     get_global_cache().clear_namespace(_COMPOSITION_CACHE_NS)
     geometry_helpers.clear_convex_hull_cache()
 
     yield
 
-    get_global_cache().clear_namespace(initializers.TEMPLATE_ROTATIONS_CACHE_NS)
+    get_global_cache().clear_namespace(_TEMPLATE_ROTATIONS_CACHE_NS)
     get_global_cache().clear_namespace(_COMPOSITION_CACHE_NS)

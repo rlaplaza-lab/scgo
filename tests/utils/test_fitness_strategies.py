@@ -39,10 +39,10 @@ def test_validate_fitness_strategy_invalid():
     with pytest.raises(SCGOValidationError, match="must be one of"):
         validate_fitness_strategy("invalid_strategy")
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="must be one of"):
         validate_fitness_strategy("energy")  # Missing prefix
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="must be one of"):
         validate_fitness_strategy("")
 
 
@@ -54,7 +54,7 @@ def test_resolve_fitness_strategy_inherits_from_top_level():
     )
 
 
-def test_ensure_fitness_strategy_resolved_rejects_none():
+def test_resolve_fitness_strategy_rejects_none_when_not_allowed():
     """Unresolved preset sentinels must fail at algorithm boundaries."""
     with pytest.raises(SCGOValidationError, match="cannot be None"):
         resolve_fitness_strategy(None, allow_none=False)
@@ -191,137 +191,3 @@ def test_fitness_storage_persistence():
     atoms_copy = atoms.copy()
     assert get_fitness_from_atoms(atoms_copy) == pytest.approx(10.5)
     assert atoms_copy.info["fitness_strategy"] == "high_energy"
-
-
-# Tests merged from test_comparators.py
-def test_get_sorted_dist_list():
-    """Test the get_sorted_dist_list function with a simple H2O molecule."""
-    from scgo.utils.comparators import get_sorted_dist_list
-
-    atoms = Atoms("H2O", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    dist_dict = get_sorted_dist_list(atoms)
-    assert 1 in dist_dict  # H
-    assert 8 in dist_dict  # O
-    assert len(dist_dict[1]) == 1  # H-H distance
-    assert len(dist_dict[8]) == 0  # No O-O distance
-    assert np.isclose(dist_dict[1][0], 1.0)
-
-
-def test_comparator_identical_structures():
-    """Test that identical structures are recognized as similar."""
-    from scgo.utils.comparators import PureInteratomicDistanceComparator
-
-    atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    atoms2 = atoms1.copy()
-    comp = PureInteratomicDistanceComparator()
-    assert comp.looks_like(atoms1, atoms2)
-
-
-def test_comparator_different_structures():
-    """Test that different structures are recognized as dissimilar."""
-    from scgo.utils.comparators import PureInteratomicDistanceComparator
-
-    atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    atoms2 = Atoms("Pt3", positions=[[0, 0, 0], [2, 0, 0], [0, 2, 0]])
-    comp = PureInteratomicDistanceComparator()
-    assert not comp.looks_like(atoms1, atoms2)
-
-
-def test_comparator_different_composition_error():
-    """Test that comparing different compositions raises an error."""
-    from scgo.utils.comparators import PureInteratomicDistanceComparator
-
-    atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    atoms2 = Atoms("Au3", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    comp = PureInteratomicDistanceComparator()
-    with pytest.raises(SCGOValidationError):
-        comp.looks_like(atoms1, atoms2)
-
-
-def test_comparator_tolerance():
-    """Test that tolerance parameter affects structure comparison."""
-    from scgo.utils.comparators import PureInteratomicDistanceComparator
-
-    atoms1 = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
-    atoms2 = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.51]])
-    # With default tolerance, they should look alike
-    comp_default = PureInteratomicDistanceComparator()
-    assert comp_default.looks_like(atoms1, atoms2)
-
-    # With a very small tolerance, they should not look alike
-    comp_strict = PureInteratomicDistanceComparator(tol=0.001)
-    assert not comp_strict.looks_like(atoms1, atoms2)
-
-
-def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
-    """Repeated looks_like / get_sorted_dist_list should populate and reuse cache."""
-    from scgo.utils.comparators import (
-        _SORTED_DIST_FP_INFO_KEY,
-        PureInteratomicDistanceComparator,
-        get_sorted_dist_list,
-    )
-
-    atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.1, 0]])
-    atoms2 = atoms1.copy()
-    atoms2.positions[2, 1] += 1e-4
-
-    first = get_sorted_dist_list(atoms1)
-    assert _SORTED_DIST_FP_INFO_KEY in atoms1.info
-    cached_id = id(atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"])
-    second = get_sorted_dist_list(atoms1)
-    assert second is first
-    assert id(second) == cached_id
-
-    comp = PureInteratomicDistanceComparator()
-    assert comp.looks_like(atoms1, atoms2)
-    assert comp.looks_like(atoms1, atoms2)
-    assert _SORTED_DIST_FP_INFO_KEY in atoms1.info
-    assert _SORTED_DIST_FP_INFO_KEY in atoms2.info
-
-    # Position change invalidates cache
-    atoms1.positions[0, 0] += 0.5
-    refreshed = get_sorted_dist_list(atoms1)
-    assert refreshed is not first
-    assert atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"] is refreshed
-
-
-def test_sorted_dist_list_mic_matches_nested_get_distance():
-    """MIC fingerprint via get_all_distances agrees with nested get_distance."""
-    from scgo.utils.comparators import _compute_sorted_dist_list, get_sorted_dist_list
-
-    atoms = Atoms(
-        "Cu4",
-        positions=[
-            [0.0, 0.0, 0.0],
-            [2.5, 0.0, 0.0],
-            [0.0, 2.5, 0.0],
-            [2.5, 2.5, 0.0],
-        ],
-        cell=[5.0, 5.0, 20.0],
-        pbc=[True, True, False],
-    )
-    vectorized = get_sorted_dist_list(atoms, mic=True)
-
-    # Reference: nested ASE get_distance (legacy path)
-    numbers = atoms.numbers
-    ref: dict[int, np.ndarray] = {}
-    for n in set(numbers):
-        i_un = [i for i, z in enumerate(numbers) if z == n]
-        d = [
-            atoms.get_distance(n1, n2, mic=True)
-            for i, n1 in enumerate(i_un)
-            for n2 in i_un[i + 1 :]
-        ]
-        d.sort()
-        ref[n] = np.array(d)
-
-    assert set(vectorized) == set(ref)
-    for n in ref:
-        assert np.allclose(vectorized[n], ref[n], atol=1e-10)
-
-    # Non-MIC gas-phase fingerprint still works for the same geometry without PBC
-    gas = atoms.copy()
-    gas.set_pbc(False)
-    gas_fp = _compute_sorted_dist_list(gas, mic=False)
-    assert 29 in gas_fp
-    assert len(gas_fp[29]) == 6

@@ -12,7 +12,7 @@ from scgo.ts_search.parallel_neb import ParallelNEBBatch, _neb_image_dedup_key
 from scgo.ts_search.transition_state import TorchSimNEB, interpolate_path
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 
-pytestmark = pytest.mark.requires_cuda
+pytestmark = [pytest.mark.requires_cuda, pytest.mark.requires_mace]
 
 
 def _gas_neb_cfg(**overrides) -> NebRunConfig:
@@ -45,6 +45,23 @@ def _gas_neb_cfg(**overrides) -> NebRunConfig:
         "surface_config": None,
         "torchsim_params": {},
     }
+    # Per-system-type required fields (mirrors TS_DEFAULTS_BY_SYSTEM_TYPE). Set
+    # here, before kwargs.update(overrides), so individual tests can still
+    # override them. Must stay in sync with NebRunConfig's required fields.
+    _surface_defaults = ("surface_cluster", "surface", "surface_adsorbate")
+    _is_surface = overrides.get("system_type", "gas_cluster") in _surface_defaults
+    if _is_surface:
+        _clash, _prom, _spurious = 0.7, 0.40, 8.0
+    else:
+        _clash, _prom, _spurious = 1.0, 0.10, 8.0
+    kwargs.update(
+        neb_prescreen_clash_distance=_clash,
+        min_saddle_prominence=_prom,
+        neb_max_spurious_barrier=_spurious,
+        binding_penetration_tolerance_a=0.1,
+        layer_cluster_threshold_ang=0.4,
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
     kwargs.update(overrides)
     return NebRunConfig(**kwargs)
 
@@ -575,7 +592,8 @@ def test_run_parallel_neb_preserves_batch_oom_error(tmp_path, cu3_triangle, cu3_
 
     minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
     pairs = [(0, 1)]
-    oom = "CUDA out of memory. Tried to allocate 6.43 GiB."
+    # Tagged for the Kaggle runner's real-vs-simulated OOM log scan.
+    oom = "CUDA out of memory [scgo-simulated-failure]. Tried to allocate 6.43 GiB."
 
     class _OomBatch:
         def __init__(self, neb_instances, *args, **kwargs):
@@ -763,3 +781,874 @@ def test_parallel_two_stage_climb_runs_after_stage1_converges(
     assert calls[0]["climb"] == [False]
     assert calls[1]["climb"] == [True]
     assert calls[1]["max_steps"] == 15
+
+
+def test_run_parallel_neb_batches_single_screen_relax_batch(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """P3: all candidate bands are fused into ONE relax_batch for the screen.
+
+    With multiple pairs and ``max_endpoint_mismatch`` gating on, the per-pair
+    energy evals are concatenated and relaxed in a single ``relax_batch(steps=0)``
+    call instead of O(n_pairs) tiny launches.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+    from scgo.ts_search.transition_state import interpolate_path
+
+    # Three pairs -> three NEB bands in the screen.
+    minima = [
+        (0.0, cu3_triangle),
+        (1.0, cu3_linear),
+        (2.0, cu3_triangle),
+        (3.0, cu3_linear),
+    ]
+    pairs = [(0, 1), (1, 2), (2, 3)]
+    # interpolate_path yields more images than neb_n_images (endpoints included).
+    images_per_band = len(
+        interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="linear")
+    )
+    total_screen_images = len(pairs) * images_per_band
+
+    screen_relaxer = _CountingFakeRelaxer()
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_path",
+            MagicMock(),
+        ),
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_energy_profile",
+            MagicMock(),
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(
+                neb_n_images=3,
+                max_endpoint_mismatch=1.25,
+            ),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=screen_relaxer,
+        )
+
+    # The screen is the FIRST relax_batch and must cover every image of every
+    # band in one launch. Before P3 this was O(n_pairs) calls of images_per_band.
+    # Later entries in batch_sizes are the NEB optimization/PES-refresh calls
+    # (deduplicated across bands), which this test does not constrain.
+    assert screen_relaxer.batch_sizes[0] == total_screen_images, (
+        f"expected the fused screen relax_batch of {total_screen_images} images "
+        f"to be the first call, got {screen_relaxer.batch_sizes}"
+    )
+
+    # Cross-check against the same run with the energy screen disabled: enabling
+    # the screen must add exactly one extra relax_batch call.
+    no_screen_relaxer = _CountingFakeRelaxer()
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_path",
+            MagicMock(),
+        ),
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_energy_profile",
+            MagicMock(),
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3, max_endpoint_mismatch=None),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=no_screen_relaxer,
+        )
+
+    assert screen_relaxer.calls == no_screen_relaxer.calls + 1, (
+        f"screen should add exactly one batched call: "
+        f"{screen_relaxer.batch_sizes} vs {no_screen_relaxer.batch_sizes}"
+    )
+
+
+def test_run_parallel_neb_screen_skip_records_correct_pair_indices(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """Energy-screen skips must record their own pair indices, not the last pair's.
+
+    The batched screen slices energies in a second loop; provenance for a pair
+    dropped there must still come from that pair's own (i, j).
+    """
+    from unittest.mock import MagicMock, patch
+
+    from scgo.exceptions import SCGOValidationError
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [
+        (0.0, cu3_triangle),
+        (1.0, cu3_linear),
+        (2.0, cu3_triangle),
+        (3.0, cu3_linear),
+    ]
+    pairs = [(0, 1), (2, 3)]
+
+    # Fail the energy profile only for the FIRST pair (0, 1).
+    calls = {"n": 0}
+
+    def _profile(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise SCGOValidationError("synthetic energy-profile rejection")
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_path",
+            MagicMock(),
+        ),
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_energy_profile",
+            _profile,
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3, max_endpoint_mismatch=1.25),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_CountingFakeRelaxer(),
+        )
+
+    skipped = results[0]
+    assert skipped["status"] == "skipped"
+    assert skipped["pair_id"] == "0_1"
+    # Provenance must reference minima 0 and 1. With the stale-index bug the
+    # second loop reused (i, j) leaked from the setup loop (the last pair, 2/3).
+    assert skipped["minima_indices"] == [0, 1], skipped["minima_indices"]
+    assert skipped["reactant_energy"] == 0.0
+    assert skipped["product_energy"] == 1.0
+
+
+def test_run_parallel_neb_reuses_injected_relaxer(tmp_path, cu3_triangle, cu3_linear):
+    """P4: an injected relaxer is reused; no second TorchSimBatchRelaxer built."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_path",
+            MagicMock(),
+        ),
+        patch(
+            "scgo.ts_search.parallel_neb.validate_initial_neb_energy_profile",
+            MagicMock(),
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb._tsh.TorchSimBatchRelaxer",
+            MagicMock(),
+        ) as relaxer_ctor,
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(
+                neb_n_images=3,
+                max_endpoint_mismatch=None,
+            ),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_CountingFakeRelaxer(),
+        )
+
+    assert len(results) == 1
+    # The injected relaxer means the function must NOT construct its own.
+    relaxer_ctor.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# B1: the optimizer step must reuse the already-batched NEB forces
+# ---------------------------------------------------------------------------
+
+
+class _SteppingCountingRelaxer(_CountingFakeRelaxer):
+    """Counting relaxer with nonzero PES forces so bands keep stepping.
+
+    ``_CountingFakeRelaxer`` returns zero forces, which converges (or NaNs) a
+    band immediately; these tests need several real optimizer steps.
+    """
+
+    def relax_batch(self, atoms_list, steps=0):
+        self.calls += 1
+        self.batch_sizes.append(len(atoms_list))
+        results = []
+        for a in atoms_list:
+            ra = a.copy()
+            forces = np.zeros((len(a), 3))
+            forces[0, 0] = 0.5  # enough to keep FIRE moving
+            ra.arrays["forces"] = forces
+            energy = float(np.sum(a.get_positions() ** 2)) - 0.01 * self.calls
+            results.append((energy, ra))
+        return results
+
+
+def test_parallel_neb_step_reuses_batched_forces(cu3_triangle, cu3_linear):
+    """B1: stepping must not dispatch an extra unbatched ``relax_batch``.
+
+    ``optimizer.step()`` is called with no forces argument (ASE 3.28 removes
+    ``Optimizer.step(f)``), so FIRE recomputes the gradient via
+    ``NEBOptimizable.get_gradient`` -> ``neb.get_forces()``. That is only safe
+    because every image still carries the SinglePoint results the batch runner
+    just attached, so ``TorchSimNEB.get_forces`` takes its cached-forces fast
+    path instead of re-entering TorchSim per band.
+    """
+    relaxer = _SteppingCountingRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=3)
+    results = batch.run_optimization(fmax=1e-8, max_steps=2)
+
+    assert results[0]["steps_taken"] == 2
+    # step 0 (all images) + step 1 (interiors) + post-loop refresh = 3 batches.
+    # Any per-band re-entry into TorchSim would push this higher.
+    assert relaxer.calls == 3, relaxer.batch_sizes
+
+
+def test_parallel_neb_never_passes_forces_to_step(cu3_triangle, cu3_linear):
+    """``optimizer.step`` is always called with no arguments (ASE 3.28 ready)."""
+
+    class _RecordingOptimizer:
+        instances: list[_RecordingOptimizer] = []
+
+        def __init__(self, neb, logfile=None, trajectory=None):
+            self.neb = neb
+            self.step_args: list[tuple] = []
+            _RecordingOptimizer.instances.append(self)
+
+        def step(self, *args):
+            self.step_args.append(args)
+
+    _RecordingOptimizer.instances.clear()
+    relaxer = _SteppingCountingRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch(
+        [neb], relaxer, max_total_steps=1, optimizer=_RecordingOptimizer
+    )
+    batch.run_optimization(fmax=1e-8, max_steps=1)
+    assert _RecordingOptimizer.instances
+    assert _RecordingOptimizer.instances[0].step_args == [()]
+
+
+# ---------------------------------------------------------------------------
+# B2: force_calls == number of batched evaluations the band took part in
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_neb_force_calls_match_batch_participations(cu3_triangle, cu3_linear):
+    """B2: each band counts exactly one force call per batch it participates in."""
+    relaxer = _SteppingCountingRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=5)
+    results = batch.run_optimization(fmax=1e-8, max_steps=3)
+
+    steps_taken = int(results[0]["steps_taken"])
+    assert steps_taken == 3
+    # One batched relax_batch per optimization step (the post-loop PES refresh is
+    # not an optimization evaluation and is not counted).
+    assert neb.get_force_calls() == steps_taken
+
+
+def test_parallel_neb_does_not_double_count_force_calls(cu3_triangle, cu3_linear):
+    """B2: the batch runner suppresses TorchSimNEB's own force_calls increment."""
+    relaxer = _CountingFakeRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    assert neb._force_calls_counted_externally is False
+
+    ParallelNEBBatch([neb], relaxer, max_total_steps=1)
+    assert neb._force_calls_counted_externally is True
+
+    # A cache miss inside get_forces must no longer bump the counter: the batch
+    # runner owns it. (The serial fallback keeps the flag False and self-counts.)
+    for img in neb.images:
+        img.calc = None
+        img.arrays.pop("forces", None)
+    before = neb.get_force_calls()
+    neb.get_forces()
+    assert neb.get_force_calls() == before
+
+
+def test_serial_torchsim_neb_still_counts_its_own_force_calls(cu3_triangle, cu3_linear):
+    """The serial fallback keeps owning force_calls (no ParallelNEBBatch)."""
+    relaxer = _CountingFakeRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    assert neb.get_force_calls() == 0
+    neb.get_forces()
+    assert neb.get_force_calls() == 1
+
+
+# ---------------------------------------------------------------------------
+# B6: dedup key must distinguish cells / pbc
+# ---------------------------------------------------------------------------
+
+
+def test_neb_dedup_key_distinguishes_cell_and_pbc(cu3_triangle):
+    """B6: identical positions in different cells must not collide.
+
+    Surface bands enable ``neb_surface_cell_remap`` / lattice rotation, which
+    genuinely produce the same Cartesian positions in different cells. Without
+    cell+pbc in the key, one image would receive the other's energy/forces.
+    """
+    a = cu3_triangle.copy()
+    b = cu3_triangle.copy()
+    assert _neb_image_dedup_key(a) == _neb_image_dedup_key(b)
+
+    b.set_cell([20.0, 20.0, 20.0])
+    assert _neb_image_dedup_key(a) != _neb_image_dedup_key(b)
+
+    c = cu3_triangle.copy()
+    c.set_pbc([True, True, True])
+    assert _neb_image_dedup_key(a) != _neb_image_dedup_key(c)
+
+
+def test_parallel_neb_does_not_dedup_across_different_cells(cu3_triangle, cu3_linear):
+    """B6 end-to-end: same-position bands in different cells stay distinct."""
+    relaxer = _CountingFakeRelaxer()
+    images1 = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    images2 = [img.copy() for img in images1]
+    for img in images2:
+        img.set_cell([30.0, 30.0, 30.0])
+        img.set_pbc([True, True, True])
+
+    neb1 = TorchSimNEB(images1, relaxer, k=0.1, climb=False)
+    neb2 = TorchSimNEB(images2, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb1, neb2], relaxer, max_total_steps=1)
+    batch.run_optimization(fmax=1.0, max_steps=1)
+
+    # 5 + 5 distinct images: positions match but cells do not, so no collapse.
+    assert relaxer.batch_sizes[0] == 10, relaxer.batch_sizes
+
+
+# ---------------------------------------------------------------------------
+# T5: atom-budget chunking
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_band_indices_by_atom_budget_splits_as_expected():
+    """Greedy bin-packing preserves order and respects the atom budget."""
+    from scgo.ts_search.parallel_neb import chunk_band_indices_by_atom_budget
+
+    costs = [1000, 1000, 1000, 1000, 1000]
+    indices = list(range(5))
+
+    assert chunk_band_indices_by_atom_budget(indices, costs, 2000) == [
+        [0, 1],
+        [2, 3],
+        [4],
+    ]
+    assert chunk_band_indices_by_atom_budget(indices, costs, 3000) == [
+        [0, 1, 2],
+        [3, 4],
+    ]
+    # Budget >= total -> a single chunk.
+    assert chunk_band_indices_by_atom_budget(indices, costs, 5000) == [indices]
+    # No budget -> a single chunk.
+    assert chunk_band_indices_by_atom_budget(indices, costs, None) == [indices]
+    assert chunk_band_indices_by_atom_budget(indices, costs, 0) == [indices]
+    assert chunk_band_indices_by_atom_budget([], costs, 1000) == []
+
+
+def test_chunk_band_indices_by_atom_budget_keeps_oversized_band():
+    """A band larger than the whole budget still gets its own chunk."""
+    from scgo.ts_search.parallel_neb import chunk_band_indices_by_atom_budget
+
+    costs = [500, 9000, 500]
+    assert chunk_band_indices_by_atom_budget([0, 1, 2], costs, 1000) == [
+        [0],
+        [1],
+        [2],
+    ]
+
+
+def _record_chunk_sizes(tmp_path, minima, pairs, neb_cfg, **run_kwargs):
+    """Run ``run_parallel_neb_search`` with a stub batch; return chunk sizes."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    sizes: list[int] = []
+
+    class _RecordingBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = list(neb_instances)
+            sizes.append(len(self.neb_instances))
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            return [
+                {
+                    "converged": True,
+                    "final_fmax": 0.01,
+                    "steps_taken": 1,
+                    "error": None,
+                }
+                for _ in self.neb_instances
+            ]
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _RecordingBatch),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=neb_cfg,
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_CountingFakeRelaxer(),
+            **run_kwargs,
+        )
+    return sizes
+
+
+def test_run_parallel_neb_chunks_by_atom_budget(tmp_path, cu3_triangle, cu3_linear):
+    """T5: with no band cap, bands are binned by the atom budget."""
+    minima = [
+        (0.0, cu3_triangle),
+        (1.0, cu3_linear),
+        (2.0, cu3_triangle),
+        (3.0, cu3_linear),
+    ]
+    pairs = [(0, 1), (1, 2), (2, 3)]
+    # Cu3 with n_images=3 -> interpolate_path yields 5 images x 3 atoms = 15
+    # atoms per band. A 30-atom budget therefore fits exactly two bands.
+    sizes = _record_chunk_sizes(
+        tmp_path,
+        minima,
+        pairs,
+        _gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=30),
+    )
+    assert sizes == [2, 1], sizes
+
+
+def test_run_parallel_neb_atom_budget_single_chunk_when_none(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """No band cap and no atom budget -> all bands share one force batch."""
+    minima = [
+        (0.0, cu3_triangle),
+        (1.0, cu3_linear),
+        (2.0, cu3_triangle),
+        (3.0, cu3_linear),
+    ]
+    pairs = [(0, 1), (1, 2), (2, 3)]
+    sizes = _record_chunk_sizes(
+        tmp_path,
+        minima,
+        pairs,
+        _gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
+    )
+    assert sizes == [3], sizes
+
+
+def test_run_parallel_neb_max_bands_overrides_atom_budget(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """T5: an explicit ``parallel_neb_max_bands`` wins over the atom budget."""
+    minima = [
+        (0.0, cu3_triangle),
+        (1.0, cu3_linear),
+        (2.0, cu3_triangle),
+        (3.0, cu3_linear),
+    ]
+    pairs = [(0, 1), (1, 2), (2, 3)]
+    # A generous atom budget would put all 3 bands in one chunk; max_bands=1
+    # must still force one band per batch.
+    sizes = _record_chunk_sizes(
+        tmp_path,
+        minima,
+        pairs,
+        _gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=100000),
+        parallel_neb_max_bands=1,
+    )
+    assert sizes == [1, 1, 1], sizes
+
+
+# ---------------------------------------------------------------------------
+# B4: non-finite forces must not reach finalize
+# ---------------------------------------------------------------------------
+
+
+def test_run_parallel_neb_marks_nonfinite_band_failed(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """B4: a band whose forces went non-finite must fail, skipping finalize."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+
+    class _NanBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = list(neb_instances)
+            # Non-finite bands still take steps and log force calls, so the old
+            # ``batch_never_ran`` (force_calls == 0) guard did not catch them.
+            for neb in self.neb_instances:
+                neb._force_calls += 1
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            return [
+                {
+                    "converged": False,
+                    "final_fmax": float("nan"),
+                    "steps_taken": 1,
+                    "error": (
+                        "NEB forces are non-finite (fmax=nan); refusing optimizer "
+                        "step [scgo-simulated-failure]"
+                    ),
+                }
+                for _ in self.neb_instances
+            ]
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _NanBatch),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb._finalize_neb_result",
+            MagicMock(side_effect=AssertionError("finalize must be skipped")),
+        ) as finalize_mock,
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_CountingFakeRelaxer(),
+        )
+
+    assert results[0]["status"] == "failed"
+    assert results[0]["neb_converged"] is False
+    assert "non-finite" in str(results[0].get("error", ""))
+    finalize_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# B5: one OOM retry per chunk (driving the real ParallelNEBBatch)
+# ---------------------------------------------------------------------------
+#
+# These tests deliberately do *not* stub ``ParallelNEBBatch.run_optimization``.
+# The retry wrapper only ever sees an exception if the real
+# ``run_optimization`` re-raises CUDA OOM out of ``relaxer.relax_batch`` — a
+# fake that raises from ``run_optimization`` would pass even while the
+# production path swallowed the OOM and silently produced zero saddles (which
+# is exactly the regression this suite exists to catch). So the fault is
+# injected at the ``relax_batch`` boundary and the real class runs.
+
+# Tagged so the Kaggle GPU runner's log scan can tell simulated OOM apart from a
+# real one (see .github/scripts/kaggle_gpu_runner.template.py).
+SIMULATED_OOM = (
+    "CUDA out of memory [scgo-simulated-failure]. Tried to allocate 6.43 GiB."
+)
+
+
+class _OomRelaxer(_CountingFakeRelaxer):
+    """Fake relaxer whose ``relax_batch`` raises CUDA OOM on the first N calls."""
+
+    def __init__(self, *, fail_first: int | None = None) -> None:
+        super().__init__()
+        self.fail_first = fail_first  # None -> always fail
+        self.failures = 0
+
+    def relax_batch(self, atoms_list, steps=0):
+        if self.fail_first is None or self.failures < self.fail_first:
+            self.failures += 1
+            raise RuntimeError(SIMULATED_OOM)
+        return super().relax_batch(atoms_list, steps=steps)
+
+
+def _recording_batch_cls(attempts: list[int]):
+    """Subclass of the real ``ParallelNEBBatch`` that records chunk sizes."""
+
+    class _RecordingBatch(ParallelNEBBatch):
+        def __init__(self, neb_instances, *args, **kwargs):
+            attempts.append(len(neb_instances))
+            super().__init__(neb_instances, *args, **kwargs)
+
+    return _RecordingBatch
+
+
+def test_run_optimization_reraises_cuda_oom(cu3_triangle, cu3_linear):
+    """T3: CUDA OOM must escape ``run_optimization`` instead of failing bands.
+
+    Swallowing it here is what made ``_run_chunk_with_oom_retry`` dead code.
+    """
+    relaxer = _OomRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=2)
+
+    with pytest.raises(RuntimeError, match="out of memory"):
+        batch.run_optimization(fmax=0.05, max_steps=2)
+
+    # The band must not have been quietly marked failed on the way out.
+    assert batch.failed_nebs == {}
+
+
+def test_run_optimization_still_fails_bands_on_non_oom_error(cu3_triangle, cu3_linear):
+    """Non-OOM ``relax_batch`` failures stay contained (bad input, not GPU pressure)."""
+
+    class _BrokenRelaxer(_CountingFakeRelaxer):
+        def relax_batch(self, atoms_list, steps=0):
+            raise RuntimeError("model weights are corrupt [scgo-simulated-failure]")
+
+    relaxer = _BrokenRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=2)
+
+    results = batch.run_optimization(fmax=0.05, max_steps=2)
+    assert "model weights are corrupt" in str(results[0]["error"])
+    assert batch.failed_nebs
+
+
+def test_run_parallel_neb_retries_chunk_once_on_cuda_oom(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """B5: a CUDA-OOM chunk is re-binned smaller and recovers, via the real class."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [
+        (0.0, cu3_triangle),
+        (1.0, cu3_linear),
+        (2.0, cu3_triangle),
+        (3.0, cu3_linear),
+    ]
+    pairs = [(0, 1), (1, 2), (2, 3)]
+    attempts: list[int] = []
+    relaxer = _OomRelaxer(fail_first=1)
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb.ParallelNEBBatch",
+            _recording_batch_cls(attempts),
+        ),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=relaxer,
+        )
+
+    # First attempt: one 3-band chunk (OOM). Retry: re-binned to smaller chunks.
+    assert attempts[0] == 3
+    assert len(attempts) > 1, attempts
+    assert all(n < 3 for n in attempts[1:]), attempts
+    assert relaxer.failures == 1
+    # Every band recovered, so none is marked failed.
+    assert all(r.get("error") is None for r in results), [
+        r.get("error") for r in results
+    ]
+
+
+def test_run_parallel_neb_fails_bands_when_oom_retry_also_fails(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """B5: a persistently OOM chunk marks its bands failed instead of raising."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear), (2.0, cu3_triangle)]
+    pairs = [(0, 1), (1, 2)]
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb._finalize_neb_result",
+            MagicMock(side_effect=AssertionError("finalize must be skipped")),
+        ) as finalize_mock,
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_OomRelaxer(),
+        )
+
+    for result in results:
+        assert result["status"] == "failed"
+        assert SIMULATED_OOM in str(result.get("error", ""))
+        assert not result.get("steps_taken")
+    finalize_mock.assert_not_called()
+
+
+def test_run_parallel_neb_does_not_retry_non_oom_relax_batch_errors(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """A non-OOM ``relax_batch`` failure fails the bands without re-binning."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear), (2.0, cu3_triangle)]
+    pairs = [(0, 1), (1, 2)]
+    attempts: list[int] = []
+
+    class _BrokenRelaxer(_CountingFakeRelaxer):
+        def relax_batch(self, atoms_list, steps=0):
+            raise RuntimeError("model weights are corrupt [scgo-simulated-failure]")
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb.ParallelNEBBatch",
+            _recording_batch_cls(attempts),
+        ),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+        patch(
+            "scgo.ts_search.parallel_neb._finalize_neb_result",
+            MagicMock(side_effect=AssertionError("finalize must be skipped")),
+        ),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3, parallel_neb_max_batch_atoms=None),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_BrokenRelaxer(),
+        )
+
+    # Exactly one chunk attempt: no half-budget re-binning for non-OOM errors.
+    assert attempts == [2], attempts
+    for result in results:
+        assert result["status"] == "failed"
+        assert "model weights are corrupt" in str(result.get("error", ""))
+
+
+def test_run_parallel_neb_propagates_non_oom_error_from_run_optimization(
+    tmp_path, cu3_triangle, cu3_linear
+):
+    """Wrapper contract: only CUDA OOM is retried; anything else propagates."""
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+
+    class _BrokenBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = list(neb_instances)
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            raise RuntimeError("optimizer exploded")
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _BrokenBatch),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+        pytest.raises(RuntimeError, match="optimizer exploded"),
+    ):
+        run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_CountingFakeRelaxer(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# B7: per-pair timing keys are chunk averages
+# ---------------------------------------------------------------------------
+
+
+def test_run_parallel_neb_reports_avg_timing_keys(tmp_path, cu3_triangle, cu3_linear):
+    """B7: per-pair timings are labelled ``*_avg_s`` (chunk time / n pairs).
+
+    The old ``neb_optimization_s`` alias is gone; the run-level rollup in
+    :func:`scgo.utils.timing_report.sum_neb_seconds_from_ts_results` reads the
+    ``*_avg_s`` key directly.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+    from scgo.utils.timing_report import sum_neb_seconds_from_ts_results
+
+    minima = [(0.0, cu3_triangle), (1.0, cu3_linear)]
+    pairs = [(0, 1)]
+
+    class _FastBatch:
+        def __init__(self, neb_instances, *args, **kwargs):
+            self.neb_instances = list(neb_instances)
+
+        def run_optimization(self, fmax=0.05, max_steps=100):
+            return [
+                {
+                    "converged": True,
+                    "final_fmax": 0.01,
+                    "steps_taken": 1,
+                    "error": None,
+                }
+                for _ in self.neb_instances
+            ]
+
+    with (
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.ParallelNEBBatch", _FastBatch),
+        patch("scgo.ts_search.parallel_neb._finalize_neb_result", MagicMock()),
+        patch("scgo.ts_search.parallel_neb.save_neb_result", MagicMock()),
+    ):
+        results, _meta = run_parallel_neb_search(
+            pairs,
+            minima,
+            neb_cfg=_gas_neb_cfg(neb_n_images=3),
+            run_dir=tmp_path,
+            rng=None,
+            relaxer=_CountingFakeRelaxer(),
+        )
+
+    timings = results[0]["timings_s"]
+    for key in ("total_wall_avg_s", "neb_optimization_avg_s", "cpu_non_relax_avg_s"):
+        assert key in timings, timings
+        assert timings[key] >= 0.0
+    # The back-compat alias is removed.
+    assert "neb_optimization_s" not in timings
+    assert sum_neb_seconds_from_ts_results(results) == pytest.approx(
+        timings["neb_optimization_avg_s"]
+    )

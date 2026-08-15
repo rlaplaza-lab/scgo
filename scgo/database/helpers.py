@@ -5,12 +5,10 @@ from __future__ import annotations
 import contextlib
 import glob
 import heapq
-import multiprocessing
 import os
 import sqlite3
 from collections import Counter
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from ase import Atoms
@@ -30,7 +28,7 @@ from scgo.database.exceptions import DatabaseSetupError
 from scgo.database.registry import get_registry
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, database_retry
-from scgo.exceptions import SCGORuntimeError
+from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import ensure_final_id, get_tag, set_tags
 from scgo.metadata.db_stamp import is_scgo_db, stamp_db
 from scgo.metadata.run_dir import load_run_dir_record, resolve_run_id_from_db_path
@@ -43,15 +41,19 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
-_MIN_DB_PARALLEL_LOAD_TASKS = 4
 
 
 class SCGODataConnection:
-    """Thin DataConnection wrapper that stamps tags via :mod:`scgo.metadata.atoms`."""
+    """Thin DataConnection wrapper that stamps tags via :mod:`scgo.metadata.atoms`.
+
+    ``add_relaxed_step`` additionally enforces the database stoichiometry and
+    guarantees that ``raw_score`` and ``final_id`` tags exist before the write.
+    """
 
     def __init__(self, da_obj: DataConnection, expected_atomic_numbers: list[int]):
         self._da = da_obj
         self._expected_atomic_numbers = expected_atomic_numbers
+        self._expected_counter = Counter(int(x) for x in expected_atomic_numbers)
 
     def __getattr__(self, name):
         return getattr(self._da, name)
@@ -59,16 +61,21 @@ class SCGODataConnection:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
-        with contextlib.suppress(OSError, RuntimeError, AttributeError):
+    def __exit__(self, exc_type, *_):
+        try:
             close_data_connection(self._da)
+        except (OSError, RuntimeError, AttributeError) as e:
+            # Close is best-effort: never let a close failure (whether the body
+            # raised or not) mask a successful run or propagate out of the
+            # context manager. Log and swallow.
+            logger.warning("Best-effort data connection close failed: %s", e)
 
     def add_relaxed_step(self, a, *args, **kwargs):
-        if Counter(int(x) for x in a.get_atomic_numbers()) != Counter(
-            self._expected_atomic_numbers
-        ):
-            raise AssertionError(
-                "Candidate composition does not match database stoichiometry"
+        actual = Counter(int(x) for x in a.get_atomic_numbers())
+        if actual != self._expected_counter:
+            raise SCGOValidationError(
+                f"Candidate composition {dict(actual)} does not match "
+                f"database stoichiometry {dict(self._expected_counter)}"
             )
 
         if get_tag(a, "raw_score") is None:
@@ -77,8 +84,8 @@ class SCGODataConnection:
                 set_tags(a, raw_score=-float(energy))
             except (AttributeError, RuntimeError, ValueError):
                 logger.warning(
-                    "raw_score missing and energy could not be computed for candidate; "
-                    "assigning PENALTY_ENERGY and continuing."
+                    "Candidate has no raw_score and its energy could not be "
+                    "computed; assigning PENALTY_ENERGY and continuing"
                 )
                 _assign_penalty_energy(a)
 
@@ -98,7 +105,7 @@ def _ensure_database_indices(
     enable_expression_indexes: bool = True,
     enable_wal_mode: bool = False,
 ) -> None:
-    """Create SQLite indices for performance."""
+    """Apply performance pragmas and create SQLite indices on ``systems``."""
     try:
 
         def _create_indices(conn: sqlite3.Connection) -> None:
@@ -108,12 +115,13 @@ def _ensure_database_indices(
                 busy_timeout=30000,
                 cache_size_mb=64,
             )
+            # ``id`` is the INTEGER PRIMARY KEY (rowid alias → implicit index) and
+            # ``unique_id`` already carries ASE's implicit unique index, so a
+            # second user index on either column is redundant. Drop them on
+            # reused DBs too so already-created files also shed the dead indices.
+            conn.execute("DROP INDEX IF EXISTS idx_id")
+            conn.execute("DROP INDEX IF EXISTS idx_unique_id")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_energy ON systems(energy)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_id ON systems(id)")
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_unique_id ON systems(unique_id)"
-                )
 
             if enable_expression_indexes:
                 json_col = SYSTEMS_JSON_COLUMN
@@ -138,24 +146,30 @@ def _ensure_database_indices(
             config=PRESET_AGGRESSIVE,
             operation_name=f"create indices on {db_path}",
         )
-        logger.debug(f"Database indices created for {db_path}")
+        logger.debug("Database indices created for %s", db_path)
     except sqlite3.OperationalError as e:
         if enable_wal_mode:
             logger.warning(
-                "Failed to enable WAL mode for %s: %s. Continuing with default mode.",
+                "Could not enable WAL mode or create indices for %s: %s "
+                "(continuing with the default journal mode)",
                 db_path,
                 e,
             )
         else:
-            logger.debug(f"Could not create all indices on {db_path}: {e}")
-    except OSError as e:
-        logger.warning(f"Unexpected error creating indices on {db_path}: {e}")
+            logger.debug("Could not create all indices on %s: %s", db_path, e)
+    except OSError:
+        logger.exception("Unexpected error creating indices on %s", db_path)
 
 
 def _register_database_best_effort(
     base_dir: str | Path, db_file: str, atoms_template: Atoms | None, run_id: str | None
 ) -> None:
-    """Best-effort register DB in registry (no exceptions)."""
+    """Best-effort registry registration for ``db_file``.
+
+    Expected registry and filesystem errors are logged, not raised. The entry is
+    added to the enclosing ``*_searches`` root when there is one, otherwise to
+    ``base_dir`` itself.
+    """
     comp_list = None
     if atoms_template is not None:
         try:
@@ -197,17 +211,45 @@ def setup_database(
     db_filename: str,
     atoms_template: Atoms,
     initial_candidate: Atoms | None = None,
-    initial_population: list[Atoms] | None = None,
     remove_existing: bool = True,
     remove_aux_files: bool = False,
     enable_wal_mode: bool = False,
     enable_expression_indexes: bool = True,
     run_id: str | None = None,
 ) -> DataConnection:
-    """Create/open an ASE `DataConnection` for `db_filename` in `output_dir`."""
+    """Create or open the ASE database ``db_filename`` inside ``output_dir``.
+
+    The template structure is written first, then indices are created, the file
+    is stamped as an SCGO database and registered in the registry (both best
+    effort), and the connection is wrapped so writes are validated and tagged.
+
+    Args:
+        output_dir: Directory holding the database file (created if missing)
+        db_filename: Database file name inside ``output_dir``
+        atoms_template: Template structure defining the expected stoichiometry
+        initial_candidate: Optional single unrelaxed starting candidate
+        remove_existing: Delete an existing database file before writing
+        remove_aux_files: Delete leftover ``-shm`` / ``-wal`` / ``-journal`` files
+        enable_wal_mode: Enable SQLite WAL journaling (off by default, since
+            SCGO targets shared HPC filesystems)
+        enable_expression_indexes: Also create JSON expression indices on
+            ``key_value_pairs``
+        run_id: Run identifier stored in the registry entry
+
+    Returns:
+        A :class:`~scgo.database.helpers.SCGODataConnection` wrapping the ASE ``DataConnection``.
+
+    If the database cannot be opened after all retries, a
+    ``DatabaseSetupError`` is raised.
+    """
     output_dir_str = str(output_dir)
     ensure_directory_exists(output_dir_str)
     db_file = os.path.join(output_dir_str, db_filename)
+
+    # Track whether the file is being created fresh (or is being replaced by
+    # remove_existing). VACUUM is only meaningful for a freshly created file;
+    # re-vacuuming an existing reused DB (resume paths) just wastes time.
+    db_file_existed_before = os.path.exists(db_file)
 
     if remove_aux_files:
         for suffix in ["-shm", "-wal", "-journal"]:
@@ -228,7 +270,7 @@ def setup_database(
                 exception_types=(OSError,),
             )
         except OSError as e:
-            logger.warning(f"Failed to remove database {db_file}: {e}")
+            logger.warning("Failed to remove database %s: %s", db_file, e)
 
     all_atom_numbers = [int(num) for num in atoms_template.get_atomic_numbers()]
 
@@ -239,18 +281,7 @@ def setup_database(
             simulation_cell=True,
         )
 
-        if initial_population is not None:
-            for candidate in initial_population:
-                gaid = prep_db.write(
-                    candidate,
-                    origin="StartingCandidateUnrelaxed",
-                    relaxed=0,
-                    generation=0,
-                    extinct=0,
-                )
-                prep_db.update(gaid, gaid=gaid)
-                candidate.info["confid"] = gaid
-        elif initial_candidate is not None:
+        if initial_candidate is not None:
             gaid = prep_db.write(
                 initial_candidate,
                 origin="StartingCandidateUnrelaxed",
@@ -261,8 +292,9 @@ def setup_database(
             prep_db.update(gaid, gaid=gaid)
             initial_candidate.info["confid"] = gaid
 
-        with contextlib.suppress(AttributeError, sqlite3.OperationalError):
-            prep_db.vacuum()
+        if not db_file_existed_before or remove_existing:
+            with contextlib.suppress(AttributeError, sqlite3.OperationalError):
+                prep_db.vacuum()
 
     try:
         da = database_retry(
@@ -306,7 +338,7 @@ def setup_database(
 
         return SCGODataConnection(da, all_atom_numbers)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
-        logger.error("Failed to open database after all retries: %s", e)
+        logger.error("Failed to set up database after all retries: %s", e)
         raise DatabaseSetupError(f"Failed to setup database {db_file}: {e}") from e
 
 
@@ -339,7 +371,7 @@ def _extract_structures_from_db(
                 chunk_size=100,
                 **iter_relaxed_kwargs,
             ):
-                out.append((float(energy), atoms) if sort else (energy, atoms))
+                out.append((float(energy), atoms))
 
             if sort:
                 out.sort(key=lambda x: x[0])
@@ -358,23 +390,23 @@ def _extract_structures_from_db(
 
             if persist:
                 try:
-                    with da.c.managed_connection() as conn:
-                        for _, atoms in out:
-                            row_id = get_tag(atoms, "systems_row_id", None)
-                            if row_id is None:
-                                continue
-                            row_id = int(row_id)
-
-                            k = SYSTEMS_JSON_COLUMN
-                            conn.execute(
-                                f"UPDATE systems SET {k} = json_set(COALESCE({k}, '{{}}'), '$.run_id', ?) WHERE id = ?",
-                                (run_id, row_id),
-                            )
+                    for _, atoms in out:
+                        row_id = get_tag(atoms, "systems_row_id", None)
+                        if row_id is None:
+                            continue
+                        # Go through ASE so ``run_id`` also lands in the
+                        # key-index tables (``keys`` / ``text_key_values``);
+                        # a raw JSON UPDATE leaves ``db.select(run_id=...)``
+                        # unable to find the row.
+                        da.c.update(int(row_id), run_id=run_id)
+                    conn = getattr(da.c, "connection", None)
+                    if conn is not None:
                         conn.commit()
                 except (
                     sqlite3.DatabaseError,
                     sqlite3.OperationalError,
                     OSError,
+                    KeyError,
                     ValueError,
                     TypeError,
                 ) as e:
@@ -421,31 +453,11 @@ def extract_minima_from_database_file(
     )
 
 
-def extract_transition_states_from_database_file(
-    db_path: str | Path,
-    run_id: str,
-    *,
-    require_final_unique_ts: bool = True,
-) -> list[tuple[float, Atoms]]:
-    """Return transition-state rows from ``db_path`` with provenance."""
-    return _extract_structures_from_db(
-        db_path,
-        run_id,
-        iter_relaxed_kwargs={
-            "require_transition_state": True,
-            "require_final_ts": require_final_unique_ts,
-        },
-        sort=True,
-    )
-
-
 def load_previous_run_results(
     base_output_dir: str,
     db_filename: str | None = None,
     composition: list[str] | None = None,
     current_run_id: str | None = None,
-    parallel: bool = True,
-    max_workers: int | None = None,
     prefer_final_unique: bool = True,
 ) -> list[tuple[float, Atoms]]:
     """Load minima from previous runs for a composition."""
@@ -483,88 +495,30 @@ def load_previous_run_results(
             all_db_files.extend((p, run_id) for p in db_list)
 
     if not all_db_files:
-        logger.info(f"No databases found in {base_output_dir}")
+        logger.info("No previous-run databases found in %s", base_output_dir)
         return []
-
-    if max_workers is None:
-        resolved_max_workers = max(1, multiprocessing.cpu_count() // 2)
-    else:
-        resolved_max_workers = max_workers
-
-    use_parallel = (
-        parallel
-        and len(all_db_files) >= _MIN_DB_PARALLEL_LOAD_TASKS
-        and multiprocessing.current_process().name == "MainProcess"
-        and resolved_max_workers > 1
-    )
 
     all_minima: list[tuple[float, Atoms]] = []
 
-    if use_parallel:
-        logger.info(
-            f"Loading {len(all_db_files)} databases in parallel "
-            f"with {resolved_max_workers} workers"
+    logger.info("Loading %s databases sequentially", len(all_db_files))
+
+    for db_path, run_id in all_db_files:
+        minima = extract_minima_from_database_file(
+            db_path, run_id or "", require_final=prefer_final_unique
         )
-
-        try:
-            with ProcessPoolExecutor(max_workers=resolved_max_workers) as executor:
-                futures = {
-                    executor.submit(
-                        _load_single_database_worker,
-                        db_path,
-                        composition,
-                        run_id,
-                        prefer_final_unique,
-                    ): (db_path, run_id)
-                    for db_path, run_id in all_db_files
-                }
-
-                for future in as_completed(futures):
-                    db_path, run_id = futures[future]
-                    try:
-                        minima = future.result(timeout=30)
-                        all_minima.extend(minima)
-                        if minima:
-                            logger.debug(
-                                f"Loaded {len(minima)} minima from {os.path.basename(db_path)}"
-                            )
-                    except (
-                        OSError,
-                        sqlite3.DatabaseError,
-                        RuntimeError,
-                        TimeoutError,
-                        ValueError,
-                    ) as e:
-                        logger.error(
-                            f"Failed to load {db_path} in parallel worker: {e}"
-                        )
-        except (
-            OSError,
-            sqlite3.DatabaseError,
-            RuntimeError,
-            ValueError,
-        ) as e:
-            raise SCGORuntimeError(
-                f"Parallel minima loading failed for {base_output_dir}: {type(e).__name__}: {e}"
-            ) from e
-
-    else:
-        logger.info(f"Loading {len(all_db_files)} databases sequentially")
-
-        for db_path, run_id in all_db_files:
-            minima = extract_minima_from_database_file(
-                db_path, run_id or "", require_final=prefer_final_unique
+        filtered_minima = _filter_minima_by_composition(minima, composition)
+        all_minima.extend(filtered_minima)
+        if filtered_minima:
+            logger.debug(
+                "Loaded %s minima from %s",
+                len(filtered_minima),
+                os.path.basename(db_path),
             )
-            filtered_minima = _filter_minima_by_composition(minima, composition)
-            all_minima.extend(filtered_minima)
-            if filtered_minima:
-                logger.debug(
-                    f"Loaded {len(filtered_minima)} minima from {os.path.basename(db_path)}"
-                )
 
     logger.info(
-        f"Loaded {len(all_minima)} total minima from previous runs "
-        f"(excluding {current_run_id})"
+        "Loaded %s total minima from previous runs (excluding %s)",
+        len(all_minima),
+        current_run_id,
     )
     return all_minima
 
@@ -585,7 +539,9 @@ def load_reference_structures(
     db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_db(p)]
 
     if not db_files:
-        logger.warning(f"No database files found matching pattern: {db_glob_pattern}")
+        logger.warning(
+            "No SCGO database files found matching pattern: %s", db_glob_pattern
+        )
         return []
 
     target_counts = None
@@ -604,11 +560,10 @@ def load_reference_structures(
                 require_final_minimum=True,
                 exclude_transition_states=True,
             ):
-                if target_counts is not None:
-                    atoms_symbols = atoms.get_chemical_symbols()
-                    atoms_counts = get_composition_counts(atoms_symbols)
-                    if atoms_counts != target_counts:
-                        continue
+                if target_counts is not None and not _composition_matches(
+                    atoms, target_counts
+                ):
+                    continue
 
                 if len(heap) < max_structures:
                     set_tags(
@@ -633,7 +588,7 @@ def load_reference_structures(
                     )
                     heapq.heapreplace(heap, (-energy, counter, atoms))
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
-            logger.debug(f"Failed to extract minima from {db_file}: {e}")
+            logger.debug("Failed to extract minima from %s: %s", db_file, e)
             continue
 
     if not heap:
@@ -644,11 +599,17 @@ def load_reference_structures(
     reference_atoms = [atoms for _, _, atoms in sorted_structures]
 
     logger.info(
-        f"Loaded {len(reference_atoms)} final reference structures for diversity calculation "
-        f"from {len(db_files)} databases"
+        "Loaded %s final reference structures for diversity calculation from %s databases",
+        len(reference_atoms),
+        len(db_files),
     )
 
     return reference_atoms
+
+
+def _composition_matches(atoms: Atoms, target_counts: Counter[str]) -> bool:
+    """Return True if *atoms* has the exact stoichiometry in *target_counts*."""
+    return get_composition_counts(atoms.get_chemical_symbols()) == target_counts
 
 
 def _filter_minima_by_composition(
@@ -662,31 +623,7 @@ def _filter_minima_by_composition(
     target_counts = get_composition_counts(composition)
     filtered = []
     for energy, atoms in minima:
-        atoms_counts = get_composition_counts(atoms.get_chemical_symbols())
-        if atoms_counts == target_counts:
+        if _composition_matches(atoms, target_counts):
             filtered.append((energy, atoms))
 
     return filtered
-
-
-def _load_single_database_worker(
-    db_path: str,
-    composition: list[str] | None = None,
-    run_id: str | None = None,
-    require_final: bool = False,
-) -> list[tuple[float, Atoms]]:
-    """Load minima from a single database in subprocess."""
-    db_path = str(db_path)
-
-    if not os.path.exists(db_path):
-        return []
-
-    try:
-        minima = extract_minima_from_database_file(
-            db_path, run_id or "", require_final=require_final
-        )
-    except (sqlite3.DatabaseError, OSError, ValueError) as e:
-        logger.error(f"Failed to extract minima from {db_path} in worker: {e}")
-        return []
-
-    return _filter_minima_by_composition(minima, composition)

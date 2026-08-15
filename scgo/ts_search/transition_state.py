@@ -14,7 +14,7 @@ import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase.calculators.singlepoint import SinglePointCalculator
-from ase.constraints import FixAtoms
+from ase.constraints import FixAtoms, FixBondLengths
 from ase.geometry import find_mic
 from ase.io import write
 from ase.mep import NEB
@@ -38,7 +38,11 @@ from scgo.utils.comparators import (
     get_shared_mobile_atom_indices,
 )
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import (
+    get_logger,
+    log_info_v,
+    log_warning_v,
+)
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
     build_timing_payload,
@@ -52,12 +56,18 @@ from scgo.utils.torchsim_policy import (
     is_uma_like_calculator,
     is_upet_like_calculator,
 )
+from scgo.utils.ts_runner_kwargs import NebRunConfig
 from scgo.utils.validation import validate_atoms, validate_calculator_attached
 
 if TYPE_CHECKING:
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
 # Pre-NEB IDPP and finalize share this cap for discontinuous / unphysical barriers.
+# It is a hard discontinuity guard for NEB profiles whose barrier is an artifact
+# of image drift / endpoint mismatch rather than a real transition, NOT a physical
+# barrier scale. It is tunable via ``neb_max_spurious_barrier`` and is only one of
+# several TS-quality gates: interior-image clash, saddle prominence and
+# endpoint-drift checks also reject unphysical NEB results.
 MAX_SPURIOUS_NEB_BARRIER_EV: float = 8.0
 
 
@@ -151,7 +161,11 @@ def calculate_structure_similarity(
     n_slab: int | None = None,
     comparator: PureInteratomicDistanceComparator | None = None,
 ) -> tuple[float, float, bool]:
-    """Return (cum_diff, max_diff, are_similar) comparing two Atoms; raises ValueError if counts differ."""
+    """Return ``(cum_diff, max_diff, are_similar)`` for two Atoms objects.
+
+    Raises:
+        SCGOValidationError: If the two structures have different atom counts.
+    """
     if len(atoms1) != len(atoms2):
         raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
@@ -220,6 +234,11 @@ class TorchSimNEB(NEB):
         )
         self.relaxer = relaxer
         self._force_calls = 0
+        # Set by ``ParallelNEBBatch``: the batch runner counts one force call per
+        # batched ``relax_batch`` the band participates in, so ``get_forces`` must
+        # not double-count on top of that (see B2). The serial fallback leaves
+        # this False and keeps owning the counter itself.
+        self._force_calls_counted_externally = False
 
     def get_forces(self) -> np.ndarray:
         """Batch-evaluate PES forces with TorchSim and return NEB forces.
@@ -231,7 +250,8 @@ class TorchSimNEB(NEB):
         if all(_image_has_cached_forces(img) for img in self.images):
             return super().get_forces()
 
-        self._force_calls += 1
+        if not self._force_calls_counted_externally:
+            self._force_calls += 1
         results = self.relaxer.relax_batch(self.images, steps=0)
 
         for atoms, (energy, relaxed_atoms) in zip(self.images, results, strict=True):
@@ -536,7 +556,7 @@ def _align_endpoints_blockwise(
             )
         p2[t1:t2] = p_blk
         n2[t1:t2] = n_blk
-    a2.set_positions(p2)
+    a2.set_positions(p2, apply_constraint=False)
     a2.numbers = n2
 
 
@@ -660,19 +680,6 @@ def _validate_lattice_compatible_rotation(
         raise SCGOValidationError(
             "Rotation determinant must be +1 for rigid alignment."
         )
-
-
-def _inplane_rotation_matrix_3d(angle: float, normal_axis: int) -> np.ndarray:
-    """Build a 3x3 rotation about the surface normal (right-handed, det=+1)."""
-    plane_axes = [i for i in range(3) if i != normal_axis]
-    c, s = float(np.cos(angle)), float(np.sin(angle))
-    rot2 = np.array([[c, -s], [s, c]], dtype=float)
-    rot = np.eye(3, dtype=float)
-    for i, ia in enumerate(plane_axes):
-        for j, ja in enumerate(plane_axes):
-            rot[ia, ja] = rot2[i, j]
-    _validate_lattice_compatible_rotation(rot, normal_axis)
-    return rot
 
 
 def _lattice_translation_candidates(
@@ -1070,15 +1077,59 @@ def _reorder_product_to_match_reactant(
         nums = product.numbers.copy()
         pos[n_slab:] = p_m
         nums[n_slab:] = n_m
-        product.set_positions(pos)
+        product.set_positions(pos, apply_constraint=False)
         product.numbers = nums
         return pos
     mapping = _match_atoms_by_fingerprint(
         reactant, product, mic_cell=mic_cell, mic_pbc=mic_pbc
     )
-    product.set_positions(product.get_positions()[mapping])
+    product.set_positions(product.get_positions()[mapping], apply_constraint=False)
     product.numbers = product.numbers[mapping]
     return product.get_positions()
+
+
+def _warn_if_interpolated_bonds_stretch(
+    images: list[Atoms],
+    *,
+    tol: float,
+    mic: bool,
+) -> None:
+    """Diagnostic: warn if interior images stretch any ``FixBondLengths`` pair.
+
+    Compares each interpolated interior image's ``FixBondLengths`` pair distance
+    against the endpoint pair distance (the larger of the two endpoints is the
+    reference). This is a diagnostic only: it never raises, so a pathological
+    IDPP interpolation does not abort a normal TS run.
+    """
+    if len(images) < 3:
+        return
+    bond_constraints = [
+        c for c in images[0].constraints if isinstance(c, FixBondLengths)
+    ]
+    if not bond_constraints:
+        return
+    logger = get_logger(__name__)
+    reactant = images[0]
+    product = images[-1]
+    for constraint in bond_constraints:
+        for a, b in constraint.pairs:
+            d_r = float(reactant.get_distance(int(a), int(b), mic=mic))
+            d_p = float(product.get_distance(int(a), int(b), mic=mic))
+            ref = max(d_r, d_p)
+            for img in images[1:-1]:
+                d = float(img.get_distance(int(a), int(b), mic=mic))
+                if abs(d - ref) > tol:
+                    log_warning_v(
+                        logger,
+                        "Post-interpolation FixBondLengths pair (%d, %d) stretched to "
+                        "%.3f A (endpoint %.3f A, tol %.3f A) in an interior NEB image",
+                        int(a),
+                        int(b),
+                        d,
+                        ref,
+                        tol,
+                    )
+                    break  # one warning per violated pair is enough
 
 
 def interpolate_path(
@@ -1099,12 +1150,13 @@ def interpolate_path(
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
+    neb_interpolation_bond_tolerance_a: float | None = None,
 ) -> list[Atoms]:
     """Interpolate between two structures and return images including endpoints.
 
     ``align_endpoints`` (default True): reorder endpoint atoms to match reactant.
     For slab/surface workflows (``n_slab > 0`` or periodic cell), alignment uses
-    :func:`_align_product_surface_pbc`: MIC-aware matching, collective mobile
+    ``_align_product_surface_pbc``: MIC-aware matching, collective mobile
     lattice-image selection, per-atom MIC snapping, optional integer in-plane
     lattice shifts (``neb_surface_max_lattice_shift``), and global in-plane rotation
     evaluated jointly with each shift, with anchors reset to the reactant slab frame
@@ -1132,10 +1184,6 @@ def interpolate_path(
     surface_lattice_rotation = neb_surface_lattice_rotation
     if align_endpoints and system_type is not None:
         system_policy = get_system_policy(system_type)
-        if system_policy.neb_disable_alignment:
-            raise SCGOValidationError(
-                f"Endpoint alignment is not allowed for {system_type!r}; set align_endpoints=False."
-            )
         surface_cell_remap = (
             system_policy.neb_surface_cell_remap and neb_surface_cell_remap
         )
@@ -1163,18 +1211,33 @@ def interpolate_path(
             surface_max_lattice_shift=neb_surface_max_lattice_shift,
             n_core_mobile=n_core_mobile,
         )
-        a2_copy.set_positions(aligned)
+        a2_copy.set_positions(aligned, apply_constraint=False)
         if _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab):
             a2_copy.set_cell(a1_copy.cell)
             a2_copy.pbc = a1_copy.pbc
 
     # Build the band from aligned endpoints; ASE interpolation only fills interiors.
-    images = [a1_copy] + [a1_copy.copy() for _ in range(n_images)] + [a2_copy]
+    # ``a1_copy``/``a2_copy`` are already de-aliased via ``copy_atoms`` above, but
+    # ``Atoms.copy()`` shallow-copies ``info`` so the interior images would share
+    # ``a1_copy``'s nested ``key_value_pairs`` dict. ``set_tags`` (potential_energy /
+    # raw_score) on one image would then overwrite every other image, so isolate
+    # each interior copy with ``copy_atoms``.
+    images = [a1_copy] + [copy_atoms(a1_copy) for _ in range(n_images)] + [a2_copy]
     neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
     # Interpolate unconstrained positions first; endpoint/image constraints
     # (e.g., fixed slab atoms) are enforced during subsequent optimization.
     neb.interpolate(method=method, mic=mic, apply_constraint=False)
     images = neb.images
+
+    # Diagnostic check (never raises): interior NEB images interpolated with
+    # apply_constraint=False must not stretch any FixBondLengths pair far from
+    # its endpoint length. A large stretch signals a pathological IDPP path.
+    if neb_interpolation_bond_tolerance_a is not None and len(images) > 2:
+        _warn_if_interpolated_bonds_stretch(
+            images,
+            tol=float(neb_interpolation_bond_tolerance_a),
+            mic=mic,
+        )
 
     if perturb_sigma > 0.0:
         if rng is None:
@@ -1183,7 +1246,7 @@ def interpolate_path(
             disp = rng.normal(
                 scale=float(perturb_sigma), size=img.get_positions().shape
             )
-            img.set_positions(img.get_positions() + disp)
+            img.set_positions(img.get_positions() + disp, apply_constraint=False)
 
     return images
 
@@ -1196,18 +1259,18 @@ def _mobile_min_pairwise_distance(
 ) -> float:
     """Minimum pairwise distance among mobile atoms (slab prefix excluded)."""
     pos = atoms.get_positions()[max(0, int(n_slab)) :]
-    if pos.shape[0] < 2:
+    n = len(pos)
+    if n < 2:
         return float("inf")
     if mic and bool(np.any(atoms.pbc)):
         cell = _cell_array(atoms.cell)
         pbc = _pbc_for_mic_alignment(atoms.pbc)
-        min_d = float("inf")
-        for i in range(len(pos)):
-            dlt = pos[i + 1 :] - pos[i]
-            dlt, _ = find_mic(dlt, cell, pbc)
-            if len(dlt):
-                min_d = min(min_d, float(np.linalg.norm(dlt, axis=1).min()))
-        return min_d
+        i_idx, j_idx = np.triu_indices(n, k=1)
+        if i_idx.size == 0:
+            return float("inf")
+        dlt = pos[j_idx] - pos[i_idx]
+        dlt_mic, _ = find_mic(dlt, cell, pbc)
+        return float(np.linalg.norm(dlt_mic, axis=1).min())
     return float(np.min(pdist(pos)))
 
 
@@ -1273,31 +1336,29 @@ def validate_initial_neb_path(
 ) -> None:
     """Reject discontinuous/clashing IDPP bands before NEB optimization.
 
-    Enabled when ``max_endpoint_mismatch`` is set (adsorbate presets). Checks:
-    - aligned mobile Cartesian residual vs ``max(6.0, 3.0 * max_endpoint_mismatch)``;
-    - interior-image min mobile pairwise distance vs ``clash_distance``
-      (endpoints are skipped — they are relaxed minima that may contain bonds).
+    The interior-image clash check (min mobile pairwise distance vs
+    ``clash_distance``) always runs. The aligned endpoint-displacement gate is
+    only enabled when ``max_endpoint_mismatch`` is set (adsorbate/surface presets).
 
     Raises:
         SCGOValidationError: when the initial path is unsuitable for NEB.
     """
-    if max_endpoint_mismatch is None:
-        return
     if len(images) < 2:
         raise SCGOValidationError(
             "Initial NEB path rejected (clashing/discontinuous interpolation): "
             "fewer than 2 images"
         )
-    cartesian_limit = max(6.0, 3.0 * float(max_endpoint_mismatch))
-    max_disp = _endpoint_mobile_max_displacement(
-        images[0], images[-1], n_slab=n_slab, mic=mic
-    )
-    if max_disp > cartesian_limit:
-        raise SCGOValidationError(
-            "Initial NEB path rejected (clashing/discontinuous interpolation): "
-            f"aligned endpoint mobile max displacement {max_disp:.3f} Å exceeds "
-            f"cartesian limit {cartesian_limit:.3f} Å"
+    if max_endpoint_mismatch is not None:
+        cartesian_limit = max(6.0, 3.0 * float(max_endpoint_mismatch))
+        max_disp = _endpoint_mobile_max_displacement(
+            images[0], images[-1], n_slab=n_slab, mic=mic
         )
+        if max_disp > cartesian_limit:
+            raise SCGOValidationError(
+                "Initial NEB path rejected (clashing/discontinuous interpolation): "
+                f"aligned endpoint mobile max displacement {max_disp:.3f} Å exceeds "
+                f"cartesian limit {cartesian_limit:.3f} Å"
+            )
     interiors = images[1:-1] if len(images) > 2 else images
     for i, img in enumerate(interiors, start=1):
         min_d = _mobile_min_pairwise_distance(img, n_slab=n_slab, mic=mic)
@@ -1385,6 +1446,11 @@ def evaluate_neb_image_energies(images: list[Atoms], relaxer: Any) -> list[float
     return [float(energy) for energy, _atoms in batch]
 
 
+def evaluate_neb_image_energies_ase(images: list[Atoms]) -> list[float]:
+    """Single-point energies for a NEB band with ASE calculator-backed images."""
+    return [float(img.get_potential_energy()) for img in images]
+
+
 def idpp_band_optimization_priority(
     energies: list[float] | np.ndarray,
     *,
@@ -1467,7 +1533,7 @@ def minima_provenance_dict(minima: list, idx: int) -> dict[str, Any]:
     """Extract per-minimum GO provenance for JSON serialization."""
     if not minima or idx < 0 or idx >= len(minima):
         get_logger(__name__).warning(
-            "minima_provenance_dict: invalid index %s for %d minima",
+            "Invalid minima index %s for %d minima; returning empty provenance",
             idx,
             len(minima) if minima else 0,
         )
@@ -1506,12 +1572,18 @@ def _finalize_neb_result(
     images: list[Atoms],
     *,
     logger: Any | None = None,
+    max_spurious_barrier: float = MAX_SPURIOUS_NEB_BARRIER_EV,
 ) -> None:
     """Populate ``result`` with TS / endpoint geometry, energies, and barriers.
 
     Mutates ``result`` in place. Assumes ``reactant_energy`` and
-    ``product_energy`` are already set; raises ``RuntimeError`` otherwise.
-    Marks an endpoint-as-TS result as failed.
+    ``product_energy`` are already set. Bands whose highest-energy image is an
+    endpoint, and barriers above :data:`MAX_SPURIOUS_NEB_BARRIER_EV`, are marked
+    failed.
+
+    Raises:
+        SCGORuntimeError: If an endpoint energy is missing, or if no image energy
+            could be read.
     """
     pair_id = result.get("pair_id")
 
@@ -1556,7 +1628,7 @@ def _finalize_neb_result(
 
     endpoint_ts = max_energy_idx == 0 or max_energy_idx == len(images) - 1
     # Match pre-NEB IDPP gate: absurd barriers are discontinuous / unphysical.
-    max_final_barrier = MAX_SPURIOUS_NEB_BARRIER_EV
+    max_final_barrier = max_spurious_barrier
     if endpoint_ts:
         result["status"] = "failed"
         result["neb_converged"] = False
@@ -1617,10 +1689,15 @@ def find_transition_state(
     n_adsorbate_mobile: int | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
     max_endpoint_mismatch: float | None = None,
+    neb_prescreen_clash_distance: float = 0.7,
+    min_saddle_prominence: float = 0.40,
+    neb_max_spurious_barrier: float = MAX_SPURIOUS_NEB_BARRIER_EV,
+    neb_interpolation_bond_tolerance_a: float | None = None,
     neb_surface_cell_remap: bool = True,
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
     relaxer: Any | None = None,
+    neb_cfg: NebRunConfig | None = None,
 ) -> dict[str, Any]:
     """Run NEB to locate a transition state between two structures.
 
@@ -1644,6 +1721,38 @@ def find_transition_state(
         A summary dict with TS geometry, energies and convergence status.
     """
     logger = get_logger(__name__)
+
+    # Resolve effective parameters. A NebRunConfig (used by both runners)
+    # wins for the geometry/validation knobs; torchsim_params and system_type
+    # are only taken from it when the explicit arguments are None (preserves
+    # the explicit-kwargs call sites used by tests).
+    if neb_cfg is not None:
+        n_images = neb_cfg.neb_n_images
+        spring_constant = neb_cfg.neb_spring_constant
+        fmax = neb_cfg.neb_fmax
+        neb_steps = neb_cfg.neb_steps
+        climb = neb_cfg.neb_climb
+        interpolation_method = neb_cfg.neb_interpolation_method
+        align_endpoints = neb_cfg.neb_align_endpoints
+        perturb_sigma = neb_cfg.neb_perturb_sigma
+        neb_interpolation_mic = neb_cfg.neb_interpolation_mic
+        neb_tangent_method = neb_cfg.neb_tangent_method
+        n_slab = neb_cfg.n_slab
+        n_core_mobile = neb_cfg.n_core_mobile
+        n_adsorbate_mobile = neb_cfg.n_adsorbate_mobile
+        adsorbate_fragment_lengths = neb_cfg.adsorbate_fragment_lengths
+        max_endpoint_mismatch = neb_cfg.max_endpoint_mismatch
+        neb_prescreen_clash_distance = neb_cfg.neb_prescreen_clash_distance
+        min_saddle_prominence = neb_cfg.min_saddle_prominence
+        neb_max_spurious_barrier = neb_cfg.neb_max_spurious_barrier
+        neb_interpolation_bond_tolerance_a = neb_cfg.neb_interpolation_bond_tolerance_a
+        neb_surface_cell_remap = neb_cfg.neb_surface_cell_remap
+        neb_surface_lattice_rotation = neb_cfg.neb_surface_lattice_rotation
+        neb_surface_max_lattice_shift = neb_cfg.neb_surface_max_lattice_shift
+        if system_type is None:
+            system_type = neb_cfg.system_type
+        if torchsim_params is None:
+            torchsim_params = neb_cfg.torchsim_params
 
     validate_atoms(atoms1)
     validate_atoms(atoms2)
@@ -1683,12 +1792,17 @@ def find_transition_state(
                 f"Cannot extract energy from product atoms for pair {pair_id}"
             )
 
-    if verbosity >= 1:
-        logger.info("Finding transition state for pair %s", pair_id)
-        if reactant_energy is not None:
-            logger.info("  Reactant energy: %.6f eV", reactant_energy)
-        if product_energy is not None:
-            logger.info("  Product energy: %.6f eV", product_energy)
+    log_info_v(
+        logger, "Finding transition state for pair %s", pair_id, verbosity=verbosity
+    )
+    if reactant_energy is not None:
+        log_info_v(
+            logger, "  Reactant energy: %.6f eV", reactant_energy, verbosity=verbosity
+        )
+    if product_energy is not None:
+        log_info_v(
+            logger, "  Product energy: %.6f eV", product_energy, verbosity=verbosity
+        )
 
     result = make_ts_result(
         pair_id=pair_id,
@@ -1716,10 +1830,13 @@ def find_transition_state(
                 f"Endpoints are identical for pair {pair_id}; no interior TS"
             )
 
-        if verbosity >= 2:
-            logger.info(
-                f"Generating initial path with {interpolation_method} interpolation"
-            )
+        log_info_v(
+            logger,
+            "Generating initial path with %s interpolation",
+            interpolation_method,
+            verbosity=verbosity,
+            min_verbosity=2,
+        )
         # Keep interpolation unconstrained; constraints are applied during NEB.
         images = interpolate_path(
             atoms1,
@@ -1738,12 +1855,14 @@ def find_transition_state(
             neb_surface_cell_remap=neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+            neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
         )
         validate_initial_neb_path(
             images,
             n_slab=n_slab,
             mic=neb_interpolation_mic,
             max_endpoint_mismatch=max_endpoint_mismatch,
+            clash_distance=neb_prescreen_clash_distance,
         )
 
         if np.allclose(
@@ -1769,21 +1888,27 @@ def find_transition_state(
                 result["reactant_energy"] = float(ep_results[0][0])
                 result["product_energy"] = float(ep_results[1][0])
 
-            band_energies: list[float] | None = None
+            band_energies = evaluate_neb_image_energies(images, ts_relaxer)
             if max_endpoint_mismatch is not None:
-                band_energies = evaluate_neb_image_energies(images, ts_relaxer)
                 validate_initial_neb_energy_profile(
                     band_energies,
                     reference_reactant_energy=reactant_energy,
                     reference_product_energy=product_energy,
+                    min_saddle_prominence=min_saddle_prominence,
+                    max_spurious_barrier=neb_max_spurious_barrier,
                 )
-                # Prefer SP energies of the aligned band over possibly stale
-                # raw_score metadata on the endpoint Atoms copies.
-                result["reactant_energy"] = float(band_energies[0])
-                result["product_energy"] = float(band_energies[-1])
+            # Prefer SP energies of the aligned band over possibly stale
+            # raw_score metadata on the endpoint Atoms copies.
+            result["reactant_energy"] = float(band_energies[0])
+            result["product_energy"] = float(band_energies[-1])
 
-            if verbosity >= 2:
-                logger.info("Using TorchSim batched NEB (climb=%s)", climb)
+            log_info_v(
+                logger,
+                "Using TorchSim batched NEB (climb=%s)",
+                climb,
+                verbosity=verbosity,
+                min_verbosity=2,
+            )
 
             steps_budget = int(neb_steps)
             use_two_stage = neb_uses_two_stage_climb(
@@ -1799,19 +1924,40 @@ def find_transition_state(
         else:
             if calculator is None:
                 raise SCGOValidationError("Calculator required when use_torchsim=False")
+            # Each image should own its calculator (ASE NEB requires distinct
+            # calculators). When a calculator cannot be deep-copied we fall back
+            # to sharing the single instance and must tell ASE that is allowed;
+            # otherwise ``NEB.get_forces`` raises ``ValueError`` for shared calcs.
+            shared_calc = False
             for img in images:
                 try:
                     img.calc = deepcopy(calculator)
                 except (TypeError, AttributeError):
+                    shared_calc = True
                     img.calc = calculator
 
+            # Lightweight single-point energy pre-screen for the serial ASE path
+            # (the TorchSim path computes band_energies above via relax_batch).
+            band_energies = evaluate_neb_image_energies_ase(images)
+            if max_endpoint_mismatch is not None:
+                validate_initial_neb_energy_profile(
+                    band_energies,
+                    reference_reactant_energy=reactant_energy,
+                    reference_product_energy=product_energy,
+                    min_saddle_prominence=min_saddle_prominence,
+                    max_spurious_barrier=neb_max_spurious_barrier,
+                )
+
             steps_budget = int(neb_steps)
-            use_two_stage = neb_uses_two_stage_climb(climb, steps_budget)
+            use_two_stage = neb_uses_two_stage_climb(
+                climb, steps_budget, initial_energies=band_energies
+            )
             neb = NEB(
                 images,
                 k=spring_constant,
                 climb=bool(climb) and not use_two_stage,
                 method=neb_tangent_method,
+                allow_shared_calculator=shared_calc,
             )
 
         opt_logfile = None if verbosity <= 1 else sys.stdout
@@ -1820,8 +1966,13 @@ def find_transition_state(
         # actually used (so early stage-1 convergence does not starve climb).
         stage1_cap = steps_budget // 2 if use_two_stage else steps_budget
 
-        if verbosity >= 2:
-            logger.info("Starting NEB optimization with %s", optimizer.__name__)
+        log_info_v(
+            logger,
+            "Starting NEB optimization with %s",
+            optimizer.__name__,
+            verbosity=verbosity,
+            min_verbosity=2,
+        )
 
         t_neb0 = perf_counter()
         dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
@@ -1830,11 +1981,13 @@ def find_transition_state(
         if use_two_stage:
             neb.climb = True
             stage2_steps = max(1, steps_budget - steps_taken)
-            if verbosity >= 2:
-                logger.info(
-                    "Enabling climbing image for second NEB stage (%d steps)",
-                    stage2_steps,
-                )
+            log_info_v(
+                logger,
+                "Enabling climbing image for second NEB stage (%d steps)",
+                stage2_steps,
+                verbosity=verbosity,
+                min_verbosity=2,
+            )
             dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
             dyn.run(fmax=fmax, steps=stage2_steps)
             steps_taken += int(dyn.nsteps)
@@ -1855,45 +2008,64 @@ def find_transition_state(
                 f"NEB did not converge (final_fmax={final_fmax}, fmax={fmax})"
             )
 
-        if verbosity >= 1:
-            fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
-            if result["neb_converged"]:
-                logger.info(
-                    "NEB converged in %d steps (final_fmax=%s < %.6f)",
-                    result["steps_taken"],
-                    fmax_str,
-                    fmax,
-                )
-            else:
-                logger.warning(
-                    "NEB not converged after %d steps (final_fmax=%s, target_fmax=%.6f)",
-                    result["steps_taken"],
-                    fmax_str,
-                    fmax,
-                )
+        fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
+        if result["neb_converged"]:
+            log_info_v(
+                logger,
+                "NEB converged in %d steps (final_fmax=%s < %.6f)",
+                result["steps_taken"],
+                fmax_str,
+                fmax,
+                verbosity=verbosity,
+            )
+        else:
+            log_warning_v(
+                logger,
+                "NEB not converged after %d steps (final_fmax=%s, target_fmax=%.6f)",
+                result["steps_taken"],
+                fmax_str,
+                fmax,
+                verbosity=verbosity,
+            )
 
         # Last optimizer step can invalidate SinglePoint caches; refresh PES at
         # the final geometries before barrier finalize (TorchSim path only).
         if use_torchsim:
             neb.get_forces()
 
-        _finalize_neb_result(result, neb.images, logger=logger)
+        _finalize_neb_result(
+            result,
+            neb.images,
+            logger=logger,
+            max_spurious_barrier=neb_max_spurious_barrier,
+        )
 
         if use_torchsim and result["status"] == "success":
             result["force_calls"] = neb.get_force_calls()
 
         if verbosity >= 1 and result["status"] == "success":
-            logger.info(
+            log_info_v(
+                logger,
                 "TS found at image %d/%d",
                 result["ts_image_index"],
                 len(neb.images) - 1,
+                verbosity=verbosity,
             )
-            logger.info("  TS energy: %.6f eV", result["ts_energy"])
-            logger.info("  Barrier height: %.6f eV", result["barrier_height"])
+            log_info_v(
+                logger, "  TS energy: %.6f eV", result["ts_energy"], verbosity=verbosity
+            )
+            log_info_v(
+                logger,
+                "  Barrier height: %.6f eV",
+                result["barrier_height"],
+                verbosity=verbosity,
+            )
             if use_torchsim:
-                logger.info(
+                log_info_v(
+                    logger,
                     "  GPU-batched force calls: %s",
                     result.get("force_calls"),
+                    verbosity=verbosity,
                 )
 
     except KeyboardInterrupt:
@@ -1902,19 +2074,24 @@ def find_transition_state(
         result["error"] = str(e)
         if is_cuda_oom_error(e):
             cleanup_torch_cuda(logger=logger)
-            if verbosity >= 1:
-                logger.warning(
-                    "Detected CUDA out-of-memory during NEB for pair %s — attempted GPU cleanup",
-                    pair_id,
-                )
-        if verbosity >= 1:
-            logger.error(
-                f"Failed to find TS for pair {pair_id}: {type(e).__name__}: {e}"
+            log_warning_v(
+                logger,
+                "Detected CUDA out-of-memory during NEB for pair %s — attempted GPU cleanup",
+                pair_id,
+                verbosity=verbosity,
             )
+        logger.error(
+            "Failed to find TS for pair %s: %s: %s",
+            pair_id,
+            type(e).__name__,
+            e,
+            exc_info=(verbosity >= 2),
+        )
 
     if t_wall0 is not None:
         total_s = perf_counter() - t_wall0
         ts_timings: dict[str, float] = {
+            "kind": "neb",
             "total_wall_s": total_s,
             "neb_optimization_s": neb_opt,
             "cpu_non_relax_s": max(0.0, total_s - neb_opt),
@@ -1960,6 +2137,7 @@ def save_neb_result(
     """Save NEB result: TS and endpoint XYZ (when present) plus metadata JSON.
 
     Writes:
+
     - ``ts_{pair_id}.xyz`` on success when a TS geometry is present
     - ``reactant_{pair_id}.xyz`` / ``product_{pair_id}.xyz`` when
       ``reactant_structure`` / ``product_structure`` are on the result dict

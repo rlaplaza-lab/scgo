@@ -9,6 +9,8 @@ Configuration
 .. autoclass:: scgo.cluster_adsorbate.config.ClusterAdsorbateConfig
    :members:
    :show-inheritance:
+   :exclude-members: _*
+   :no-index:
 
 Surface site discovery
 ----------------------
@@ -19,14 +21,19 @@ clusters and slabs.
 .. autoclass:: scgo.cluster_adsorbate.sites.SurfaceSiteCandidate
    :members:
    :show-inheritance:
+   :exclude-members: _*
+   :no-index:
 
 .. autofunction:: scgo.cluster_adsorbate.sites.compute_surface_site_candidates
+   :no-index:
 
 Placement and hierarchical builds
 ---------------------------------
 
 .. autofunction:: scgo.cluster_adsorbate.placement.place_fragment_on_cluster
+   :no-index:
 .. autofunction:: scgo.cluster_adsorbate.placement.radii_derived_height_bounds
+   :no-index:
 .. autofunction:: scgo.cluster_adsorbate.hierarchical.build_hierarchical_core_fragment_cluster
 .. autofunction:: scgo.cluster_adsorbate.hierarchical.build_adsorbate_only_cluster
 
@@ -42,6 +49,7 @@ GA repositioning and rigid geometry
 
 .. autoclass:: scgo.cluster_adsorbate.reposition.FragmentRepositionMutation
    :members:
+   :exclude-members: _*
 
 .. autofunction:: scgo.cluster_adsorbate.rigid.enforce_frozen_adsorbate_geometry
 .. autofunction:: scgo.cluster_adsorbate.rigid.restore_rigid_adsorbate_fragments
@@ -57,3 +65,33 @@ Operator clash checks and placement ranking use covalent-radius ``blmin`` tables
 .. autofunction:: scgo.initialization.atomic_radii.build_blmin_from_zs
 .. autofunction:: scgo.initialization.steric_scoring.steric_deficit
 .. autofunction:: scgo.initialization.steric_scoring.steric_deficit_two_sets
+
+Submodule reference
+-------------------
+
+.. automodule:: scgo.cluster_adsorbate.config
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.cluster_adsorbate.placement
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.cluster_adsorbate.validation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.cluster_adsorbate.sites
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. autofunction:: scgo.cluster_adsorbate.constraints.attach_adsorbate_internal_geometry_constraints
+.. autofunction:: scgo.cluster_adsorbate.relax.relax_metal_cluster_with_adsorbate

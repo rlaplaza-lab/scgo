@@ -29,7 +29,8 @@ class SCGODatabaseManager:
     Provides a high-level cached interface for loading previous run results
     and reference structures for diversity calculations.
 
-    Example:
+    Example::
+
         >>> with SCGODatabaseManager(base_dir="output") as manager:
         ...     refs = manager.load_reference_structures("**/*.db")
     """
@@ -54,8 +55,6 @@ class SCGODatabaseManager:
         # Initialize unified cache
         self._cache = get_global_cache()
         self._cache_namespace = "db_manager"
-        self._cache_timestamps: dict[tuple, float] = {}
-        self._cache_fingerprints: dict[tuple, tuple[int, int, tuple[str, ...]]] = {}
 
         logger.debug(
             f"Initialized SCGODatabaseManager: base_dir={base_dir}, "
@@ -84,33 +83,63 @@ class SCGODatabaseManager:
     def _is_cache_valid(
         self, cache_key: tuple, fingerprint: tuple[int, int, tuple[str, ...]]
     ) -> bool:
-        """Check if cache entry is still valid based on TTL.
+        """Check whether a cached entry can still be reused.
+
+        An entry is reusable only when caching is enabled, the value is still
+        present in the shared cache, the recorded file fingerprint is unchanged,
+        and the entry is younger than ``cache_ttl_seconds``.
 
         Args:
             cache_key: Cache key to check
+            fingerprint: Current fingerprint of the database files backing the
+                entry, as returned by ``_compute_files_fingerprint``
 
         Returns:
-            True if cache is valid, False if expired
+            True if the cache entry is valid, False if caching is disabled, the
+            entry is missing, the files changed, or the TTL expired
         """
         if not self.enable_caching:
             return False
 
-        if cache_key not in self._cache_timestamps:
+        entry = self._cache.get(self._cache_namespace, cache_key)
+        if entry is None:
             return False
-        if self._cache.get(self._cache_namespace, cache_key) is None:
-            return False
-        if self._cache_fingerprints.get(cache_key) != fingerprint:
+        fp_stored, timestamp = entry[1], entry[2]
+        if fp_stored != fingerprint:
             return False
 
-        age = time.time() - self._cache_timestamps[cache_key]
+        age = time.time() - timestamp
         return age < self.cache_ttl_seconds
 
+    def _get_cached(self, cache_key):
+        """Return the cached value for ``cache_key`` (or ``None`` if absent).
+
+        The cache stores ``(value, fingerprint, timestamp)`` tuples; callers only
+        need the wrapped value.
+        """
+        entry = self._cache.get(self._cache_namespace, cache_key)
+        if entry is None:
+            return None
+        return entry[0]
+
+    def _store_cached(self, cache_key, value, fingerprint):
+        """Store ``value`` alongside its ``fingerprint`` and a fresh timestamp."""
+        self._cache.set(
+            self._cache_namespace, cache_key, (value, fingerprint, time.time())
+        )
+
     def clear_cache(self):
-        """Clear all cached results."""
+        """Clear all cached results.
+
+        Note:
+            The value cache is the process-wide :func:`get_global_cache`
+            namespace shared by every manager instance, so this wipes cached
+            entries for *all* managers, not just this one. Cache keys are
+            prefixed with the resolved ``base_dir``, so entries stay isolated
+            per manager while they live.
+        """
         self._cache.clear_namespace(self._cache_namespace)
-        self._cache_timestamps.clear()
-        self._cache_fingerprints.clear()
-        logger.info("Cleared all caches")
+        logger.info("Cleared database manager caches")
 
     def load_previous_results(
         self,
@@ -131,12 +160,14 @@ class SCGODatabaseManager:
             force_reload: Force reload from disk, bypassing cache
             prefer_final_unique: If True (default), only ``final_unique_minimum``
                 rows are loaded. Set False to include all relaxed structures.
+                Transition states are excluded either way.
 
         Returns:
             List of (energy, Atoms) tuples from all previous runs
         """
         formula = get_cluster_formula(composition)
         cache_key = (
+            str(self.base_dir.resolve()),
             "prev_results",
             tuple(composition),
             current_run_id,
@@ -151,7 +182,7 @@ class SCGODatabaseManager:
         # Check cache
         if not force_reload and self._is_cache_valid(cache_key, fp):
             logger.debug("Using cached previous results for %s", formula)
-            return self._cache.get(self._cache_namespace, cache_key)
+            return self._get_cached(cache_key)
 
         logger.info("Attempting to load previous results for %s", formula)
 
@@ -165,9 +196,7 @@ class SCGODatabaseManager:
 
         # Cache results
         if self.enable_caching:
-            self._cache.set(self._cache_namespace, cache_key, minima)
-            self._cache_timestamps[cache_key] = time.time()
-            self._cache_fingerprints[cache_key] = fp
+            self._store_cached(cache_key, minima, fp)
 
         logger.info("Loaded %s minima from previous runs", len(minima))
         return minima
@@ -184,7 +213,8 @@ class SCGODatabaseManager:
         Results are cached for improved performance.
 
         Args:
-            db_glob_pattern: Glob pattern to find database files
+            db_glob_pattern: Glob pattern to find database files, resolved
+                relative to ``base_dir``
             composition: Optional composition filter
             max_structures: Maximum number of structures to load
             force_reload: Force reload from disk, bypassing cache
@@ -193,6 +223,7 @@ class SCGODatabaseManager:
             List of Atoms objects sorted by energy (lowest first)
         """
         cache_key = (
+            str(self.base_dir.resolve()),
             "ref_structs",
             db_glob_pattern,
             tuple(composition) if composition else None,
@@ -209,7 +240,7 @@ class SCGODatabaseManager:
                 logger.debug("Using cached reference structures for %s", formula)
             else:
                 logger.debug("Using cached reference structures")
-            return self._cache.get(self._cache_namespace, cache_key)
+            return self._get_cached(cache_key)
 
         if composition:
             formula = get_cluster_formula(composition)
@@ -226,9 +257,7 @@ class SCGODatabaseManager:
 
         # Cache results
         if self.enable_caching:
-            self._cache.set(self._cache_namespace, cache_key, structures)
-            self._cache_timestamps[cache_key] = time.time()
-            self._cache_fingerprints[cache_key] = fp
+            self._store_cached(cache_key, structures, fp)
 
         logger.info("Loaded %s reference structures", len(structures))
         return structures
@@ -240,6 +269,6 @@ class SCGODatabaseManager:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.close()
         return False

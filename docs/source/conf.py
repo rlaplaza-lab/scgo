@@ -54,6 +54,30 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # Dataclass fields are documented twice (attributes + __init__ params) under Sphinx 9.
 suppress_warnings = ["autodoc.duplicate_object"]
 
+# Treat every missing cross-reference as a warning so doc regressions surface.
+nitpicky = True
+
+# Tolerate references we cannot resolve from any inventory, mostly external
+# packages (ase_ga publishes no objects.inv; torch_sim/ase/scipy intersphinx is
+# unreachable in this build environment) and private/internal helpers that should
+# not be linked.
+nitpick_ignore = [
+    ("py:class", "ase_ga.data.DataConnection"),
+    ("py:class", "ase_ga.startgenerator.StartGenerator"),
+    ("py:class", "ase_ga.standard_comparators.SequentialComparator"),
+    ("py:class", "ase_ga.offspring_creator.OperationSelector"),
+    ("py:class", "ase_ga.offspring_creator.OffspringCreator"),
+    ("py:func", "ase.Atoms.get_distance"),
+    ("py:class", "scipy.spatial._qhull.ConvexHull"),
+    ("py:class", "InFlightAutoBatcher"),
+]
+
+nitpick_ignore_regex = [
+    (r"py:(class|func|method|mod|data|attr|exc|meth)", r"torch_sim\..*"),
+    (r"py:(class|func|method|mod|data|attr|exc|meth)", r"ase\..*"),
+    (r"py:(class|func|method|mod|data|attr|exc|meth)", r"ase_ga\..*"),
+]
+
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
@@ -101,9 +125,32 @@ autodoc_default_options = {
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
 }
 
 # -- Options for todo extension -----------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/todo.html
 
 todo_include_todos = False
+
+
+# -- Custom roles ------------------------------------------------------------
+
+from docutils import nodes
+
+def doi_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+    options = options or {}
+    text = text.strip()
+    if "<" in text:
+        label, _, target = text.partition("<")
+        label = label.strip()
+        target = target.rstrip(">").strip()
+    else:
+        label, target = text, None
+    if target:
+        return [nodes.reference(rawtext, label, refuri="https://doi.org/" + target, **options)], []
+    return [nodes.Text(label)], []
+
+def setup(app):
+    app.add_role("doi", doi_role)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}

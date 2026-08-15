@@ -4,8 +4,6 @@ This module tests the is_true_minimum function which verifies that optimized
 structures are true local minima by checking for imaginary frequencies.
 """
 
-import os
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -17,8 +15,9 @@ from scgo.utils.helpers import is_true_minimum, perform_local_relaxation
 
 
 class MockVibrationsSaddle:
-    def __init__(self, atoms, name=None):
+    def __init__(self, atoms, name=None, indices=None):
         self.atoms = atoms
+        self.indices = indices
 
     def run(self):
         pass
@@ -32,8 +31,9 @@ class MockVibrationsSaddle:
 
 
 class MockVibrationsTrueMinimum:
-    def __init__(self, atoms, name=None):
+    def __init__(self, atoms, name=None, indices=None):
         self.atoms = atoms
+        self.indices = indices
 
     def run(self):
         pass
@@ -44,6 +44,98 @@ class MockVibrationsTrueMinimum:
 
     def clean(self):
         pass
+
+
+class MockVibrationsImaginary:
+    """ASE returns *complex* frequencies for imaginary modes (e.g. ``0+965j``)."""
+
+    def __init__(self, atoms, name=None, indices=None):
+        self.atoms = atoms
+        self.indices = indices
+
+    def run(self):
+        pass
+
+    def get_frequencies(self):
+        return np.array([0 + 965j, 0 + 0j, 0 + 0j, 50 + 0j, 100 + 0j, 150 + 0j])
+
+    def clean(self):
+        pass
+
+
+class MockVibrationsComplexRealMinimum:
+    """Complex dtype but no imaginary modes: still a true minimum."""
+
+    def __init__(self, atoms, name=None, indices=None):
+        self.atoms = atoms
+        self.indices = indices
+
+    def run(self):
+        pass
+
+    def get_frequencies(self):
+        return np.array([-0.1 + 0j, 0 + 0j, 0.1 + 0j, 50 + 0j, 100 + 0j, 150 + 0j])
+
+    def clean(self):
+        pass
+
+
+class MockVibrationsCapture:
+    """Records the ``indices`` kwarg passed to ``Vibrations`` and returns a spectrum.
+
+    ``last_indices`` holds the most recent ``indices`` value so tests can assert
+    exactly which atoms SCGO chose to displace.
+    """
+
+    last_indices = None
+    call_count = 0
+
+    def __init__(self, atoms, name=None, indices=None):
+        self.atoms = atoms
+        MockVibrationsCapture.last_indices = indices
+        MockVibrationsCapture.call_count += 1
+
+    def run(self):
+        pass
+
+    def get_frequencies(self):
+        # Only near-zero (translational/rotational) modes -> true minimum.
+        return np.array([0.0, 0.0, 0.0, 50.0, 100.0, 150.0])
+
+    def clean(self):
+        pass
+
+
+@pytest.mark.parametrize(
+    "mock_cls,expected",
+    [
+        (MockVibrationsImaginary, False),
+        (MockVibrationsSaddle, False),
+        (MockVibrationsComplexRealMinimum, True),
+        (MockVibrationsTrueMinimum, True),
+    ],
+)
+def test_is_true_minimum_via_vibrations_mock(tmp_path, monkeypatch, mock_cls, expected):
+    """Mocked vibration spectra drive the Hessian-based minimum verdict.
+
+    Each mock encodes a distinct spectrum behavior (imaginary complex mode,
+    real-negative saddle, complex-without-imaginary minimum, real near-zero
+    minimum) and the expected ``is_true_minimum`` result.
+    """
+    atoms = Atoms(["Pt", "Pt"], positions=[[0, 0, 0], [0, 0, 2.5]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=20)
+
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", mock_cls)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is expected
 
 
 def test_is_true_minimum_high_forces(tmp_path):
@@ -57,48 +149,6 @@ def test_is_true_minimum_high_forces(tmp_path):
         calculator=EMT(),
         fmax_threshold=0.01,  # Very strict threshold
         check_hessian=False,  # Skip expensive Hessian check for this test
-    )
-    assert is_min is False
-
-
-def test_is_true_minimum_true_minimum(tmp_path, monkeypatch):
-    # Create a relaxed structure (e.g., H2 molecule)
-    atoms = Atoms(["H", "H"], positions=[[0, 0, 0], [0, 0, 0.74]])
-    atoms.calc = EMT()
-
-    # Perform a quick relaxation to ensure forces are low
-    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=10)
-
-    # Mock Vibrations to ensure a controlled outcome for Hessian check
-    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsTrueMinimum)
-
-    is_min = is_true_minimum(
-        atoms,
-        calculator=EMT(),
-        fmax_threshold=0.05,
-        check_hessian=True,
-        imag_freq_threshold=1.0,  # Strict threshold for imaginary frequencies
-    )
-    assert is_min is True
-
-
-def test_is_true_minimum_saddle_point(tmp_path, monkeypatch):
-    # Create a structure that should be a saddle point (e.g., linear H3)
-    atoms = Atoms(["H", "H", "H"], positions=[[0, 0, 0], [0, 0, 1.0], [0, 0, 2.0]])
-    atoms.calc = EMT()
-
-    # Perform a quick relaxation (forces might not be zero for a saddle point)
-    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=10)
-
-    # Mock Vibrations to simulate a saddle point
-    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsSaddle)
-
-    is_min = is_true_minimum(
-        atoms,
-        calculator=EMT(),
-        fmax_threshold=0.05,
-        check_hessian=True,
-        imag_freq_threshold=50.0,  # Threshold to catch the -100.0 freq
     )
     assert is_min is False
 
@@ -119,57 +169,53 @@ def test_is_true_minimum_hessian_skipped(tmp_path):
 
 
 @pytest.mark.slow
-def test_is_true_minimum_real_hessian(tmp_path):
+def test_is_true_minimum_real_hessian(tmp_path, monkeypatch):
     # Run in a temporary directory so Vibrations writes files there and cleans up
-    cwd = os.getcwd()
+    monkeypatch.chdir(tmp_path)
+
+    # Small dimer which EMT can relax quickly
+    atoms = Atoms(["Pt", "Pt"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]])
+    calc = EMT()
+
+    # Local relaxation: attach calculator and run a few LBFGS steps
+    perform_local_relaxation(
+        atoms,
+        calculator=calc,
+        optimizer=LBFGS,
+        fmax=0.05,
+        steps=50,
+    )
+
+    # After relaxation, check Hessian for true minimum
+    is_min = is_true_minimum(
+        atoms,
+        calculator=calc,
+        fmax_threshold=0.1,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+
+    assert is_min is True
+    # Additionally, run Vibrations directly and assert the number of
+    # near-zero modes (translational + rotational) is as expected for a
+    # linear dimer (expected 5 near-zero modes).
+    # Re-attach calculator since perform_local_relaxation replaces it with SinglePointCalculator
+    atoms.calc = calc
+    vib = Vibrations(atoms, name="vib_modes")
     try:
-        os.chdir(tmp_path)
-
-        # Small dimer which EMT can relax quickly
-        atoms = Atoms(["Pt", "Pt"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]])
-        calc = EMT()
-
-        # Local relaxation: attach calculator and run a few LBFGS steps
-        perform_local_relaxation(
-            atoms,
-            calculator=calc,
-            optimizer=LBFGS,
-            fmax=0.05,
-            steps=50,
-        )
-
-        # After relaxation, check Hessian for true minimum
-        is_min = is_true_minimum(
-            atoms,
-            calculator=calc,
-            fmax_threshold=0.1,
-            check_hessian=True,
-            imag_freq_threshold=50.0,
-        )
-
-        assert is_min is True
-        # Additionally, run Vibrations directly and assert the number of
-        # near-zero modes (translational + rotational) is as expected for a
-        # linear dimer (expected 5 near-zero modes).
-        # Re-attach calculator since perform_local_relaxation replaces it with SinglePointCalculator
-        atoms.calc = calc
-        vib = Vibrations(atoms, name="vib_modes")
-        try:
-            vib.run()
-            freqs = vib.get_frequencies()
-        finally:
-            vib.clean()
-
-        # Determine if the molecule is linear via moments of inertia
-        moi = atoms.get_moments_of_inertia(vectors=False)
-        is_linear = any(np.isclose(moi, 0, atol=1e-5))
-        expected_zero_modes = 5 if is_linear else 6
-
-        # Count near-zero modes (absolute frequency smaller than 1 cm^-1)
-        near_zero_count = int(np.sum(np.abs(freqs) < 1.0))
-        assert near_zero_count >= expected_zero_modes
+        vib.run()
+        freqs = vib.get_frequencies()
     finally:
-        os.chdir(cwd)
+        vib.clean()
+
+    # Determine if the molecule is linear via moments of inertia
+    moi = atoms.get_moments_of_inertia(vectors=False)
+    is_linear = any(np.isclose(moi, 0, atol=1e-5))
+    expected_zero_modes = 5 if is_linear else 6
+
+    # Count near-zero modes (absolute frequency smaller than 1 cm^-1)
+    near_zero_count = int(np.sum(np.abs(freqs) < 1.0))
+    assert near_zero_count >= expected_zero_modes
 
 
 @pytest.mark.slow
@@ -221,8 +267,9 @@ def test_is_true_minimum_imag_freq_threshold_variations(tmp_path, monkeypatch):
 
     # Mock vibrations with small imaginary frequency
     class MockVibrationsSmallImag:
-        def __init__(self, atoms, name=None):
+        def __init__(self, atoms, name=None, indices=None):
             self.atoms = atoms
+            self.indices = indices
 
         def run(self):
             pass
@@ -333,3 +380,102 @@ def test_is_true_minimum_force_threshold_boundary(tmp_path):
         check_hessian=False,
     )
     assert is_min_above is True
+
+
+def test_is_true_minimum_passes_explicit_vibration_indices(tmp_path, monkeypatch):
+    """SCGO derives Vibrations indices from FixAtoms and passes them explicitly."""
+    from ase.constraints import FixAtoms
+
+    atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
+    atoms.calc = EMT()
+    atoms.set_constraint(FixAtoms(indices=[0]))  # freeze atom 0
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.01, steps=10)
+
+    MockVibrationsCapture.last_indices = None
+    MockVibrationsCapture.call_count = 0
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsCapture)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is True
+    # Only the free atom (index 1) is displaced.
+    assert list(MockVibrationsCapture.last_indices) == [1]
+    assert MockVibrationsCapture.call_count == 1
+
+
+def test_is_true_minimum_unconstrained_full_indices(tmp_path, monkeypatch):
+    """Without FixAtoms, every atom is displaced (full range indices)."""
+    atoms = Atoms("Pt3", positions=[[0, 0, 0], [0, 0, 2.0], [0, 0, 4.0]])
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.05, steps=10)
+
+    MockVibrationsCapture.last_indices = None
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsCapture)
+
+    is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert list(MockVibrationsCapture.last_indices) == [0, 1, 2]
+
+
+def test_is_true_minimum_all_fixed_skips_hessian(tmp_path, monkeypatch):
+    """When every atom is fixed, the Hessian check is skipped (no Vibrations call)."""
+    from ase.constraints import FixAtoms
+
+    atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.0]])
+    atoms.calc = EMT()
+    atoms.set_constraint(FixAtoms(indices=[0, 1]))
+
+    MockVibrationsCapture.call_count = 0
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsCapture)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    # Accepted on the force check alone; Vibrations never invoked.
+    assert is_min is True
+    assert MockVibrationsCapture.call_count == 0
+
+
+def test_is_true_minimum_no_moments_of_inertia_for_periodic(tmp_path, monkeypatch):
+    """Periodic / constrained checks log zero modes as 0, skipping inertia calc."""
+    atoms = Atoms(
+        "Pt2",
+        positions=[[0, 0, 0], [0, 0, 2.0]],
+        cell=[10, 10, 10],
+        pbc=True,
+    )
+    atoms.calc = EMT()
+    perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.05, steps=10)
+
+    moi_calls = {"n": 0}
+
+    def _moi(self, vectors=False):  # noqa: ARG001
+        moi_calls["n"] += 1
+        return np.array([1.0, 1.0, 1.0])
+
+    monkeypatch.setattr(type(atoms), "get_moments_of_inertia", _moi)
+    monkeypatch.setattr("scgo.utils.helpers.Vibrations", MockVibrationsCapture)
+
+    is_min = is_true_minimum(
+        atoms,
+        calculator=EMT(),
+        fmax_threshold=0.05,
+        check_hessian=True,
+        imag_freq_threshold=50.0,
+    )
+    assert is_min is True
+    assert moi_calls["n"] == 0

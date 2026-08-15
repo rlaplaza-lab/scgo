@@ -26,6 +26,7 @@ class TestEnsureRng:
         rng = ensure_rng(0)
         assert isinstance(rng, np.random.Generator)
 
+    @pytest.mark.reproducibility
     def test_reproducibility_same_seed(self):
         rng1 = ensure_rng(42)
         rng2 = ensure_rng(42)
@@ -35,6 +36,7 @@ class TestEnsureRng:
 
         assert nums1 == nums2
 
+    @pytest.mark.reproducibility
     def test_reproducibility_different_seeds(self):
         rng1 = ensure_rng(42)
         rng2 = ensure_rng(123)
@@ -72,6 +74,7 @@ class TestCreateChildRng:
         # Sequences should be different
         assert parent_nums != child_nums
 
+    @pytest.mark.reproducibility
     def test_reproducibility_of_children(self):
         parent1 = np.random.default_rng(42)
         parent2 = np.random.default_rng(42)
@@ -178,12 +181,16 @@ def test_rattle_mutation_deterministic_and_accepts_generator(pt3_atoms, rng):
 def test_mutation_constructors_reject_legacy_randomstate():
     import numpy as _np
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(
+        SCGOValidationError, match="rng must be an instance of numpy.random.Generator"
+    ):
         RattleMutation(
             blmin={}, n_top=2, system_type="gas_cluster", rng=_np.random.RandomState(1)
         )
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(
+        SCGOValidationError, match="rng must be an instance of numpy.random.Generator"
+    ):
         CustomPermutationMutation(
             n_top=2, system_type="gas_cluster", rng=_np.random.RandomState(1)
         )
@@ -195,7 +202,9 @@ def test_ga_go_rejects_legacy_randomstate():
 
     from scgo.algorithms import ga_go
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(
+        SCGOValidationError, match="rng must be an instance of numpy.random.Generator"
+    ):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=".",

@@ -24,10 +24,7 @@ from scgo.algorithms.ga_common import (
 )
 from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-from scgo.cluster_adsorbate.constraints import (
-    attach_adsorbate_internal_geometry_constraints,
-)
-from scgo.cluster_adsorbate.rigid import enforce_frozen_adsorbate_geometry
+from scgo.cluster_adsorbate.constraints import prepare_atoms_for_local_relax
 from scgo.constants import (
     BOLTZMANN_K_EV_PER_K,
     DEFAULT_COMPARATOR_TOL,
@@ -39,13 +36,12 @@ from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.constraints import attach_slab_constraints_from_surface_config
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
     resolve_structure_mic,
-    validate_structure_for_system_type,
+    validate_minimum_structure,
 )
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.fitness_strategies import (
@@ -60,7 +56,12 @@ from scgo.utils.helpers import (
     extract_minima_from_database,
     perform_local_relaxation,
 )
-from scgo.utils.logging import get_logger, should_show_progress
+from scgo.utils.logging import (
+    get_logger,
+    log_debug_v,
+    log_info_v,
+    should_show_progress,
+)
 from scgo.utils.timing_report import (
     build_timing_payload,
     log_timing_summary,
@@ -74,6 +75,8 @@ from scgo.utils.validation import (
     validate_integer,
     validate_positive,
 )
+
+logger = get_logger(__name__)
 
 
 def _move_atoms(
@@ -169,9 +172,20 @@ def _move_atoms(
     disp = np.zeros_like(positions)
     indices_to_move: list[int] = []
 
+    groups: dict[int, list[int]] = {}
+
+    def _choose_groups(pool: list[int], fraction: float) -> list[int]:
+        n_groups = len(pool)
+        if n_groups == 0:
+            return []
+        n_to_move_groups = min(n_groups, max(1, int(n_groups * fraction)))
+        return list(rng.choice(pool, size=n_to_move_groups, replace=False))
+
+    # Build (candidates, fraction, scale, is_group) pools. Tag-group pools move a
+    # whole group rigidly (one shared displacement vector); atom pools move each
+    # selected atom independently. Both cores and adsorbate share one apply loop.
     if move_by_tag_groups:
         tags = atoms_new.get_tags()
-        groups: dict[int, list[int]] = {}
         for idx in movable_indices:
             groups.setdefault(int(tags[idx]), []).append(int(idx))
         group_ids = sorted(groups)
@@ -184,51 +198,32 @@ def _move_atoms(
         core_group_ids = [g for g in group_ids if not _is_ads_group(g)]
         ads_group_ids = [g for g in group_ids if _is_ads_group(g)]
 
-        def _choose_groups(pool: list[int], fraction: float) -> list[int]:
-            n_groups = len(pool)
-            if n_groups == 0:
-                return []
-            n_to_move_groups = min(n_groups, max(1, int(n_groups * fraction)))
-            return list(rng.choice(pool, size=n_to_move_groups, replace=False))
-
         if use_split and (core_group_ids or ads_group_ids):
-            chosen_core = _choose_groups(core_group_ids, move_fraction)
-            chosen_ads = _choose_groups(ads_group_ids, ads_frac_eff)
-            for group_id in chosen_core:
+            pools = [
+                (core_group_ids, move_fraction, dr, True),
+                (ads_group_ids, ads_frac_eff, ads_dr_eff, True),
+            ]
+        else:
+            pools = [(group_ids, move_fraction, dr, True)]
+    elif use_split and (core_indices or ads_indices):
+        pools = [
+            (core_indices, move_fraction, dr, False),
+            (ads_indices, ads_frac_eff, ads_dr_eff, False),
+        ]
+    else:
+        pools = [(list(movable_indices), move_fraction, dr, False)]
+
+    for candidates, fraction, scale, is_group in pools:
+        if is_group:
+            for group_id in _choose_groups(candidates, fraction):
                 group_indices = groups[group_id]
-                displacement = dr * rng.uniform(-1.0, 1.0, 3)
-                disp[group_indices, :] = displacement
-                indices_to_move.extend(group_indices)
-            for group_id in chosen_ads:
-                group_indices = groups[group_id]
-                displacement = ads_dr_eff * rng.uniform(-1.0, 1.0, 3)
-                disp[group_indices, :] = displacement
+                disp[group_indices, :] = scale * rng.uniform(-1.0, 1.0, 3)
                 indices_to_move.extend(group_indices)
         else:
-            n_groups = len(group_ids)
-            n_to_move_groups = min(n_groups, max(1, int(n_groups * move_fraction)))
-            chosen_groups = list(
-                rng.choice(group_ids, size=n_to_move_groups, replace=False),
-            )
-            for group_id in chosen_groups:
-                group_indices = groups[group_id]
-                displacement = dr * rng.uniform(-1.0, 1.0, 3)
-                disp[group_indices, :] = displacement
-                indices_to_move.extend(group_indices)
-    elif use_split and (core_indices or ads_indices):
-        chosen_core = _select_atom_indices(core_indices, move_fraction)
-        chosen_ads = _select_atom_indices(ads_indices, ads_frac_eff)
-        indices_to_move = chosen_core + chosen_ads
-        if chosen_core:
-            disp[chosen_core, :] = rng.uniform(-1.0, 1.0, (len(chosen_core), 3)) * dr
-        if chosen_ads:
-            disp[chosen_ads, :] = (
-                rng.uniform(-1.0, 1.0, (len(chosen_ads), 3)) * ads_dr_eff
-            )
-    else:
-        indices_to_move = _select_atom_indices(list(movable_indices), move_fraction)
-        disp[indices_to_move, :] = rng.uniform(-1.0, 1.0, (len(indices_to_move), 3))
-        disp *= dr
+            chosen = _select_atom_indices(candidates, fraction)
+            if chosen:
+                disp[chosen, :] = rng.uniform(-1.0, 1.0, (len(chosen), 3)) * scale
+                indices_to_move.extend(chosen)
 
     if not indices_to_move:
         return atoms_new, "Moved_atoms: none"
@@ -306,7 +301,8 @@ def bh_go(
             is set.
         timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``
             when ``run_trials`` is not used).
-        timing_collector: Optional list appended with the timing payload after the run.
+        timing_collector: Optional list appended with the timing payload after the
+            run; only populated when ``write_timing_json`` is set.
         deduplicate: If True (default), filter to structurally unique minima.
         energy_tolerance: Energy difference (eV) below which structures are considered duplicates.
         comparator_tol: Tolerance for interatomic distance comparator.
@@ -314,7 +310,7 @@ def bh_go(
         comparator_n_top: Number of top distances to use in comparator. If None, uses all.
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace). Default 1.
         run_id: Optional run ID for tracking.
-        clean: If True, start fresh (ignore previous databases).
+        clean: If True, remove an existing database in the output directory.
         fitness_strategy: Fitness strategy. One of: "low_energy", "high_energy", "diversity".
             Default "low_energy".
         diversity_reference_db: Glob pattern for reference structure databases.
@@ -328,8 +324,9 @@ def bh_go(
         non-low_energy strategies, or by energy (lowest first) for low_energy.
 
     Raises:
-        TypeError: If atoms is not an Atoms object or niter is not an integer.
-        ValueError: If calculator is not attached or parameters are invalid.
+        SCGOValidationError: If atoms is not an ASE Atoms object, niter is not a
+            positive integer, no calculator is attached, or any other parameter
+            is invalid.
     """
     validate_atoms(atoms)
     validate_integer("niter", niter)
@@ -374,8 +371,6 @@ def bh_go(
             mobile_composition,
             adsorbate_definition=adsorbate_definition,
         )
-
-    logger = get_logger(__name__)
 
     movable_indices = list(range(len(atoms)))
     if surface_mode:
@@ -468,12 +463,17 @@ def bh_go(
     try:
         profile_t0 = perf_counter()
         profile_timings: dict[str, float] = {}
-        profile_counters: dict[str, int] = {"niter": int(niter), "accepted": 0}
+        profile_counters: dict[str, int] = {
+            "niter": int(niter),
+            "accepted": 0,
+            "rejected_invalid": 0,
+        }
         per_iteration: list[dict[str, Any]] | None = [] if detailed_timing else None
 
         def _finish_bh_timing() -> None:
             total = perf_counter() - profile_t0
             profile_timings["total_wall_s"] = total
+            profile_timings["kind"] = "bh"
             relax_sum = float(
                 profile_timings.get("initial_local_relaxation_s", 0.0)
             ) + float(profile_timings.get("offspring_local_relaxation_s", 0.0))
@@ -508,20 +508,15 @@ def bh_go(
             config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
-        if surface_mode and surface_config is not None:
-            attach_slab_constraints_from_surface_config(a_current, surface_config)
-        if freeze_adsorbate_internal_geometry:
-            enforce_frozen_adsorbate_geometry(
-                a_current,
-                n_slab=(n_slab if surface_mode else 0),
-                adsorbate_definition=adsorbate_definition,
-                fragment_templates=adsorbate_fragment_template,
-            )
-            attach_adsorbate_internal_geometry_constraints(
-                a_current,
-                n_slab=(n_slab if surface_mode else 0),
-                adsorbate_definition=adsorbate_definition,
-            )
+        a_current = prepare_atoms_for_local_relax(
+            a_current,
+            surface_mode=surface_mode,
+            surface_config=surface_config,
+            n_slab=(n_slab if surface_mode else 0),
+            freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+            adsorbate_definition=adsorbate_definition,
+            adsorbate_fragment_templates=adsorbate_fragment_template,
+        )
         t_rel0 = perf_counter()
         e_current = perform_local_relaxation(
             a_current,
@@ -534,17 +529,29 @@ def bh_go(
             n_slab=n_slab,
         )
         profile_timings["initial_local_relaxation_s"] = perf_counter() - t_rel0
-        validate_structure_for_system_type(
-            a_current,
-            system_type=system_type,
-            surface_config=surface_config,
-            n_slab=n_slab if surface_mode else None,
-            adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-        )
+        try:
+            validate_minimum_structure(
+                a_current,
+                system_type=system_type,
+                surface_config=surface_config,
+                n_slab=n_slab if surface_mode else None,
+                adsorbate_definition=adsorbate_definition,
+                connectivity_factor=connectivity_factor,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            )
+        except SCGOValidationError as exc:
+            # The initial seed must not crash the whole run: the trial gate
+            # (below) and the run_trials final gate already treat an invalid
+            # structure as rejectable/droppable. Proceed with the seed as the
+            # starting point; subsequent moves and the final gate still enforce
+            # connectivity, so disconnected minima are never reported downstream.
+            logger.warning(
+                "Initial relaxed seed fails structural gate (%s); proceeding "
+                "with it as the starting structure.",
+                exc,
+            )
         set_tags(
             a_current,
             **_run_metadata_extras(),
@@ -570,11 +577,15 @@ def bh_go(
         )
         set_fitness_in_atoms(a_current, fitness_current, fitness_strategy)
 
-        if verbosity >= 1:
-            logger.info(
-                f"Starting Basin Hopping with fitness_strategy='{fitness_strategy}' "
-                f"(initial energy: {e_current:.4f} eV, fitness: {fitness_current:.4f})"
-            )
+        log_info_v(
+            logger,
+            "Starting Basin Hopping with fitness_strategy='%s' "
+            "(initial energy: %.4f eV, fitness: %.4f)",
+            fitness_strategy,
+            e_current,
+            fitness_current,
+            verbosity=verbosity,
+        )
 
         iteration_iterator = range(niter)
         if verbosity >= 1:
@@ -598,20 +609,15 @@ def bh_go(
                 adsorbate_dr=ads_dr,
                 adsorbate_move_fraction=ads_frac,
             )
-            if surface_mode and surface_config is not None:
-                attach_slab_constraints_from_surface_config(a_trial, surface_config)
-            if freeze_adsorbate_internal_geometry:
-                enforce_frozen_adsorbate_geometry(
-                    a_trial,
-                    n_slab=(n_slab if surface_mode else 0),
-                    adsorbate_definition=adsorbate_definition,
-                    fragment_templates=adsorbate_fragment_template,
-                )
-                attach_adsorbate_internal_geometry_constraints(
-                    a_trial,
-                    n_slab=(n_slab if surface_mode else 0),
-                    adsorbate_definition=adsorbate_definition,
-                )
+            a_trial = prepare_atoms_for_local_relax(
+                a_trial,
+                surface_mode=surface_mode,
+                surface_config=surface_config,
+                n_slab=(n_slab if surface_mode else 0),
+                freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                adsorbate_definition=adsorbate_definition,
+                adsorbate_fragment_templates=adsorbate_fragment_template,
+            )
             if run_id is not None:
                 set_tags(a_trial, run_id=run_id)
 
@@ -643,17 +649,28 @@ def bh_go(
             profile_timings["offspring_local_relaxation_s"] = (
                 profile_timings.get("offspring_local_relaxation_s", 0.0) + dt_rel
             )
-            validate_structure_for_system_type(
-                a_trial,
-                system_type=system_type,
-                surface_config=surface_config,
-                n_slab=n_slab if surface_mode else None,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            )
+            try:
+                validate_minimum_structure(
+                    a_trial,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab if surface_mode else None,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                )
+            except SCGOValidationError as exc:
+                # A single invalid trial must not abort the whole run: count it as
+                # rejected and continue with the next move.
+                profile_counters["rejected_invalid"] += 1
+                logger.warning(
+                    "Iteration %d: rejecting invalid trial structure (%s)",
+                    iteration,
+                    exc,
+                )
+                continue
             set_tags(
                 a_trial,
                 **_run_metadata_extras(),
@@ -686,27 +703,37 @@ def bh_go(
             if fitness_trial > fitness_current:
                 # Better fitness - always accept
                 accept = True
-                if verbosity >= 2:
-                    logger.debug(
-                        f"Iteration {iteration}: Accepting (fitness improved: "
-                        f"{fitness_current:.4f} → {fitness_trial:.4f})"
-                    )
+                log_debug_v(
+                    logger,
+                    "Iteration %d: Accepting (fitness improved: %.4f → %.4f)",
+                    iteration,
+                    fitness_current,
+                    fitness_trial,
+                    verbosity=verbosity,
+                )
             elif temperature > 0.0:
                 # Metropolis acceptance based on fitness difference
                 fitness_diff = fitness_trial - fitness_current
                 acceptance_prob = np.exp(fitness_diff / temperature)
                 accept = rng.random() < acceptance_prob
 
-                if verbosity >= 2:
-                    logger.debug(
-                        f"Iteration {iteration}: Metropolis test "
-                        f"(fitness_diff: {fitness_diff:.4f}, "
-                        f"acceptance_prob: {acceptance_prob:.4f}, accept: {accept})"
-                    )
+                log_debug_v(
+                    logger,
+                    "Iteration %d: Metropolis test "
+                    "(fitness_diff: %.4f, acceptance_prob: %.4f, accept: %s)",
+                    iteration,
+                    fitness_diff,
+                    acceptance_prob,
+                    accept,
+                    verbosity=verbosity,
+                )
 
             if accept:
                 profile_counters["accepted"] += 1
                 a_current = a_trial.copy()
+                # Atoms.copy() drops ``calc``; re-attach so force-based moves and
+                # the next relaxation keep working (MACE/UMA fail without it).
+                a_current.calc = calculator
                 e_current = e_trial
                 fitness_current = fitness_trial
 
@@ -717,10 +744,12 @@ def bh_go(
                     and iteration % diversity_update_interval == 0
                 ):
                     diversity_scorer.add_reference(a_trial)
-                    if verbosity >= 2:
-                        logger.debug(
-                            f"Updated reference structures (total: {len(diversity_scorer)})"
-                        )
+                    log_debug_v(
+                        logger,
+                        "Updated reference structures (total: %d)",
+                        len(diversity_scorer),
+                        verbosity=verbosity,
+                    )
 
             if per_iteration is not None:
                 per_iteration.append(
@@ -758,7 +787,7 @@ def bh_go(
             _finish_bh_timing()
             return []
 
-        # Reuse the comparator created earlier (line 200) for deduplication
+        # Reuse the comparator created before the run loop for deduplication
         # Sort by energy for binning (lowest first)
         sorted_minima = sorted(valid_minima, key=lambda x: x[0])
 

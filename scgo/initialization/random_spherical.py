@@ -7,7 +7,7 @@ strategies that operate on the current cluster geometry.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 import numpy as np
 from ase import Atom, Atoms
@@ -30,6 +30,7 @@ from .geometry_helpers import (
     _check_composition_feasibility,
     _compute_composition_delta,
     _generate_batch_positions_on_convex_hull,
+    _set_cubic_cell_and_center,
     _verify_exact_composition,
     analyze_disconnection,
     compute_bond_distance_params,
@@ -483,6 +484,8 @@ def random_spherical(
     Args:
         composition: List of element symbols for the atoms.
         cell_side: The side length of the cubic cell for the returned Atoms object.
+        rng: Numpy ``Generator`` supplying all randomness for this call
+            (placement order, coordinates, retries).
         placement_radius_scaling: A scaling factor used to determine the initial
             spherical volume for atom placement. Larger values result in a larger
             initial volume.
@@ -491,20 +494,20 @@ def random_spherical(
             overlap, while < 1.0 allows some overlap.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold.
-        max_connectivity_retries: Maximum number of retries if connectivity
-            validation fails.
+        max_connectivity_retries: Maximum number of retries if placement or
+            connectivity validation fails.
         blmin_ratio: GA-compatible steric floor (covalent-radius scale). ``None``
             disables the extra floor beyond ``min_distance_factor``.
-        rng: Numpy ``Generator`` supplying all randomness for this call
-            (placement order, coordinates, retries).
 
     Returns:
-        An :class:`ase.Atoms` instance with the randomly placed cluster.
+        An :class:`ase.Atoms` instance with the randomly placed cluster. For an
+        empty ``composition``, returns an empty ``Atoms`` object.
 
     Raises:
-        ValueError: If all atoms cannot be placed within the given constraints
-        after a maximum number of attempts, or if connectivity validation
-        fails after all retries.
+        SCGOValidationError: If the numeric parameters are invalid, if
+            ``connectivity_factor`` is below the active steric floor, or if a
+            connected, clash-free cluster could not be built within
+            ``max_connectivity_retries`` attempts.
 
     """
     # Handle empty composition
@@ -647,7 +650,7 @@ def grow_from_seed(
     """Try to grow a smaller candidate :class:`ase.Atoms` to the target composition.
 
     Growth is performed by repeatedly adding atoms to the existing seed using
-    convex-hull-based placement (via :func:`_add_atoms_to_cluster_iteratively`),
+    convex-hull-based placement (via ``_add_atoms_to_cluster_iteratively``),
     with covalent-radii-based clash checks and connectivity enforcement.
 
     Args:
@@ -655,17 +658,26 @@ def grow_from_seed(
         target_composition: The target composition as a list of element symbols.
         placement_radius_scaling: A scaling factor to determine the placement shell
             radius.
-        min_distance_factor: Factor to scale covalent radii for minimum distance
-            checks.
         cell_side: The side length of the cubic cell for the new :class:`ase.Atoms`
             object.
+        rng: Numpy ``Generator`` supplying all randomness for this call.
+        min_distance_factor: Factor to scale covalent radii for minimum distance
+            checks.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold.
-        rng: Optional numpy random number generator.
+        blmin_ratio: GA-compatible steric floor (covalent-radius scale) enforced
+            during placement and on the grown cluster. ``None`` disables it.
 
     Returns:
         A new :class:`ase.Atoms` object of the target composition on success,
-        or ``None`` on failure.
+        or ``None`` on failure (infeasible composition, failed placement, or
+        failed clash/connectivity/blmin validation). When the seed already
+        matches the target composition, the seed is returned re-celled and
+        centered.
+
+    Raises:
+        SCGOValidationError: If growth completed but produced a composition
+            other than ``target_composition``.
 
     """
     base_atoms = seed_atoms.copy()
@@ -673,8 +685,7 @@ def grow_from_seed(
 
     # Handle empty target composition - return seed with proper cell/centering
     if not target_composition:
-        base_atoms.set_cell([cell_side, cell_side, cell_side])
-        base_atoms.center()
+        _set_cubic_cell_and_center(base_atoms, cell_side)
         return base_atoms
 
     # Check composition feasibility before attempting growth
@@ -691,11 +702,10 @@ def grow_from_seed(
     base_counts = get_composition_counts(base_composition)
     target_counts = get_composition_counts(target_composition)
 
-    atoms_to_add, _, _ = _compute_composition_delta(base_counts, target_counts)
+    atoms_to_add, _ = _compute_composition_delta(base_counts, target_counts)
 
     if not atoms_to_add:
-        base_atoms.set_cell([cell_side, cell_side, cell_side])
-        base_atoms.center()
+        _set_cubic_cell_and_center(base_atoms, cell_side)
         return base_atoms
 
     atoms_to_add = _sample_atoms_to_add_order(
@@ -718,8 +728,7 @@ def grow_from_seed(
     )
 
     if final_atoms:
-        final_atoms.set_cell([cell_side, cell_side, cell_side])
-        final_atoms.center()
+        _set_cubic_cell_and_center(final_atoms, cell_side)
 
         # Verify exact composition match after growth
         if not _verify_exact_composition(final_atoms, target_composition):
@@ -765,11 +774,13 @@ def _add_atoms_to_cluster_iteratively(
 ) -> Atoms | None:
     """Iteratively adds atoms to a base Atoms object within a spherical volume.
 
-    This function places new atoms in batches when possible (for clusters with ≥4 atoms),
-    using convex hull facets to place multiple atoms per hull computation. For smaller
-    clusters or edge cases, it falls back to single-atom placement. The placement volume
-    is dynamically adjusted. Connectivity is checked during growth to ensure the cluster
-    remains connected.
+    This function places new atoms in batches when the current cluster already
+    has >=4 atoms and connectivity is not as tight as the steric floor, using
+    convex hull facets to place multiple atoms per hull computation. For
+    smaller clusters, tight connectivity, or when batch generation yields no
+    candidates, it falls back to single-atom placement. The placement volume
+    is dynamically adjusted. Connectivity is checked during growth to ensure
+    the cluster remains connected.
 
     Args:
         base_atoms: The starting Atoms object to add atoms to
@@ -778,6 +789,8 @@ def _add_atoms_to_cluster_iteratively(
         placement_radius_scaling: Scaling for placement radius.
         rng: Random number generator.
         connectivity_factor: Factor for connectivity threshold.
+        steric_floor: Optional lower bound that progressive relaxation of the
+            clash threshold must never cross (e.g. the GA blmin ratio).
 
     Returns:
         A new Atoms object with all atoms added, or None if addition failed
@@ -855,7 +868,11 @@ def _add_atoms_single_mode(
     *,
     steric_floor: float | None = None,
 ) -> Atoms | None:
-    """Single-atom placement mode for clusters with <4 atoms."""
+    """Single-atom placement mode.
+
+    Used for clusters with <4 atoms, when connectivity is as tight as the
+    steric floor, and as the fallback when batch placement finds no candidates.
+    """
     for atom_idx, atom_symbol in enumerate(atoms_to_add):
         atom_radius = radii_to_add[atom_symbol]
         new_pos = None
@@ -888,7 +905,8 @@ def _add_atoms_single_mode(
             n_current = len(new_atoms)
 
             if n_current > 0:
-                assert center is not None
+                if center is None:
+                    raise TypeError("center must be computed when n_current > 0")
 
                 # Special handling for 2-atom clusters: bond length must respect
                 # both the steric floor and connectivity_factor (not raw r_i+r_j).
@@ -954,7 +972,7 @@ def _add_atoms_single_mode(
                     )
                     if not candidates:
                         # Convex hull needs >=4 atoms; anchor on an existing atom so
-                        # bond_distance is measured from a real neighbour, not the COM.
+                        # bond_distance is measured from a real neighbor, not the COM.
                         anchor_idx = int(rng.integers(n_current))
                         anchor_pos = current_positions[anchor_idx]
                         anchor_radius = get_covalent_radius_by_z(
@@ -1064,8 +1082,8 @@ def _add_atoms_single_mode(
         if len(new_atoms) >= 2 and not is_cluster_connected(
             new_atoms, connectivity_factor, use_mic=False
         ):
-            disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
+            suggested_factor, analysis_msg = analyze_disconnection(
+                new_atoms, connectivity_factor, use_mic=False
             )
             remaining_atoms = atoms_to_add[atom_idx + 1 :]
             remaining_counts = (
@@ -1282,7 +1300,7 @@ def _add_atoms_batch_mode(
             continue
 
         # Remove placed atoms from atoms_to_add (one per placement, not all of each symbol)
-        placed_counts = Counter(sym for sym, _ in valid_placements)
+        placed_counts = get_composition_counts([sym for sym, _ in valid_placements])
         remaining = []
         for atom in atoms_to_add:
             if placed_counts.get(atom, 0) > 0:
@@ -1297,8 +1315,8 @@ def _add_atoms_batch_mode(
         if len(new_atoms) >= 2 and not is_cluster_connected(
             new_atoms, connectivity_factor, use_mic=False
         ):
-            disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(new_atoms, connectivity_factor, use_mic=False)
+            suggested_factor, analysis_msg = analyze_disconnection(
+                new_atoms, connectivity_factor, use_mic=False
             )
             remaining_counts = get_composition_counts(atoms_to_add)
             diagnostics = get_structure_diagnostics(

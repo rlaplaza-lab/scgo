@@ -8,7 +8,7 @@ from scgo.metadata.atoms import ensure_final_id
 from scgo.metadata.persist import mark_final_minima_in_db
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
-from tests.test_utils import assert_db_final_row
+from tests.helpers import assert_db_final_row
 
 
 def test_ts_search_uses_only_tagged_final_minima(tmp_path):

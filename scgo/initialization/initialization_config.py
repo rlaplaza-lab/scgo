@@ -21,10 +21,22 @@ MAX_CONSECUTIVE_FAILURES = 50
 # atoms connected if distance <= (r_i + r_j) * CONNECTIVITY_FACTOR
 # GA operators use blmin_ratio=0.7 (steric floor); validation at 1.4 catches
 # borderline disconnections that still pass the tighter operator threshold.
+#
+# CONNECTIVITY_FACTOR is intentionally generous (1.4). For metals a 1.0x bond
+# length still trips (e.g. Pt-Pt at 2.72 A < 2.77 A at 1.0x), so the higher
+# factor is required for correct connectivity. It plays two roles:
+#   1. cluster/slab fragmentation vs single-subgroup contact validation
+#      (deliberately permissive), and
+#   2. intra-fragment integrity (also permissive, with the dedicated
+#      H-contact special case _H_CONTACT_THRESHOLD_A = 1.15 A so short
+#      X-H bonds are not spuriously broken).
 CONNECTIVITY_FACTOR = 1.4  # Connectivity threshold used consistently throughout
 BLMIN_RATIO_DEFAULT = 0.7  # Covalent-radius scale for GA/placement clash tables
-# Placement may relax below this during difficult fits, but never below
-# ``BLMIN_RATIO_DEFAULT`` when ``random_spherical`` enforces GA sterics.
+# Validation fallback only. Every placement path clamps to
+# max(MIN_DISTANCE_FACTOR_DEFAULT, blmin_ratio=0.7) via resolve_steric_floor,
+# so real clashes are gated by the 0.7 blmin_ratio (or the cluster_adsorbate
+# _BLMIN_RATIO_FLOOR = 0.55 for adsorbate-vs-slab two-set checks), never by 0.4
+# alone. 0.4 is a lower bound for paths that do not supply a blmin_ratio.
 MIN_DISTANCE_FACTOR_DEFAULT = 0.4
 PLACEMENT_RADIUS_SCALING_DEFAULT = 1.2
 SEED_CLASH_FACTOR = MIN_DISTANCE_FACTOR_DEFAULT  # Use same factor as random placement
@@ -43,10 +55,6 @@ ENERGY_SPREAD_DIVISOR = 10.0  # Divisor for adaptive temperature calculation
 
 # Convex hull and geometry
 CONVEX_HULL_PERTURBATION_SCALE = 0.1
-CONVEX_HULL_CACHE_SIZE = 100
-# Cache sizes for initialization caches (tunable via configuration)
-CANDIDATE_CACHE_SIZE = 100
-COMPOSITION_CACHE_SIZE = 100
 CONVEX_HULL_VOLUME_TOLERANCE = 1e-6  # Tolerance for degenerate convex hulls
 
 # Magic numbers and templates
@@ -54,11 +62,36 @@ CONVEX_HULL_VOLUME_TOLERANCE = 1e-6  # Tolerance for degenerate convex hulls
 # Clusters within this many atoms of a magic number are considered "near"
 MAGIC_NUMBER_TOLERANCE = 2
 
-# Magic numbers for different structure types
-# Based on Doye group study: https://doye.chem.ox.ac.uk/jon/structures/Morse/paper/node5.html
-ICOSAHEDRAL_MAGIC_NUMBERS = [
-    13,
+# Magic numbers for high-symmetry cluster sizes, grouped by structure family.
+# Membership is what matters (the original combined these as a ``sorted(set(...))``),
+# so this single literal preserves every number from the per-family lists above.
+# Note that the decahedral group is unordered and includes both 54 and 55.
+#
+# Provenance: the icosahedral/decahedral/cuboctahedral families follow the LJ/Doye
+# global-minimum and magic-number surveys (Wales, Doye, etc.). These numbers only
+# gate the OPTIONAL high-symmetry templates and their allocation weights; usage is
+# bounded (a small fixed template set), so they never drive unbounded allocation
+# or physics defaults (CONNECTIVITY_FACTOR, MAGIC_NUMBERS-independent).
+MAGIC_NUMBERS = {
+    # Platonic solid vertices: tetrahedron, octahedron, cube, icosahedron, dodecahedron
+    4,
+    6,
+    8,
+    12,
+    20,
+    # Tetrahedral shells (vertices +1/+2/+3 shells)
+    10,
+    35,
+    # Octahedral (ASE Octahedron generator: length=2/3/4/5, cutoff=0)
     19,
+    44,
+    85,
+    # Cubic (n×n×n cubes)
+    27,
+    64,
+    125,
+    # Icosahedral (Doye group study)
+    13,
     23,
     26,
     29,
@@ -70,52 +103,21 @@ ICOSAHEDRAL_MAGIC_NUMBERS = [
     55,
     58,
     61,
-    64,
     71,
     78,
     127,
     147,
     309,
-]
-DECAHEDRAL_MAGIC_NUMBERS = [7, 13, 23, 39, 55, 54, 85, 116, 147, 105, 156, 207]
-
-# Regular polyhedra (Platonic solids) - vertices only
-PLATONIC_SOLID_MAGIC_NUMBERS = [
-    4,
-    6,
-    8,
-    12,
-    20,
-]  # tetrahedron, octahedron, cube, icosahedron, dodecahedron
-
-# Octahedral cluster magic numbers (from ASE Octahedron generator)
-OCTAHEDRAL_MAGIC_NUMBERS = [6, 19, 44, 85]  # length=2,3,4,5 with cutoff=0
-
-# Cubic cluster magic numbers (n×n×n cubes)
-CUBIC_MAGIC_NUMBERS = [8, 27, 64, 125]  # 2³, 3³, 4³, 5³
-
-# Tetrahedral cluster magic numbers (layered tetrahedra)
-TETRAHEDRAL_MAGIC_NUMBERS = [4, 10, 20, 35]  # vertices, +1 shell, +2 shells, +3 shells
-
-# Archimedean solids and related structures
-ARCHIMEDEAN_MAGIC_NUMBERS = [
-    12,
-    13,
+    # Decahedral (unordered: includes both 54 and 55)
+    7,
+    54,
+    105,
+    116,
+    156,
+    207,
+    # Archimedean: cuboctahedron (12), cuboctahedron+center (13), truncated octahedron (24)
     24,
-]  # cuboctahedron (12 vertices), cuboctahedron+center (13), truncated octahedron (24)
-
-# Combined list of all magic numbers
-MAGIC_NUMBERS = sorted(
-    set(
-        ICOSAHEDRAL_MAGIC_NUMBERS
-        + DECAHEDRAL_MAGIC_NUMBERS
-        + PLATONIC_SOLID_MAGIC_NUMBERS
-        + OCTAHEDRAL_MAGIC_NUMBERS
-        + CUBIC_MAGIC_NUMBERS
-        + TETRAHEDRAL_MAGIC_NUMBERS
-        + ARCHIMEDEAN_MAGIC_NUMBERS
-    )
-)
+}
 
 # Strategy and diversity
 # Number of seed combination strategies available
@@ -136,9 +138,13 @@ SEED_PREFACTOR = (
 )
 
 # Internal caching and selection
-_FIND_SMALLER_CANDIDATES_CACHE_VERSION = 3
+_FIND_SMALLER_CANDIDATES_CACHE_VERSION = 4
 _MAX_CANDIDATES_PER_FORMULA = 10000
 _COMPOSITION_CACHE_NS = "composition"
+
+# Exact-match reuse tier scaling (mirrors SEED_* for the bounded additive tier)
+EXACT_BASE_PCT = 0.10
+EXACT_PREFACTOR = 1.5
 
 # Template diversity enhancement
 TEMPLATE_ROTATION_CANDIDATES = (
@@ -157,8 +163,8 @@ TEMPLATE_BASE_WEIGHTS: dict[str, float] = {
 }
 
 # Multi-element composition penalty factor
-# Applied to icosahedron and decahedron for multi-element clusters
-# (these structures are less favorable for mixed compositions)
+# Subtracted from every template weight for multi-element clusters
+# (high-symmetry motifs are less favorable for mixed compositions)
 MULTI_ELEMENT_TEMPLATE_PENALTY = 0.9
 
 # Diversity boost factor for underrepresented template types
@@ -180,8 +186,6 @@ SMART_FILTERING_PERTURBATION_SCALE = (
 PLACEMENT_RELAXATION_FACTOR = 0.25  # Relaxation factor for placement attempts
 MIN_DISTANCE_THRESHOLD_LOW = 0.4  # Lower threshold for min_distance_factor
 MIN_DISTANCE_THRESHOLD_HIGH = 0.8  # Upper threshold for min_distance_factor
-BOND_DISTANCE_MULTIPLIER_2ATOM = 1.2  # Multiplier for 2-atom bond distances
-BOND_DISTANCE_MULTIPLIER_3ATOM = 3.0  # Multiplier for 3-atom bond distances
 CONNECTIVITY_SUGGESTION_BUFFER = 1.05  # Buffer for connectivity factor suggestions
 
 # Physical and computational

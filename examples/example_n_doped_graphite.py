@@ -3,7 +3,12 @@
 
 ``system_type="surface_adsorbate"`` — GA/BH search the top slab layer plus an OH
 adsorbate on an N-doped graphite slab (bottom layers fixed). Requires
-``scgo[mace]``.
+``scgo[mace]``. Pass the same ``surface_config`` to the preset builders and
+``run_go_ts``.
+Params come from the reduced-budget (~25% of production)
+:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
+:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
+production calculator and NEB physics but shrink the GA and NEB step budgets.
 
 Output: ``results/n_doped_graphite_oh_mace/`` with searches / TS result trees.
 """
@@ -17,8 +22,8 @@ from ase import Atoms
 
 from scgo import (
     SurfaceSystemConfig,
-    get_torchsim_ga_params,
-    get_ts_search_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
     make_n_doped_graphite_surface_config,
     run_go_ts,
 )
@@ -29,8 +34,8 @@ SYSTEM_TYPE = "surface_adsorbate"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
 OUTPUT_STEM = "n_doped_graphite_oh"
 
-NITER = 4
-POPULATION_SIZE = 16
+# GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
+# per-example knob (it is the dominant TS cost lever).
 MAX_PAIRS = 4
 SLAB_LAYERS = 3
 SLAB_REPEAT_XY = 3
@@ -48,24 +53,25 @@ def _oh_fragment() -> Atoms:
 
 
 def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
-    go_params = get_torchsim_ga_params(
+    go_params = get_low_effort_torchsim_ga_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,
     )
     go_params["connectivity_factor"] = 1.8
     go_params["optimizer_params"]["ga"].update(
-        niter=NITER,
-        population_size=POPULATION_SIZE,
         write_timing_json=True,
         detailed_timing=True,
     )
+    go_params[
+        "n_jobs"
+    ] = -2  # one switch parallelizes population init, offspring, and validation
     go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 
 
 def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
-    ts_params = get_ts_search_params(
+    ts_params = get_low_effort_ts_search_params(
         system_type=SYSTEM_TYPE,
         surface_config=surface_config,
         seed=SEED,

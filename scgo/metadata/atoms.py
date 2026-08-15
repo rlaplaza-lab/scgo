@@ -1,4 +1,4 @@
-"""Structure tags on ASE Atoms (single bag: ``key_value_pairs``).
+r"""Structure tags on ASE Atoms (single bag: ``key_value_pairs``).
 
 All structure annotations go through this API. ASE persists
 ``atoms.info['key_value_pairs']`` into SQLite ``systems.key_value_pairs``.
@@ -129,7 +129,8 @@ def filter_by_tags(
 def compute_final_id(atoms: Atoms, energy: float | None) -> str:
     """Compute a deterministic identifier for a final structure.
 
-    SHA256 over canonical species, rounded positions, and optional energy.
+    SHA256 over the centered copy's chemical symbols, positions rounded to 8
+    decimals, and the energy when one is given.
     """
     a = atoms.copy()
     with contextlib.suppress(AttributeError, TypeError):

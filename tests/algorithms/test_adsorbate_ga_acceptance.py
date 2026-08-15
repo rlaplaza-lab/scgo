@@ -16,10 +16,11 @@ from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment
 from scgo.initialization.atomic_radii import build_blmin, build_blmin_from_zs
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
+from scgo.system_types import AdsorbateDefinition
 
 pytestmark = pytest.mark.slow
 
-MAX_MUTATION_ATTEMPTS = 40
+MAX_MUTATION_ATTEMPTS = 15
 
 _GAS_ADSORBATE_OPS = (
     "rattle",
@@ -57,15 +58,14 @@ def _prepare_parent(atoms: Atoms, confid: int) -> Atoms:
 
 def _gas_pt3_oh_parent() -> tuple[Atoms, list[str], dict, dict]:
     comp = ["Pt", "Pt", "Pt", "O", "H"]
-    ads = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-        "fragment_bond_axis": [0, 1],
-    }
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+        fragment_bond_axis=[0, 1],
+    )
     oh = _oh_template()
     built = build_hierarchical_core_fragment_cluster(
-        comp,
         ads,
         np.random.default_rng(101),
         previous_search_glob="**/*.db",
@@ -85,12 +85,12 @@ def _gas_pt3_oh_parent() -> tuple[Atoms, list[str], dict, dict]:
 def _surface_pt3_oh_parent() -> tuple[Atoms, list[str], dict, dict, int]:
     slab = fcc111("Pt", size=(4, 4, 2), vacuum=6.0, orthogonal=True)
     comp = ["Pt", "Pt", "Pt", "O", "H"]
-    ads = {
-        "core_symbols": ["Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-        "fragment_bond_axis": [0, 1],
-    }
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+        fragment_bond_axis=[0, 1],
+    )
     oh = _oh_template()
     cfg = SurfaceSystemConfig(
         slab=slab,

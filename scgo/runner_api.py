@@ -9,11 +9,15 @@ for ``*_adsorbate`` modes, core-only ``composition`` plus ``adsorbates=...``
 (single or multiple ASE ``Atoms`` fragments).
 System-definition keys in ``go_params`` are partly restricted:
 ``system_type`` remains rejected, while top-level ``surface_config`` is allowed
-and fanned out into optimizer slots. Adsorbate placement tuning
-(``cluster_adsorbate_config``, ``connectivity_factor``, ``freeze_adsorbate_internal_geometry``)
-belongs in ``go_params`` only—not as separate ``run_*`` keywords. For
-``ts_params``, ``system_type`` remains rejected while ``surface_config`` is
-allowed and validated against the run argument.
+and must agree with the run argument when both are set. Identity keys
+(``system_type``, ``surface_config``, ``adsorbate_definition``,
+``adsorbate_fragment_template``, ``cluster_adsorbate_config``) are forbidden
+inside ``optimizer_params`` slots — those slots hold algorithm hyperparameters
+only. Adsorbate placement tuning (``cluster_adsorbate_config``,
+``connectivity_factor``, ``freeze_adsorbate_internal_geometry``) belongs in
+``go_params`` only—not as separate ``run_*`` keywords. For ``ts_params``,
+``system_type`` remains rejected while ``surface_config`` is allowed and
+validated against the run argument.
 
 GA/BH timing JSON is configured in ``params``/``go_params`` under
 ``optimizer_params["ga"]`` (or ``bh``): ``write_timing_json`` and ``detailed_timing``.
@@ -42,12 +46,13 @@ from scgo.runner_composition import (
     parse_composition_arg,
 )
 from scgo.runner_go import select_scgo_minima_algorithm
-from scgo.runner_params import RunGOCampaignContext, RunGOContext, resolve_workflow_seed
+from scgo.runner_params import resolve_workflow_seed
 from scgo.runner_params import (
     _log_completion,
     _log_validation_error,
     _prepare_run_go_campaign_context,
     _prepare_run_go_context,
+    format_completion_details,
 )
 from scgo.runner_ts import (
     log_go_ts_summary,
@@ -60,21 +65,7 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import AdsorbatesInput, SystemType
 from scgo.utils.logging import get_logger
 
-_LOGGER = get_logger(__name__)
-
-
-def _execute_run_go(context: RunGOContext) -> list[tuple[float, Atoms]]:
-    return runner_go._run_go_trials(
-        context.composition,
-        context.system_type,
-        params=context.params,
-        seed=context.seed,
-        verbosity=context.verbosity,
-        run_id=context.run_id,
-        clean=context.clean,
-        output_dir=context.output_dir,
-        calculator_for_global_optimization=context.calculator_for_global_optimization,
-    )
+logger = get_logger(__name__)
 
 
 def run_go(
@@ -92,6 +83,9 @@ def run_go(
     log_summary: bool = True,
 ) -> list[tuple[float, Atoms]]:
     """Run global optimization trials for one composition."""
+    from scgo import configure
+
+    configure()
     try:
         context = _prepare_run_go_context(
             composition,
@@ -110,21 +104,8 @@ def run_go(
         _log_validation_error(exc)
         raise
     t0 = perf_counter()
-    minima = _execute_run_go(context)
-    if log_summary:
-        _log_completion(
-            "run_go",
-            elapsed_s=perf_counter() - t0,
-            details=f"minima={len(minima)} output_dir={context.output_summary_dir}",
-        )
-    return minima
-
-
-def _execute_run_go_campaign(
-    context: RunGOCampaignContext,
-) -> dict[str, list[tuple[float, Atoms]]]:
-    return runner_go._run_go_campaign_compositions(
-        context.compositions,
+    minima = runner_go._run_go_trials(
+        context.composition,
         context.system_type,
         params=context.params,
         seed=context.seed,
@@ -132,7 +113,18 @@ def _execute_run_go_campaign(
         run_id=context.run_id,
         clean=context.clean,
         output_dir=context.output_dir,
+        calculator_for_global_optimization=context.calculator_for_global_optimization,
     )
+    if log_summary:
+        _log_completion(
+            "run_go",
+            elapsed_s=perf_counter() - t0,
+            details=format_completion_details(
+                minima=len(minima),
+                output_dir=context.output_summary_dir,
+            ),
+        )
+    return minima
 
 
 def run_go_campaign(
@@ -143,6 +135,7 @@ def run_go_campaign(
     run_id: str | None = None,
     clean: bool = False,
     output_dir: str | Path | None = None,
+    calculator_for_global_optimization: Calculator | None = None,
     surface_config: SurfaceSystemConfig | None = None,
     system_type: SystemType | None = None,
     adsorbates: AdsorbatesInput | None = None,
@@ -150,11 +143,24 @@ def run_go_campaign(
 ) -> dict[str, list[tuple[float, Atoms]]]:
     """Run global optimization for multiple compositions.
 
-    Each composition gets a reproducible sub-seed derived from ``seed`` /
-    ``params["seed"]``. If a composition fails (``ValueError``, ``RuntimeError``,
-    ``SCGOValidationError``, I/O, or database errors), the error is logged, that
-    formula maps to an empty list, and remaining compositions continue.
+    Results are keyed by the component-aware path key (formula plus adsorbate and
+    surface segments), not by the plain chemical formula. Each composition gets a
+    reproducible sub-seed derived from ``seed`` / ``params["seed"]``. If a
+    composition fails (``ValueError``, ``RuntimeError``, ``SCGOValidationError``,
+    I/O, or database errors), the error is logged, that path key maps to an empty
+    list, and remaining compositions continue.
+
+    A pre-warmed ``calculator_for_global_optimization`` (e.g. a loaded MLIP) is
+    reused for every composition, avoiding an MLIP reload per campaign. When
+    omitted, the campaign builds its own calculator exactly once and never tears
+    down a caller-owned one. As with :func:`run_go`, SCGO sets the calculator's
+    ``directory`` attribute per run, so a supplied calculator is mutated in place
+    (and ends pointing at the last composition's run dir after the campaign
+    returns).
     """
+    from scgo import configure
+
+    configure()
     try:
         context = _prepare_run_go_campaign_context(
             compositions,
@@ -164,6 +170,7 @@ def run_go_campaign(
             run_id=run_id,
             clean=clean,
             output_dir=output_dir,
+            calculator_for_global_optimization=calculator_for_global_optimization,
             surface_config=surface_config,
             system_type=system_type,
             adsorbates=adsorbates,
@@ -172,12 +179,27 @@ def run_go_campaign(
         _log_validation_error(exc)
         raise
     t0 = perf_counter()
-    campaign = _execute_run_go_campaign(context)
+    campaign = runner_go._run_go_campaign_compositions(
+        context.compositions,
+        context.system_type,
+        params=context.params,
+        seed=context.seed,
+        verbosity=context.verbosity,
+        run_id=context.run_id,
+        clean=context.clean,
+        output_dir=context.output_dir,
+        calculator_for_global_optimization=context.calculator_for_global_optimization,
+        composition_adsorbate=context.composition_adsorbate,
+    )
     if log_summary:
         _log_completion(
             "run_go_campaign",
             elapsed_s=perf_counter() - t0,
-            details=f"compositions={len(campaign)} output_dir={context.output_summary_dir}",
+            details=format_completion_details(
+                compositions=len(campaign),
+                minima=sum(len(v) for v in campaign.values()),
+                output_dir=context.output_summary_dir,
+            ),
         )
     return campaign
 

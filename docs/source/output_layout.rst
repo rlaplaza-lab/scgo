@@ -4,7 +4,6 @@ Output Layout
 This page documents the on-disk directory structure created by SCGO runs.
 For a quick reference, see the summary in the :doc:`/quickstart` guide.
 
-------------
 Path Keys
 ------------
 
@@ -20,11 +19,12 @@ Examples: ``Pt5``, ``Pt5_OH_OH``, ``Pt5_OH_OH_graphite``, ``defected_graphite``,
 
 Chemical composition matching uses ASE-style formulas (e.g., ``H2O2Pt5``).
 
-------------------
 Output directories
 ------------------
 
-``output_dir`` semantics differ by runner:
+``output_dir`` semantics differ by runner, but every runner resolves a single
+**campaign root**. GO writes ``{root}/{path_key}_searches/`` and TS writes
+``{root}/{path_key}_ts_results/`` as siblings:
 
 .. list-table::
    :widths: 22 28 50
@@ -34,16 +34,16 @@ Output directories
      - ``output_dir`` is
      - Default when omitted
    * - ``run_go``
-     - The ``{path_key}_searches/`` directory itself
+     - The ``{path_key}_searches/`` directory itself; the campaign root is its parent
      - ``{path_key}_searches/`` in the current working directory
    * - ``run_go_campaign``
-     - Campaign parent; each composition → ``{parent}/{path_key}_searches/``
+     - The shared campaign root; each composition → ``{root}/{path_key}_searches/``
      - Each composition → ``{path_key}_searches/`` in CWD (no shared parent)
    * - ``run_go_ts``
      - Campaign root → ``{root}/{path_key}_searches/`` and ``{root}/{path_key}_ts_results/``
      - ``scgo_runs/{path_key}_{calculator_slug}/`` (see ``output_root`` / ``output_stem`` below)
    * - ``run_go_ts_campaign``
-     - Campaign parent; each composition → ``{parent}/{path_key}_campaign/…``
+     - Campaign root; each composition → ``{root}/{path_key}_searches/`` + ``{root}/{path_key}_ts_results/`` (sibling shape)
      - ``scgo_runs/go_ts_campaign_{calc}/``
    * - ``run_ts_search``
      - Campaign root (or an existing ``*_searches/`` path — parent is inferred)
@@ -123,7 +123,6 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
        └── Pt5_searches/
            └── run_<timestamp>/
 
-------------------
 On-disk layout
 ------------------
 
@@ -142,7 +141,7 @@ UTC-based):
    :header-rows: 1
 
    * - Runner
-     - ``run_id`` behaviour
+     - ``run_id`` behavior
    * - ``run_go``
      - One new ``run_*`` per call under ``{path_key}_searches/``
    * - ``run_go_campaign``
@@ -161,13 +160,16 @@ Per-run files
 
 Under each ``run_*`` directory:
 
-- ``metadata.json`` — composition, params snapshot, and output-JSON provenance
-  header (``schema_version`` = 3, ``scgo_version``, ``created_at`` UTC ISO-8601
-  with ``Z``, ``python_version``, ``timestamp``). This ``schema_version`` is the
-  **output-JSON** header version, not the SQLite DB stamp version.
+- ``metadata.json`` — composition, params snapshot, ``path_key`` (the
+  component-aware directory identity), and output-JSON provenance header
+  (``schema_version`` = 4, ``scgo_version``, ``created_at`` UTC ISO-8601 with
+  ``Z``, ``python_version``). This ``schema_version`` is the **output-JSON**
+  header version, not the SQLite DB stamp version. ``created_at`` is the single
+  run timestamp (there is no legacy ``timestamp`` field).
 - ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db`` — optimizer database (GO only)
 - ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``); includes
-  ``run_id``, ``timing_schema_version``, and the same provenance header fields
+  ``run_id`` and the same single provenance header (``schema_version`` = 4). There
+  is no separate ``timing_schema_version`` key.
 - ``pair_<i>_<j>/`` — NEB artifacts, ``neb_{i}_{j}_metadata.json``, and optional
   ``timing_{i}_{j}.json`` per pair (TS only)
 
@@ -198,8 +200,16 @@ TS results record endpoint lineage in ``minima_provenance`` (in
      - Meaning
    * - ``schema_version`` / ``scgo_version`` / ``created_at`` / ``python_version``
      - Shared **output-JSON** provenance header on summaries, metadata, and timing
-       files (``schema_version`` = 3). Distinct from the SQLite ``scgo_metadata``
+       files (``schema_version`` = 4). Distinct from the SQLite ``scgo_metadata``
        table stamp (``schema_version`` = 2; see :mod:`scgo.metadata.db_stamp`).
+   * - ``path_key``
+     - Always the component-aware directory identity (e.g. ``Pt5``,
+       ``Pt5_OH_OH_graphite``, ``defected_graphite``). For slab-target types
+       (``surface`` / ``surface_adsorbate`` with ``composition=[]``) this is the
+       ``formula`` too — never empty, always matching the directory.
+   * - ``formula``
+     - Chemical composition formula when non-empty; for slab-target types equals
+       ``path_key``.
    * - ``run_id``
      - GO run that produced the endpoint minimum
    * - ``source_db`` / ``source_db_relpath``
@@ -211,10 +221,41 @@ TS results record endpoint lineage in ``minima_provenance`` (in
    * - ``energy``
      - Endpoint energy at pairing time (eV)
 
+Runner reference
+~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :widths: 28 36 36
+   :header-rows: 1
+
+   * - Runner
+     - Returns
+     - Side-effect directories
+   * - ``run_go``
+     - list of (energy, Atoms) minima
+     - ``{root}/{path_key}_searches/run_*/`` (optimizer DBs)
+   * - ``run_go_campaign``
+     - mapping ``path_key`` → minima list
+     - ``{root}/{path_key}_searches/run_*/`` for each composition
+   * - ``run_go_ts``
+     - GO→TS summary dict
+     - ``{root}/{path_key}_searches/`` + ``{root}/{path_key}_ts_results/`` siblings
+   * - ``run_go_ts_campaign``
+     - mapping ``path_key`` → summary dict
+     - ``{root}/{path_key}_searches/`` + ``{root}/{path_key}_ts_results/`` siblings per composition
+   * - ``run_ts_search``
+     - list of TS result dicts
+     - ``{root}/{path_key}_ts_results/run_*/``
+   * - ``run_ts_campaign``
+     - mapping ``path_key`` → TS result list
+     - ``{root}/{path_key}_ts_results/run_*/`` per composition
+
+``root`` is the campaign root documented above (``{output_dir}`` or, for
+GO+TS defaults, ``{output_root or ./scgo_runs}/{output_stem or path_key}_{calc}``).
+
 See :doc:`/quickstart` for usage examples and :doc:`/api/database` for database
 access patterns.
 
----------------
 Reading Results
 ---------------
 

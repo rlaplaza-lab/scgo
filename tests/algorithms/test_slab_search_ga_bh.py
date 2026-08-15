@@ -115,3 +115,32 @@ def test_bh_movable_indices_for_slab_search() -> None:
     assert movable == list(range(part.n_fixed, len(atoms)))
     assert part.n_fixed == resolved.n_fixed
     assert 0 not in movable
+
+
+def test_prefilter_frozen_prefix_enables_bare_surface_clash() -> None:
+    """For bare-surface slab search the template *is* the whole slab, so the frozen
+    prefix (``n_fixed``), not the full slab length, must bound the mobile region.
+
+    Passing the full slab length makes ``n_mobile == 0`` and silently disables the
+    clash prefilter (the original bug); passing the frozen prefix lets the top
+    layers be clash-checked against the frozen bottom.
+    """
+    from scgo.algorithms.geneticalgorithm_go_torchsim import (
+        _fails_fast_geometric_prefilter,
+    )
+
+    # 2 frozen bottom atoms + 1 mobile top atom overlapping the frozen region.
+    slab = Atoms(
+        "Pt3",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.2]],
+        cell=[10.0, 10.0, 10.0],
+        pbc=True,
+    )
+    n_fixed = 2
+    n_slab_full = 3
+    blmin = {(78, 78): 2.0}  # Pt-Pt; prefilter threshold = 0.55 * 2.0 = 1.1
+
+    # Full slab length disables the gate (n_mobile == 0).
+    assert _fails_fast_geometric_prefilter(slab, blmin, n_slab=n_slab_full) is False
+    # Frozen prefix enables mobile-region clash detection.
+    assert _fails_fast_geometric_prefilter(slab, blmin, n_slab=n_fixed) is True

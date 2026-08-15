@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 
 import numpy as np
 import pytest
 import torch
 from ase import Atoms
 from ase.calculators.emt import EMT
-from ase.constraints import FixAtoms
+from ase.constraints import FixAtoms, FixBondLengths
 
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
@@ -26,13 +25,6 @@ from scgo.ts_search.transition_state_io import (
     adsorbate_pair_select_cap,
     select_structure_pairs,
 )
-
-
-@pytest.fixture
-def temp_output_dir():
-    """Temporary directory for output files."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
 
 
 def test_neb_max_atom_force_uses_per_atom_norm():
@@ -236,6 +228,32 @@ def test_find_transition_state_records_align_and_perturb(
     if ts is not None:
         assert ts.calc is None
 
+    # The same metadata must be recorded when the flat kwargs arrive bundled in
+    # a single NebRunConfig (the serial runner's call path).
+    from tests.ts_search.test_parallel_neb import _gas_neb_cfg
+
+    cfg = _gas_neb_cfg(
+        neb_n_images=3,
+        neb_fmax=0.1,
+        neb_steps=20,
+        neb_align_endpoints=True,
+        neb_perturb_sigma=0.03,
+    )
+    result_cfg = find_transition_state(
+        h2_reactant,
+        h2_product,
+        calculator=EMT(),
+        output_dir=temp_output_dir,
+        pair_id="meta_cfg_test",
+        rng=np.random.default_rng(1),
+        neb_cfg=cfg,
+    )
+    assert result_cfg.get("align_endpoints") is True
+    assert result_cfg.get("perturb_sigma") == pytest.approx(0.03)
+    ts_cfg = result_cfg.get("transition_state")
+    if ts_cfg is not None:
+        assert ts_cfg.calc is None
+
 
 def test_find_ts_endpoint_marked_not_converged(temp_output_dir, h2_reactant):
     """Identical endpoints raise a structured failure (no interior saddle)."""
@@ -270,7 +288,7 @@ def test_interpolate_path_different_lengths_fails():
     atoms1.center(vacuum=5.0)
     atoms2.center(vacuum=5.0)
 
-    with pytest.raises((ValueError, SCGOValidationError)):
+    with pytest.raises((ValueError, SCGOValidationError), match="different lengths"):
         interpolate_path(atoms1, atoms2, n_images=3)
 
 
@@ -646,7 +664,7 @@ def test_find_ts_no_calculator_fails(h2_reactant, h2_product, temp_output_dir):
     h2_product.calc = None
 
     with pytest.raises(
-        SCGOValidationError
+        SCGOValidationError, match="must have a calculator attached"
     ):  # Should fail validation without calculator
         find_transition_state(
             h2_reactant,
@@ -1141,6 +1159,7 @@ class TestTorchSimNEB:
 
     @pytest.mark.slow
     @pytest.mark.requires_cuda
+    @pytest.mark.requires_mace
     def test_find_ts_with_torchsim_cu3(self, cu3_triangle, cu3_linear, temp_output_dir):
         """Cu3 triangle–linear TS search with TorchSim + MACE (GPU-only)."""
         device = "cuda"
@@ -1273,3 +1292,250 @@ def test_full_neb_convergence(cu3_triangle, cu3_linear, temp_output_dir):
     # Should converge for Cu3 with EMT
     # (though TS might not be meaningful for EMT)
     assert "status" in result
+
+
+# ---------------------------------------------------------------------------
+# T1: interior NEB images must not share the reactant's key_value_pairs dict
+# ---------------------------------------------------------------------------
+
+
+def test_interpolate_path_interior_images_have_isolated_key_value_pairs(
+    cu3_triangle, cu3_linear
+):
+    """Each band image owns its ``info['key_value_pairs']`` dict.
+
+    ``Atoms.copy()`` shallow-copies ``info``, so the nested ``key_value_pairs``
+    dict was shared across interior images: ``set_tags`` on one image (e.g.
+    ``potential_energy``/``raw_score``) overwrote every other image. The source
+    minimum must also stay untouched.
+    """
+    from scgo.metadata.atoms import get_tag, set_tags
+
+    reactant = cu3_triangle.copy()
+    reactant.info["key_value_pairs"] = {"raw_score": 1.23}
+    product = cu3_linear.copy()
+    product.info["key_value_pairs"] = {"raw_score": 4.56}
+
+    images = interpolate_path(
+        reactant, product, n_images=3, method="idpp", align_endpoints=True
+    )
+    assert len(images) == 5
+
+    for i, img in enumerate(images):
+        set_tags(img, potential_energy=float(i))
+
+    # Each image reports its own potential_energy (no cross-image clobbering).
+    for i, img in enumerate(images):
+        assert get_tag(img, "potential_energy") == pytest.approx(float(i))
+
+    # Interior images must not alias each other's tag dict.
+    interior = images[1:-1]
+    for a, b in zip(interior, interior[1:], strict=False):
+        assert a.info["key_value_pairs"] is not b.info["key_value_pairs"]
+    # ...nor the endpoint band image's dict.
+    assert images[1].info["key_value_pairs"] is not images[0].info["key_value_pairs"]
+
+    # The source minima are never mutated by band tag writes.
+    assert "potential_energy" not in reactant.info["key_value_pairs"]
+    assert "potential_energy" not in product.info["key_value_pairs"]
+    assert reactant.info["key_value_pairs"]["raw_score"] == pytest.approx(1.23)
+    assert product.info["key_value_pairs"]["raw_score"] == pytest.approx(4.56)
+
+
+# ---------------------------------------------------------------------------
+# T3: serial NEB fallback with a non-deepcopyable calculator must not raise
+# ---------------------------------------------------------------------------
+
+
+def test_serial_neb_shared_calculator_fallback_reaches_neb(
+    cu3_triangle, cu3_linear, temp_output_dir
+):
+    """A calculator that cannot be deep-copied falls back to a shared instance.
+
+    ASE ``NEB.get_forces`` raises ``ValueError`` when images share one
+    calculator unless ``allow_shared_calculator=True``. The serial fallback must
+    set that flag so the run reaches (and steps) NEB construction instead of
+    failing with the shared-calculator error.
+
+    ``_finalize_neb_result`` deep-copies the TS image (including its calculator);
+    it is patched here so the deliberately non-deep-copyable calculator does not
+    trip that unrelated code path — the assertion is about NEB construction.
+    """
+    from unittest.mock import patch
+
+    class _NoDeepcopyEMT(EMT):
+        def __deepcopy__(self, memo):
+            raise TypeError("this calculator cannot be deep-copied")
+
+    reactant = cu3_triangle.copy()
+    product = cu3_linear.copy()
+    reactant.calc = _NoDeepcopyEMT()
+    product.calc = _NoDeepcopyEMT()
+
+    with patch("scgo.ts_search.transition_state._finalize_neb_result") as finalize_mock:
+        result = find_transition_state(
+            reactant,
+            product,
+            calculator=_NoDeepcopyEMT(),
+            output_dir=temp_output_dir,
+            pair_id="shared_calc",
+            n_images=3,
+            fmax=0.5,
+            neb_steps=1,
+            use_torchsim=False,
+            verbosity=0,
+        )
+
+    assert "status" in result
+    err = str(result.get("error") or "").lower()
+    # The specific shared-calculator ASE ValueError must not appear.
+    assert "share the same calculator" not in err
+    # NEB was constructed and stepped (finalize was reached).
+    finalize_mock.assert_called_once()
+    assert int(result.get("steps_taken") or 0) >= 1
+
+
+def test_idpp_priority_screen_forwards_clash_distance(
+    h2_reactant, h2_product, monkeypatch
+):
+    """The IDPP ranking must gate paths with the resolved ``neb_prescreen_clash_distance``
+    (the value the real NEB prescreen uses), not fall back to the 0.7 default.
+    """
+    import logging
+
+    from scgo.ts_search import transition_state_run as ts_run
+
+    captured: dict[str, object] = {}
+
+    def _spy_validate(images, *, n_slab, mic, max_endpoint_mismatch, clash_distance):
+        captured["clash_distance"] = clash_distance
+        return None
+
+    monkeypatch.setattr(ts_run, "validate_initial_neb_path", _spy_validate)
+    monkeypatch.setattr(
+        ts_run, "_evaluate_bands_in_chunks", lambda *a, **k: [[0.0, 0.0, 0.0]]
+    )
+    monkeypatch.setattr(
+        ts_run, "validate_initial_neb_energy_profile", lambda *a, **k: None
+    )
+
+    minima = [(0.0, h2_reactant.copy()), (0.1, h2_product.copy())]
+    ts_run._prioritize_adsorbate_pairs_by_idpp(
+        [(0, 1)],
+        minima,
+        max_pairs=1,
+        relaxer=object(),
+        neb_n_images=3,
+        neb_interpolation_method="idpp",
+        neb_interpolation_mic=False,
+        neb_align_endpoints=True,
+        neb_perturb_sigma=0.0,
+        rng=np.random.default_rng(0),
+        system_type="gas_cluster",
+        n_slab=0,
+        n_core_mobile=None,
+        n_adsorbate_mobile=None,
+        adsorbate_fragment_lengths=None,
+        neb_surface_cell_remap=False,
+        neb_surface_lattice_rotation=False,
+        neb_surface_max_lattice_shift=0,
+        max_endpoint_mismatch=float("inf"),
+        neb_prescreen_clash_distance=1.0,
+        parallel_neb_max_batch_atoms=None,
+        parallel_neb_max_bands=None,
+        logger=logging.getLogger("test"),
+    )
+
+    assert captured["clash_distance"] == 1.0
+
+
+def test_find_transition_state_skips_energy_profile_when_mismatch_unset(
+    temp_output_dir, h2_reactant, h2_product, monkeypatch
+):
+    """Serial ASE path must not call the energy-profile screen when mismatch is None."""
+    import scgo.ts_search.transition_state as ts_mod
+
+    calls: list[object] = []
+
+    def _spy(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(ts_mod, "validate_initial_neb_energy_profile", _spy)
+
+    find_transition_state(
+        h2_reactant,
+        h2_product,
+        calculator=EMT(),
+        output_dir=temp_output_dir,
+        pair_id="energy_profile_skip",
+        n_images=3,
+        fmax=0.1,
+        neb_steps=5,
+        verbosity=0,
+        use_torchsim=False,
+        max_endpoint_mismatch=None,
+    )
+    assert calls == []
+
+    find_transition_state(
+        h2_reactant,
+        h2_product,
+        calculator=EMT(),
+        output_dir=temp_output_dir,
+        pair_id="energy_profile_on",
+        n_images=3,
+        fmax=0.1,
+        neb_steps=5,
+        verbosity=0,
+        use_torchsim=False,
+        max_endpoint_mismatch=1.25,
+    )
+    assert len(calls) >= 1
+
+
+def test_neb_run_config_carries_promoted_thresholds():
+    from scgo.param_presets import TS_DEFAULTS_BY_SYSTEM_TYPE
+    from tests.ts_search.test_parallel_neb import _gas_neb_cfg
+
+    for system_type in TS_DEFAULTS_BY_SYSTEM_TYPE:
+        cfg = _gas_neb_cfg(system_type=system_type)
+        assert cfg.binding_penetration_tolerance_a == 0.1
+        assert cfg.layer_cluster_threshold_ang == 0.4
+        assert cfg.neb_interpolation_bond_tolerance_a == 0.5
+
+
+def _bonded_dimer(positions: np.ndarray) -> Atoms:
+    atoms = Atoms("CO", positions=positions.copy())
+    atoms.set_constraint(FixBondLengths([(0, 1)]))
+    return atoms
+
+
+def test_interpolate_path_bond_check_passes_when_preserved(caplog):
+    a1 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.2]]))
+    a2 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.2]]))
+    with caplog.at_level("WARNING", logger="scgo.ts_search.transition_state"):
+        images = interpolate_path(
+            a1,
+            a2,
+            n_images=3,
+            method="linear",
+            align_endpoints=False,
+            neb_interpolation_bond_tolerance_a=0.5,
+        )
+    assert len(images) == 5
+    assert not any("FixBondLengths" in r.message for r in caplog.records)
+
+
+def test_interpolate_path_bond_check_warns_when_stretched(caplog):
+    a1 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]))
+    a2 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.5]]))
+    with caplog.at_level("WARNING", logger="scgo.ts_search.transition_state"):
+        interpolate_path(
+            a1,
+            a2,
+            n_images=3,
+            method="linear",
+            align_endpoints=False,
+            neb_interpolation_bond_tolerance_a=0.1,
+        )
+    assert any("FixBondLengths" in r.message for r in caplog.records)

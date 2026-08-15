@@ -11,6 +11,7 @@ import pytest
 from ase import Atoms
 from ase.build import bulk
 from ase.calculators.emt import EMT
+from ase.optimize import LBFGS
 
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
@@ -311,7 +312,7 @@ class TestCompositionValidationIntegration:
 
     def test_invalid_composition_raises(self, comp, desc, rng):
         """Test handling of invalid composition types."""
-        with pytest.raises(SCGOValidationError):
+        with pytest.raises(SCGOValidationError, match="composition"):
             create_initial_cluster(comp, rng=rng)
 
     def test_empty_composition_validation(self, comp, desc, rng):
@@ -336,39 +337,72 @@ class TestNumericParameterValidationIntegration:
     def test_negative_parameters_raise(self, param_name, invalid_values):
         """Test that negative parameters raise appropriate errors."""
         for invalid_val in invalid_values:
-            with pytest.raises(SCGOValidationError):
+            with pytest.raises(SCGOValidationError, match=param_name):
                 create_initial_cluster(
                     ["Pt", "Pt"], rng=None, **{param_name: invalid_val}
                 )
 
 
-# Parametrized test cases for optimization parameters
-OPTIMIZER_PARAM_CASES = [
-    ("niter", [-1, 0, "invalid"]),
-    ("population_size", [-1, 0, "invalid"]),
-    ("temperature", [-1.0, "invalid"]),
-    ("dr", [-1.0, 0.0, "invalid"]),
+BH_GO_PARAM_CASES = [
+    ("niter", -1, "niter must be positive"),
+    ("niter", 0, "niter must be positive"),
+    ("niter", "invalid", "must be an integer"),
+    ("dr", -1.0, "dr must be positive"),
+    ("dr", 0.0, "dr must be positive"),
+    ("dr", "invalid", r"not supported between instances"),
 ]
 
 
-@pytest.mark.parametrize("param_name,invalid_values", OPTIMIZER_PARAM_CASES)
-class TestOptimizationParameterValidation:
-    """Tests for optimization parameter validation - consolidated."""
+@pytest.mark.parametrize("param_name,invalid_value,error_match", BH_GO_PARAM_CASES)
+def test_bh_go_parameter_validation(
+    param_name, invalid_value, error_match, tmp_path, rng
+):
+    """Test bh_go raises on invalid parameter values."""
+    atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    atoms.calc = EMT()
+    with pytest.raises((SCGOValidationError, TypeError), match=error_match):
+        bh_go(
+            atoms,
+            output_dir=str(tmp_path),
+            rng=rng,
+            **{param_name: invalid_value},
+        )
 
-    def test_optimization_parameters_raise(self, param_name, invalid_values):
-        """Test optimization parameter validation."""
-        for invalid_val in invalid_values:
-            with pytest.raises(TypeError):
-                bh_go(
-                    composition=["Pt", "Pt"],
-                    niter=invalid_val if param_name == "niter" else 10,
-                    population_size=(
-                        invalid_val if param_name == "population_size" else 20
-                    ),
-                    temperature=invalid_val if param_name == "temperature" else 0.1,
-                    dr=invalid_val if param_name == "dr" else 0.3,
-                    calculator_for_global_optimization=EMT(),
-                )
+
+GA_GO_PARAM_CASES = [
+    ("population_size", -1, "population_size must be positive"),
+    ("population_size", 0, "population_size must be positive"),
+    ("population_size", "invalid", "must be an integer"),
+    ("mutation_probability", 1.5, "mutation_probability must be between"),
+]
+
+
+@pytest.mark.parametrize("param_name,invalid_value,error_match", GA_GO_PARAM_CASES)
+def test_ga_go_parameter_validation(
+    param_name, invalid_value, error_match, tmp_path, rng
+):
+    """Test ga_go raises on invalid parameter values."""
+    with pytest.raises(SCGOValidationError, match=error_match):
+        ga_go(
+            composition=["Pt", "Pt"],
+            output_dir=str(tmp_path),
+            calculator=EMT(),
+            rng=rng,
+            niter=1,
+            **{param_name: invalid_value},
+        )
+
+
+class TestOptimizerUnexpectedKwargs:
+    """Regression tests for unexpected kwargs on optimizer entry points."""
+
+    def test_bh_go_rejects_unexpected_kwargs(self):
+        """bh_go does not accept composition or calculator_for_global_optimization kwargs."""
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            bh_go(
+                composition=["Pt", "Pt"],
+                calculator_for_global_optimization=EMT(),
+            )
 
 
 def test_ga_offspring_fraction_validation(tmp_path, rng):
@@ -376,7 +410,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
     calc = EMT()
 
     # Invalid: zero or negative
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="offspring_fraction"):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_0"),
@@ -389,7 +423,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
         )
 
     # Invalid: > 1
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="offspring_fraction"):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_1"),
@@ -409,7 +443,7 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
         def relax_batch(self, batch: list):
             return [(0.0, a.copy()) for a in batch]
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="offspring_fraction"):
         ga_go(
             composition=["Pt", "Pt"],
             output_dir=str(tmp_path / "bad_off_ts"),
@@ -435,25 +469,17 @@ def test_ga_offspring_fraction_validation(tmp_path, rng):
     )
 
 
-# Parametrized test cases for calculator validation
-CALCULATOR_INVALID_CASES = [
-    ("invalid_calculator", "string"),
-    (None, "None"),
-]
-
-
-@pytest.mark.parametrize("calc,desc", CALCULATOR_INVALID_CASES)
 class TestCalculatorValidationIntegration:
     """Tests for calculator parameter validation - consolidated."""
 
-    def test_invalid_calculator_raises(self, calc, desc):
-        """Test handling of invalid calculator."""
-        with pytest.raises(TypeError):
-            bh_go(
-                composition=["Pt", "Pt"],
-                calculator_for_global_optimization=calc,
-                niter=1,
-            )
+    def test_none_calculator_raises(self, pt2_atoms):
+        """Test validate_calculator_attached raises for None calculator."""
+        atoms = pt2_atoms.copy()
+        atoms.calc = None
+        with pytest.raises(
+            SCGOValidationError, match="must have a calculator attached"
+        ):
+            validate_calculator_attached(atoms, "test algorithm")
 
 
 class TestHelperFunctionValidationIntegration:
@@ -461,7 +487,7 @@ class TestHelperFunctionValidationIntegration:
 
     def test_auto_niter_none_raises(self):
         """Test auto_niter with None raises TypeError."""
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="object of type 'NoneType' has no len()"):
             auto_niter(None)
 
     @pytest.mark.parametrize("comp", [["Pt", "Pt"], "string"])
@@ -471,7 +497,7 @@ class TestHelperFunctionValidationIntegration:
 
     def test_auto_population_size_none_raises(self):
         """Test auto_population_size with None raises TypeError."""
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="object of type 'NoneType' has no len()"):
             auto_population_size(None)
 
     @pytest.mark.parametrize("comp", [["Pt", "Pt"], "string"])
@@ -482,83 +508,62 @@ class TestHelperFunctionValidationIntegration:
     def test_perform_local_relaxation_invalid_calc(self, pt2_atoms):
         """Test perform_local_relaxation with invalid calculator."""
         atoms = pt2_atoms.copy()
-        with pytest.raises(TypeError):
-            perform_local_relaxation(atoms, calculator="invalid", fmax=0.01, steps=100)
-
-    @pytest.mark.parametrize("fmax", [-0.01])
-    def test_perform_local_relaxation_invalid_fmax(self, fmax, pt2_atoms):
-        """Test perform_local_relaxation with invalid fmax."""
-        atoms = pt2_atoms.copy()
-        with pytest.raises(TypeError):
-            perform_local_relaxation(atoms, calculator=EMT(), fmax=fmax, steps=100)
-
-    @pytest.mark.parametrize("steps", [-1])
-    def test_perform_local_relaxation_invalid_steps(self, steps, pt2_atoms):
-        """Test perform_local_relaxation with invalid steps."""
-        atoms = pt2_atoms.copy()
-        with pytest.raises(TypeError):
-            perform_local_relaxation(atoms, calculator=EMT(), fmax=0.01, steps=steps)
+        with pytest.raises(AttributeError, match="get_forces"):
+            perform_local_relaxation(
+                atoms, calculator="invalid", optimizer=LBFGS, fmax=0.01, steps=100
+            )
 
 
 class TestGlobalOptimizerValidationIntegration:
     """Tests for global optimizer parameter validation - consolidated."""
 
-    def test_bh_go_invalid_composition(self):
-        """Test bh_go with invalid composition."""
-        with pytest.raises(TypeError):
+    @pytest.mark.parametrize("niter", [-1, 0, "invalid"])
+    def test_bh_go_invalid_niter(self, niter, tmp_path, rng):
+        """Test bh_go raises on invalid niter."""
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        atoms.calc = EMT()
+        with pytest.raises((SCGOValidationError, TypeError), match="niter"):
             bh_go(
-                composition="invalid", calculator_for_global_optimization=EMT(), niter=1
-            )
-
-    @pytest.mark.parametrize("niter", [-1])
-    def test_bh_go_invalid_niter(self, niter):
-        """Test bh_go with invalid niter."""
-        with pytest.raises(TypeError):
-            bh_go(
-                composition=["Pt", "Pt"],
-                calculator_for_global_optimization=EMT(),
+                atoms,
+                output_dir=str(tmp_path),
+                rng=rng,
                 niter=niter,
             )
 
-    @pytest.mark.parametrize("temp", [-1.0])
-    def test_bh_go_invalid_temperature(self, temp):
-        """Test bh_go with invalid temperature."""
-        with pytest.raises(TypeError):
-            bh_go(
-                composition=["Pt", "Pt"],
-                calculator_for_global_optimization=EMT(),
-                niter=1,
-                temperature=temp,
-            )
-
-    def test_ga_go_invalid_composition(self):
-        """Test ga_go with invalid composition."""
-        with pytest.raises(TypeError):
+    def test_ga_go_invalid_composition(self, tmp_path, rng):
+        """Test ga_go raises on invalid composition."""
+        with pytest.raises(SCGOValidationError, match="composition"):
             ga_go(
                 composition="invalid",
-                calculator_for_global_optimization=EMT(),
+                calculator=EMT(),
+                output_dir=str(tmp_path),
+                rng=rng,
                 niter=1,
                 population_size=20,
             )
 
-    @pytest.mark.parametrize("pop_size", [-1])
-    def test_ga_go_invalid_population_size(self, pop_size):
-        """Test ga_go with invalid population_size."""
-        with pytest.raises(TypeError):
+    @pytest.mark.parametrize("pop_size", [-1, 0, "invalid"])
+    def test_ga_go_invalid_population_size(self, pop_size, tmp_path, rng):
+        """Test ga_go raises on invalid population_size."""
+        with pytest.raises(SCGOValidationError, match="population_size"):
             ga_go(
                 composition=["Pt", "Pt"],
-                calculator_for_global_optimization=EMT(),
+                calculator=EMT(),
+                output_dir=str(tmp_path),
+                rng=rng,
                 niter=1,
                 population_size=pop_size,
             )
 
     @pytest.mark.parametrize("mut_prob", [1.5])
-    def test_ga_go_invalid_mutation_probability(self, mut_prob):
-        """Test ga_go with invalid mutation_probability."""
-        with pytest.raises(TypeError):
+    def test_ga_go_invalid_mutation_probability(self, mut_prob, tmp_path, rng):
+        """Test ga_go raises on invalid mutation_probability."""
+        with pytest.raises(SCGOValidationError, match="mutation_probability"):
             ga_go(
                 composition=["Pt", "Pt"],
-                calculator_for_global_optimization=EMT(),
+                calculator=EMT(),
+                output_dir=str(tmp_path),
+                rng=rng,
                 niter=1,
                 population_size=20,
                 mutation_probability=mut_prob,
@@ -568,21 +573,27 @@ class TestGlobalOptimizerValidationIntegration:
 class TestCampaignFunctionValidationIntegration:
     """Tests for campaign function parameter validation - consolidated."""
 
-    def test_run_trials_invalid_composition(self):
+    def test_run_trials_invalid_composition(self, rng):
         """Test run_trials with invalid composition."""
-        with pytest.raises(TypeError):
+        with pytest.raises(SCGOValidationError, match="composition"):
             run_trials(
                 composition="invalid",
                 global_optimizer="bh",
+                global_optimizer_kwargs={"system_type": "gas_cluster"},
+                output_dir="out",
+                rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_run_trials_invalid_optimizer(self):
+    def test_run_trials_invalid_optimizer(self, rng):
         """Test run_trials with invalid global_optimizer."""
-        with pytest.raises(TypeError):
+        with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
             run_trials(
                 composition=["Pt", "Pt"],
                 global_optimizer="invalid",
+                global_optimizer_kwargs={"system_type": "gas_cluster"},
+                output_dir="out",
+                rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
@@ -597,21 +608,27 @@ class TestCampaignFunctionValidationIntegration:
                 rng=rng,
             )
 
-    def test_scgo_invalid_composition(self):
+    def test_scgo_invalid_composition(self, rng):
         """Test scgo with invalid composition."""
-        with pytest.raises(TypeError):
+        with pytest.raises(SCGOValidationError, match="composition"):
             scgo(
                 composition="invalid",
                 global_optimizer="bh",
+                global_optimizer_kwargs={"system_type": "gas_cluster"},
+                output_dir="out",
+                rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_scgo_invalid_optimizer(self):
+    def test_scgo_invalid_optimizer(self, rng):
         """Test scgo with invalid global_optimizer."""
-        with pytest.raises(TypeError):
+        with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="invalid",
+                global_optimizer_kwargs={"system_type": "gas_cluster"},
+                output_dir="out",
+                rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
@@ -644,17 +661,19 @@ class TestEdgeCaseValidationIntegration:
     @pytest.mark.parametrize("invalid_param", ["1.0", "invalid"])
     def test_mixed_type_parameters(self, invalid_param):
         """Test handling of mixed type parameters."""
-        with pytest.raises((SCGOValidationError, TypeError)):
+        with pytest.raises(TypeError, match="not supported between instances of"):
             create_initial_cluster(
                 ["Pt", "Pt"], rng=None, placement_radius_scaling=invalid_param
             )
 
     def test_none_parameters_raise(self):
         """Test handling of None parameters."""
-        with pytest.raises(SCGOValidationError):
+        with pytest.raises(SCGOValidationError, match="cannot be None"):
             create_initial_cluster(None, rng=None)
 
-        with pytest.raises(TypeError):
+        with pytest.raises(
+            TypeError, match="not supported between instances of 'NoneType' and 'int'"
+        ):
             create_initial_cluster(
                 ["Pt", "Pt"], rng=None, placement_radius_scaling=None
             )

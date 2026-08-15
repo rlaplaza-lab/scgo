@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 scgo.egg-info/
 test_output/
+out/
 examples/results/
 examples/logs/
 logs/

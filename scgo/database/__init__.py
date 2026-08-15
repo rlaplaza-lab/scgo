@@ -1,4 +1,4 @@
-"""SCGO Database Module
+"""SCGO Database Module.
 
 Designed for **HPC** use: SQLite on shared filesystems (Lustre, GPFS, NFS-class),
 batch jobs, and optional multi-process access. WAL mode is off by default.
@@ -14,24 +14,14 @@ from scgo.database.connection import (
     close_data_connection,
     get_connection,
 )
-from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.discovery import list_discovered_db_paths_with_run
-from scgo.database.exceptions import (
-    DatabaseMigrationError,
-    DatabaseSetupError,
-)
 from scgo.database.helpers import (
     extract_minima_from_database_file,
-    extract_transition_states_from_database_file,
     load_previous_run_results,
     load_reference_structures,
     setup_database,
 )
 from scgo.database.manager import SCGODatabaseManager
-from scgo.database.registry import (
-    clear_registry_cache,
-    get_registry,
-)
 from scgo.database.sync import (
     HPC_DATABASE_EXCEPTIONS,
     RetryConfig,
@@ -39,28 +29,20 @@ from scgo.database.sync import (
     retry_transaction,
 )
 from scgo.database.transactions import database_transaction
-from scgo.metadata.persist import mark_final_minima_in_db
 
 __all__ = [
     "get_global_cache",
-    "SYSTEMS_JSON_COLUMN",
     "close_data_connection",
     "get_connection",
-    "DatabaseSetupError",
-    "DatabaseMigrationError",
     "setup_database",
     "extract_minima_from_database_file",
-    "extract_transition_states_from_database_file",
     "load_previous_run_results",
     "load_reference_structures",
     "list_discovered_db_paths_with_run",
-    "mark_final_minima_in_db",
     "SCGODatabaseManager",
     "database_transaction",
     "HPC_DATABASE_EXCEPTIONS",
     "RetryConfig",
     "database_retry",
     "retry_transaction",
-    "get_registry",
-    "clear_registry_cache",
 ]

@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import get_distances
 from scipy.spatial import (
     ConvexHull,
     KDTree,
@@ -33,6 +34,7 @@ from .initialization_config import (
     CONNECTIVITY_SUGGESTION_BUFFER,
     CONVEX_HULL_PERTURBATION_SCALE,
     CONVEX_HULL_VOLUME_TOLERANCE,
+    KDTREE_THRESHOLD,
     LINEAR_GEOMETRY_TOLERANCE,
     MIN_DISTANCE_FACTOR_DEFAULT,
     ROTATION_AXIS_TOLERANCE,
@@ -41,16 +43,16 @@ from .initialization_config import (
 
 # Core utilities
 
-template_debug_logger = get_logger("scgo.initialization.templates")
+template_debug_logger = get_logger(__name__)
 
 
 def format_composition_counts_short(
     counts: Mapping[str, int] | Counter[str],
 ) -> str:
-    """Format composition counts as a compact string (e.g. ``Pt×11, Au×2``)."""
+    """Format composition counts as a compact string (e.g. ``Pt x 11, Au x 2``)."""
     if not counts:
         return "none"
-    return ", ".join(f"{symbol}×{count}" for symbol, count in sorted(counts.items()))
+    return ", ".join(f"{symbol}x{count}" for symbol, count in sorted(counts.items()))
 
 
 def format_placement_error_message(
@@ -70,7 +72,8 @@ def format_placement_error_message(
     diagnostics, and suggestions for common placement failures.
 
     Args:
-        context: Context description (e.g., "random_spherical", "seed+growth")
+        context: Action description completing "Could not ..."
+            (e.g., "place all 13 atoms after 10 attempts")
         composition: Composition list (for display)
         n_atoms: Number of atoms (for display)
         placement_radius_scaling: Current placement radius scaling
@@ -135,8 +138,9 @@ _CONVEX_HULL_CACHE_NS = "convex_hull"
 def _get_positions_hash(positions: np.ndarray) -> str:
     """Generate a collision-resistant hash for positions array.
 
-    Uses SHA256 to avoid hash collisions that could return wrong cached results.
-    For small arrays (<100 points), also stores positions bytes for collision detection.
+    Uses SHA256 to make hash collisions negligible. Callers additionally pair
+    the digest with the raw position bytes in the cache key, so a collision
+    cannot return a wrong cached result.
 
     Args:
         positions: Array of atomic positions
@@ -151,8 +155,9 @@ def _get_positions_hash(positions: np.ndarray) -> str:
 def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
     """Get convex hull from cache or compute and cache it.
 
-    Uses LRU eviction policy to maintain cache size limit.
-    Uses SHA256 hashing to avoid collisions and verifies cached results match positions.
+    Backed by the global cache, which uses LRU eviction to bound its size.
+    The cache key combines the SHA256 digest of the positions with their raw
+    bytes, so a digest collision cannot return a hull for other positions.
 
     Args:
         positions: Array of atomic positions
@@ -161,7 +166,9 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
         ConvexHull object for the given positions
 
     Raises:
-        ValueError: If positions array has fewer than 4 points (insufficient for 3D hull)
+        SCGOValidationError: If the positions array has fewer than 4 points
+            (insufficient for a 3D hull) or if the hull computation fails on
+            degenerate geometry
     """
     if len(positions) < 4:
         raise SCGOValidationError(
@@ -230,11 +237,12 @@ def _adjust_bond_distance_for_facet_geometry(
 ) -> float:
     """Adjust bond distance based on facet geometry constraints.
 
-    This function adjusts the bond distance to ensure connectivity constraints
-    are satisfied when placing atoms on convex hull facets. For small facets,
-    it uses strict constraints to ensure connectivity. For large facets, it
-    gradually relaxes the constraint while still relying on per-candidate
-    connectivity checks to maintain cluster connectivity.
+    Caps the bond distance so that a new atom placed along the facet normal
+    stays within ``max_connectivity_dist`` of the closest facet vertex, and
+    raises it again when the geometry allows keeping the atom at least
+    ``min_connectivity_dist`` away from the farthest facet vertex. Facets whose
+    closest vertex already sits beyond ``max_connectivity_dist``, and calls
+    without both connectivity bounds, leave the bond distance unchanged.
 
     Args:
         bond_distance: Initial bond distance for placement
@@ -363,15 +371,13 @@ def _compute_facet_properties(
 
 
 def _filter_safe_facets_for_placement(
-    atoms: Atoms,
     facet_properties: list[tuple[np.ndarray, np.ndarray, float, tuple[float, float]]],
     bond_distance: float,
     min_connectivity_dist: float | None,
     max_connectivity_dist: float | None,
     min_distance_factor: float | None,
-    new_atom_radius: float | None,
+    radii: np.ndarray | None,
     positions: np.ndarray,
-    symbols_list: list[str],
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> list[int]:
     """Filter facets that can safely accommodate atom placement.
@@ -380,40 +386,36 @@ def _filter_safe_facets_for_placement(
     placed on them without clashes or connectivity issues. This avoids
     trial-and-error approaches.
 
+    The 1.5x connectivity pre-skip (facets whose nearest vertex sits well beyond
+    the connectivity threshold) is applied once by the caller before this filter
+    runs, so it is not repeated here.
+
     Args:
-        atoms: The Atoms object representing the current cluster structure.
         facet_properties: List of (centroid, normal, area, (min_dist, max_dist))
-            for each facet.
+            for each facet, already sorted and pre-skipped by the caller.
         bond_distance: Target bond distance for placement.
         min_connectivity_dist: Minimum connectivity distance threshold.
         max_connectivity_dist: Maximum connectivity distance threshold.
         min_distance_factor: Factor for minimum distance checks.
-        new_atom_radius: Covalent radius of the atom to be placed.
+        radii: Per-existing-atom sum of the new atom's covalent radius and the
+            existing atom's covalent radius (``new_atom_radius + r_existing``),
+            reused from the caller's single precomputation. ``None`` disables the
+            clash/connectivity checks (every facet is then treated as safe).
         positions: Array of existing atom positions.
-        symbols_list: List of element symbols for existing atoms.
         connectivity_factor: Factor to multiply sum of covalent radii for
             connectivity threshold. Defaults to CONNECTIVITY_FACTOR.
 
     Returns:
         List of facet indices that are safe for placement.
     """
+    if radii is None or min_distance_factor is None:
+        # No per-atom radius information: every facet is treated as safe.
+        return list(range(len(facet_properties)))
+
     safe_facet_indices = []
 
-    for idx, (
-        centroid,
-        normal,
-        _area,
-        (min_centroid_dist, max_centroid_dist),
-    ) in enumerate(facet_properties):
-        # Skip facets where centroid is significantly beyond connectivity threshold
-        # Use scaled threshold to allow large facets with relaxed constraints
-        # For very large facets (min_centroid_dist > 1.5 * max_connectivity_dist),
-        # skip them as they're unlikely to yield valid placements even with relaxation
-        if (
-            max_connectivity_dist is not None
-            and min_centroid_dist > max_connectivity_dist * 1.5
-        ):
-            continue
+    for idx, prop in enumerate(facet_properties):
+        centroid, normal, _area, (min_centroid_dist, max_centroid_dist) = prop
 
         # Adjust bond_distance based on facet geometry
         adjusted_bond_distance = _adjust_bond_distance_for_facet_geometry(
@@ -427,38 +429,17 @@ def _filter_safe_facets_for_placement(
         # Calculate expected placement position (without perturbation for analysis)
         expected_pos = centroid + normal * adjusted_bond_distance
 
-        is_safe = True
+        # Single vectorized pass over existing atoms for both the clash and
+        # connectivity checks (replaces the previous two Python atom loops).
+        dists = np.linalg.norm(positions - expected_pos, axis=1)
+        if np.any(dists < radii * min_distance_factor):
+            continue
+        if max_connectivity_dist is not None and not np.any(
+            dists <= radii * connectivity_factor
+        ):
+            continue
 
-        if min_distance_factor is not None and new_atom_radius is not None:
-            for i, existing_pos in enumerate(positions):
-                dist = np.linalg.norm(expected_pos - existing_pos)
-                r_existing = get_covalent_radius(symbols_list[i])
-                min_allowed = (new_atom_radius + r_existing) * min_distance_factor
-                if dist < min_allowed:
-                    is_safe = False
-                    break
-
-            if (
-                is_safe
-                and max_connectivity_dist is not None
-                and new_atom_radius is not None
-            ):
-                is_connected = False
-                for i, existing_pos in enumerate(positions):
-                    dist = np.linalg.norm(expected_pos - existing_pos)
-                    r_existing = get_covalent_radius(symbols_list[i])
-                    # Connectivity threshold for this pair
-                    connectivity_threshold = (
-                        new_atom_radius + r_existing
-                    ) * connectivity_factor
-                    if dist <= connectivity_threshold:
-                        is_connected = True
-                        break
-                if not is_connected:
-                    is_safe = False
-
-        if is_safe:
-            safe_facet_indices.append(idx)
+        safe_facet_indices.append(idx)
 
     return safe_facet_indices
 
@@ -529,68 +510,67 @@ def _generate_batch_positions_on_convex_hull(
         # Convex hull computation failed (degenerate geometry)
         return []
 
-    # Compute facet properties using shared helper
+    # Compute facet properties once (a single list of
+    # (centroid, normal, area, (min_dist, max_dist)) tuples).
     facet_properties = _compute_facet_properties(hull, atoms)
-    facet_areas = [prop[2] for prop in facet_properties]
-    facet_centroids = [prop[0] for prop in facet_properties]
-    facet_normals = [prop[1] for prop in facet_properties]
-    facet_vertex_distances = [prop[3] for prop in facet_properties]
-
-    total_area = sum(facet_areas)
+    total_area = sum(prop[2] for prop in facet_properties)
     if total_area == 0:  # Handle degenerate cases
         return []
 
-    # Sort facets by area (descending), then centroid coordinates for reproducibility
-    facet_indices = list(range(len(facet_areas)))
-    facet_indices.sort(
+    # Deterministic sort by area (descending), then centroid coordinates for
+    # reproducibility. ``facet_order`` keeps each facet's original hull simplex
+    # index aligned with ``sorted_facet_properties`` (used for vertex lookup).
+    facet_order = sorted(
+        range(len(facet_properties)),
         key=lambda i: (
-            -facet_areas[i],  # Negative for descending order
-            round(facet_centroids[i][0], 8),
-            round(facet_centroids[i][1], 8),
-            round(facet_centroids[i][2], 8),
-        )
+            -facet_properties[i][2],
+            round(facet_properties[i][0][0], 8),
+            round(facet_properties[i][0][1], 8),
+            round(facet_properties[i][0][2], 8),
+        ),
     )
+    sorted_facet_properties = [facet_properties[i] for i in facet_order]
+    sorted_areas = np.array([prop[2] for prop in sorted_facet_properties])
 
-    # Reorder facets according to deterministic sort
-    sorted_facet_centroids = [facet_centroids[i] for i in facet_indices]
-    sorted_facet_normals = [facet_normals[i] for i in facet_indices]
-    sorted_facet_vertex_distances = [facet_vertex_distances[i] for i in facet_indices]
+    # Single, shared 1.5x connectivity pre-skip: facets whose nearest vertex is
+    # well beyond the connectivity threshold are extremely unlikely to yield a
+    # valid placement, so drop them once here instead of re-testing per facet.
+    if max_connectivity_dist is not None:
+        kept = [
+            i
+            for i, prop in enumerate(sorted_facet_properties)
+            if prop[3][0] <= max_connectivity_dist * 1.5
+        ]
+        sorted_facet_properties = [sorted_facet_properties[i] for i in kept]
+        facet_order = [facet_order[i] for i in kept]
+        sorted_areas = sorted_areas[kept]
 
-    # Get symbols for validation if enabled
-    symbols_list = atoms.get_chemical_symbols()
-    new_atom_radius = None
+    # Precompute the per-existing-atom radius sum (new + existing) once; it is
+    # reused by the safety filter and the per-candidate validation below.
+    radii = None
     if new_atom_symbol is not None:
+        symbols_list = atoms.get_chemical_symbols()
         new_atom_radius = get_covalent_radius(new_atom_symbol)
+        radii = new_atom_radius + np.array(
+            [get_covalent_radius(s) for s in symbols_list]
+        )
+    else:
+        new_atom_radius = None
+        radii = None
 
-    n_facets = len(sorted_facet_centroids)
+    n_facets = len(sorted_facet_properties)
 
     # Pre-filter facets if smart filtering is enabled
-    if (
-        smart_facet_filtering
-        and min_distance_factor is not None
-        and new_atom_radius is not None
-    ):
-        # Create sorted facet properties list (using sorted indices)
-        sorted_facet_properties = [
-            (
-                sorted_facet_centroids[i],
-                sorted_facet_normals[i],
-                facet_areas[facet_indices[i]],
-                sorted_facet_vertex_distances[i],
-            )
-            for i in range(n_facets)
-        ]
-        # Filter to safe facets (returns indices in sorted_facet_properties order)
+    if smart_facet_filtering and min_distance_factor is not None and radii is not None:
+        # Filter to safe facets (returns indices into sorted_facet_properties).
         safe_sorted_indices = _filter_safe_facets_for_placement(
-            atoms,
             sorted_facet_properties,
             bond_distance,
             min_connectivity_dist,
             max_connectivity_dist,
             min_distance_factor,
-            new_atom_radius,
+            radii,
             positions,
-            symbols_list,
             connectivity_factor=connectivity_factor,
         )
         n_safe_facets = len(safe_sorted_indices)
@@ -608,10 +588,8 @@ def _generate_batch_positions_on_convex_hull(
             return []
         if smart_facet_filtering and len(safe_sorted_indices) > 0:
             # Select from safe facets based on area
-            sorted_safe_areas = [
-                facet_areas[facet_indices[i]] for i in safe_sorted_indices
-            ]
-            safe_total_area = sum(sorted_safe_areas)
+            sorted_safe_areas = sorted_areas[safe_sorted_indices]
+            safe_total_area = float(sorted_safe_areas.sum())
             if safe_total_area > 0:
                 probabilities = np.array(sorted_safe_areas) / safe_total_area
                 selected_safe = rng.choice(
@@ -624,12 +602,9 @@ def _generate_batch_positions_on_convex_hull(
             else:
                 selected_indices = safe_sorted_indices[:n_to_select]
         else:
-            sorted_facet_areas = [
-                facet_areas[facet_indices[i]] for i in range(n_facets)
-            ]
-            probabilities = np.array(sorted_facet_areas) / total_area
+            probabilities = sorted_areas / float(sorted_areas.sum())
             selected_indices = rng.choice(
-                n_facets, size=n_to_select, replace=False, p=probabilities
+                len(sorted_areas), size=n_to_select, replace=False, p=probabilities
             )
 
     # Generate candidate positions for selected facets
@@ -637,20 +612,17 @@ def _generate_batch_positions_on_convex_hull(
     perturbation_scale = CONVEX_HULL_PERTURBATION_SCALE
 
     for idx in selected_indices:
-        chosen_centroid = sorted_facet_centroids[idx]
-        chosen_normal = sorted_facet_normals[idx]
-        min_centroid_dist, max_centroid_dist = sorted_facet_vertex_distances[idx]
-
-        # Skip facets where centroid is significantly beyond connectivity threshold
-        # For very large facets (min_centroid_dist > 1.5 * max_connectivity_dist),
-        # skip them as they're unlikely to yield valid placements
-        if (
-            max_connectivity_dist is not None
-            and min_centroid_dist > max_connectivity_dist * 1.5
-        ):
-            continue
-
-        # For large facets, place closer to vertices instead of centroid
+        (
+            chosen_centroid,
+            chosen_normal,
+            _area,
+            (
+                min_centroid_dist,
+                max_centroid_dist,
+            ),
+        ) = sorted_facet_properties[
+            idx
+        ]  # For large facets, place closer to vertices instead of centroid
         # This ensures atoms are within connectivity distance of existing atoms
         facet_size_ratio = (
             min_centroid_dist / max_connectivity_dist
@@ -659,7 +631,7 @@ def _generate_batch_positions_on_convex_hull(
         )
         if facet_size_ratio > 0.6:
             # Large facet: interpolate between centroid and nearest vertex
-            original_facet_idx = facet_indices[idx]
+            original_facet_idx = facet_order[idx]
             if original_facet_idx < len(hull.simplices):
                 facet_vertex_indices = hull.simplices[original_facet_idx]
                 facet_vertex_positions = positions[facet_vertex_indices]
@@ -727,31 +699,12 @@ def _generate_batch_positions_on_convex_hull(
         # because perturbation or interpolation might shift the point into a clash.
         is_valid = True
         if min_distance_factor is not None and new_atom_radius is not None:
-            for i, existing_pos in enumerate(positions):
-                dist = np.linalg.norm(candidate_pos - existing_pos)
-                r_existing = get_covalent_radius(symbols_list[i])
-                min_allowed = (new_atom_radius + r_existing) * min_distance_factor
-                if dist < min_allowed:
-                    is_valid = False
-                    break
-
-            if (
-                is_valid
-                and max_connectivity_dist is not None
-                and new_atom_radius is not None
-            ):
-                is_connected = False
-                for i, existing_pos in enumerate(positions):
-                    dist = np.linalg.norm(candidate_pos - existing_pos)
-                    r_existing = get_covalent_radius(symbols_list[i])
-                    # Connectivity threshold for this pair
-                    connectivity_threshold = (
-                        new_atom_radius + r_existing
-                    ) * connectivity_factor
-                    if dist <= connectivity_threshold:
-                        is_connected = True
-                        break
-                if not is_connected:
+            dists = np.linalg.norm(positions - candidate_pos, axis=1)
+            if np.any(dists < radii * min_distance_factor):
+                is_valid = False
+            elif max_connectivity_dist is not None:
+                conn_threshold = radii * connectivity_factor
+                if not np.any(dists <= conn_threshold):
                     is_valid = False
 
         if not is_valid:
@@ -763,12 +716,11 @@ def _generate_batch_positions_on_convex_hull(
                 and min_distance_factor is not None
                 and new_atom_radius is not None
             ):
-                min_dist_to_existing = min(
-                    np.linalg.norm(candidate_pos - existing_pos)
-                    for existing_pos in positions
+                min_dist_to_existing = float(
+                    np.linalg.norm(positions - candidate_pos, axis=1).min()
                 )
                 template_debug_logger.debug(
-                    f"candidate rejected: min_dist={min_dist_to_existing:.3f}, "
+                    f"Candidate rejected: min_dist={min_dist_to_existing:.3f}, "
                     f"min_centroid_dist={min_centroid_dist:.3f}, "
                     f"max_conn={max_connectivity_dist:.3f}"
                 )
@@ -790,7 +742,10 @@ def get_largest_facets(
         n_facets: Number of largest facets to return
 
     Returns:
-        List of tuples (centroid, normal, area) for the largest facets
+        List of tuples (centroid, normal, area) for the largest facets, sorted
+        by area (descending). For clusters with fewer than 4 atoms or for
+        degenerate geometry, returns a single synthetic facet at the center of
+        mass with unit area.
 
     """
     if len(atoms) < 4:
@@ -809,8 +764,11 @@ def get_largest_facets(
             centered_positions = positions - center
             if len(positions) > 1:
                 cov_matrix = np.cov(centered_positions.T)
-                eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
-                normal = eigenvectors[:, -1] / np.linalg.norm(eigenvectors[:, -1])
+                _eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+                # np.linalg.eigh returns eigenvalues in ascending order, so the
+                # plane normal is the eigenvector of the *smallest* eigenvalue
+                # (the direction of least positional variance).
+                normal = eigenvectors[:, 0] / np.linalg.norm(eigenvectors[:, 0])
             else:
                 normal = np.array([1.0, 0.0, 0.0])
         else:
@@ -849,7 +807,7 @@ def _classify_seed_geometry(atoms: Atoms) -> str:
         centered_positions = positions - center
 
         cov_matrix = np.cov(centered_positions.T)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        eigenvalues, _eigenvectors = np.linalg.eigh(cov_matrix)
 
         # Check if structure is linear (1D) vs planar (2D)
         # Linear: λ1 ≈ 0 AND λ2 ≈ 0 (only one dimension has variation)
@@ -912,7 +870,6 @@ def place_multi_atom_seed_on_facet(
     target_facet_centroid: np.ndarray,
     target_facet_normal: np.ndarray,
     bond_distance: float,
-    rng: np.random.Generator,
 ) -> Atoms:
     """Place a multi-atom seed so that its largest facet contacts the target facet.
 
@@ -921,10 +878,9 @@ def place_multi_atom_seed_on_facet(
         target_facet_centroid: Centroid of the target facet
         target_facet_normal: Normal vector of the target facet
         bond_distance: Desired bond distance between facets
-        rng: Random number generator for rotation
 
     Returns:
-        The seed atoms with new positions
+        A copy of the seed with rotated and translated positions
 
     """
     # Get the largest facet of the seed
@@ -933,7 +889,7 @@ def place_multi_atom_seed_on_facet(
         # Fallback: arbitrary +x axis when no facet can be identified
         seed_normal = np.array([1.0, 0.0, 0.0])
     else:
-        seed_facet_centroid, seed_facet_normal, _ = seed_facets[0]
+        _, seed_facet_normal, _ = seed_facets[0]
         seed_normal = seed_facet_normal
 
     # Create a copy to work with
@@ -981,6 +937,63 @@ def place_multi_atom_seed_on_facet(
     return placed_seed
 
 
+def pairwise_distances(
+    p1: np.ndarray, p2: np.ndarray, atoms: Atoms, *, use_mic: bool
+) -> np.ndarray:
+    """Vectorised ``(len(p1), len(p2))`` distance matrix between two position sets.
+
+    ``use_mic`` applies the minimum image convention using ``atoms``' cell and
+    periodic boundary conditions. One ASE call replaces an ``O(n*m)`` loop over
+    :meth:`ase.Atoms.get_distance`.
+    """
+    if use_mic:
+        return get_distances(p1, p2, cell=atoms.cell, pbc=atoms.pbc)[1]
+    return cdist(p1, p2)
+
+
+def _covalent_radii_array(atoms: Atoms) -> np.ndarray:
+    """Covalent radii (Å) for every atom, in atom order."""
+    return np.array(
+        [get_covalent_radius(s) for s in atoms.get_chemical_symbols()], dtype=float
+    )
+
+
+def _bonded_pairs(
+    atoms: Atoms, connectivity_factor: float, use_mic: bool
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(i, j)`` index arrays (``i < j``) of covalently bonded pairs.
+
+    Bonded means ``d(i, j) <= (r_i + r_j) * connectivity_factor``.
+
+    ``use_mic`` builds the full minimum-image distance matrix in one vectorised
+    ASE call. A KDTree pre-filter would silently drop pairs that are only close
+    through a periodic image, so it is used exclusively for the (non-periodic)
+    open-boundary case, where it keeps large clusters near ``O(n log n)``.
+    """
+    n_atoms = len(atoms)
+    radii = _covalent_radii_array(atoms)
+
+    if use_mic or n_atoms < KDTREE_THRESHOLD:
+        dist = (
+            atoms.get_all_distances(mic=True)
+            if use_mic
+            else cdist(atoms.get_positions(), atoms.get_positions())
+        )
+        thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
+        return np.nonzero(np.triu(dist <= thresh, k=1))
+
+    positions = atoms.get_positions()
+    tree = KDTree(positions)
+    query_radius = 2.0 * float(np.max(radii)) * connectivity_factor
+    pairs = np.array(sorted(tree.query_pairs(query_radius)), dtype=int)
+    if pairs.size == 0:
+        return np.empty(0, dtype=int), np.empty(0, dtype=int)
+    i_idx, j_idx = pairs[:, 0], pairs[:, 1]
+    d = np.linalg.norm(positions[i_idx] - positions[j_idx], axis=1)
+    keep = d <= (radii[i_idx] + radii[j_idx]) * connectivity_factor
+    return i_idx[keep], j_idx[keep]
+
+
 def _find_connected_components(
     atoms: Atoms, connectivity_factor: float, use_mic: bool = False
 ) -> tuple[dict[int, list[int]], list[int]]:
@@ -992,73 +1005,34 @@ def _find_connected_components(
         use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
-        Tuple of (components dict mapping root to atom indices, parent array for Union-Find)
+        Tuple of (components dict mapping root to atom indices, parent list for Union-Find)
     """
     if len(atoms) <= 1:
         return {0: [0] if len(atoms) == 1 else []}, list(range(len(atoms)))
 
-    positions = atoms.get_positions()
-    symbols = atoms.get_chemical_symbols()
     n_atoms = len(atoms)
-
     parent = list(range(n_atoms))
 
     def find(x: int) -> int:
         """Find root of x with path compression."""
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
 
-    def union(x: int, y: int) -> bool:
-        """Union two components. Returns True if union was performed."""
+    def union(x: int, y: int) -> None:
+        """Union two components."""
         px, py = find(x), find(y)
         if px != py:
             parent[px] = py
-            return True
-        return False
 
-    if n_atoms < 50:
-        for i in range(n_atoms):
-            for j in range(i + 1, n_atoms):
-                if use_mic:
-                    distance = float(atoms.get_distance(i, j, mic=True))
-                else:
-                    distance = np.linalg.norm(positions[i] - positions[j])
-                r_i = get_covalent_radius(symbols[i])
-                r_j = get_covalent_radius(symbols[j])
-                threshold = (r_i + r_j) * connectivity_factor
-                if distance <= threshold:
-                    union(i, j)
-    else:
-        tree = KDTree(positions)
-        unique_radii = {get_covalent_radius(s) for s in symbols}
-        max_radius = max(unique_radii)
-        query_radius = 2 * max_radius * connectivity_factor
-
-        for i in range(n_atoms):
-            neighbor_indices = tree.query_ball_point(positions[i], query_radius)
-            r_i = get_covalent_radius(symbols[i])
-
-            for j in neighbor_indices:
-                if j <= i:
-                    continue
-
-                if use_mic:
-                    distance = float(atoms.get_distance(i, j, mic=True))
-                else:
-                    distance = np.linalg.norm(positions[i] - positions[j])
-                r_j = get_covalent_radius(symbols[j])
-                threshold = (r_i + r_j) * connectivity_factor
-
-                if distance <= threshold:
-                    union(i, j)
+    i_idx, j_idx = _bonded_pairs(atoms, connectivity_factor, use_mic)
+    for i, j in zip(i_idx.tolist(), j_idx.tolist(), strict=True):
+        union(i, j)
 
     components: dict[int, list[int]] = {}
     for i in range(n_atoms):
-        root = find(i)
-        if root not in components:
-            components[root] = []
-        components[root].append(i)
+        components.setdefault(find(i), []).append(i)
 
     return components, parent
 
@@ -1070,12 +1044,15 @@ def is_cluster_connected(
 ) -> bool:
     """Check if all atoms in a cluster are connected within the specified distance threshold.
 
-    Uses a Union-Find algorithm with KDTree spatial indexing to efficiently determine if all
-    atoms form a single connected component where edges exist between atoms within
+    Uses a Union-Find algorithm to determine if all atoms form a single
+    connected component where edges exist between atoms within
     (r_i + r_j) * connectivity_factor.
 
-    This optimized version uses scipy.spatial.KDTree for efficient neighbor queries,
-    providing O(n log n) performance instead of O(n²) for large clusters.
+    Non-periodic clusters with 50 or more atoms use scipy.spatial.KDTree for
+    neighbor queries, giving roughly O(n log n) behavior instead of the O(n²)
+    pairwise scan used for smaller clusters. ``use_mic`` always uses the full
+    minimum-image distance matrix, because a KDTree on unwrapped positions
+    cannot see neighbors that are only close through a periodic image.
 
     Args:
         atoms: The Atoms object to check
@@ -1094,7 +1071,7 @@ def analyze_disconnection(
     atoms: Atoms,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     use_mic: bool = False,
-) -> tuple[float, float, str]:
+) -> tuple[float, str]:
     """Analyze disconnection in a cluster and suggest appropriate connectivity factor.
 
     Args:
@@ -1103,15 +1080,15 @@ def analyze_disconnection(
         use_mic: If True, use minimum image convention for distance calculations.
 
     Returns:
-        Tuple of (max_disconnection_distance, suggested_connectivity_factor, analysis_message)
+        Tuple of (suggested_connectivity_factor, analysis_message)
     """
     if len(atoms) <= 1:
-        return 0.0, connectivity_factor, "Single atom or empty cluster"
+        return connectivity_factor, "Single atom or empty cluster"
 
     components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
 
     if len(components) <= 1:
-        return 0.0, connectivity_factor, "Cluster is connected"
+        return connectivity_factor, "Cluster is connected"
 
     positions = atoms.get_positions()
     symbols = atoms.get_chemical_symbols()
@@ -1131,7 +1108,7 @@ def analyze_disconnection(
                         closest_atoms = (atom1, atom2, symbols[atom1], symbols[atom2])
 
     if closest_atoms is None:
-        return float("inf"), connectivity_factor, "Unable to analyze disconnection"
+        return connectivity_factor, "Unable to analyze disconnection"
 
     atom1_idx, atom2_idx, sym1, sym2 = closest_atoms
     r1 = get_covalent_radius(sym1)
@@ -1150,7 +1127,7 @@ def analyze_disconnection(
         f"Suggested connectivity_factor: {suggested_factor:.2f}"
     )
 
-    return min_inter_component_distance, suggested_factor, analysis_msg
+    return suggested_factor, analysis_msg
 
 
 def _build_connectivity_adjacency(
@@ -1162,39 +1139,10 @@ def _build_connectivity_adjacency(
     if n <= 1:
         return adj
 
-    positions = cluster.get_positions()
-    symbols = cluster.get_chemical_symbols()
-    radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
-
-    if use_mic:
-        for i in range(n):
-            for j in range(i + 1, n):
-                distance = float(cluster.get_distance(i, j, mic=True))
-                if distance <= (radii[i] + radii[j]) * connectivity_factor:
-                    adj[i].append(j)
-                    adj[j].append(i)
-        return adj
-
-    if n < 50:
-        dist = cdist(positions, positions)
-        thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
-        for i in range(n):
-            for j in range(i + 1, n):
-                if dist[i, j] <= thresh[i, j]:
-                    adj[i].append(j)
-                    adj[j].append(i)
-    else:
-        tree = KDTree(positions)
-        max_radius = float(np.max(radii))
-        query_radius = 2.0 * max_radius * connectivity_factor
-        for i in range(n):
-            for j in tree.query_ball_point(positions[i], query_radius):
-                if j <= i:
-                    continue
-                distance = float(np.linalg.norm(positions[i] - positions[j]))
-                if distance <= (radii[i] + radii[j]) * connectivity_factor:
-                    adj[i].append(j)
-                    adj[j].append(i)
+    i_idx, j_idx = _bonded_pairs(cluster, connectivity_factor, use_mic)
+    for i, j in zip(i_idx.tolist(), j_idx.tolist(), strict=True):
+        adj[i].append(j)
+        adj[j].append(i)
     return adj
 
 
@@ -1232,6 +1180,7 @@ def _identify_safe_removal_candidates(
         cluster: The cluster to analyze
         candidate_indices: List of atom indices to test for safe removal
         connectivity_factor: Factor for connectivity threshold
+        use_mic: If True, use minimum image convention for distance calculations
         max_to_check: Maximum number of candidates to check (for performance)
 
     Returns:
@@ -1313,9 +1262,11 @@ def get_structure_diagnostics(
         atoms: The Atoms object to analyze
         min_distance_factor: Factor to scale covalent radii for minimum distance checks
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
-        StructureDiagnostics object containing detailed analysis results
+        StructureDiagnostics object containing detailed analysis results. At
+        most 10 clash details are collected.
     """
     if len(atoms) == 0:
         return StructureDiagnostics(
@@ -1342,7 +1293,11 @@ def get_structure_diagnostics(
         if len(clash_details) >= 10:
             break
         for j in range(i + 1, n_atoms):
-            distance = np.linalg.norm(positions[i] - positions[j])
+            distance = float(
+                pairwise_distances(
+                    positions[i : i + 1], positions[j : j + 1], atoms, use_mic=use_mic
+                )[0, 0]
+            )
             r_i = radii[symbols[i]]
             r_j = radii[symbols[j]]
             min_allowed = (r_i + r_j) * min_distance_factor
@@ -1441,6 +1396,7 @@ def validate_cluster_structure(
         connectivity_factor: Factor to multiply sum of covalent radii for connectivity threshold
         check_clashes: Whether to check for atomic clashes (default: True)
         check_connectivity: Whether to check connectivity (default: True)
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
         Tuple of (is_valid, error_message). If is_valid is True, error_message is empty.
@@ -1485,11 +1441,46 @@ def validate_cluster_structure(
     return True, ""
 
 
+def _set_cubic_cell_and_center(atoms: Atoms, cell_side: float) -> None:
+    """Set a cubic cell of the given side and center the atoms within it.
+
+    Replaces the repeated ``atoms.set_cell([cell_side, cell_side, cell_side])``
+    followed by ``atoms.center()`` pattern used across the initialization
+    modules.
+
+    Args:
+        atoms: Atoms object to modify in place.
+        cell_side: Cubic cell side length.
+    """
+    atoms.set_cell([cell_side, cell_side, cell_side])
+    atoms.center()
+
+
+def _validate_cluster_defaults(
+    atoms: Atoms,
+    min_distance_factor: float,
+    connectivity_factor: float,
+) -> tuple[bool, str]:
+    """Validate clashes and composition-aware connectivity without MIC."""
+    return validate_cluster_structure(
+        atoms,
+        min_distance_factor,
+        connectivity_factor,
+        check_clashes=True,
+        check_connectivity=_should_check_connectivity(atoms),
+        use_mic=False,
+    )
+
+
 def reorder_cluster_to_composition(cluster: Atoms, composition: Sequence[str]) -> Atoms:
     """Reorder cluster atoms to match the campaign composition symbol sequence.
 
     GA cut-and-splice pairing requires identical per-index atomic numbers across
     parents, so all structures for a given composition must share the same order.
+
+    Raises:
+        SCGOValidationError: If the cluster symbols cannot be matched one-to-one
+            with ``composition``.
     """
     desired = list(composition)
     current = cluster.get_chemical_symbols()
@@ -1541,15 +1532,18 @@ def validate_cluster(
         sort_atoms: When True and ``composition`` is set, reorder atoms to match
             the composition list (required for GA pairing). When True without
             ``composition``, fall back to alphabetical element sort.
-        raise_on_failure: Whether to raise ValueError on validation failure
+        raise_on_failure: Whether to raise SCGOValidationError on validation failure
         source: Context string for error messages (e.g., "template", "seed+growth")
+        use_mic: If True, use minimum image convention for distance calculations
 
     Returns:
         Tuple of (validated_atoms, is_valid, error_message). If is_valid is True,
         error_message is empty. validated_atoms may be reordered if sort_atoms=True.
 
     Raises:
-        ValueError: If raise_on_failure=True and validation fails
+        SCGOValidationError: If raise_on_failure=True and validation fails, or
+            if reordering to ``composition`` is requested but the cluster
+            symbols do not match it.
 
     """
     # Auto-detect if we should check connectivity
@@ -1655,18 +1649,27 @@ def _sort_atoms_by_element(atoms: Atoms) -> Atoms:
     return sorted_atoms
 
 
-def _should_check_connectivity(atoms: Atoms) -> bool:
+def _should_check_connectivity(atoms: Atoms, *, uses_surface: bool = False) -> bool:
     """Determine if connectivity check should be performed for a cluster.
 
     Connectivity checks are only meaningful for clusters with more than 2 atoms.
     For very small clusters (<= 2 atoms), the notion of connectivity is ambiguous.
 
+    Whole-structure connectivity is never meaningful for surface systems: a
+    multi-layer slab (e.g. graphite) is not internally covalently bonded through
+    the stack, so checking the whole slab+adsorbate structure would wrongly reject
+    every surface trial. Surface connectivity is instead enforced per mobile
+    subgroup by :func:`~scgo.system_types.validate_connectivity_policy`.
+
     Args:
-        atoms: The Atoms object to check
+        atoms: The Atoms object to check.
+        uses_surface: When True (whole structure includes a slab), return False.
 
     Returns:
-        True if connectivity should be checked, False otherwise
+        True if connectivity should be checked, False otherwise.
     """
+    if uses_surface:
+        return False
     return len(atoms) > 2
 
 
@@ -1706,6 +1709,9 @@ def _cycle_composition_to_length(
     Returns:
         List of element symbols with length equal to target_length
 
+    Raises:
+        SCGOValidationError: If ``composition`` is empty
+
     Example:
         >>> _cycle_composition_to_length(["Pt", "Au"], 5)
         ["Pt", "Au", "Pt", "Au", "Pt"]
@@ -1744,8 +1750,9 @@ def _assign_exact_composition(
         Atoms object with exact composition assigned
 
     Raises:
-        ValueError: If cluster atom count doesn't match n_atoms (when provided) or if
-                   composition assignment fails
+        SCGOValidationError: If cluster atom count doesn't match n_atoms (when
+                   provided), if ``composition`` is empty, or if composition
+                   assignment fails
     """
     if n_atoms is None:
         n_atoms = len(cluster)
@@ -1761,7 +1768,7 @@ def _assign_exact_composition(
         raise SCGOValidationError(
             f"Cannot assign empty composition to cluster with {n_atoms} atoms"
         )
-    elif len(composition) == n_atoms:
+    if len(composition) == n_atoms:
         # Exact match - use composition directly
         cluster.set_chemical_symbols(composition)
     else:
@@ -1789,46 +1796,25 @@ def _assign_exact_composition(
 
 
 def _compute_composition_delta(
-    base_counts: dict[str, int],
-    target_counts: dict[str, int],
-) -> tuple[list[str], dict[str, int], dict[str, int]]:
+    base_counts: Mapping[str, int],
+    target_counts: Mapping[str, int],
+) -> tuple[list[str], dict[str, int]]:
     """Compute atoms to add and remove to match target composition.
 
     Args:
-        base_counts: Current composition counts as dict mapping element to count
-        target_counts: Target composition counts as dict mapping element to count
+        base_counts: Current composition counts.
+        target_counts: Target composition counts.
 
     Returns:
-        Tuple of (atoms_to_add, atoms_to_remove_dict, excess_elements_dict):
-        - atoms_to_add: List of element symbols to add
-        - atoms_to_remove: Dict mapping element to count to remove
-        - excess_elements: Dict of elements that would need to be removed
-          but aren't present in sufficient quantity (for error reporting)
+        ``(atoms_to_add, atoms_to_remove)`` where ``atoms_to_add`` is a list of
+        symbols in target-count key order and ``atoms_to_remove`` maps element
+        to removal count.
     """
-    atoms_to_add = []
-    atoms_to_remove = {}
-    excess_elements = {}
-
-    all_elements = set(base_counts.keys()) | set(target_counts.keys())
-
-    for elem in all_elements:
-        base_count = base_counts.get(elem, 0)
-        target_count = target_counts.get(elem, 0)
-        diff = target_count - base_count
-
-        if diff > 0:
-            # Need to add this element
-            atoms_to_add.extend([elem] * diff)
-        elif diff < 0:
-            # Need to remove this element
-            removal_count = -diff
-            if base_count >= removal_count:
-                atoms_to_remove[elem] = removal_count
-            else:
-                # Can't remove enough - this is an excess element
-                excess_elements[elem] = removal_count - base_count
-
-    return atoms_to_add, atoms_to_remove, excess_elements
+    base = Counter(base_counts)
+    target = Counter(target_counts)
+    atoms_to_add = list((target - base).elements())
+    atoms_to_remove = dict(base - target)
+    return atoms_to_add, atoms_to_remove
 
 
 def _check_composition_feasibility(
@@ -1871,9 +1857,7 @@ def _check_composition_feasibility(
     base_counts = get_composition_counts(base_composition)
     target_counts = get_composition_counts(target_composition)
 
-    _, atoms_to_remove, excess_elements = _compute_composition_delta(
-        base_counts, target_counts
-    )
+    _, atoms_to_remove = _compute_composition_delta(base_counts, target_counts)
 
     if operation == "grow" and atoms_to_remove:
         removal_details = ", ".join(
@@ -1882,19 +1866,6 @@ def _check_composition_feasibility(
         return False, (
             f"Cannot grow from {base_composition} to {target_composition}: "
             f"base has excess atoms that must be removed first ({removal_details})"
-        )
-
-    # Check if we can achieve target composition
-    if excess_elements:
-        # Some elements need to be removed but aren't present in sufficient quantity
-        excess_details = ", ".join(
-            f"{elem} (need to remove {count} more than available)"
-            for elem, count in excess_elements.items()
-        )
-        return False, (
-            f"Cannot achieve target composition {target_composition} from "
-            f"base {base_composition}: insufficient quantity of elements to remove. "
-            f"Excess elements: {excess_details}"
         )
 
     base_total = sum(base_counts.values())

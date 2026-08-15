@@ -11,7 +11,8 @@ from ase import Atoms
 from ase.optimize import FIRE
 
 from scgo.calculators import torchsim_helpers as _tsh
-from scgo.exceptions import SCGORuntimeError, SCGOValidationError
+from scgo.exceptions import SCGOValidationError
+from scgo.metadata.provenance import is_cuda_oom_error
 from scgo.utils.logging import get_logger
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.ts_runner_kwargs import NebRunConfig
@@ -40,11 +41,174 @@ logger = get_logger(__name__)
 
 
 def _neb_image_dedup_key(atoms: Atoms) -> tuple:
-    """Hashable key for deduplicating NEB images across bands."""
+    """Hashable key for deduplicating NEB images across bands.
+
+    Positions alone are not enough: surface bands enable ``neb_surface_cell_remap``
+    and ``neb_surface_lattice_rotation``, which legitimately produce identical
+    Cartesian positions in *different* cells. Cell and PBC are part of the key so
+    such images never collide and receive a neighbor's energy/forces.
+    """
     return (
         tuple(atoms.get_chemical_symbols()),
         tuple(np.round(atoms.get_positions().ravel(), 6)),
+        tuple(np.round(np.asarray(atoms.get_cell()).ravel(), 6)),
+        tuple(bool(p) for p in atoms.get_pbc()),
     )
+
+
+def _band_atom_cost(neb: TorchSimNEB) -> int:
+    """Atoms in one fused force batch for this band (``n_images * n_atoms``)."""
+    images = neb.images
+    if not images:
+        return 0
+    return len(images) * len(images[0])
+
+
+def chunk_band_indices_by_atom_budget(
+    indices: list[int],
+    costs: list[int],
+    max_batch_atoms: int | None,
+) -> list[list[int]]:
+    """Greedily bin ``indices`` so each chunk's summed atom cost fits the budget.
+
+    ``costs`` is indexed by band index (parallel to ``neb_instances``). Input
+    order is preserved, so chunking is deterministic. A single band exceeding the
+    budget still gets its own chunk (never dropped). ``max_batch_atoms`` of
+    ``None`` or ``<= 0`` disables budgeting and returns one chunk.
+    """
+    if not indices:
+        return []
+    if max_batch_atoms is None or int(max_batch_atoms) <= 0:
+        return [list(indices)]
+    budget = int(max_batch_atoms)
+    chunks: list[list[int]] = []
+    current: list[int] = []
+    current_atoms = 0
+    for idx in indices:
+        cost = int(costs[idx])
+        if current and current_atoms + cost > budget:
+            chunks.append(current)
+            current = []
+            current_atoms = 0
+        current.append(idx)
+        current_atoms += cost
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _apply_band_cap(chunks: list[list[int]], band_cap: int | None) -> list[list[int]]:
+    """Further split atom-budget chunks so none exceeds *band_cap* bands."""
+    if band_cap is None:
+        return chunks
+    capped: list[list[int]] = []
+    for chunk in chunks:
+        capped.extend(chunk[k : k + band_cap] for k in range(0, len(chunk), band_cap))
+    return capped
+
+
+# The soft sentinel "NEB did not converge after N steps" is the only error text
+# that stays climb-eligible: a band that merely exhausted stage-1's half budget
+# is the normal interior-max IDPP case and MUST still proceed to the climb pass.
+# Every other non-empty error (non-finite forces, "not processed", CUDA OOM, or
+# any arbitrary exception message) marks a hard failure.
+_STAGE1_SOFT_NONCONVERGENCE = "did not converge"
+
+
+def _stage1_band_climb_eligible(summary: dict[str, Any]) -> bool:
+    """Return True when a stage-1 band should proceed to the CI-NEB climb pass.
+
+    A band is climb-eligible when it actually took at least one optimizer step
+    and did not *hard*-fail. The previous ``not summary.get("error")`` test
+    filtered out every band that merely exhausted stage-1's half budget (which
+    is stamped ``error="NEB did not converge after N steps"``), so in the normal
+    case no band ever climbed.
+
+    Preference order:
+
+    * the explicit ``summary["failed"]`` boolean set by
+      :meth:`ParallelNEBBatch.run_optimization` (``neb_idx in self.failed_nebs``);
+    * a string sniff of ``summary["error"]`` as a fallback for summaries produced
+      outside ``run_optimization`` (e.g. the OOM-retry stubs), where only an
+      empty error or the soft "did not converge" sentinel stays climb-eligible
+      and any other error text is treated as a hard failure.
+    """
+    if int(summary.get("steps_taken") or 0) <= 0:
+        return False
+    if "failed" in summary:
+        return not bool(summary["failed"])
+    error_text = str(summary.get("error") or "").lower()
+    if not error_text:
+        return True
+    return _STAGE1_SOFT_NONCONVERGENCE in error_text
+
+
+def _evaluate_bands_in_chunks(
+    bands: list[list[Atoms]],
+    relaxer: Any,
+    *,
+    atom_budget: int | None,
+    band_cap: int | None,
+) -> list[list[float]]:
+    """Batched single-point energies per band, chunked to fit GPU memory.
+
+    ``bands`` is a list of image lists (one per band). Returns per-band energy
+    lists in the same order as the input. Each fused
+    :func:`evaluate_neb_image_energies` call is bounded by ``atom_budget`` (the
+    summed ``n_images * n_atoms`` cost) and ``band_cap`` (max bands per batch),
+    mirroring the chunking used for the optimization pass. On CUDA OOM a chunk is
+    re-binned at half its atom cost and retried once (``cleanup_torch_cuda`` runs
+    between attempts).
+
+    This replaces a single ``evaluate_neb_image_energies(all_images)`` over every
+    image of every band, which bypassed the atom budget and OOM recovery and
+    could silently OOM the whole pre-screen for large ``setup_pairs`` lists.
+    """
+    if not bands:
+        return []
+    band_costs = [len(imgs) * len(imgs[0]) if imgs else 0 for imgs in bands]
+
+    def _chunk(indices: list[int], budget: int | None) -> list[list[int]]:
+        chunks = chunk_band_indices_by_atom_budget(indices, band_costs, budget)
+        return _apply_band_cap(chunks, band_cap)
+
+    results: list[list[float] | None] = [None] * len(bands)
+
+    def _run_chunk(chunk: list[int]) -> None:
+        chunk_images = [img for band_i in chunk for img in bands[band_i]]
+        energies = evaluate_neb_image_energies(chunk_images, relaxer)
+        offset = 0
+        for band_i in chunk:
+            n = len(bands[band_i])
+            results[band_i] = [float(e) for e in energies[offset : offset + n]]
+            offset += n
+
+    for chunk in _chunk(list(range(len(bands))), atom_budget):
+        try:
+            _run_chunk(chunk)
+        except (RuntimeError, MemoryError) as exc:
+            if not is_cuda_oom_error(exc):
+                raise
+            logger.warning(
+                "Pre-screen energy eval hit CUDA OOM for %d band(s) (%s); "
+                "retrying once at half the chunk atom cost",
+                len(chunk),
+                exc,
+            )
+            cleanup_torch_cuda(logger=logger)
+            chunk_atoms = sum(band_costs[i] for i in chunk)
+            retry_budget = max(1, chunk_atoms // 2)
+            for sub_chunk in chunk_band_indices_by_atom_budget(
+                chunk, band_costs, retry_budget
+            ):
+                _run_chunk(sub_chunk)
+
+    if not all(r is not None for r in results):
+        missing = [i for i, r in enumerate(results) if r is None]
+        raise SCGOValidationError(
+            f"Parallel NEB returned incomplete results; missing bands: {missing}"
+        )
+    return results  # type: ignore[return-value]
 
 
 class ParallelNEBBatch:
@@ -68,16 +232,58 @@ class ParallelNEBBatch:
         self.failed_nebs: dict[int, str] = {}
         self.step_count = 0
 
+        # The batch runner owns ``force_calls`` for these bands (B2): it counts
+        # one call per batched relax_batch a band participates in, so the bands
+        # must not also self-count inside ``TorchSimNEB.get_forces``.
+        for neb in neb_instances:
+            if hasattr(neb, "_force_calls_counted_externally"):
+                neb._force_calls_counted_externally = True
+
         # Per-NEB optimizer instances (created lazily). Uses ASE optimizers
         # (default: FIRE) so stepping respects NEB forces / spring terms.
         self._optimizers: dict[int, object] = {}
+
+    def _step_optimizer(self, neb_idx: int) -> None:
+        """Advance one band's optimizer using the just-computed batched forces.
+
+        ``optimizer.step()`` is called with no arguments: the ASE
+        ``Dynamics.step()`` API takes none, and ``FIRE.step`` keeps ``f=None``
+        only for backwards compatibility. Called that way ``FIRE.step()`` falls
+        back to ``optimizable.get_gradient().reshape(-1, 3)``, and
+        ``NEBOptimizable.get_gradient`` is ``neb.get_forces().ravel()`` (NEB
+        forces are already the descent direction, no sign flip), so the value is
+        identical to the forces this batch just computed (checked against ASE
+        3.26).
+
+        Crucially this does *not* cost an extra TorchSim call: every image still
+        carries the SinglePoint results attached moments ago, so
+        ``TorchSimNEB.get_forces`` takes its cached-forces fast path instead of
+        dispatching an unbatched per-band ``relax_batch``.
+        """
+        optimizer = self._optimizers.get(neb_idx)
+        if optimizer is None:
+            optimizer = self.optimizer_cls(
+                self.neb_instances[neb_idx], logfile=None, trajectory=None
+            )
+            self._optimizers[neb_idx] = optimizer
+        optimizer.step()
 
     def run_optimization(
         self,
         fmax: float = 0.05,
         max_steps: int = 500,
     ) -> list[dict[str, Any]]:
-        """Optimize NEBs using batched evaluations; return per-NEB summaries."""
+        """Optimize NEBs using batched evaluations; return per-NEB summaries.
+
+        Raises:
+            RuntimeError: (or ``torch.cuda.OutOfMemoryError``) when a batched
+                force evaluation runs out of GPU memory. CUDA OOM is *not*
+                converted into per-band error dicts: the caller
+                (``run_parallel_neb_search``) re-bins the chunk at half its
+                own atom cost and retries. Non-OOM ``RuntimeError``/``ValueError``
+                still mark the active bands failed and end the loop, because
+                those indicate bad input rather than GPU pressure.
+        """
         if not self.neb_instances:
             logger.error("No NEB instances provided to run_optimization")
             return []
@@ -89,6 +295,7 @@ class ParallelNEBBatch:
                 "final_fmax": None,
                 "error": None,
                 "force_calls": None,
+                "failed": False,
             }
             for _ in self.neb_instances
         ]
@@ -98,12 +305,14 @@ class ParallelNEBBatch:
             unique_images: list[Atoms] = []
             unique_index: dict[tuple, int] = {}
             neb_image_map: list[tuple[int, int, int]] = []
+            batch_participants: list[int] = []
             # After step 0, endpoints keep cached SinglePoint energy/forces.
             evaluate_endpoints = self.step_count == 0
 
             for neb_idx in self.active_nebs:
                 neb = self.neb_instances[neb_idx]
                 n_img = len(neb.images)
+                participates = False
                 for img_idx, atoms in enumerate(neb.images):
                     is_endpoint = img_idx == 0 or img_idx == n_img - 1
                     if is_endpoint and not evaluate_endpoints:
@@ -114,6 +323,9 @@ class ParallelNEBBatch:
                         unique_images.append(atoms)
                     unique_slot = unique_index[key]
                     neb_image_map.append((neb_idx, img_idx, unique_slot))
+                    participates = True
+                if participates:
+                    batch_participants.append(neb_idx)
 
             if not unique_images:
                 break
@@ -127,6 +339,20 @@ class ParallelNEBBatch:
             try:
                 unique_results = self.relaxer.relax_batch(unique_images, steps=0)
             except (RuntimeError, ValueError) as e:
+                if is_cuda_oom_error(e):
+                    # Propagate GPU pressure so ``_run_chunk_with_oom_retry`` can
+                    # re-bin this chunk at half its atom cost. Swallowing it here
+                    # (the historical behavior) made that safety net unreachable
+                    # and silently produced zero transition states.
+                    logger.warning(
+                        "Batched force evaluation hit CUDA OOM at step %d "
+                        "(%d image(s), %d band(s)); propagating for re-binning: %s",
+                        self.step_count,
+                        len(unique_images),
+                        len(self.active_nebs),
+                        e,
+                    )
+                    raise
                 kind = (
                     "Invalid input"
                     if isinstance(e, ValueError)
@@ -138,7 +364,11 @@ class ParallelNEBBatch:
                     results[neb_idx]["error"] = str(e)
                 break
 
-            for neb_idx in self.active_nebs:
+            # ``force_calls`` = number of batched relax_batch evaluations a band
+            # actually took part in. The batch runner owns the counter here;
+            # ``TorchSimNEB.get_forces`` only counts for the serial fallback (its
+            # cached-forces fast path is taken right below).
+            for neb_idx in batch_participants:
                 self.neb_instances[neb_idx]._force_calls += 1
 
             for neb_idx, img_idx, unique_slot in neb_image_map:
@@ -163,23 +393,25 @@ class ParallelNEBBatch:
                             "NEB forces are non-finite "
                             f"(fmax={max_force!r}); refusing optimizer step"
                         )
+                        results[neb_idx]["converged"] = False
                         self.failed_nebs[neb_idx] = msg
                         results[neb_idx]["error"] = msg
                         logger.debug("NEB %d step failed: %s", neb_idx, msg)
-                    elif max_force < fmax:
+                        continue
+                    if max_force < fmax:
                         results[neb_idx]["converged"] = True
                         self.converged_nebs[neb_idx] = True
                         logger.debug(
                             f"NEB {neb_idx} finished: converged, fmax={max_force:.6f}"
                         )
                     else:
-                        if neb_idx not in self._optimizers:
-                            self._optimizers[neb_idx] = self.optimizer_cls(
-                                neb, logfile=None, trajectory=None
-                            )
-                        self._optimizers[neb_idx].step()
+                        self._step_optimizer(neb_idx)
                         still_active.append(neb_idx)
                 except (RuntimeError, ValueError) as e:
+                    if is_cuda_oom_error(e):
+                        # Same contract as the batched eval above: OOM belongs to
+                        # the chunk-level retry, not to per-band bookkeeping.
+                        raise
                     logger.debug("NEB %d step failed: %s", neb_idx, e)
                     self.failed_nebs[neb_idx] = str(e)
                     results[neb_idx]["error"] = str(e)
@@ -191,6 +423,9 @@ class ParallelNEBBatch:
                 break
 
         for neb_idx in range(len(self.neb_instances)):
+            # Record the hard-failure flag so ``_stage1_band_climb_eligible`` can
+            # key off it directly instead of sniffing the error string.
+            results[neb_idx]["failed"] = neb_idx in self.failed_nebs
             if neb_idx not in self.converged_nebs and neb_idx not in self.failed_nebs:
                 steps = results[neb_idx]["steps_taken"] or 0
                 results[neb_idx]["error"] = (
@@ -211,7 +446,10 @@ class ParallelNEBBatch:
         return results
 
     def _refresh_pes_after_optimization(self) -> None:
-        """Re-evaluate all NEB images at their final positions (no optimizer step)."""
+        """Re-evaluate images of every non-failed NEB at their final positions.
+
+        No optimizer step is taken; failed bands are skipped.
+        """
         unique_images: list[Atoms] = []
         unique_index: dict[tuple, int] = {}
         neb_image_map: list[tuple[int, int, int]] = []
@@ -263,16 +501,33 @@ def run_parallel_neb_search(
     run_dir: Path,
     rng: np.random.Generator | None,
     parallel_neb_max_bands: int | None = None,
+    relaxer: Any | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Run all pairs through ParallelNEBBatch. Returns (results, timing meta).
 
-    ``parallel_neb_max_bands`` limits how many bands share one force batch
-    (``None`` = all). Surface presets pass ``1`` so large slab cells stay under
-    GPU memory while still using the parallel NEB runner.
+    Bands are chunked so each fused force batch fits GPU memory
+    (``cleanup_torch_cuda`` runs between chunks). Both bounds always apply:
+
+    * bands are greedily binned so the summed ``n_images * n_atoms`` per batch
+      stays within ``neb_cfg.parallel_neb_max_batch_atoms`` (``None`` = no atom
+      budget);
+    * ``parallel_neb_max_bands`` (>0) additionally caps how many bands share a
+      batch. Surface presets pass ``4``.
+
+    A chunk that hits CUDA OOM is re-binned at half its own atom cost and retried
+    once (after ``cleanup_torch_cuda``); only the sub-chunks that still OOM have
+    their bands marked failed.
+
+    ``relaxer`` lets the caller reuse a single :class:`TorchSimBatchRelaxer`
+    (e.g. the one built for the IDPP screen) instead of constructing a fresh
+    model load. When ``None``, a relaxer is built from ``neb_cfg.torchsim_params``.
     """
     t_parallel0 = perf_counter()
     torchsim_params = neb_cfg.torchsim_params or {}
-    relaxer = _tsh.TorchSimBatchRelaxer(**torchsim_params)
+    # Reuse the caller-provided relaxer (e.g. the shared IDPP-screen relaxer)
+    # instead of constructing a second model load.
+    if relaxer is None:
+        relaxer = _tsh.TorchSimBatchRelaxer(**torchsim_params)
     neb_steps_i = int(neb_cfg.neb_steps)
     system_type = neb_cfg.system_type
 
@@ -329,6 +584,9 @@ def run_parallel_neb_search(
         save_neb_result(skipped, str(pair_dir), pair_id)
         pair_results[pair_ord] = skipped
 
+    # Build NEB instances for every valid pair first; defer the per-band single-point
+    # energy eval so all bands can be fused into one relax_batch(steps=0) call below.
+    setup_pairs: list[tuple[int, str, int, int, float, float, list[Any]]] = []
     for pair_ord, (i, j) in enumerate(pairs):
         pair_id = f"{i}_{j}"
         react_e = float(minima[i][0])
@@ -364,25 +622,58 @@ def run_parallel_neb_search(
             neb_surface_lattice_rotation=neb_cfg.neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_cfg.neb_surface_max_lattice_shift,
         )
-        band_energies: list[float] | None = None
         try:
             validate_initial_neb_path(
                 images,
                 n_slab=neb_cfg.n_slab,
                 mic=neb_cfg.neb_interpolation_mic,
                 max_endpoint_mismatch=neb_cfg.max_endpoint_mismatch,
+                clash_distance=neb_cfg.neb_prescreen_clash_distance,
             )
-            if neb_cfg.max_endpoint_mismatch is not None:
-                band_energies = evaluate_neb_image_energies(images, relaxer)
-                validate_initial_neb_energy_profile(
-                    band_energies,
-                    reference_reactant_energy=react_e,
-                    reference_product_energy=prod_e,
-                )
         except SCGOValidationError as e:
             logger.warning("Skipping pair %s: %s", pair_id, e)
             _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
             continue
+        setup_pairs.append((pair_ord, pair_id, i, j, react_e, prod_e, images))
+
+    # Batched single-point energy pre-screen across all valid bands, chunked to
+    # fit GPU memory (per-band, input order preserved). Only needed when the
+    # ``max_endpoint_mismatch`` energy-profile gate is enabled. Chunking mirrors
+    # the optimization pass so a large ``setup_pairs`` list cannot OOM the screen
+    # without recovery.
+    if setup_pairs and neb_cfg.max_endpoint_mismatch is not None:
+        prescreen_band_cap = (
+            int(parallel_neb_max_bands)
+            if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
+            else None
+        )
+        band_energy_lists = _evaluate_bands_in_chunks(
+            [imgs for _ord, _pid, _i, _j, _re, _pe, imgs in setup_pairs],
+            relaxer,
+            atom_budget=neb_cfg.parallel_neb_max_batch_atoms,
+            band_cap=prescreen_band_cap,
+        )
+    else:
+        band_energy_lists = []
+
+    for setup_i, (pair_ord, pair_id, i, j, react_e, prod_e, images) in enumerate(
+        setup_pairs
+    ):
+        band_energies: list[float] | None = None
+        if band_energy_lists:
+            band_energies = band_energy_lists[setup_i]
+            try:
+                validate_initial_neb_energy_profile(
+                    band_energies,
+                    reference_reactant_energy=react_e,
+                    reference_product_energy=prod_e,
+                    min_saddle_prominence=neb_cfg.min_saddle_prominence,
+                    max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
+                )
+            except SCGOValidationError as e:
+                logger.warning("Skipping pair %s: %s", pair_id, e)
+                _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
+                continue
         pair_two_stage = neb_uses_two_stage_climb(
             neb_cfg.neb_climb, neb_steps_i, initial_energies=band_energies
         )
@@ -418,69 +709,159 @@ def run_parallel_neb_search(
         band_cap = (
             int(parallel_neb_max_bands)
             if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
-            else len(neb_instances)
+            else None
         )
-        if band_cap < len(neb_instances):
+        band_costs = [_band_atom_cost(neb) for neb in neb_instances]
+        atom_budget = neb_cfg.parallel_neb_max_batch_atoms
+        if band_cap is not None and band_cap < len(neb_instances):
             logger.info(
                 "Parallel NEB concurrency capped at %d band(s) "
-                "(%d total; avoids GPU OOM on large cells)",
+                "(%d total; explicit parallel_neb_max_bands override)",
                 band_cap,
                 len(neb_instances),
             )
+        if atom_budget is not None and int(atom_budget) > 0:
+            logger.info(
+                "Parallel NEB chunking by atom budget: %d atoms/force-batch "
+                "(%d band(s), costs %s)",
+                int(atom_budget),
+                len(neb_instances),
+                band_costs,
+            )
 
-        def _chunk_indices(indices: list[int]) -> list[list[int]]:
+        def _chunk_indices(
+            indices: list[int], *, budget: int | None = None
+        ) -> list[list[int]]:
+            """Chunk band indices honoring *both* the atom budget and band cap.
+
+            ``parallel_neb_max_bands`` used to override the atom budget entirely,
+            so a band cap that still exceeded GPU capacity produced one oversized
+            fused force batch. Chunking at ``min(band_cap, atom_budget)`` keeps the
+            scgo-side bound honest even when the memory scaler is unavailable.
+            """
             if not indices:
                 return []
-            return [indices[i : i + band_cap] for i in range(0, len(indices), band_cap)]
+            chunks = chunk_band_indices_by_atom_budget(
+                indices, band_costs, budget if budget is not None else atom_budget
+            )
+            return _apply_band_cap(chunks, band_cap)
+
+        def _run_chunk_with_oom_retry(
+            chunk: list[int],
+            *,
+            max_total_steps: int,
+            max_steps: int,
+        ) -> list[dict[str, Any]]:
+            """Run one chunk; on CUDA OOM re-bin at half its atom cost and retry.
+
+            Returns per-band summaries in ``chunk`` order. Bands that still fail
+            after the retry carry the OOM error text with ``steps_taken=0`` so the
+            caller's ``batch_never_ran`` guard can skip :func:`_finalize_neb_result`
+            for them downstream.
+            """
+            try:
+                return _run_chunk(chunk, max_total_steps, max_steps)
+            except (RuntimeError, MemoryError) as exc:
+                if not is_cuda_oom_error(exc):
+                    raise
+                logger.warning(
+                    "Parallel NEB chunk of %d band(s) hit CUDA OOM (%s); "
+                    "retrying once at half the chunk atom cost",
+                    len(chunk),
+                    exc,
+                )
+            cleanup_torch_cuda(logger=logger)
+            chunk_atoms = sum(band_costs[i] for i in chunk)
+            retry_budget = max(1, chunk_atoms // 2)
+            summaries: dict[int, dict[str, Any]] = {}
+            for sub_chunk in chunk_band_indices_by_atom_budget(
+                chunk, band_costs, retry_budget
+            ):
+                try:
+                    sub_results = _run_chunk(sub_chunk, max_total_steps, max_steps)
+                except (RuntimeError, MemoryError) as exc:
+                    if not is_cuda_oom_error(exc):
+                        raise
+                    logger.error(
+                        "Parallel NEB retry still OOM for %d band(s): %s",
+                        len(sub_chunk),
+                        exc,
+                    )
+                    cleanup_torch_cuda(logger=logger)
+                    sub_results = [
+                        {
+                            "converged": False,
+                            "final_fmax": None,
+                            "steps_taken": 0,
+                            "error": str(exc),
+                        }
+                        for _ in sub_chunk
+                    ]
+                for local_i, band_i in enumerate(sub_chunk):
+                    summaries[band_i] = sub_results[local_i]
+            return [summaries[i] for i in chunk]
+
+        def _run_chunk(
+            chunk: list[int], max_total_steps: int, max_steps: int
+        ) -> list[dict[str, Any]]:
+            chunk_nebs = [neb_instances[i] for i in chunk]
+            batch = ParallelNEBBatch(
+                chunk_nebs, relaxer, max_total_steps=max_total_steps
+            )
+            try:
+                return batch.run_optimization(
+                    fmax=neb_cfg.neb_fmax, max_steps=max_steps
+                )
+            finally:
+                del batch
+                cleanup_torch_cuda(logger=logger)
 
         # Single-stage climb bands (typical endpoint-max IDPP adsorbate paths).
         single_idx = [i for i, ts in enumerate(neb_two_stage) if not ts]
         two_idx = [i for i, ts in enumerate(neb_two_stage) if ts]
+        # Chunk each stage list independently so two-stage bands (which need a
+        # separate climb pass) never share a force batch with single-stage bands.
         for chunk in _chunk_indices(single_idx):
-            chunk_nebs = [neb_instances[i] for i in chunk]
-            batch = ParallelNEBBatch(chunk_nebs, relaxer, max_total_steps=neb_steps_i)
-            chunk_results = batch.run_optimization(
-                fmax=neb_cfg.neb_fmax, max_steps=neb_steps_i
+            chunk_results = _run_chunk_with_oom_retry(
+                chunk, max_total_steps=neb_steps_i, max_steps=neb_steps_i
             )
             for local_i, neb_i in enumerate(chunk):
                 batch_results[neb_i] = chunk_results[local_i]
-            del batch
-            cleanup_torch_cuda(logger=logger)
         for chunk in _chunk_indices(two_idx):
             # Interior-max IDPP: relax without climb, then climb (always).
             chunk_nebs = [neb_instances[i] for i in chunk]
             stage1_cap = neb_steps_i // 2
-            batch = ParallelNEBBatch(chunk_nebs, relaxer, max_total_steps=stage1_cap)
-            stage1_results = batch.run_optimization(
-                fmax=neb_cfg.neb_fmax, max_steps=stage1_cap
+            stage1_results = _run_chunk_with_oom_retry(
+                chunk, max_total_steps=stage1_cap, max_steps=stage1_cap
             )
-            del batch
-            cleanup_torch_cuda(logger=logger)
             for neb in chunk_nebs:
                 neb.climb = True
             climb_local = [
                 i
                 for i, summary in enumerate(stage1_results)
-                if not summary.get("error")
+                if _stage1_band_climb_eligible(summary)
             ]
             if climb_local:
                 steps1_vals = [
                     int(stage1_results[i].get("steps_taken") or 0) for i in climb_local
                 ]
+                # Stage 2 shares one step budget across the whole chunk, so the
+                # slowest stage-1 band (max steps taken) sets it for everyone.
+                # This is intentionally conservative: it guarantees no band in the
+                # chunk exceeds the overall neb_steps budget, at the cost of
+                # shrinking the climb budget for bands that converged quickly.
+                # The neb_steps_i // 2 floor keeps a usable climb pass regardless.
                 stage2_steps = max(
                     neb_steps_i // 2,
                     neb_steps_i - max(steps1_vals),
                     1,
                 )
-                stage2_nebs = [chunk_nebs[i] for i in climb_local]
-                batch2 = ParallelNEBBatch(
-                    stage2_nebs, relaxer, max_total_steps=stage2_steps
+                stage2_chunk = [chunk[i] for i in climb_local]
+                stage2_results = _run_chunk_with_oom_retry(
+                    stage2_chunk,
+                    max_total_steps=stage2_steps,
+                    max_steps=stage2_steps,
                 )
-                stage2_results = batch2.run_optimization(
-                    fmax=neb_cfg.neb_fmax, max_steps=stage2_steps
-                )
-                del batch2
-                cleanup_torch_cuda(logger=logger)
                 for local_i, s1_i in enumerate(climb_local):
                     s2 = stage2_results[local_i]
                     s1 = stage1_results[s1_i]
@@ -508,7 +889,8 @@ def run_parallel_neb_search(
         neb = neb_instances[neb_idx]
         summary = batch_results[neb_idx]
         result = pair_results[pair_ord]
-        assert result is not None
+        if result is None:
+            raise SCGOValidationError("Parallel NEB produced a missing pair result")
         result["neb_converged"] = bool(summary.get("converged", False))
         result["error"] = summary.get("error")
         result["final_fmax"] = summary.get("final_fmax")
@@ -517,25 +899,35 @@ def run_parallel_neb_search(
 
         # Batch failures (e.g. CUDA OOM) leave only GO endpoint energies on the
         # band; finalize would overwrite the real error with endpoint-as-TS.
-        batch_never_ran = (
-            result.get("error")
+        error_text = str(result.get("error") or "")
+        batch_never_ran = bool(
+            error_text
             and (result.get("force_calls") or 0) == 0
             and not result.get("steps_taken")
         )
-        if batch_never_ran:
+        # Non-finite NEB forces (nan/inf fmax) mean the band's geometry and
+        # energies are meaningless even though steps were taken, so finalize must
+        # not turn them into a reported saddle either.
+        forces_non_finite = "non-finite" in error_text.lower()
+        band_unusable = batch_never_ran or forces_non_finite
+        if band_unusable:
             result["status"] = "failed"
             result["neb_converged"] = False
             logger.warning(
-                "Parallel NEB batch failed before any steps for pair %s: %s",
+                "Parallel NEB band unusable for pair %s (%s): %s",
                 result.get("pair_id"),
-                result.get("error"),
+                "non-finite forces" if forces_non_finite else "no steps taken",
+                error_text,
             )
         else:
             try:
-                _finalize_neb_result(result, neb.images, logger=logger)
-            except (RuntimeError, SCGORuntimeError, SCGOValidationError) as e:
-                # SCGORuntimeError is not a RuntimeError subclass; catch both so a
-                # missing-energy finalize cannot abort the whole parallel batch.
+                _finalize_neb_result(
+                    result,
+                    neb.images,
+                    logger=logger,
+                    max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
+                )
+            except (RuntimeError, SCGOValidationError) as e:
                 result["status"] = "failed"
                 result["error"] = str(e)
                 _detach_calc(result.get("transition_state"))
@@ -551,15 +943,20 @@ def run_parallel_neb_search(
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
         save_neb_result(result, str(pair_dir), pair_id)
+        # Chunk wall time divided across pairs, not per-pair measurements: the
+        # ``*_avg_s`` suffix keeps that explicit. Consumers read these via
+        # :func:`~scgo.utils.timing_report.neb_seconds_from_pair_timings`.
         result["timings_s"] = {
-            "total_wall_s": wall_each,
-            "neb_optimization_s": neb_each,
-            "cpu_non_relax_s": max(0.0, wall_each - neb_each),
+            "kind": "neb",
+            "total_wall_avg_s": wall_each,
+            "neb_optimization_avg_s": neb_each,
+            "cpu_non_relax_avg_s": max(0.0, wall_each - neb_each),
         }
 
     meta = {
         "neb_batch_optimization_s": neb_batch_s,
         "parallel_wall_s": wall_total,
     }
-    assert all(r is not None for r in pair_results)
+    if not all(r is not None for r in pair_results):
+        raise SCGOValidationError("Parallel NEB produced a missing pair result")
     return pair_results, meta  # type: ignore[return-value]

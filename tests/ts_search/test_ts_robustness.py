@@ -11,7 +11,7 @@ import torch
 
 from scgo.ts_search.transition_state_run import run_transition_state_search
 from scgo.ts_search.ts_network import save_ts_network_metadata
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 
 def test_save_ts_network_metadata_skips_malformed_success():
@@ -52,7 +52,6 @@ def test_save_ts_network_metadata_skips_malformed_success():
         assert len(meta["ts_connections"]) == 1
 
 
-@pytest.mark.requires_cuda
 def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
     """Simulate a per-pair CUDA OOM and ensure the campaign continues and
     GPU cleanup is attempted. This test sets up a minimal mock DB locally.
@@ -100,7 +99,9 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
 
         # Now patch the TS-finding call to raise a CUDA OOM and patch cleanup
         def fake_find_transition_state(*args, **kwargs):
-            raise RuntimeError("CUDA out of memory. Tried to allocate ...")
+            raise RuntimeError(
+                "CUDA out of memory [scgo-simulated-failure]. Tried to allocate ..."
+            )
 
         monkeypatch.setattr(
             "scgo.ts_search.transition_state_run.find_transition_state",
@@ -142,7 +143,6 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
                 assert ts.calc is None
 
 
-@pytest.mark.requires_cuda
 def test_pairwise_cleanup_even_without_errors(monkeypatch):
     """GPU cleanup should be attempted after every pair, not only on OOMs.
 
@@ -237,6 +237,7 @@ def test_transition_state_results_do_not_retain_calculators(tmp_path):
 
 
 @pytest.mark.requires_cuda
+@pytest.mark.requires_mace
 def test_gpu_memory_does_not_grow(tmp_path, monkeypatch):
     """Repeated campaigns with a GPU-backed dummy calculator should not leak.
 

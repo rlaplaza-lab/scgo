@@ -40,11 +40,12 @@ Shared CLI flags (see ``benchmark.benchmark_common.add_common_benchmark_cli``):
 Pytest
 ------
 
-``pytest.ini`` excludes ``benchmark/`` from the default test path. To run MLIP
-regression hooks:
+``pytest.ini`` sets ``testpaths = tests``, so ``benchmark/`` is out of scope
+for the default run (a ``benchmark`` marker also exists for explicit runs). To
+run MLIP regression hooks:
 
 .. code-block:: bash
 
    pytest benchmark/ -m slow
 
-See also ``benchmark/README.md`` in the repository for maintainer notes.
+See also `benchmark/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/benchmark/README.md>`_ in the repository for maintainer notes.

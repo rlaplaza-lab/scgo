@@ -21,6 +21,7 @@ from scgo.surface.presets import (
     make_n_doped_graphite_surface_config,
 )
 from scgo.system_types import (
+    AdsorbateDefinition,
     get_system_policy,
     resolve_search_mobile_composition,
     validate_system_type_settings,
@@ -100,6 +101,36 @@ def test_resolve_search_mobile_composition_surface() -> None:
         system_type="surface", composition=[], surface_config=cfg
     )
     assert mobile == ["C", "C"]
+
+
+def test_resolve_search_mobile_composition_requires_surface_config() -> None:
+    with pytest.raises(SCGOValidationError, match="requires surface_config"):
+        resolve_search_mobile_composition(
+            system_type="surface",
+            composition=[],
+            surface_config=None,
+        )
+
+
+def test_resolve_search_mobile_composition_slab_plus_adsorbate() -> None:
+    cfg = SurfaceSystemConfig(
+        slab=_three_layer_c_slab(),
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+    )
+    cfg, part = prepare_slab_search_surface_config(cfg)
+    ads = AdsorbateDefinition(
+        core_symbols=[],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    mobile = resolve_search_mobile_composition(
+        system_type="surface_adsorbate",
+        composition=["O", "H"],
+        surface_config=cfg,
+        adsorbate_definition=ads,
+    )
+    assert mobile == list(part.mobile_slab_symbols) + ["O", "H"]
 
 
 def test_defected_graphite_preset_removes_vacancy() -> None:

@@ -7,13 +7,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.test_utils import assert_e2e_minima_list
+from tests.helpers import assert_e2e_minima_list
 
 pytest.importorskip("upet")
 pytest.importorskip("metatomic_torchsim")
 pytest.importorskip("torch_sim")
 
 
+@pytest.mark.gpu_smoke
 @pytest.mark.requires_cuda
 @pytest.mark.requires_upet
 def test_upet_torchsim_batch_relaxer_uses_cuda_and_autobatcher():
@@ -36,6 +37,7 @@ def test_upet_torchsim_batch_relaxer_uses_cuda_and_autobatcher():
     assert str(relaxer.model.device).startswith("cuda")
 
 
+@pytest.mark.gpu_smoke
 @pytest.mark.requires_cuda
 @pytest.mark.requires_upet
 def test_upet_torchsim_relax_batch_gpu(tmp_path: Path):
@@ -71,6 +73,7 @@ def test_upet_torchsim_relax_batch_gpu(tmp_path: Path):
         assert atoms.cell.sum() != 0.0  # storage cell restored after metatomic path
 
 
+@pytest.mark.gpu_smoke
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.requires_cuda

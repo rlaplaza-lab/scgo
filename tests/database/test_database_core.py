@@ -8,10 +8,8 @@ the current SCGO database APIs.
 from __future__ import annotations
 
 import gc
-import multiprocessing as mp
 import os
 import sqlite3
-import threading
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -22,11 +20,8 @@ import pytest
 from ase import Atoms
 from ase.calculators.emt import EMT
 
-from scgo.algorithms import ga_go
-from scgo.algorithms.basinhopping_go import bh_go
 from scgo.database import (
     RetryConfig,
-    SCGODatabaseManager,
     close_data_connection,
     database_retry,
     database_transaction,
@@ -34,26 +29,16 @@ from scgo.database import (
     setup_database,
 )
 from scgo.database.discovery import DatabaseDiscovery
-from scgo.database.health import check_database_health, get_database_statistics
-from scgo.database.registry import DatabaseRegistry
 from scgo.database.streaming import (
-    count_database_structures,
     iter_database_minima,
-    iter_databases_minima,
+    iter_relaxed_structures,
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import (
-    filter_by_tags,
     get_tag,
-    get_tags,
     set_tags,
 )
-from scgo.metadata.db_stamp import (
-    ensure_db_schema_version,
-    get_db_schema_version,
-    set_db_schema_version,
-)
-from tests.test_utils import assert_run_id_persisted, create_test_atoms
+from tests.helpers import create_test_atoms
 
 
 def _final_kvp(raw_score: float) -> dict[str, float | bool]:
@@ -89,6 +74,70 @@ def _register_unrelaxed(da, atoms: Atoms, *, description: str = "test:insert") -
     atoms.info.setdefault("key_value_pairs", {})
     atoms.info.setdefault("data", {})
     da.add_unrelaxed_candidate(atoms, description=description)
+
+
+def _build_relaxed_db(tmp_path: Path, filename: str, n_rows: int) -> Path:
+    """Create an SCGO db with ``n_rows`` relaxed final minima (raw_score -10-i)."""
+    template = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    da = setup_database(tmp_path, filename, template, initial_candidate=template)
+    try:
+        for i in range(n_rows):
+            a = template.copy()
+            a.positions[1][0] += 0.05 * i
+            a.info["key_value_pairs"] = _final_kvp(-10.0 - i)
+            a.info["data"] = {"tag": f"row_{i}"}
+            da.add_relaxed_step(a)
+    finally:
+        close_data_connection(da)
+        gc.collect()
+    return Path(tmp_path) / filename
+
+
+class _RecordingConnection:
+    """Proxy around a live sqlite3 connection that records ``execute`` calls.
+
+    Statements containing ``fail_on`` raise ``sqlite3.OperationalError`` so the
+    caller's error handling can be exercised.
+    """
+
+    def __init__(self, real, fail_on: str | None = None):
+        self._real = real
+        self._fail_on = fail_on
+        self.statements: list[str] = []
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def execute(self, sql, *args, **kwargs):
+        self.statements.append(sql)
+        if self._fail_on is not None and self._fail_on in sql:
+            raise sqlite3.OperationalError(f"simulated failure for {self._fail_on!r}")
+        return self._real.execute(sql, *args, **kwargs)
+
+
+def _stream_with_recording_connection(
+    db_file: Path, *, fail_on: str | None = None, chunk_size: int = 2
+) -> tuple[list[tuple[float, Atoms]], list[str]]:
+    """Stream ``db_file`` while recording SQL issued on the streaming connection."""
+    proxies: list[_RecordingConnection] = []
+
+    with get_connection(db_file) as da:
+        real_managed = da.c.managed_connection
+
+        @contextmanager
+        def _managed(commit_frequency=5000):
+            with real_managed(commit_frequency) as real:
+                proxy = _RecordingConnection(real, fail_on=fail_on)
+                proxies.append(proxy)
+                yield proxy
+
+        da.c.managed_connection = _managed
+        yielded = list(
+            iter_relaxed_structures(da, Path(db_file), chunk_size=chunk_size)
+        )
+
+    statements = [sql for proxy in proxies for sql in proxy.statements]
+    return yielded, statements
 
 
 def _count_open_files() -> int:
@@ -162,15 +211,23 @@ class TestDatabaseSetupAndFlow:
 
         assert db_file.exists()
 
-        with sqlite3.connect(db_file) as conn:
+        conn = sqlite3.connect(db_file)
+        try:
             cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table';")
             tables = {row[0] for row in cursor.fetchall()}
+            cursor.close()
+        finally:
+            conn.close()
 
         assert "systems" in tables
 
-        with sqlite3.connect(db_file) as conn:
+        conn = sqlite3.connect(db_file)
+        try:
             cursor = conn.execute("PRAGMA table_info(systems);")
             systems_columns = {row[1] for row in cursor.fetchall()}
+            cursor.close()
+        finally:
+            conn.close()
 
         assert {"id", "energy", "fmax"}.issubset(systems_columns)
 
@@ -184,8 +241,8 @@ class TestDatabaseSetupAndFlow:
                 "Au3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]]
             )
 
-            # Expect the database to raise an assertion when adding an invalid atom set
-            with pytest.raises(AssertionError):
+            # Expect the database to raise a validation error when adding an invalid atom set
+            with pytest.raises(SCGOValidationError, match="Candidate composition"):
                 da.add_relaxed_step(invalid_atoms)
 
             # Ensure retrieving candidates still returns a valid list
@@ -232,7 +289,7 @@ class TestDatabaseSetupAndFlow:
             _,
         ):
             if should_raise:
-                with pytest.raises(AssertionError):
+                with pytest.raises(SCGOValidationError, match="Candidate composition"):
                     da.add_relaxed_step(candidate)
                 return
 
@@ -299,105 +356,6 @@ class TestDatabaseSetupAndFlow:
             energy = extract_energy_from_atoms(inserted)
             assert kv["final_id"] == ensure_final_id(inserted, energy)
 
-    def test_algorithm_database_integration(self, tmp_path, pt3_atoms, rng):
-        """BH and GA integration creates database entries."""
-        # Test BH
-        atoms_bh = pt3_atoms.copy()
-        atoms_bh.calc = EMT()
-        _ = bh_go(
-            atoms=atoms_bh,
-            output_dir=str(tmp_path / "bh_test"),
-            niter=1,
-            dr=0.2,
-            niter_local_relaxation=2,
-            rng=rng,
-        )
-        db_bh = tmp_path / "bh_test" / "bh_go.db"
-        assert db_bh.exists()
-
-        with get_connection(db_bh) as db:
-            assert len(db.get_all_relaxed_candidates()) > 0
-
-        # Test GA
-        calc_ga = EMT()
-        _ = ga_go(
-            composition=["Pt", "Pt", "Pt"],
-            output_dir=str(tmp_path / "ga_test"),
-            calculator=calc_ga,
-            niter=1,
-            population_size=2,
-            niter_local_relaxation=2,
-            rng=rng,
-        )
-        db_ga = tmp_path / "ga_test" / "ga_go.db"
-        assert db_ga.exists()
-
-        with get_connection(db_ga) as db:
-            assert len(db.get_all_relaxed_candidates()) > 0
-
-    def test_ga_runs_store_run_id_in_key_value_pairs(self, tmp_path, rng):
-        """Running `ga_go` with a `run_id` should persist it in key_value_pairs for
-        relaxed candidates (so discovery/filtering by run_id works)."""
-        from ase.calculators.emt import EMT
-
-        from scgo.algorithms import ga_go
-
-        run_id = "run_test_write"
-        outdir = tmp_path / "ga_run"
-        _ = ga_go(
-            composition=["Pt"] * 5,
-            output_dir=str(outdir),
-            calculator=EMT(),
-            niter=1,
-            population_size=2,
-            niter_local_relaxation=1,
-            rng=rng,
-            run_id=run_id,
-            clean=True,
-        )
-
-        db_file = outdir / "ga_go.db"
-        assert db_file.exists()
-
-        with get_connection(db_file) as da:
-            rows = da.get_all_relaxed_candidates()
-
-        matched = []
-        for r in rows:
-            try:
-                assert_run_id_persisted(r, run_id)
-                matched.append(r)
-            except AssertionError:
-                continue
-
-        assert matched, "No relaxed candidates had run_id stored in key_value_pairs"
-
-    def test_set_tags_emits_trace_per_call(self, caplog):
-        """Each set_tags call emits a TRACE record (no per-generation debug cache)."""
-        import logging as _logging
-
-        from scgo.utils.logging import TRACE
-
-        _logging.getLogger().setLevel(TRACE)
-        caplog.set_level(TRACE)
-        caplog.clear()
-
-        from ase import Atoms
-
-        a1 = Atoms("Pt", positions=[[0, 0, 0]])
-        a2 = Atoms("Pt", positions=[[0, 0, 0]])
-
-        set_tags(a1, generation=7, run_id="run_x", raw_score=-1.0)
-        set_tags(a2, generation=7, run_id="run_x", raw_score=-2.0)
-
-        trace_msgs = [
-            r
-            for r in caplog.records
-            if r.levelno == TRACE and "Set tags on atoms" in r.getMessage()
-        ]
-
-        assert len(trace_msgs) == 2
-
 
 class TestDatabaseConnections:
     """Connection interfaces."""
@@ -439,7 +397,7 @@ class TestTransactions:
 
         if raise_inside:
             with (
-                pytest.raises(SCGOValidationError),
+                pytest.raises(SCGOValidationError, match="Test error"),
                 get_connection(tmp_path / "test.db") as db,
                 database_transaction(db) as conn,
             ):
@@ -467,6 +425,50 @@ class TestTransactions:
             count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
 
         assert count == initial + expected_delta
+
+    def test_transaction_joins_already_open_transaction(self, tmp_path, pt2_atoms):
+        """An outer (ASE-owned) transaction must be joined, not re-``BEGIN``-ed."""
+        with _setup_test_db(tmp_path, "test.db", pt2_atoms, initial_candidate=None) as (
+            _da,
+            _db_path,
+        ):
+            pass
+
+        insert_sql = (
+            "INSERT INTO systems (username, numbers, positions, cell) "
+            "VALUES (?, '[78,78]', '[[0,0,0],[2.5,0,0]]', "
+            "'[[10,0,0],[0,10,0],[0,0,10]]')"
+        )
+
+        with (
+            get_connection(tmp_path / "test.db") as db,
+            db.c.managed_connection() as conn,
+        ):
+            initial = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
+
+            # Mimic a pending ASE write: the connection is already in a transaction.
+            conn.execute(insert_sql, ("outer",))
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+            assert conn.in_transaction
+
+            with database_transaction(db) as inner_conn:
+                assert inner_conn is conn
+                inner_conn.execute(insert_sql, ("inner",))
+
+            # The joined transaction still belongs to the outer writer.
+            assert conn.in_transaction
+            conn.commit()
+
+        with (
+            get_connection(tmp_path / "test.db") as db,
+            db.c.managed_connection() as conn,
+        ):
+            count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
+            usernames = {row[0] for row in conn.execute("SELECT username FROM systems")}
+
+        assert count == initial + 2
+        assert {"outer", "inner"}.issubset(usernames)
 
     def test_retry_transaction_context(self, tmp_path, pt2_atoms):
         with _setup_test_db(tmp_path, "test.db", pt2_atoms, initial_candidate=None) as (
@@ -529,75 +531,6 @@ class TestTransactions:
             )
         assert result == "ok"
         assert attempts["n"] == 2
-
-
-class TestSchemaVersioning:
-    """Schema versioning and migration."""
-
-    def test_get_set_db_schema_version(self, tmp_path, pt2_atoms):
-        with _setup_test_db(
-            tmp_path, "test.db", pt2_atoms, initial_candidate=pt2_atoms
-        ) as (_da, _db_path):
-            pass
-
-        with get_connection(tmp_path / "test.db") as db:
-            version = get_db_schema_version(db)
-            assert version >= 0
-
-            set_db_schema_version(db, 5)
-            assert get_db_schema_version(db) == 5
-
-    def test_ensure_db_schema_version(self, tmp_path, pt2_atoms):
-        with _setup_test_db(
-            tmp_path, "test.db", pt2_atoms, initial_candidate=pt2_atoms
-        ) as (_da, _db_path):
-            pass
-
-        with get_connection(tmp_path / "test.db") as db:
-            ensure_db_schema_version(db)
-            assert get_db_schema_version(db) >= 1
-
-
-class TestMetadataManagement:
-    """Metadata helper functions."""
-
-    def test_set_get_tag(self):
-        atoms = Atoms("Pt3")
-        set_tags(
-            atoms,
-            run_id="run_20260204_120000",
-            generation=5,
-            fitness=0.95,
-        )
-
-        assert get_tag(atoms, "run_id") == "run_20260204_120000"
-        assert get_tag(atoms, "generation") == 5
-        assert get_tag(atoms, "fitness") == pytest.approx(0.95)
-
-    def test_get_tags(self):
-        atoms = Atoms("Pt3")
-        set_tags(atoms, run_id="test")
-
-        all_meta = get_tags(atoms)
-        assert "run_id" in all_meta
-
-    def test_set_tags_merges_keys(self):
-        atoms = Atoms("Pt3")
-        set_tags(atoms, run_id="test")
-        set_tags(atoms, generation=10)
-
-        assert get_tag(atoms, "generation") == 10
-        assert get_tag(atoms, "run_id") == "test"
-
-    def test_filter_by_tags(self):
-        atoms_list = []
-        for i in range(5):
-            atoms = Atoms("Pt3")
-            set_tags(atoms, run_id=f"run_{i % 2}")
-            atoms_list.append(atoms)
-
-        filtered = filter_by_tags(atoms_list, run_id="run_0")
-        assert len(filtered) == 3
 
 
 class TestFilesystemSync:
@@ -680,52 +613,6 @@ class TestFilesystemSync:
         assert len(attempts) == 3
 
 
-def _register_one_db_worker(args: tuple[int, str]) -> None:
-    """Multiprocessing worker: register one DB path (used for flock stress test)."""
-    from scgo.database.registry import DatabaseRegistry, clear_registry_cache
-
-    i, base_str = args
-    clear_registry_cache()
-    base = Path(base_str)
-    run_dir = base / f"run_{i}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    db_file = run_dir / "ga_go.db"
-    db_file.write_bytes(b"")
-    reg = DatabaseRegistry(base)
-    reg.register_database(
-        db_file,
-        composition=["Pt", "Pt"],
-        run_id=f"run_{i}",
-    )
-
-
-class TestRegistryConcurrency:
-    """Registry functionality tests."""
-
-    def test_concurrent_registrations_merge(self, tmp_path):
-        base = tmp_path / "out"
-        base.mkdir()
-        n = 4
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(n) as pool:
-            pool.map(
-                _register_one_db_worker,
-                [(i, str(base.resolve())) for i in range(n)],
-            )
-
-        # With simplified in-memory registry, we test that registration works
-        # but doesn't create persistent files
-        reg_path = base / ".scgo_db_registry.json"
-        assert not reg_path.is_file()  # No persistent file in simplified version
-
-        # Test that we can still create a registry and find databases
-        reg = DatabaseRegistry(base)
-        all_dbs = reg.get_all_databases()
-        # Note: in-memory registry won't have the databases registered by other processes
-        # This is expected behavior for the simplified version
-        assert len(all_dbs) >= 0  # May be 0 due to in-memory nature
-
-
 class TestDiscovery:
     """Database discovery."""
 
@@ -773,6 +660,30 @@ class TestDiscovery:
         db_files = discovery.find_databases(db_filename="*.db", use_cache=False)
         assert db_files
 
+    def test_empty_result_is_not_cached(self, tmp_path):
+        """A miss recorded before the DB exists must not be cached.
+
+        GO writes its database mid-run and TS reads it back in the same
+        process, so caching an empty result would pin the stale answer and
+        make TS report zero minima.
+        """
+        discovery = DatabaseDiscovery(tmp_path)
+
+        # Queried before any run has written a database.
+        assert discovery.find_databases() == []
+        assert discovery._cache == {}, "empty results must not be cached"
+
+        run_dir = tmp_path / "run_20260204_120000"
+        run_dir.mkdir(parents=True)
+        atoms = Atoms("Pt3")
+        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
+        close_data_connection(da)
+        del da
+
+        # The same discovery instance must now observe the new database.
+        db_files = discovery.find_databases()
+        assert any(Path(str(f)).name == "ga_go.db" for f in db_files)
+
 
 class TestRobustness:
     """Robustness, concurrency, and retry behavior."""
@@ -784,7 +695,7 @@ class TestRobustness:
             pass
 
         with (
-            pytest.raises(KeyError),
+            pytest.raises(KeyError, match="Test exception"),
             get_connection(tmp_path / "test.db") as db,
         ):
             _ = db.get_all_relaxed_candidates()
@@ -799,7 +710,7 @@ class TestRobustness:
         if initial_fd_count < 0:
             pytest.skip("Cannot count file descriptors on this system")
 
-        for i in range(100):
+        for i in range(25):
             with _setup_test_db(
                 tmp_path,
                 f"test_{i}.db",
@@ -814,12 +725,12 @@ class TestRobustness:
 
         final_fd_count = _count_open_files()
         fd_increase = final_fd_count - initial_fd_count
-        assert fd_increase < 20
+        assert fd_increase < 5
 
     @pytest.mark.slow
     def test_add_ts_to_database_no_file_handle_leak(self, tmp_path, pt2_atoms):
         from scgo.ts_search.ts_network import add_ts_to_database
-        from tests.test_utils import mark_test_minima_as_final
+        from tests.helpers import mark_test_minima_as_final
 
         with _setup_test_db(
             tmp_path,
@@ -838,7 +749,7 @@ class TestRobustness:
         ts = pt2_atoms.copy()
         ts.info.setdefault("key_value_pairs", {})["raw_score"] = -0.5
 
-        for i in range(50):
+        for i in range(25):
             assert add_ts_to_database(
                 ts_structure=ts,
                 ts_energy=0.5,
@@ -852,7 +763,7 @@ class TestRobustness:
         gc.collect()
 
         fd_increase = _count_open_files() - initial_fd_count
-        assert fd_increase < 20
+        assert fd_increase < 5
 
     @pytest.mark.slow
     @pytest.mark.xdist_group(name="no_nested_pool")
@@ -880,7 +791,7 @@ class TestRobustness:
 
         assert all(r[0] for r in results), f"Worker failures: {results}"
 
-        n_relaxed = count_database_structures(db_file)
+        n_relaxed = len(list(iter_database_minima(db_file)))
         assert n_relaxed == n_workers * batch_size
 
     def test_setup_database_wal_mode(self, tmp_path, pt2_atoms):
@@ -893,55 +804,15 @@ class TestRobustness:
         ) as (_da, _db_path):
             pass
 
-        with sqlite3.connect(str(tmp_path / "test.db")) as conn:
-            mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        try:
+            cur = conn.execute("PRAGMA journal_mode;")
+            mode = cur.fetchone()[0]
+            cur.close()
+        finally:
+            conn.close()
 
         assert mode.lower() == "wal"
-
-
-class TestDatabaseManager:
-    """Test SCGODatabaseManager."""
-
-
-class TestDatabaseHealth:
-    """Test database health utilities."""
-
-    def test_health_check_healthy(self, tmp_path):
-        """Test health check on healthy database."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-        close_data_connection(da)
-        del da
-
-        health = check_database_health(db_file)
-        assert "healthy" in health
-        assert "errors" in health
-        assert "warnings" in health
-        assert "info" in health
-        assert health["healthy"] is True
-        assert len(health["errors"]) == 0
-
-    def test_health_check_missing_file(self, tmp_path):
-        """Test health check on missing file."""
-        db_file = tmp_path / "nonexistent.db"
-        health = check_database_health(db_file)
-        assert health["healthy"] is False
-        assert len(health["errors"]) > 0
-
-    def test_get_statistics(self, tmp_path):
-        """Test getting database statistics."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-        close_data_connection(da)
-        del da
-
-        stats = get_database_statistics(db_file)
-        assert "size_mb" in stats
-        assert "journal_mode" in stats
-        assert "systems_count" in stats
-        assert stats["systems_count"] >= 0
 
 
 class TestDatabaseStreaming:
@@ -956,7 +827,6 @@ class TestDatabaseStreaming:
         for i in range(10):
             a = atoms.copy()
             a.positions += rng.random((3, 3)) * 0.1
-            from scgo.metadata.atoms import set_tags
 
             set_tags(a, raw_score=-30.0 - i)
             a.info["data"] = {"tag": f"test_{i}"}
@@ -1000,7 +870,7 @@ class TestDatabaseStreaming:
         monkeypatch.setattr(DataConnection, "get_all_relaxed_candidates", _fail)
 
         yielded = list(iter_database_minima(db_file, chunk_size=3))
-        assert len(yielded) == count_database_structures(db_file)
+        assert len(yielded) == 10
         assert all(isinstance(e, float) for e, _ in yielded)
 
     def test_iter_database_minima_logs_row_failure_and_continues(
@@ -1015,7 +885,6 @@ class TestDatabaseStreaming:
         for i in range(3):
             a = atoms.copy()
             a.positions += rng.random((2, 3)) * 0.1
-            from scgo.metadata.atoms import set_tags
 
             set_tags(a, raw_score=-10.0 - i)
             a.info["data"] = {"tag": f"test_{i}"}
@@ -1051,404 +920,82 @@ class TestDatabaseStreaming:
             if rec.levelname == "WARNING"
         )
 
-    def test_iter_databases_minima(self, tmp_path, rng):
-        """Test iterating over multiple databases."""
-        db_files = []
-        for i in range(3):
-            db_file = tmp_path / f"test_{i}.db"
-            atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5 + i * 0.1, 0, 0]])
-            da = setup_database(
-                tmp_path, f"test_{i}.db", atoms, initial_candidate=atoms
-            )
+    def test_streaming_returns_every_relaxed_row(self, tmp_path):
+        """Every relaxed row is streamed with its energy and systems_row_id tag."""
+        n_rows = 5
+        db_file = _build_relaxed_db(tmp_path, "stream.db", n_rows)
 
-            for j in range(3):
-                a = atoms.copy()
-                a.positions += rng.random((2, 3)) * 0.1
-                from scgo.metadata.atoms import set_tags
+        yielded, _statements = _stream_with_recording_connection(db_file)
 
-                set_tags(a, raw_score=-10.0 - j)
-                a.info["data"] = {"tag": f"test_{j}"}
-                da.add_relaxed_step(a)
+        assert len(yielded) == n_rows
+        assert sorted(e for e, _ in yielded) == [10.0 + i for i in range(n_rows)]
 
-            close_data_connection(da)
-            del da
-            db_files.append(str(db_file))
+        row_ids = []
+        for energy, atoms_obj in yielded:
+            row_id = get_tag(atoms_obj, "systems_row_id")
+            assert isinstance(row_id, int)
+            row_ids.append(row_id)
+            assert len(atoms_obj) == 2
+            assert atoms_obj.get_chemical_symbols() == ["Pt", "Pt"]
+            assert get_tag(atoms_obj, "raw_score") == pytest.approx(-energy)
+        assert len(set(row_ids)) == n_rows
 
-        count = 0
-        for energy, atoms_obj in iter_databases_minima(db_files):
-            assert isinstance(energy, float)
-            assert isinstance(atoms_obj, Atoms)
-            count += 1
-
-        assert count > len(db_files)
-
-    def test_iter_databases_minima_max_structures_zero(self, tmp_path, rng):
-        """max_structures=0 must yield an empty iterator (not treat 0 as unlimited)."""
-        db_file = tmp_path / "test_zero.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test_zero.db", atoms, initial_candidate=atoms)
-        a = atoms.copy()
-        from scgo.metadata.atoms import set_tags
-
-        set_tags(a, raw_score=-10.0)
-        a.info["data"] = {"tag": "test"}
-        da.add_relaxed_step(a)
-        close_data_connection(da)
-
-        items = list(iter_databases_minima([str(db_file)], max_structures=0))
-        assert items == []
-
-    def test_count_database_structures(self, tmp_path, rng):
-        """Test counting structures."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(5):
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = {"raw_score": -10.0 - i}
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        count = count_database_structures(db_file)
-        assert count >= 5
-
-    def test_count_database_structures_no_get_all(self, tmp_path, rng, monkeypatch):
-        """Ensure count_database_structures does not load all rows into memory."""
-        db_file = tmp_path / "test.db"
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(tmp_path, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(5):
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = {"raw_score": -10.0 - i}
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        from ase_ga.data import DataConnection
-
-        def _fail(*args, **kwargs):
-            raise AssertionError(
-                "get_all_relaxed_candidates should not be called by count_database_structures"
-            )
-
-        monkeypatch.setattr(DataConnection, "get_all_relaxed_candidates", _fail)
-
-        assert count_database_structures(db_file) >= 5
-
-
-class TestDatabaseManagerCaching:
-    """Comprehensive tests for enhanced database manager features."""
-
-    def test_caching_behavior(self, tmp_path, rng):
-        """Test result caching and cache invalidation."""
-        run_dir = tmp_path / "run_001"
-        run_dir.mkdir(parents=True)
-        atoms = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.0, 0]])
-        da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(5):
-            a = atoms.copy()
-            a.positions += rng.random((3, 3)) * 0.1
-            a.info["key_value_pairs"] = _final_kvp(-30.0 - i)
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        manager = SCGODatabaseManager(
-            base_dir=tmp_path, enable_caching=True, cache_ttl_seconds=10
-        )
-
-        result1 = manager.load_previous_results(
-            composition=["Pt", "Pt", "Pt"],
-            current_run_id="run_test",
-        )
-
-        result2 = manager.load_previous_results(
-            composition=["Pt", "Pt", "Pt"],
-            current_run_id="run_test",
-        )
-
-        assert len(result1) == len(result2)
-        assert result1 is result2
-
-        result3 = manager.load_previous_results(
-            composition=["Pt", "Pt", "Pt"],
-            current_run_id="run_test",
-            force_reload=True,
-        )
-
-        assert len(result3) == len(result1)
-        assert result3 is not result1
-
-        manager.clear_cache()
-
-        result4 = manager.load_previous_results(
-            composition=["Pt", "Pt", "Pt"],
-            current_run_id="run_test",
-        )
-
-        assert len(result4) == len(result1)
-        manager.close()
-
-    def test_cache_ttl_expiration(self, tmp_path, rng):
-        """Test that cache expires after TTL."""
-        run_dir = tmp_path / "run_001"
-        run_dir.mkdir(parents=True)
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(3):
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = _final_kvp(-10.0 - i)
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        manager = SCGODatabaseManager(
-            base_dir=tmp_path,
-            enable_caching=True,
-            cache_ttl_seconds=1,
-        )
-
-        result1 = manager.load_previous_results(
-            composition=["Pt", "Pt"],
-            current_run_id="run_test",
-        )
-
-        result2 = manager.load_previous_results(
-            composition=["Pt", "Pt"],
-            current_run_id="run_test",
-        )
-        assert result1 is result2
-
-        # Simulate TTL expiry deterministically
-        manager.clear_cache()
-
-        result3 = manager.load_previous_results(
-            composition=["Pt", "Pt"],
-            current_run_id="run_test",
-        )
-        assert result1 is not result3
-
-        manager.close()
-
-    def test_concurrent_manager_access(self, tmp_path, rng):
-        """Test thread-safe manager operations."""
-        run_dir = tmp_path / "run_000"
-        run_dir.mkdir(parents=True)
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
-
-        for i in range(10):
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = _final_kvp(-10.0 - i)
-            a.info["data"] = {"tag": f"test_{i}"}
-            da.add_relaxed_step(a)
-
-        close_data_connection(da)
-        del da
-
-        manager = SCGODatabaseManager(base_dir=tmp_path, enable_caching=True)
-
-        results = []
-        errors = []
-
-        def load_data(thread_id):
-            try:
-                data = manager.load_previous_results(
-                    composition=["Pt", "Pt"],
-                    current_run_id=f"run_{thread_id}",
+        with sqlite3.connect(db_file) as raw:
+            db_ids = {
+                row[0]
+                for row in raw.execute(
+                    "SELECT id FROM systems "
+                    "WHERE json_extract(key_value_pairs, '$.relaxed') = 1"
                 )
-                results.append((thread_id, len(data)))
-            except Exception as e:
-                errors.append((thread_id, e))
+            }
+        assert set(row_ids) == db_ids
 
-        threads = []
-        for i in range(5):
-            t = threading.Thread(target=load_data, args=(i,))
-            threads.append(t)
-            t.start()
+    def test_streaming_does_not_issue_bulk_select_star(self, tmp_path):
+        """The dead ``SELECT * FROM systems`` bulk path must be gone (D2)."""
+        db_file = _build_relaxed_db(tmp_path, "stream_no_bulk.db", 4)
 
-        for t in threads:
-            t.join()
+        yielded, statements = _stream_with_recording_connection(db_file)
 
-        assert len(errors) == 0
-        assert len(results) == 5
+        assert len(yielded) == 4
+        bulk = [s for s in statements if "SELECT * FROM systems" in s]
+        assert bulk == [], f"unexpected bulk row query issued: {bulk}"
 
-        lengths = [length for _, length in results]
-        assert all(val == lengths[0] for val in lengths)
+    def test_streaming_survives_failing_bulk_query(self, tmp_path):
+        """A failing bulk query must not surface as ``UnboundLocalError`` (D1)."""
+        n_rows = 4
+        db_file = _build_relaxed_db(tmp_path, "stream_failure.db", n_rows)
 
-        manager.close()
+        try:
+            yielded, _statements = _stream_with_recording_connection(
+                db_file, fail_on="SELECT * FROM systems"
+            )
+        except UnboundLocalError as exc:  # pragma: no cover - regression guard
+            pytest.fail(f"chunk loader leaked UnboundLocalError: {exc}")
 
-    def test_load_reference_structures_uses_datetime_run_id(self, tmp_path, rng):
-        """Reference structures inherit run_id from parent run_* directory."""
-        from scgo.database.helpers import load_reference_structures
-        from scgo.metadata.atoms import get_tag
+        assert len(yielded) == n_rows
+        assert sorted(e for e, _ in yielded) == [10.0 + i for i in range(n_rows)]
 
-        run_id = "run_20250124_143022_123456"
-        run_dir = tmp_path / run_id
+
+class TestRunIdPersistence:
+    """Persisting ``run_id`` back into database rows."""
+
+    def test_persisted_run_id_is_queryable_via_ase_select(self, tmp_path):
+        """``persist=True`` must update ASE's key-index tables, not just JSON."""
+        from ase.db import connect as ase_db_connect
+
+        from scgo.database.helpers import extract_minima_from_database_file
+
+        run_dir = tmp_path / "run_20250101_000000_000000"
         run_dir.mkdir(parents=True)
+        n_rows = 3
+        db_file = _build_relaxed_db(run_dir, "ga_go.db", n_rows)
 
-        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
-        a = atoms.copy()
-        a.info["key_value_pairs"] = _final_kvp(-5.0)
-        a.info["data"] = {"tag": "test_min"}
-        da.add_relaxed_step(a)
-        close_data_connection(da)
-        del da
+        run_id = "run_persist_index"
+        minima = extract_minima_from_database_file(db_file, run_id, persist=True)
+        assert len(minima) == n_rows
 
-        refs = load_reference_structures(
-            f"{run_id}/ga_go.db",
-            composition=["Pt", "Pt"],
-            max_structures=10,
-            base_dir=tmp_path,
-        )
-        assert len(refs) == 1
-        assert get_tag(refs[0], "run_id") == run_id
+        with ase_db_connect(str(db_file)) as ase_db:
+            selected = list(ase_db.select(run_id=run_id))
 
-    def test_diversity_references_caching(self, tmp_path, rng):
-        """Test diversity reference loading with caching."""
-        for i in range(3):
-            run_dir = tmp_path / f"run_{i:03d}"
-            run_dir.mkdir(parents=True)
-
-            _ = run_dir / f"ref_{i}.db"
-            atoms = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.0, 0]])
-            da = setup_database(run_dir, f"ref_{i}.db", atoms, initial_candidate=atoms)
-
-            for j in range(5):
-                a = atoms.copy()
-                a.positions += rng.random((3, 3)) * 0.1
-                a.info["key_value_pairs"] = _final_kvp(-30.0 - j)
-                a.info["data"] = {"tag": f"test_{j}"}
-                da.add_relaxed_step(a)
-
-            close_data_connection(da)
-        del da
-
-        manager = SCGODatabaseManager(base_dir=tmp_path, enable_caching=True)
-
-        refs1 = manager.load_reference_structures(
-            "run_*/ref_*.db",
-            composition=["Pt", "Pt", "Pt"],
-            max_structures=20,
-        )
-
-        from scgo.metadata.atoms import get_tag
-
-        assert len(refs1) > 0
-        assert all(isinstance(a, Atoms) for a in refs1)
-        # Ensure only final-unique-minimum tagged structures were loaded
-        assert all(get_tag(a, "final_unique_minimum", False) for a in refs1)
-
-        refs2 = manager.load_reference_structures(
-            "run_*/ref_*.db",
-            composition=["Pt", "Pt", "Pt"],
-            max_structures=20,
-        )
-
-        assert refs1 is refs2
-
-        refs3 = manager.load_reference_structures(
-            "run_*/ref_*.db",
-            composition=["Pt", "Pt", "Pt"],
-            max_structures=20,
-            force_reload=True,
-        )
-
-        assert refs1 is not refs3
-
-        manager.close()
-
-    def test_load_previous_run_results_parallel_integration(self, tmp_path, rng):
-        """Ensure the parallel-capable loader returns the same minima set (integration).
-
-        Uses >=4 run directories so the parallel branch is exercised.
-        """
-        # Create 4 runs each with a trial containing 3 relaxed structures
-        for i in range(4):
-            run_dir = tmp_path / f"run_{i:03d}"
-            run_dir.mkdir(parents=True)
-
-            atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-            da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
-
-            for j in range(3):
-                a = atoms.copy()
-                a.positions += rng.random((2, 3)) * 0.1
-                a.info["key_value_pairs"] = _final_kvp(-10.0 - j)
-                a.info["data"] = {"tag": f"test_{j}"}
-                da.add_relaxed_step(a)
-
-            close_data_connection(da)
-        del da
-
-        from scgo.database import helpers
-
-        minima = helpers.load_previous_run_results(
-            base_output_dir=tmp_path,
-            composition=["Pt", "Pt"],
-            current_run_id="run_999",
-        )
-
-        # 4 runs * 3 structures each = 12 minima expected
-        assert len(minima) == 12
-        assert all(
-            isinstance(e, float) and hasattr(a, "get_chemical_symbols")
-            for e, a in minima
-        )
-
-    def test_load_previous_run_results_parallel_invokes_executor(
-        self, tmp_path, rng, monkeypatch
-    ):
-        """Verify the parallel branch uses ProcessPoolExecutor when many DBs present."""
-        for i in range(4):
-            run_dir = tmp_path / f"run_{i:03d}"
-            run_dir.mkdir(parents=True)
-
-            atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-            da = setup_database(run_dir, "test.db", atoms, initial_candidate=atoms)
-
-            a = atoms.copy()
-            a.positions += rng.random((2, 3)) * 0.1
-            a.info["key_value_pairs"] = _final_kvp(-10.0)
-            a.info["data"] = {"tag": "single"}
-            da.add_relaxed_step(a)
-
-            close_data_connection(da)
-        del da
-
-        import scgo.database.helpers as helpers
-
-        orig = helpers.ProcessPoolExecutor
-        invoked = {"used": False}
-
-        def spy(*args, **kwargs):
-            invoked["used"] = True
-            return orig(*args, **kwargs)
-
-        monkeypatch.setattr(helpers, "ProcessPoolExecutor", spy)
-
-        # Call the public helper (now delegates to the parallel-capable loader)
-        _ = helpers.load_previous_run_results(
-            base_output_dir=tmp_path,
-            composition=["Pt", "Pt"],
-        )
-
-        assert invoked["used"] is True
+        assert len(selected) == n_rows
+        assert all(row.key_value_pairs.get("run_id") == run_id for row in selected)

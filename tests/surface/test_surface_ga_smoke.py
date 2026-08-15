@@ -7,9 +7,10 @@ from ase.calculators.emt import EMT
 from numpy.random import default_rng
 
 from scgo.algorithms import ga_go
-from tests.test_utils import (
+from tests.helpers import (
     MockRelaxer,
     assert_deposition_height_in_bounds,
+    assert_minima_structurally_valid,
     assert_supported_cluster_binding,
 )
 
@@ -23,6 +24,7 @@ def _assert_surface_ga_result(
     post_relaxation: bool,
 ) -> None:
     assert len(minima) >= 1
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(slab) + n_adsorbate)
     _e, best = minima[0]
     n_slab = len(slab)
     assert len(best) == n_slab + n_adsorbate

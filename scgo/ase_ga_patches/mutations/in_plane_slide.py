@@ -1,8 +1,9 @@
+"""Mutation that translates adsorbate atoms parallel to the slab surface."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Mutation that translates adsorbate atoms parallel to the slab surface."""
 
 import numpy as np
 from ase import Atoms
@@ -12,6 +13,7 @@ from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 from scgo.ase_ga_patches.mutations._common import (
     _append_unique_unit_vector,
     _ensure_rng,
+    _preserves_mobile_connectivity,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
@@ -20,14 +22,19 @@ __all__ = ["InPlaneSlideMutation"]
 
 
 class InPlaneSlideMutation(OffspringCreator):
-    """Randomly translates adsorbate atoms parallel to the slab surface.
+    """Translates adsorbate atoms parallel to the slab surface.
+
+    Candidate shifts combine directions from slab repulsion, the in-plane
+    principal axes and fixed in-plane axis/diagonal directions, scaled by
+    fixed fractions of ``max_displacement``; the first shift that violates
+    no *blmin* pair is accepted.
 
     Parameters
     ----------
     blmin : dict
         Minimum allowed interatomic distances.
     n_top : int
-        Number of adsorbate atoms optimised by the GA.
+        Number of adsorbate atoms optimized by the GA.
     surface_normal_axis : int
         Cartesian axis index (0, 1, or 2) normal to the surface.
     max_displacement : float
@@ -35,7 +42,7 @@ class InPlaneSlideMutation(OffspringCreator):
     rng : numpy.random.Generator or None
         Random number generator.
     max_inner_attempts : int
-        Maximum number of random displacement attempts per call.
+        Upper bound on the number of candidate shifts per call (capped at 12).
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, surface_normal_axis=2,
@@ -97,7 +104,6 @@ class InPlaneSlideMutation(OffspringCreator):
         if primary_direction is not None:
             ordered_directions.append(primary_direction)
             perpendicular = np.array([-primary_direction[1], primary_direction[0]])
-            _append_unique_unit_vector(ordered_directions, primary_direction)
             _append_unique_unit_vector(ordered_directions, perpendicular)
             _append_unique_unit_vector(ordered_directions, -perpendicular)
             _append_unique_unit_vector(ordered_directions, -primary_direction)
@@ -107,9 +113,11 @@ class InPlaneSlideMutation(OffspringCreator):
             _append_unique_unit_vector(ordered_directions, -direction)
 
         magnitudes = [
+            min(0.4, 0.05 * self.max_displacement),
+            0.1 * self.max_displacement,
+            0.25 * self.max_displacement,
             0.5 * self.max_displacement,
             self.max_displacement,
-            0.25 * self.max_displacement,
         ]
         candidate_shifts = []
         for direction in ordered_directions:
@@ -140,7 +148,7 @@ class InPlaneSlideMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        top = atoms[-N:]
+        top = atoms[len(atoms) - N:]
         pos = top.get_positions()
         num = top.get_atomic_numbers()
         cell = top.get_cell()
@@ -164,14 +172,17 @@ class InPlaneSlideMutation(OffspringCreator):
         in_plane = [i for i in range(3) if i != self.surface_normal_axis]
 
         self.last_attempt_count = 0
+        use_mic = bool(self._policy.uses_surface)
         for shift in self._candidate_shift_vectors(slab, pos[mask], in_plane):
             self.last_attempt_count += 1
             new_pos = pos.copy()
             new_pos[mask] += shift
-            cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc)
+            cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc, tags=tags)
             if atoms_too_close(cand, self.blmin):
                 continue
             if self.test_dist_to_slab and len(slab) > 0 and atoms_too_close_two_sets(slab, cand, self.blmin):
+                continue
+            if not _preserves_mobile_connectivity(top, cand, use_mic=use_mic):
                 continue
             return slab + cand
         return None

@@ -6,10 +6,6 @@ from __future__ import annotations
 class SCGOError(Exception):
     """Base exception for all SCGO errors."""
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
 
 class SCGOValidationError(SCGOError):
     """Input validation errors.
@@ -18,16 +14,12 @@ class SCGOValidationError(SCGOError):
     (or API/runner boundary); construction alone does not log.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
 
 class SCGOConfigurationError(SCGOError):
     """Configuration or system-setup errors."""
 
 
-class SCGORuntimeError(SCGOError):
+class SCGORuntimeError(SCGOError, RuntimeError):
     """Runtime errors during optimization."""
 
 

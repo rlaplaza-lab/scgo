@@ -1,15 +1,20 @@
+"""Rattle-style mutations that perturb atomic positions locally."""
+
 # fmt: off
 
 from __future__ import annotations
 
-"""Rattle-style mutations that perturb atomic positions locally."""
 
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
-from scgo.ase_ga_patches.mutations._common import _ensure_rng
+from scgo.ase_ga_patches.mutations._common import (
+    _ensure_rng,
+    _preserves_mobile_connectivity,
+    _reanchor_mobile_to_slab,
+)
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
 
@@ -29,9 +34,13 @@ class RattleMutation(OffspringCreator):
 
     n_top: Number of atoms optimized by the GA.
 
-    rattle_strength: Strength with which the atoms are moved.
+    rattle_strength: Strength with which the atoms are moved; each
+        Cartesian component is displaced uniformly in
+        [-rattle_strength, rattle_strength).
 
-    rattle_prop: The probability with which each atom is rattled.
+    rattle_prop: The probability with which each atom (or each tag group,
+        when use_tags is True) is rattled. One group is always rattled
+        per attempt, regardless of this probability.
 
     test_dist_to_slab: whether to also make sure that the distances
         between the atoms and the slab satisfy the blmin.
@@ -46,7 +55,7 @@ class RattleMutation(OffspringCreator):
         Used to ensure physical validity of mutations.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     verbose: bool
         If True, print verbose output.
@@ -55,7 +64,8 @@ class RattleMutation(OffspringCreator):
 
     def __init__(self, blmin, n_top, system_type: SystemType, rattle_strength=0.8,
                  rattle_prop=0.4, test_dist_to_slab=True, use_tags=False,
-                 target_tags=None, verbose=False, rng=None):
+                 target_tags=None, verbose=False, rng=None,
+                 surface_normal_axis=2):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -66,6 +76,7 @@ class RattleMutation(OffspringCreator):
         self.use_tags = use_tags
         self.target_tags = target_tags
         self.system_type = system_type
+        self.surface_normal_axis = surface_normal_axis
         self._policy = get_system_policy(system_type)
 
         self.descriptor = "RattleMutation"
@@ -99,27 +110,33 @@ class RattleMutation(OffspringCreator):
         """
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[:len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()
         cell = atoms.get_cell()
         pbc = atoms.get_pbc()
-        st = 2. * self.rattle_strength
 
         # Determine which tags to target
         unique_tags = np.unique(tags)
         if self.target_tags is not None:
             target_tags_set = set(self.target_tags)
             unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        if len(unique_tags) == 0:
+            # Nothing to rattle (empty mobile region or no matching tag).
+            return None
 
-        count = 0
         maxcount = 1000
-        too_close = True
-        while too_close and count < maxcount:
-            count += 1
+        strengths = (
+            self.rattle_strength,
+            0.5 * self.rattle_strength,
+            0.25 * self.rattle_strength,
+        )
+        use_mic = bool(self._policy.uses_surface)
+        parent_mobile = atoms
+        for count in range(maxcount):
+            strength = strengths[min(count * len(strengths) // maxcount, len(strengths) - 1)]
+            st = 2. * strength
             pos = pos_ref.copy()
 
             # Guarantee at least one tag is rattled, then sample the rest.
@@ -131,19 +148,25 @@ class RattleMutation(OffspringCreator):
                     pos[select] += st * (r - 0.5)
 
             top = Atoms(num, positions=pos, cell=cell, pbc=pbc, tags=tags)
+            if self._policy.uses_surface:
+                top = _reanchor_mobile_to_slab(
+                    atoms, top, slab, self.surface_normal_axis)
             too_close = atoms_too_close(
                 top, self.blmin, use_tags=self.use_tags)
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(top, slab, self.blmin)
+            if too_close:
+                continue
+            if not _preserves_mobile_connectivity(
+                parent_mobile, top, use_mic=use_mic
+            ):
+                continue
+            mutant = slab + top
+            if not self._policy.uses_surface:
+                mutant.center()
+            return mutant
 
-        if count == maxcount:
-            return None
-
-        mutant = slab + top
-        # Apply centering only for gas-phase systems
-        if not self._policy.uses_surface:
-            mutant.center()
-        return mutant
+        return None
 
 
 class AnisotropicRattleMutation(OffspringCreator):
@@ -167,6 +190,7 @@ class AnisotropicRattleMutation(OffspringCreator):
         target_tags=None,
         rng=None,
         verbose=False,
+        surface_normal_axis=2,
     ):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
@@ -179,6 +203,7 @@ class AnisotropicRattleMutation(OffspringCreator):
         self.use_tags = use_tags
         self.target_tags = target_tags
         self.system_type = system_type
+        self.surface_normal_axis = surface_normal_axis
         self._policy = get_system_policy(system_type)
 
         self.descriptor = "AnisotropicRattleMutation"
@@ -194,7 +219,7 @@ class AnisotropicRattleMutation(OffspringCreator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        atoms = atoms[-N:]
+        atoms = atoms[len(atoms) - N:]
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()
@@ -206,15 +231,19 @@ class AnisotropicRattleMutation(OffspringCreator):
         if self.target_tags is not None:
             target_tags_set = set(self.target_tags)
             unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        if len(unique_tags) == 0:
+            # Nothing to rattle (empty mobile region or no matching tag).
+            return None
 
-        count = 0
         maxcount = 1000
-        too_close = True
-
-        while too_close and count < maxcount:
-            count += 1
+        scales = (1.0, 0.5, 0.25)
+        use_mic = bool(self._policy.uses_surface)
+        parent_mobile = atoms
+        count = 0
+        while count < maxcount:
+            scale = scales[min(count * len(scales) // maxcount, len(scales) - 1)]
+            in_plane = self.in_plane_strength * scale
+            normal_s = self.normal_strength * scale
             pos = pos_ref.copy()
 
             # Random unit normal defining the dominant exploration plane.
@@ -244,23 +273,30 @@ class AnisotropicRattleMutation(OffspringCreator):
             for idx, tag in enumerate(unique_tags_local):
                 if idx == guaranteed or self.rng.random() < self.rattle_prop:
                     select = np.where(tags == tag)
-                    a = self.rng.uniform(-self.in_plane_strength, self.in_plane_strength)
-                    b = self.rng.uniform(-self.in_plane_strength, self.in_plane_strength)
-                    c = self.rng.uniform(-self.normal_strength, self.normal_strength)
+                    a = self.rng.uniform(-in_plane, in_plane)
+                    b = self.rng.uniform(-in_plane, in_plane)
+                    c = self.rng.uniform(-normal_s, normal_s)
                     pos[select] += a * u + b * v + c * normal
 
             top = Atoms(num, positions=pos, cell=cell, pbc=pbc, tags=tags)
+            if self._policy.uses_surface:
+                top = _reanchor_mobile_to_slab(
+                    atoms, top, slab, self.surface_normal_axis)
+            count += 1
             too_close = atoms_too_close(top, self.blmin, use_tags=self.use_tags)
             if not too_close and self.test_dist_to_slab:
                 too_close = atoms_too_close_two_sets(top, slab, self.blmin)
+            if too_close:
+                continue
+            if not _preserves_mobile_connectivity(
+                parent_mobile, top, use_mic=use_mic
+            ):
+                continue
+            result = slab + top
+            if not self._policy.uses_surface:
+                result.center()
+            return result
 
-        if count == maxcount:
-            return None
-
-        result = slab + top
-        # Apply centering only for gas-phase systems
-        if not self._policy.uses_surface:
-            result.center()
-        return result
+        return None
 
 # fmt: on

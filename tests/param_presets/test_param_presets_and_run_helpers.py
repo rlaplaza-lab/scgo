@@ -47,6 +47,84 @@ def test_get_default_params_structure():
     ]:
         assert key in params
     assert set(params["optimizer_params"].keys()) == {"simple", "bh", "ga"}
+    identity_keys = {
+        "system_type",
+        "surface_config",
+        "adsorbate_definition",
+        "adsorbate_fragment_template",
+        "cluster_adsorbate_config",
+    }
+    for algo, slot in params["optimizer_params"].items():
+        assert identity_keys.isdisjoint(slot), f"{algo} slot has identity keys"
+
+
+def test_torchsim_ga_params_stamps_surface_config_top_level_only():
+    """Surface builders put ``surface_config`` on the top-level dict, not in slots."""
+    from ase.build import fcc111
+
+    from scgo.param_presets import get_torchsim_ga_params
+    from scgo.surface.config import SurfaceSystemConfig
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+    # Avoid loading the MACE relaxer: monkeypatch via get_default_params path is
+    # heavy; call the builder and strip relaxer if present, or skip on load fail.
+    try:
+        params = get_torchsim_ga_params(
+            system_type="surface_cluster", surface_config=cfg, seed=1
+        )
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"TorchSim model load unavailable: {exc}")
+    assert params["surface_config"] is cfg
+    for algo in ("simple", "bh", "ga"):
+        assert "surface_config" not in params["optimizer_params"][algo]
+        assert "system_type" not in params["optimizer_params"][algo]
+
+
+@pytest.mark.parametrize(
+    "builder_name",
+    [
+        "get_low_effort_torchsim_ga_params",
+        "get_low_effort_upet_ga_params",
+        "get_low_effort_uma_ga_params",
+    ],
+)
+def test_low_effort_builders_stamp_surface_config_top_level_only(
+    monkeypatch, builder_name
+):
+    """Low-effort GO builders mirror TorchSim: top-level surface only, no slot identity."""
+    from ase.build import fcc111
+
+    import scgo.param_presets as presets
+    from scgo.surface.config import SurfaceSystemConfig
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+
+    def _fake_torchsim(**kwargs):
+        p = get_default_params()
+        if kwargs.get("surface_config") is not None:
+            p["surface_config"] = kwargs["surface_config"]
+        return p
+
+    # Bypass MLIP / TorchSim construction so this stays a cheap unit test.
+    monkeypatch.setattr(presets, "get_torchsim_ga_params", _fake_torchsim)
+    monkeypatch.setattr(presets, "get_default_upet_params", get_default_params)
+    monkeypatch.setattr(presets, "get_default_uma_params", get_default_params)
+
+    builder = getattr(presets, builder_name)
+    kwargs: dict = {"system_type": "surface_cluster", "surface_config": cfg, "seed": 1}
+    if builder_name == "get_low_effort_upet_ga_params":
+        kwargs["model_name"] = "pet-mad-s"
+        kwargs["version"] = "1.5.0"
+    elif builder_name == "get_low_effort_uma_ga_params":
+        kwargs["model_name"] = "uma-s-1p2"
+        kwargs["uma_task"] = "oc25"
+    params = builder(**kwargs)
+    assert params["surface_config"] is cfg
+    for algo in ("simple", "bh", "ga"):
+        assert "surface_config" not in params["optimizer_params"][algo]
+        assert "system_type" not in params["optimizer_params"][algo]
 
 
 def test_get_minimal_ga_params_merged_with_defaults():
@@ -71,6 +149,7 @@ def test_get_minimal_ga_params_merged_with_defaults():
         else:
             assert merged_ga[key] == default_value
 
+    # get_minimal_ga_params pins n_jobs_offspring=1 explicitly (sequential runner).
     assert merged_ga["n_jobs_offspring"] == 1
 
 
@@ -102,7 +181,7 @@ def test_validate_algorithm_params_raises_on_unexpected_keys():
     """validate_algorithm_params should fail on unexpected keys."""
     algo_params = {"niter": 10, "unknown_key": 123}
     with pytest.raises(SCGOValidationError, match="Unexpected BH algorithm parameters"):
-        validate_algorithm_params(algo_params, chosen_go="bh", verbosity=1)
+        validate_algorithm_params(algo_params, chosen_go="bh")
 
 
 def test_validate_algorithm_params_accepts_offspring_fraction(caplog):
@@ -110,21 +189,16 @@ def test_validate_algorithm_params_accepts_offspring_fraction(caplog):
     caplog.set_level("WARNING")
     algo_params = {"offspring_fraction": 0.5}
 
-    validate_algorithm_params(algo_params, chosen_go="ga", verbosity=1)
+    validate_algorithm_params(algo_params, chosen_go="ga")
 
     warnings = [rec.message for rec in caplog.records]
     assert not any("Unexpected GA algorithm parameters" in str(msg) for msg in warnings)
 
 
-def test_validate_algorithm_params_accepts_surface_config(caplog):
-    """`surface_config` is a recognized GA key for adsorbate-on-slab runs."""
-    caplog.set_level("WARNING")
-    algo_params = {"surface_config": None}
-
-    validate_algorithm_params(algo_params, chosen_go="ga", verbosity=1)
-
-    warnings = [rec.message for rec in caplog.records]
-    assert not any("Unexpected GA algorithm parameters" in str(msg) for msg in warnings)
+def test_validate_algorithm_params_rejects_surface_config():
+    """``surface_config`` is identity — forbidden in optimizer slots."""
+    with pytest.raises(SCGOValidationError, match="Unexpected GA algorithm parameters"):
+        validate_algorithm_params({"surface_config": None}, chosen_go="ga")
 
 
 def test_get_testing_params_is_lightweight():
@@ -225,11 +299,12 @@ def test_get_diversity_params_sets_reference_db():
     assert params["diversity_reference_db"] == "Pt*_searches/**/*.db"
 
 
+@pytest.mark.requires_uma
 def test_get_uma_ga_benchmark_params_structure():
     fairchem = pytest.importorskip("fairchem")
     if not hasattr(fairchem, "core"):
         pytest.skip("fairchem.core not available")
-    params = get_uma_ga_benchmark_params(seed=7)
+    params = _skip_if_model_unavailable(lambda: get_uma_ga_benchmark_params(seed=7))
     assert params["calculator"] == "UMA"
     assert params["seed"] == 7
     assert params["optimizer_params"]["ga"]["relaxer"] is not None
@@ -338,11 +413,11 @@ class TestResolveAutoParams:
         slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
         cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
         composition = ["Pt"] * 4
-        base = {"surface_config": cfg}
+        top = {"surface_config": cfg}
         assert (
             prepare_algorithm_kwargs(
-                {**base, "niter_local_relaxation": "auto"},
-                {},
+                {"niter_local_relaxation": "auto"},
+                top,
                 composition,
                 "ga",
                 system_type="surface_cluster",
@@ -351,8 +426,8 @@ class TestResolveAutoParams:
         )
         assert (
             prepare_algorithm_kwargs(
-                {**base, "niter_local_relaxation": 40},
-                {},
+                {"niter_local_relaxation": 40},
+                top,
                 composition,
                 "ga",
                 system_type="surface_cluster",
@@ -489,7 +564,9 @@ class TestResolveDiversityParams:
         algo_params = {}
         params = {}
 
-        with pytest.raises(SCGOValidationError) as exc_info:
+        with pytest.raises(
+            SCGOValidationError, match="diversity_reference_db is required"
+        ) as exc_info:
             resolve_diversity_params(algo_params, params, "bh")
 
         error_msg = str(exc_info.value)
@@ -599,3 +676,157 @@ class TestGetCalculatorClass:
         )
         with pytest.raises(SCGOValidationError, match="not available"):
             get_calculator_class("TEST")
+
+
+def test_get_low_effort_upet_ga_params_structure():
+    """UPET low-effort GO preset: reduced budget + attached relaxer (no CUDA)."""
+    pytest.importorskip("upet")
+    from scgo.param_presets import get_low_effort_upet_ga_params
+
+    params = get_low_effort_upet_ga_params(
+        system_type="gas_cluster",
+        seed=42,
+        model_name="pet-mad-s",
+        version="1.5.0",
+    )
+    assert params["calculator"] == "UPET"
+    assert params["calculator_kwargs"] == {
+        "model_name": "pet-mad-s",
+        "version": "1.5.0",
+    }
+    ga = params["optimizer_params"]["ga"]
+    # Reduced GA budget vs the production TorchSim benchmark preset.
+    assert ga["niter"] == 3
+    assert ga["population_size"] == 13
+    assert ga["niter_local_relaxation"] == 70
+    assert ga["n_jobs_population_init"] == 1
+    assert ga["early_stopping_niter"] == 0
+    assert ga["relaxer"] is not None
+
+
+@pytest.mark.requires_uma
+def test_get_low_effort_uma_ga_params_structure():
+    """UMA low-effort GO preset: reduced budget + attached relaxer (no CUDA)."""
+    pytest.importorskip("fairchem")
+    from scgo.param_presets import get_low_effort_uma_ga_params
+
+    params = _skip_if_model_unavailable(
+        lambda: get_low_effort_uma_ga_params(
+            system_type="gas_cluster",
+            seed=42,
+            model_name="uma-s-1p2",
+            uma_task="oc25",
+        )
+    )
+    assert params["calculator"] == "UMA"
+    assert params["calculator_kwargs"] == {
+        "model_name": "uma-s-1p2",
+        "task_name": "oc25",
+    }
+    ga = params["optimizer_params"]["ga"]
+    assert ga["niter"] == 3
+    assert ga["population_size"] == 13
+    assert ga["niter_local_relaxation"] == 70
+    assert ga["n_jobs_population_init"] == 1
+    assert ga["early_stopping_niter"] == 0
+    assert ga["relaxer"] is not None
+
+
+def test_low_effort_ts_search_params_upet_floors_neb_steps():
+    """UPET TS low-effort path returns the same floored neb_steps as MACE."""
+    from scgo.param_presets import (
+        get_low_effort_ts_search_params,
+        low_effort_neb_steps,
+    )
+
+    mace = get_low_effort_ts_search_params(
+        "MACE", None, system_type="gas_cluster", seed=42
+    )
+    upet = get_low_effort_ts_search_params(
+        "UPET",
+        {"model_name": "pet-mad-s", "version": "1.5.0"},
+        system_type="gas_cluster",
+        seed=42,
+    )
+    assert upet["neb_steps"] == low_effort_neb_steps("gas_cluster")
+    assert upet["neb_steps"] == mace["neb_steps"]
+    assert upet["calculator"] == "UPET"
+
+
+def _skip_if_model_unavailable(get_params):
+    """Build params; skip the test if the relaxer model cannot load here."""
+    pytest.importorskip("torch")
+    try:
+        return get_params()
+    except Exception as exc:  # pragma: no cover - env-dependent torch model load
+        pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
+
+
+def test_get_torchsim_ga_params_relaxer_invariants():
+    """T1.3: MACE TorchSim preset exposes the expected relaxer invariants."""
+    pytest.importorskip("mace")
+    from scgo.param_presets import get_torchsim_ga_params
+
+    params = _skip_if_model_unavailable(
+        lambda: get_torchsim_ga_params(system_type="gas_cluster", seed=11)
+    )
+    ga = params["optimizer_params"]["ga"]
+    relaxer = ga["relaxer"]
+    assert relaxer.model_kind == "mace"
+    assert relaxer.autobatcher is True
+    assert relaxer.expected_max_atoms == 600
+    assert relaxer.max_steps == 200
+    assert ga["niter"] == "auto"
+    assert ga["population_size"] == "auto"
+
+
+def test_get_uma_ga_benchmark_params_relaxer_invariants():
+    """T1.3: UMA benchmark preset exposes the expected relaxer invariants."""
+    pytest.importorskip("fairchem")
+    from scgo.param_presets import get_uma_ga_benchmark_params
+
+    params = _skip_if_model_unavailable(lambda: get_uma_ga_benchmark_params(seed=7))
+    ga = params["optimizer_params"]["ga"]
+    relaxer = ga["relaxer"]
+    assert relaxer.autobatcher is True
+    assert relaxer.expected_max_atoms == 600
+    assert relaxer.max_steps == 200
+
+
+def test_get_default_uma_params_relaxer_invariants():
+    """T1.3: UMA default preset exposes the expected relaxer invariants."""
+    pytest.importorskip("fairchem")
+    from scgo.param_presets import get_default_uma_params
+
+    params = _skip_if_model_unavailable(get_default_uma_params)
+    ga = params["optimizer_params"]["ga"]
+    relaxer = ga["relaxer"]
+    assert relaxer.autobatcher is None
+    assert relaxer.expected_max_atoms is None
+    assert relaxer.max_steps == 250
+
+
+def test_get_upet_ga_benchmark_params_relaxer_invariants():
+    """T1.3: UPET benchmark preset exposes the expected relaxer invariants."""
+    pytest.importorskip("upet")
+    from scgo.param_presets import get_upet_ga_benchmark_params
+
+    params = _skip_if_model_unavailable(lambda: get_upet_ga_benchmark_params(seed=7))
+    ga = params["optimizer_params"]["ga"]
+    relaxer = ga["relaxer"]
+    assert relaxer.autobatcher is True
+    assert relaxer.expected_max_atoms == 600
+    assert relaxer.max_steps == 200
+
+
+def test_get_default_upet_params_relaxer_invariants():
+    """T1.3: UPET default preset exposes the expected relaxer invariants."""
+    pytest.importorskip("upet")
+    from scgo.param_presets import get_default_upet_params
+
+    params = _skip_if_model_unavailable(get_default_upet_params)
+    ga = params["optimizer_params"]["ga"]
+    relaxer = ga["relaxer"]
+    assert relaxer.autobatcher is None
+    assert relaxer.expected_max_atoms is None
+    assert relaxer.max_steps == 250

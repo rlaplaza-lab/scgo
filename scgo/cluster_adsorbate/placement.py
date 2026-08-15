@@ -26,6 +26,7 @@ from scgo.cluster_adsorbate.sites import (
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs, get_covalent_radius
+from scgo.initialization.geometry_helpers import _should_check_connectivity
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     PLACEMENT_RELAXATION_FACTOR,
@@ -114,14 +115,6 @@ def _select_site_type(
     probs /= float(np.sum(probs))
     idx = int(rng.choice(len(available_types), p=probs))
     return available_types[idx]
-
-
-def blmin_for_core_and_fragment(
-    core: Atoms, fragment: Atoms, blmin_ratio: float
-) -> dict:
-    """Minimum interatomic distances for all element pairs in core ∪ fragment."""
-    zs = list(core.numbers) + list(fragment.numbers)
-    return build_blmin_from_zs(zs, ratio=blmin_ratio)
 
 
 def _build_fragment_positions(
@@ -218,8 +211,23 @@ def place_fragment_on_cluster(
     site_core: Atoms | None = None,
     clash_atoms: Atoms | None = None,
     site_candidates: dict[SiteType, list[SurfaceSiteCandidate]] | None = None,
+    uses_surface: bool = False,
 ) -> Atoms | None:
-    """Rigidly place a gas-phase fragment with random orientation near the cluster."""
+    """Rigidly place a fragment at a ranked adsorption site near the cluster.
+
+    Each attempt scores several site/height trials by steric deficit and takes
+    the first clash-free trial among the best-ranked ones. Multi-atom fragments
+    are oriented along ``bond_axis`` when given (aligned to the site normal,
+    optionally spun about it) and randomly rotated otherwise.
+
+    Returns:
+        The placed fragment, or ``None`` if every attempt fails.
+
+    Raises:
+        SCGOValidationError: If ``core``, ``fragment_template``, ``site_core``
+            or ``clash_atoms`` is empty, or if ``anchor_index``/``bond_axis``
+            is out of range for the fragment.
+    """
     if config is None:
         config = ClusterAdsorbateConfig()
     if len(core) == 0:
@@ -337,7 +345,12 @@ def place_fragment_on_cluster(
                 min_distance_factor=min_dist_factor,
                 connectivity_factor=config.structure_connectivity_factor,
                 check_clashes=config.structure_check_clashes,
-                check_connectivity=config.structure_check_connectivity,
+                check_connectivity=(
+                    config.structure_check_connectivity
+                    and _should_check_connectivity(
+                        trial_combined, uses_surface=uses_surface
+                    )
+                ),
             )
             if not ok:
                 continue
@@ -351,7 +364,7 @@ def place_fragment_on_cluster(
         return frag
 
     logger.warning(
-        "place_fragment_on_cluster: exceeded max_placement_attempts=%s",
+        "Reached max_placement_attempts=%s in place_fragment_on_cluster",
         config.max_placement_attempts,
     )
     return None

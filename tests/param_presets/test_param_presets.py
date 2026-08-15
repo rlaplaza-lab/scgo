@@ -9,9 +9,12 @@ from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import (
     TS_DEFAULTS_BY_SYSTEM_TYPE,
     get_default_params,
+    get_low_effort_torchsim_ga_params,
+    get_low_effort_ts_search_params,
     get_torchsim_ga_params,
     get_ts_defaults,
     get_ts_search_params,
+    low_effort_neb_steps,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
@@ -144,6 +147,15 @@ def test_ts_search_params_expose_adsorbate_subgraph_integrity_default():
     assert kwargs["enforce_adsorbate_subgraph_integrity"] is True
 
 
+def test_ts_defaults_expose_promoted_thresholds():
+    for system_type in TS_DEFAULTS_BY_SYSTEM_TYPE:
+        d = get_ts_defaults(system_type)
+        assert d["binding_penetration_tolerance_a"] == 0.1
+        assert d["layer_cluster_threshold_ang"] == 0.4
+        assert d["neb_interpolation_bond_tolerance_a"] == 0.5
+        assert d["neb_max_spurious_barrier"] == 8.0
+
+
 def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     gas = get_ts_search_params(system_type="gas_cluster_adsorbate")
     assert gas["neb_climb"] is True
@@ -160,6 +172,8 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert bare["neb_climb"] is False
     assert bare["use_parallel_neb"] is True
     assert bare["parallel_neb_max_bands"] is None
+    # No explicit band cap: gas bands are chunked by the atom budget instead.
+    assert bare["parallel_neb_max_batch_atoms"] == 6000
     assert bare["neb_fmax"] == pytest.approx(0.20)
     assert bare["max_endpoint_mismatch"] is None
     assert bare["energy_gap_threshold"] == pytest.approx(2.0)
@@ -175,7 +189,8 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert surf["neb_fmax"] == pytest.approx(0.20)
     assert surf["torchsim_fmax"] == pytest.approx(0.20)
     assert surf["use_parallel_neb"] is True
-    assert surf["parallel_neb_max_bands"] == 1
+    assert surf["parallel_neb_max_bands"] == 4
+    assert surf["parallel_neb_max_batch_atoms"] == 4000
     assert "torchsim_batch_size" not in surf
     assert surf["max_endpoint_mismatch"] == pytest.approx(1.5)
     assert surf["neb_n_images"] == 7
@@ -237,7 +252,8 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert ts["neb_steps"] == 2000
     assert ts["torchsim_max_steps"] == 2000
     assert ts["use_parallel_neb"] is True
-    assert ts["parallel_neb_max_bands"] == 1
+    assert ts["parallel_neb_max_bands"] == 4
+    assert ts["parallel_neb_max_batch_atoms"] == 4000
     assert "torchsim_batch_size" not in ts
     assert ts["neb_climb"] is False
     assert ts["neb_interpolation_method"] == "idpp"
@@ -255,6 +271,30 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert kwargs["neb_align_endpoints"] is True
     assert kwargs["neb_surface_cell_remap"] is True
     assert kwargs["neb_surface_lattice_rotation"] is True
+    assert kwargs["parallel_neb_max_batch_atoms"] == 4000
+    # G3: the TS relaxer is sized for the largest fused NEB force batch, mirroring
+    # the GO expected_max_atoms pattern so the memory-scaler cache bucket is stable.
+    assert kwargs["torchsim_params"]["expected_max_atoms"] == 4000
+    assert kwargs["torchsim_params"]["max_atoms_to_try"] == 4000
+
+
+def test_coerce_ts_gas_relaxer_sized_for_atom_budget():
+    """G3: gas presets size the relaxer from their own (larger) atom budget."""
+    ts = get_ts_search_params(system_type="gas_cluster")
+    kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
+    assert kwargs["parallel_neb_max_batch_atoms"] == 6000
+    assert kwargs["torchsim_params"]["expected_max_atoms"] == 6000
+    assert kwargs["torchsim_params"]["max_atoms_to_try"] == 6000
+
+
+def test_coerce_ts_omits_relaxer_sizing_without_atom_budget():
+    """No atom budget -> no expected_max_atoms cap (torch-sim defaults apply)."""
+    ts = get_ts_search_params(system_type="gas_cluster")
+    ts["parallel_neb_max_batch_atoms"] = None
+    kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
+    assert kwargs["parallel_neb_max_batch_atoms"] is None
+    assert "expected_max_atoms" not in kwargs["torchsim_params"]
+    assert "max_atoms_to_try" not in kwargs["torchsim_params"]
 
 
 def test_ts_search_step_defaults_can_be_auto():
@@ -284,7 +324,6 @@ def test_loaders_default_to_final_unique_minima():
 
     from scgo.database.helpers import (
         extract_minima_from_database_file,
-        extract_transition_states_from_database_file,
         load_previous_run_results,
     )
     from scgo.ts_search.transition_state_io import load_minima_by_composition
@@ -307,12 +346,6 @@ def test_loaders_default_to_final_unique_minima():
         .default
         is True
     )
-    assert (
-        inspect.signature(extract_transition_states_from_database_file)
-        .parameters["require_final_unique_ts"]
-        .default
-        is True
-    )
 
 
 def _fake_torchsim_go(
@@ -325,12 +358,8 @@ def _fake_torchsim_go(
     from scgo.param_presets import get_default_params
 
     p = get_default_params()
-    for algo in ("simple", "bh", "ga"):
-        p["optimizer_params"][algo]["system_type"] = system_type
     if surface_config is not None:
         p["surface_config"] = surface_config
-        for algo in ("simple", "bh", "ga"):
-            p["optimizer_params"][algo]["surface_config"] = surface_config
     if model_name is not None:
         p["calculator_kwargs"]["model_name"] = model_name
     p["seed"] = seed
@@ -402,14 +431,17 @@ def test_production_style_mace_go_ts_surface_has_surface_config(monkeypatch):
     )
     ga = go_params["optimizer_params"]["ga"]
     assert go_params["surface_config"] is cfg
+    assert "surface_config" not in ga
+    assert "system_type" not in ga
     prepared = prepare_algorithm_kwargs(
         ga,
-        {"fitness_strategy": "low_energy"},
+        {"fitness_strategy": "low_energy", "surface_config": cfg},
         ["Pt"] * 5,
         "ga",
         system_type="surface_cluster",
     )
     assert prepared["niter_local_relaxation"] >= 400
+    assert prepared["surface_config"] is cfg
     assert ts_params["surface_config"] is cfg
     assert (
         coerce_ts_params_to_runner_kwargs(ts_params, system_type="surface_cluster").get(
@@ -447,3 +479,135 @@ def test_get_torchsim_ga_params_default_relaxer_matches_default_model():
         pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
     assert p["calculator_kwargs"].get("model_name") == "mace_matpes_0"
     assert p["optimizer_params"]["ga"]["relaxer"].mace_model_name == "mace_matpes_0"
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_low_effort_ts_params_only_shrink_step_budget(system_type):
+    """The low-effort TS preset must change budgets, never NEB physics."""
+    production = _ts_search_params_for(system_type)
+    if get_system_policy(system_type).uses_surface:
+        low = get_low_effort_ts_search_params(
+            system_type=system_type, surface_config=_surface_config_for_test()
+        )
+    else:
+        low = get_low_effort_ts_search_params(system_type=system_type)
+
+    budget_keys = {"neb_steps", "torchsim_max_steps", "write_timing_json"}
+    for key, expected in production.items():
+        if key in budget_keys:
+            continue
+        assert low[key] == expected, (
+            f"{system_type}: low-effort preset changed physics key {key!r}: "
+            f"{low[key]!r} != {expected!r}"
+        )
+    assert low["write_timing_json"] is False
+    # max_pairs stays uncapped: it is the caller's cost lever.
+    assert low["max_pairs"] is None
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_low_effort_neb_steps_are_floored_and_reduced(system_type):
+    """NEB budgets shrink toward 25% but never below the convergence floor."""
+    steps = low_effort_neb_steps(system_type)
+    floor = param_presets_module._LOW_EFFORT_NEB_FLOOR
+    assert steps >= floor
+
+    production = get_ts_defaults(system_type)["neb_steps"]
+    if isinstance(production, int):
+        assert steps <= production
+        expected = max(
+            floor, round(production * param_presets_module._LOW_EFFORT_SCALE)
+        )
+        assert steps == expected
+    else:
+        # "auto" is resolved from composition at run time, so only the floor applies.
+        assert production == "auto"
+        assert steps == floor
+
+
+@pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
+def test_low_effort_ts_params_preserve_n_images(system_type):
+    """Adsorbate bands keep their 7 images; the budget preset must not reset them."""
+    policy = get_system_policy(system_type)
+    if policy.uses_surface:
+        low = get_low_effort_ts_search_params(
+            system_type=system_type, surface_config=_surface_config_for_test()
+        )
+    else:
+        low = get_low_effort_ts_search_params(system_type=system_type)
+    assert low["neb_n_images"] == (7 if policy.has_adsorbate else 5)
+
+
+def test_low_effort_ts_params_surface_config_required():
+    with pytest.raises(
+        SCGOValidationError, match="requires surface_config to be provided"
+    ):
+        get_low_effort_ts_search_params(system_type="surface_cluster")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "system_type", ["gas_cluster", "gas_cluster_adsorbate", "surface_cluster"]
+)
+def test_low_effort_ga_params_shrink_budget_only(system_type):
+    """The low-effort GA preset must only shrink the search budget."""
+    pytest.importorskip("torch")
+    pytest.importorskip("mace")
+
+    kwargs = {"system_type": system_type, "seed": 7}
+    if get_system_policy(system_type).uses_surface:
+        kwargs["surface_config"] = _surface_config_for_test()
+    try:
+        production = get_torchsim_ga_params(**kwargs)
+        low = get_low_effort_torchsim_ga_params(**kwargs)
+    except Exception as exc:  # pragma: no cover - environment-dependent model load
+        pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
+
+    assert low["calculator"] == production["calculator"]
+    assert low["calculator_kwargs"] == production["calculator_kwargs"]
+    assert low["seed"] == production["seed"]
+
+    ga = low["optimizer_params"]["ga"]
+    assert ga["niter"] == param_presets_module._LOW_EFFORT_GA_NITER
+    assert ga["population_size"] == param_presets_module._LOW_EFFORT_GA_POPULATION_SIZE
+    assert (
+        ga["niter_local_relaxation"]
+        == param_presets_module._LOW_EFFORT_GA_NITER_LOCAL_RELAXATION
+    )
+    assert ga["n_jobs_population_init"] == 1
+    assert ga["early_stopping_niter"] == 0
+    assert ga["write_timing_json"] is False
+    assert ga["detailed_timing"] is False
+    # Budget is genuinely below the production benchmark reference.
+    base = param_presets_module._get_base_ga_benchmark_params(7)["optimizer_params"][
+        "ga"
+    ]
+    assert ga["niter"] < base["niter"]
+    assert ga["population_size"] < base["population_size"]
+
+
+@pytest.mark.slow
+def test_low_effort_ga_params_surface_local_relaxation_is_clamped_up():
+    """Surface GO keeps production-strength local relaxation despite the low budget."""
+    pytest.importorskip("torch")
+    pytest.importorskip("mace")
+
+    cfg = _surface_config_for_test()
+    try:
+        params = get_low_effort_torchsim_ga_params(
+            system_type="surface_cluster", surface_config=cfg, seed=5
+        )
+    except Exception as exc:  # pragma: no cover - environment-dependent model load
+        pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
+
+    prepared = prepare_algorithm_kwargs(
+        params["optimizer_params"]["ga"],
+        {
+            "fitness_strategy": "low_energy",
+            "surface_config": params.get("surface_config"),
+        },
+        ["Pt"] * 5,
+        "ga",
+        system_type="surface_cluster",
+    )
+    assert prepared["niter_local_relaxation"] >= 400

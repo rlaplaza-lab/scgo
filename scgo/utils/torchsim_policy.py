@@ -6,8 +6,8 @@ here validate whether TorchSim may be used for a given calculator name and wheth
 the required stack is installed.
 
 Design note:
-- If a caller explicitly requests TorchSim (``use_torchsim=True``), we **fail
-  fast** when TorchSim (or the required model support) is missing; we do not
+- If a caller explicitly requests TorchSim (``use_torchsim=True``), we **fail fast**
+  when TorchSim (or the required model support) is missing; we do not
   silently fall back to ASE.
 """
 
@@ -20,11 +20,6 @@ from ase.calculators.calculator import Calculator
 from scgo.exceptions import (
     SCGOValidationError,
 )
-
-
-def mace_torchsim_stack_available() -> bool:
-    """True if ``torch_sim`` (``scgo[mace]``) is importable."""
-    return importlib.util.find_spec("torch_sim") is not None
 
 
 def calculator_name_supports_torchsim_batched_neb(calculator_name: str) -> bool:
@@ -100,7 +95,8 @@ def resolve_ts_torchsim_flags(
     """Return effective ``(use_torchsim, use_parallel_neb)`` for TS search.
 
     If TorchSim is **not** requested, returns ``(False, False)``.
-    If TorchSim is requested but unavailable/misconfigured, raises ImportError/ValueError.
+    If TorchSim is requested but unavailable/misconfigured, raises ImportError or
+    SCGOValidationError.
     When TorchSim is on and ``use_parallel_neb`` is ``None``, parallel NEB defaults
     to ``True`` (matches presets).
     """

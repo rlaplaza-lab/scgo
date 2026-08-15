@@ -1,7 +1,8 @@
 """Shared components for Genetic Algorithm implementations.
 
-This module contains code shared between the standard GA and TorchSim-enhanced GA
-implementations to reduce duplication.
+This module contains code shared by the TorchSim Genetic Algorithm and the other
+SCGO drivers that reuse its building blocks (Basin Hopping, transition-state
+search) to reduce duplication.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ import typing
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator
+from ase.constraints import FixAtoms as ASEFixAtoms
+from ase.constraints import FixBondLengths as ASEFixBondLengths
 from ase_ga.offspring_creator import OperationSelector
 from ase_ga.standard_comparators import (
     InteratomicDistanceComparator,
@@ -40,7 +43,13 @@ from scgo.ase_ga_patches.mutations import (
     ShellSwapMutation,
 )
 from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
+from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
+from scgo.cluster_adsorbate.hierarchical import (
+    build_hierarchical_core_fragment_cluster,
+    build_hierarchical_core_fragment_cluster_batch,
+)
+from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_PAIR_COR_CUM_DIFF,
@@ -53,6 +62,7 @@ from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
 )
+from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.metadata.atoms import get_tag
@@ -61,15 +71,15 @@ from scgo.surface.deposition import (
     create_deposited_cluster,
     create_deposited_cluster_batch,
 )
+from scgo.surface.partition import resolve_slab_search_partition
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
     SystemType,
-    _adsorbate_fragment_lengths_from_definition,
     get_system_policy,
     uses_surface,
     validate_composition_against_adsorbate,
-    validate_structure_for_system_type,
+    validate_minimum_structure,
 )
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.diversity_scorer import DiversityScorer
@@ -79,9 +89,8 @@ from scgo.utils.fitness_strategies import (
 )
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
 from scgo.utils.logging import get_logger
+from scgo.utils.parallel_workers import resolve_n_jobs, validate_n_jobs
 from scgo.utils.phase_logging import (
-    InitDiagnosticsCollector,
-    format_count_summary,
     log_phase_header,
 )
 from scgo.utils.rng_helpers import (
@@ -94,10 +103,6 @@ from scgo.utils.validation import (
     validate_integer,
     validate_positive,
 )
-
-if typing.TYPE_CHECKING:
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
-
 
 logger = get_logger(__name__)
 
@@ -113,11 +118,6 @@ def _copy_adsorbate_fragment_template(
     return None
 
 
-def _rng_or_default(rng: Generator | None) -> Generator:
-    """Return the provided RNG or create a fresh one when absent."""
-    return rng if rng is not None else np.random.default_rng()
-
-
 def slab_ga_metadata_extras(
     surface_config: SurfaceSystemConfig | None, n_slab: int, system_type: SystemType
 ) -> dict[str, int | str | list[str]]:
@@ -129,8 +129,6 @@ def slab_ga_metadata_extras(
             surface_config.slab.get_chemical_symbols()
         )
         if get_system_policy(system_type).slab_is_search_target:
-            from scgo.surface.partition import resolve_slab_search_partition
-
             part = resolve_slab_search_partition(surface_config)
             metadata["n_fixed_slab_atoms"] = part.n_fixed
             metadata["n_mobile_slab_atoms"] = part.n_mobile_slab
@@ -153,7 +151,7 @@ def adsorbate_partition_metadata(
     n_core = len(core_list)
     n_ads = len(ads_list)
     fragment_lengths = parse_positive_fragment_lengths(
-        adsorbate_definition.get("adsorbate_fragment_lengths")
+        adsorbate_definition.adsorbate_fragment_lengths
     )
     if sum(fragment_lengths) != n_ads and n_ads > 0:
         fragment_lengths = [n_ads]
@@ -173,13 +171,91 @@ def ga_run_metadata_extras(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None = None,
+    fix_atoms_indices: list[int] | None = None,
+    fix_bond_lengths_pairs: list[list[int]] | None = None,
 ) -> dict[str, int | str]:
-    """Slab + optional core/adsorbate mobile partition for GA written structures."""
+    """Slab + optional core/adsorbate mobile partition for GA written structures.
+
+    When ``fix_atoms_indices`` / ``fix_bond_lengths_pairs`` are provided (the
+    relaxation-time constraint index lists), they are persisted as JSON-encoded
+    tags so the constraint state can be rebuilt on load even when a consumer
+    relies on the metadata backstop rather than the native DB constraint
+    round-trip.
+    """
     out = slab_ga_metadata_extras(surface_config, n_slab, system_type)
     out.update(
         adsorbate_partition_metadata(system_type, composition, adsorbate_definition)
     )
+    if fix_atoms_indices is not None:
+        out["fix_atoms_indices_json"] = [int(i) for i in fix_atoms_indices]
+    if fix_bond_lengths_pairs is not None:
+        out["fix_bond_lengths_pairs_json"] = [
+            [int(a), int(b)] for a, b in fix_bond_lengths_pairs
+        ]
     return out
+
+
+def extract_constraint_index_lists(atoms: Atoms) -> dict[str, typing.Any]:
+    """Extract FixAtoms indices and FixBondLengths pairs for DB round-trip.
+
+    Covers both constraint families (similar to
+    ``collect_ase_fixatoms_indices`` in ``torchsim_helpers``).
+
+    Returns a JSON-serializable dict with:
+      - ``fix_atoms_indices``: sorted unique positive indices fixed by any
+        ``FixAtoms`` constraint (negative indices normalized via ``i % len(atoms)``).
+      - ``fix_bond_lengths_pairs``: list of ``[i, j]`` pairs (each sorted,
+        negatives normalized) from every ``FixBondLengths`` constraint.
+
+    Empty lists are returned when ``atoms`` carries no matching constraints.
+    """
+    n = len(atoms)
+    fix_atoms: set[int] = set()
+    bond_pairs: list[list[int]] = []
+    for c in atoms.constraints:
+        if isinstance(c, ASEFixAtoms):
+            for i in c.index:
+                fix_atoms.add(int(i) % n)
+        elif isinstance(c, ASEFixBondLengths):
+            for a, b in c.pairs:
+                aa, bb = int(a) % n, int(b) % n
+                bond_pairs.append([min(aa, bb), max(aa, bb)])
+    return {
+        "fix_atoms_indices": sorted(fix_atoms),
+        "fix_bond_lengths_pairs": bond_pairs,
+    }
+
+
+def reconstruct_constraints_from_index_lists(
+    atoms: Atoms,
+    *,
+    fix_atoms_indices: list[int] | None = None,
+    fix_bond_lengths_pairs: list[list[int]] | None = None,
+) -> bool:
+    """Reattach FixAtoms / FixBondLengths on *atoms* when missing (additive).
+
+    Rebuilds each constraint type only if the loaded ``Atoms`` does not already
+    carry one of that type, so an existing (e.g. native round-tripped)
+    constraint is never overwritten or duplicated.
+
+    ``FixBondLengths`` is rebuilt from the stored pairs; ASE recomputes the
+    target bond lengths from the loaded (relaxed) positions, which is correct
+    for downstream reuse (e.g. TS NEB setups). Returns ``True`` when any
+    constraint was (re)built.
+    """
+    existing = list(atoms.constraints)
+    has_fix_atoms = any(isinstance(c, ASEFixAtoms) for c in existing)
+    has_fix_bonds = any(isinstance(c, ASEFixBondLengths) for c in existing)
+    new: list = list(existing)
+    if fix_atoms_indices and not has_fix_atoms:
+        new.append(ASEFixAtoms(indices=list(fix_atoms_indices)))
+    if fix_bond_lengths_pairs and not has_fix_bonds:
+        pairs = [tuple(int(x) for x in p) for p in fix_bond_lengths_pairs]
+        new.append(ASEFixBondLengths(pairs))
+    if len(new) != len(existing):
+        atoms.set_constraint(new)
+        return True
+    return False
 
 
 def validate_structure_for_ga_storage(
@@ -194,13 +270,19 @@ def validate_structure_for_ga_storage(
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
+    n_slab_deposit: int | None = None,
 ) -> str | None:
     """Validate ``atoms`` in the GA database storage frame.
 
     Applies :func:`~scgo.utils.helpers.canonicalize_relaxed_for_storage` and then
-    :func:`~scgo.system_types.validate_structure_for_system_type`. Returns
+    :func:`~scgo.system_types.validate_minimum_structure`. Returns
     ``None`` when the structure is eligible for GA evolution; otherwise the
     validation error message.
+
+    ``n_slab`` is the full slab prefix used for canonicalization, symbol
+    matching, and adsorbate tag partition. For slab-as-search-target systems
+    pass ``n_slab_deposit`` as the frozen prefix so deposit/connectivity sees
+    the search-mobile region (top layers + adsorbate).
 
     All TorchSim GA code paths that assign ``ga_eligible`` after relaxation
     (or before initial unrelaxed insert) must use this helper so pre- and
@@ -212,7 +294,7 @@ def validate_structure_for_ga_storage(
             surface_mode=surface_mode,
             n_slab=n_slab,
         )
-        validate_structure_for_system_type(
+        validate_minimum_structure(
             atoms,
             system_type=system_type,
             surface_config=surface_config,
@@ -222,6 +304,7 @@ def validate_structure_for_ga_storage(
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            n_slab_deposit=n_slab_deposit,
         )
     except (ValueError, SCGOValidationError) as exc:
         return str(exc)
@@ -249,7 +332,7 @@ def core_adsorbate_partition_counts(
             context="core_adsorbate_partition_counts",
         )
     except (ValueError, SCGOValidationError) as exc:
-        logger.debug("core_adsorbate_partition_counts validation failed: %s", exc)
+        logger.debug("Validation of core_adsorbate_partition_counts failed: %s", exc)
         return None
     if len(ads_list) == 0:
         return None
@@ -276,7 +359,7 @@ def core_adsorbate_partition_details(
         return None
     n_core, n_ads = counts
     lengths = parse_positive_fragment_lengths(
-        adsorbate_definition.get("adsorbate_fragment_lengths")
+        adsorbate_definition.adsorbate_fragment_lengths
     )
     if sum(lengths) != n_ads:
         lengths = [n_ads]
@@ -309,10 +392,7 @@ def resolve_neb_mobile_dims(
     if len(ads_list) == 0:
         return None, None, None
     n_core, n_ads = len(core_list), len(ads_list)
-    try:
-        frag_lengths = _adsorbate_fragment_lengths_from_definition(adsorbate_definition)
-    except (TypeError, ValueError, SCGOValidationError):
-        frag_lengths = None
+    frag_lengths = list(adsorbate_definition.adsorbate_fragment_lengths)
     return n_core, n_ads, frag_lengths
 
 
@@ -372,10 +452,7 @@ def validate_ga_common_params(
     validate_positive("niter", niter, strict=True)
     validate_integer("population_size", population_size)
     validate_positive("population_size", population_size, strict=True)
-    if n_jobs_population_init not in (-1, -2) and n_jobs_population_init < 1:
-        raise SCGOValidationError(
-            f"n_jobs_population_init must be -1, -2, or >= 1, got {n_jobs_population_init}"
-        )
+    validate_n_jobs(n_jobs_population_init, "n_jobs_population_init")
     if calculator is None:
         raise SCGOValidationError("calculator is required for genetic algorithm")
     if fmax is not None:
@@ -391,10 +468,11 @@ class ClusterStartGenerator(StartGenerator):
 
     Uses :func:`scgo.initialization.create_initial_cluster_batch` to produce
     starting candidates. When population_size is provided, pre-generates the
-    entire population in one batch call.
+    entire population up front.
 
-    For ``gas_cluster_adsorbate``, pass ``adsorbate_definition`` and optional
-    fragment options; uses
+    For ``gas_cluster_adsorbate``, ``adsorbate_definition`` and
+    ``adsorbate_fragment_template`` are required (``cluster_adsorbate_config`` is
+    optional); candidates come from
     :func:`scgo.cluster_adsorbate.hierarchical.build_hierarchical_core_fragment_cluster`
     (same as surface hierarchical seeds without a slab). Plain ``gas_cluster`` must
     not pass these keyword arguments.
@@ -409,7 +487,7 @@ class ClusterStartGenerator(StartGenerator):
         population_size: int | None = None,
         mode: str = "smart",
         previous_search_glob: str = "**/*.db",
-        n_jobs: int = 1,
+        n_jobs: int | None = None,
         *,
         system_type: SystemType = "gas_cluster",
         adsorbate_definition: AdsorbateDefinition | None = None,
@@ -426,18 +504,20 @@ class ClusterStartGenerator(StartGenerator):
             rng: Optional numpy random number generator for reproducibility.
             calculator: Optional calculator to assign to generated atoms.
             population_size: Optional total population size. If provided, pre-generates
-                entire population in one batch call. If None, generates on demand.
+                the entire population up front. If None, generates on demand.
             mode: Initialization mode. Default "smart".
             previous_search_glob: Glob pattern used to find prior databases for
                 seed-based initialization. Defaults to ``"**/*.db"``.
             n_jobs: Number of parallel workers for batch initialization.
-                Default 1 (sequential). Special values: -1 (all CPUs), -2 (all except one).
-                Only used when population_size is provided.
+                ``None`` uses the project default (single worker; opt in with
+                -1/-2 for parallelism). Special values: -1 (all CPUs),
+                -2 (all except one). Only used when population_size is provided.
             system_type: ``gas_cluster`` or ``gas_cluster_adsorbate``; used to reject
                 spurious adsorbate kwargs for plain gas clusters.
             adsorbate_definition: Required for hierarchical gas seeds; optional for
                 monolithic (validated at runner; still used for metadata in GA).
-            adsorbate_fragment_template: Optional fragment geometry for hierarchical layout.
+            adsorbate_fragment_template: Fragment geometry for the hierarchical
+                layout; required for ``system_type=gas_cluster_adsorbate``.
             cluster_adsorbate_config: Optional placement/validation for the fragment.
             max_hierarchical_attempts: Max inner tries in hierarchical core+fragment
                 build (per candidate).
@@ -480,7 +560,7 @@ class ClusterStartGenerator(StartGenerator):
         self.population_size: int | None = population_size
         self.mode: str = mode
         self.previous_search_glob: str = previous_search_glob
-        self.n_jobs: int = n_jobs
+        self.n_jobs: int = resolve_n_jobs(n_jobs)
         self.system_type: SystemType = system_type
         self.adsorbate_definition = adsorbate_definition
         self.adsorbate_fragment_template = (
@@ -513,47 +593,21 @@ class ClusterStartGenerator(StartGenerator):
                 verbosity=verbosity,
             )
             if self._hierarchical and adsorbate_definition is not None:
-                from scgo.cluster_adsorbate.hierarchical import (
-                    build_hierarchical_core_fragment_cluster,
-                )
-
-                InitDiagnosticsCollector.reset()
-                self._candidate_batch = []
-                for _i in range(population_size):
-                    placement_metadata: dict[str, str] = {}
-                    a = build_hierarchical_core_fragment_cluster(
-                        self.composition,
-                        adsorbate_definition,
-                        self.rng,
-                        self.previous_search_glob,
-                        self.adsorbate_fragment_template,
-                        self.cluster_adsorbate_config,
-                        cluster_init_vacuum=self.vacuum,
-                        init_mode=self.mode,
-                        max_placement_attempts=self.max_hierarchical_attempts,
-                        batch_site_counts=self._batch_site_type_counts,
-                        placement_metadata=placement_metadata,
-                    )
-                    if a is None:
-                        raise SCGORuntimeError(
-                            "ClusterStartGenerator: hierarchical gas seed could not be "
-                            "placed; increase max_hierarchical_attempts or relax "
-                            "ClusterAdsorbateConfig."
-                        )
-                    site_type = placement_metadata.get("site_type")
-                    if site_type in self._batch_site_type_counts:
-                        self._batch_site_type_counts[site_type] += 1
-                    self._candidate_batch.append(a)
-                site_summary = format_count_summary(self._batch_site_type_counts)
-                InitDiagnosticsCollector.emit_summary(
-                    logger,
-                    verbosity=verbosity,
+                self._candidate_batch = build_hierarchical_core_fragment_cluster_batch(
+                    adsorbate_definition,
+                    self.rng,
+                    self.previous_search_glob,
+                    self.adsorbate_fragment_template,
+                    self.cluster_adsorbate_config,
+                    cluster_init_vacuum=self.vacuum,
+                    init_mode=self.mode,
                     n_structures=population_size,
-                    extra=f"site types {site_summary}" if site_summary else "",
+                    max_placement_attempts=self.max_hierarchical_attempts,
+                    batch_site_counts=self._batch_site_type_counts,
+                    n_jobs=self.n_jobs,
+                    verbosity=verbosity,
                 )
             else:
-                from scgo.initialization import create_initial_cluster_batch
-
                 self._candidate_batch = create_initial_cluster_batch(
                     composition=composition,
                     n_structures=population_size,
@@ -561,10 +615,10 @@ class ClusterStartGenerator(StartGenerator):
                     vacuum=vacuum,
                     previous_search_glob=previous_search_glob,
                     mode=mode,
-                    n_jobs=n_jobs,
+                    n_jobs=self.n_jobs,
                 )
 
-    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+    def get_new_candidate(self) -> Atoms:
         """Generate a single new, random cluster candidate.
 
         If population_size was provided, serves candidates from pre-generated batch.
@@ -579,14 +633,9 @@ class ClusterStartGenerator(StartGenerator):
 
         if atoms is None:
             if self._hierarchical and self.adsorbate_definition is not None:
-                from scgo.cluster_adsorbate.hierarchical import (
-                    build_hierarchical_core_fragment_cluster,
-                )
-
                 atoms = build_hierarchical_core_fragment_cluster(
-                    self.composition,
                     self.adsorbate_definition,
-                    _rng_or_default(self.rng),
+                    ensure_rng_or_create(self.rng),
                     self.previous_search_glob,
                     self.adsorbate_fragment_template,
                     self.cluster_adsorbate_config,
@@ -607,17 +656,18 @@ class ClusterStartGenerator(StartGenerator):
                 ):
                     self._batch_site_type_counts[site_type] += 1
             else:
-                from scgo.initialization import create_initial_cluster
-
                 atoms = create_initial_cluster(
                     self.composition,
                     vacuum=self.vacuum,
-                    rng=_rng_or_default(self.rng),
+                    rng=ensure_rng_or_create(self.rng),
                     previous_search_glob=self.previous_search_glob,
                     mode=self.mode,
                 )
 
-        assert atoms is not None
+        if atoms is None:
+            raise SCGORuntimeError(
+                "StartGenerator failed to produce a valid Atoms object"
+            )
         if self.calculator is not None:
             atoms.calc = self.calculator
         return atoms
@@ -636,7 +686,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         calculator: Calculator | None = None,
         population_size: int | None = None,
         previous_search_glob: str = "**/*.db",
-        n_jobs: int = 1,
+        n_jobs: int | None = None,
         adsorbate_definition: AdsorbateDefinition | None = None,
         adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
         cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
@@ -652,7 +702,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         self.calculator = calculator
         self.population_size = population_size
         self.previous_search_glob = previous_search_glob
-        self.n_jobs = n_jobs
+        self.n_jobs = resolve_n_jobs(n_jobs)
         self.adsorbate_definition = adsorbate_definition
         self.adsorbate_fragment_template = _copy_adsorbate_fragment_template(
             adsorbate_fragment_template
@@ -680,14 +730,15 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 rng=self.rng,
                 config=surface_config,
                 previous_search_glob=previous_search_glob,
-                n_jobs=n_jobs,
+                n_jobs=self.n_jobs,
                 adsorbate_definition=adsorbate_definition,
                 adsorbate_fragment_template=self.adsorbate_fragment_template,
                 cluster_adsorbate_config=cluster_adsorbate_config,
                 batch_site_counts=self._batch_site_type_counts,
+                verbosity=verbosity,
             )
 
-    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+    def get_new_candidate(self) -> Atoms:
         atoms = None
         if self._candidate_batch is not None and self._candidate_count < len(
             self._candidate_batch
@@ -700,7 +751,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 self.composition,
                 self.slab,
                 self.blmin,
-                _rng_or_default(self.rng),
+                ensure_rng_or_create(self.rng),
                 self.surface_config,
                 previous_search_glob=self.previous_search_glob,
                 adsorbate_definition=self.adsorbate_definition,
@@ -751,12 +802,11 @@ class SurfaceSlabStartGenerator(StartGenerator):
                 f"len(slab)={len(self.slab)}"
             )
         n_pop = int(population_size) if population_size is not None else 1
-        if verbosity >= 1:
-            log_phase_header(
-                logger,
-                "Population initialization",
-                verbosity=verbosity,
-            )
+        log_phase_header(
+            logger,
+            "Population initialization",
+            verbosity=verbosity,
+        )
         for _ in range(max(n_pop, 1)):
             self._candidate_batch.append(self._make_candidate())
 
@@ -770,7 +820,7 @@ class SurfaceSlabStartGenerator(StartGenerator):
         atoms.set_positions(pos)
         return atoms
 
-    def get_new_candidate(self, maxiter: typing.Any = None) -> Atoms:
+    def get_new_candidate(self) -> Atoms:
         if self._candidate_count < len(self._candidate_batch):
             atoms = self._candidate_batch[self._candidate_count]
             self._candidate_count += 1
@@ -965,7 +1015,7 @@ def _append_partitioned_mutation(
     include_ads_variant: bool,
     kwargs_for: typing.Callable[[str], dict[str, typing.Any]],
 ) -> None:
-    """Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
+    r"""Register a mutation as plain or ``_core`` / ``_ads`` partition variants.
 
     ``kwargs_for`` receives ``\"plain\"``, ``\"core\"``, or ``\"ads\"`` and must
     return constructor kwargs for that variant (including ``target_tags`` when
@@ -1016,15 +1066,19 @@ def create_mutation_operators(
         blmin: Bond length minimums dictionary.
         rng: Random number generator.
         use_adaptive: Whether to include adaptive mutation operators.
-        adsorbate_definition: Two-block mobile partition: tag-aware rattle, skip
-            flattening/breathing.
+        adsorbate_definition: Enables the two-block core/adsorbate mobile
+            partition: tag-aware rattle plus ``_core``/``_ads`` variants of the
+            flattening, breathing, and in-plane slide mutations, and (for
+            cluster searches) a fragment reposition operator.
         n_slab: Number of fixed slab atoms; when > 0, registers in-plane slide.
         surface_normal_axis: Slab normal (0, 1, or 2) for in-plane slide.
-        flattening_thickness_factor: Passed to :class:`FlatteningMutation`
+        flattening_thickness_factor: Passed to :class:`~scgo.ase_ga_patches.mutations.FlatteningMutation`
             (larger values relax post-projection thickness, helping large clusters).
         flattening_max_inner_attempts: Max ranked flattening candidates per call.
         rotational_max_inner_attempts: Max ranked rotation candidates per call.
         mirror_max_tries: Max ranked mirror cutting-plane candidates per call.
+            Mirror is registered only for surface systems and tagged
+            adsorbate partitions; untagged gas-phase clusters omit it.
         breathing_max_inner_attempts: Max radial-scale trials per breathing call.
         in_plane_slide_max_inner_attempts: Max slide trials per slide call.
         in_plane_slide_max_displacement: Maximum displacement magnitude (Å) per
@@ -1045,8 +1099,8 @@ def create_mutation_operators(
     policy = get_system_policy(system_type)
     partition_composition = list(composition)
     if policy.slab_is_search_target and policy.has_adsorbate and adsorbate_definition:
-        ads = adsorbate_definition.get("adsorbate_symbols", [])
-        core = adsorbate_definition.get("core_symbols", [])
+        ads = adsorbate_definition.adsorbate_symbols
+        core = adsorbate_definition.core_symbols
         if isinstance(ads, list) and isinstance(core, list):
             partition_composition = [str(s) for s in core] + [str(s) for s in ads]
     part = core_adsorbate_partition_details(
@@ -1093,6 +1147,7 @@ def create_mutation_operators(
         rattle_prop=min(0.4, 0.4 * shared_move_scale),
         use_tags=use_partition_tags,
         system_type=system_type,
+        surface_normal_axis=surface_normal_axis,
         rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
     )
     operators.append(rattle)
@@ -1141,6 +1196,7 @@ def create_mutation_operators(
                 "rng": get_child_rng_or_none(rng),
                 "max_inner_attempts": flattening_max_inner_attempts,
                 "system_type": system_type,
+                "surface_normal_axis": surface_normal_axis,
             }
             if variant == "core":
                 kw["target_tags"] = [0]
@@ -1167,21 +1223,27 @@ def create_mutation_operators(
             use_tags=use_partition_tags,
             rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
             max_inner_attempts=rotational_max_inner_attempts,
+            surface_normal_axis=surface_normal_axis,
         )
         operators.append(rotational)
         name_map["rotational"] = len(operators) - 1
 
-        mirror: MirrorMutation = MirrorMutation(
-            blmin,
-            n_to_optimize,
-            reflect=True,
-            system_type=system_type,
-            target_tags=core_only_tags,
-            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
-            max_tries=mirror_max_tries,
-        )
-        operators.append(mirror)
-        name_map["mirror"] = len(operators) - 1
+        # Untagged gas-phase clusters have no leftover reference, so a
+        # full-cluster mirror is an isometry. Omit it from the factory
+        # (and mutate() still returns None as a safety net).
+        if use_partition_tags or uses_surface(system_type):
+            mirror: MirrorMutation = MirrorMutation(
+                blmin,
+                n_to_optimize,
+                reflect=True,
+                system_type=system_type,
+                target_tags=core_only_tags,
+                rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+                max_tries=mirror_max_tries,
+                surface_normal_axis=surface_normal_axis,
+            )
+            operators.append(mirror)
+            name_map["mirror"] = len(operators) - 1
 
         anisotropic: AnisotropicRattleMutation = AnisotropicRattleMutation(
             blmin,
@@ -1191,6 +1253,7 @@ def create_mutation_operators(
             rattle_prop=min(0.5, 0.5 * shared_move_scale),
             use_tags=use_partition_tags,
             system_type=system_type,
+            surface_normal_axis=surface_normal_axis,
             rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
         )
         operators.append(anisotropic)
@@ -1211,6 +1274,7 @@ def create_mutation_operators(
                 "system_type": system_type,
                 "rng": get_child_rng_or_none(rng),
                 "max_inner_attempts": breathing_max_inner_attempts,
+                "surface_normal_axis": surface_normal_axis,
             }
             if variant == "core":
                 kw["target_tags"] = [0]
@@ -1264,8 +1328,6 @@ def create_mutation_operators(
         and use_partition_tags
         and adsorbate_definition is not None
     ):
-        from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
-
         reposition = FragmentRepositionMutation(
             blmin,
             n_to_optimize,
@@ -1274,6 +1336,7 @@ def create_mutation_operators(
             fragment_templates=adsorbate_fragment_template,
             cluster_adsorbate_config=cluster_adsorbate_config,
             rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            surface_normal_axis=surface_normal_axis,
         )
         operators.append(reposition)
         name_map["fragment_reposition"] = len(operators) - 1
@@ -1322,6 +1385,15 @@ def update_mutation_weights(
     s = float(sum(weights))
     if s > 0.0:
         weights = [w / s for w in weights]
+    elif weights:
+        # All-zero (or negative) weights make OperationSelector.__get_index__
+        # return None -> ``oplist[None]`` TypeError. Fall back to uniform.
+        logger.warning(
+            "All operator weights are non-positive; falling back to uniform "
+            "selection over %d operators",
+            len(weights),
+        )
+        weights = [1.0 / len(weights)] * len(weights)
 
     if "rattle" in name_map:
         rattle_idx: int = name_map["rattle"]
@@ -1358,7 +1430,7 @@ def create_structure_comparator(
     and run-level filtering to ensure consistent duplicate detection criteria.
 
     Args:
-        n_atoms: Number of trailing (adsorbate) atoms to compare.
+        n_atoms: Number of trailing (mobile) atoms to compare.
         energy_tolerance: Energy difference tolerance for duplicate detection (eV).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC).
 
@@ -1452,10 +1524,12 @@ def setup_diversity_scorer(
         mic: Whether the diversity comparator uses the minimum-image convention.
 
     Returns:
-        DiversityScorer instance if fitness_strategy is "diversity", None otherwise.
+        DiversityScorer instance when fitness_strategy is "diversity" and at least
+        one reference structure was loaded; None otherwise.
 
     Raises:
-        ValueError: If diversity_reference_db is None when fitness_strategy is "diversity".
+        SCGOValidationError: If diversity_reference_db is None when
+            fitness_strategy is "diversity".
     """
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
@@ -1480,8 +1554,8 @@ def setup_diversity_scorer(
 
     if not reference_structures:
         logger.warning(
-            "No reference structures found for diversity strategy. "
-            "This may result in poor diversity optimization."
+            "No reference structures found for diversity strategy; "
+            "diversity optimization may be ineffective"
         )
         return None
 
@@ -1552,7 +1626,7 @@ def log_early_stopping_info(
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if logger.isEnabledFor(logging.INFO):
-        logger.info("Starting GA evolution with %d generations...", niter)
+        logger.info("Starting GA evolution with %d generations", niter)
         logger.info("Using fitness_strategy='%s'", fitness_strategy)
     if early_stopping_niter > 0:
         stopping_metric: str = (
@@ -1586,6 +1660,4 @@ def sort_minima_by_fitness(
             key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
             reverse=True,  # Higher fitness first
         )
-        logger.info(
-            f"Sorted {len(all_minima)} unique minima by {fitness_strategy} fitness"
-        )
+        logger.info(f"Sorted {len(all_minima)} minima by {fitness_strategy} fitness")

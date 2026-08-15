@@ -1,4 +1,4 @@
-"""Flat TS dict → kwargs for :func:`run_transition_state_search`."""
+"""Flat TS dict → kwargs for :func:`~scgo.ts_search.run_transition_state_search`."""
 
 from __future__ import annotations
 
@@ -13,18 +13,6 @@ from scgo.param_presets import get_ts_defaults
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
-
-
-@dataclass(frozen=True)
-class TsRunConfig:
-    """Resolved transition-state runner configuration (flat dict view)."""
-
-    calculator: str
-    calculator_kwargs: dict[str, Any]
-    system_type: SystemType
-    use_torchsim: bool
-    use_parallel_neb: bool
-    surface_config: SurfaceSystemConfig | None
 
 
 @dataclass(frozen=True)
@@ -49,6 +37,12 @@ class NebRunConfig:
     n_adsorbate_mobile: int | None
     adsorbate_fragment_lengths: list[int] | None
     max_endpoint_mismatch: float | None
+    neb_prescreen_clash_distance: float
+    min_saddle_prominence: float
+    neb_max_spurious_barrier: float
+    binding_penetration_tolerance_a: float
+    layer_cluster_threshold_ang: float
+    neb_interpolation_bond_tolerance_a: float
     adsorbate_definition: Any | None
     connectivity_factor: float | None
     allow_cluster_fragmentation: bool
@@ -57,6 +51,15 @@ class NebRunConfig:
     system_type: SystemType
     surface_config: SurfaceSystemConfig | None
     torchsim_params: dict[str, Any] | None
+    # Per-config connectivity factor source (ClusterAdsorbateConfig). When a
+    # NebRunConfig is built with connectivity_factor=None, this is honored by the
+    # validation gateway (precedence: explicit float → cluster_adsorbate_config →
+    # surface_config → module default). Optional for parity with the GO gate.
+    cluster_adsorbate_config: Any | None = None
+    # Atom budget (sum of n_images * n_atoms) for one fused parallel-NEB force
+    # batch. Applied together with ``parallel_neb_max_bands`` (both bounds hold);
+    # ``None`` means "no atom budget" (all bands in one batch).
+    parallel_neb_max_batch_atoms: int | None = None
 
 
 def coerce_ts_params_to_runner_kwargs(
@@ -65,12 +68,11 @@ def coerce_ts_params_to_runner_kwargs(
     system_type: SystemType,
     surface_config: Any | None = None,
 ) -> dict[str, Any]:
-    """Map initialized ``get_ts_search_params`` output to runner kwargs.
+    """Map initialized :func:`~scgo.get_ts_search_params` output to runner kwargs.
 
     Expects a fully initialized flat TS dict (see
     :func:`scgo.utils.run_helpers.initialize_ts_params`). Missing NEB knobs still
-    fall back to per-system defaults in
-    :data:`scgo.param_presets.TS_DEFAULTS_BY_SYSTEM_TYPE` as a safety net.
+    fall back to per-system defaults in ``TS_DEFAULTS_BY_SYSTEM_TYPE`` as a safety net.
     """
     if ts_params is None:
         raise SCGOValidationError(
@@ -109,6 +111,10 @@ def coerce_ts_params_to_runner_kwargs(
             "or as the run surface_config argument."
         )
 
+    ts_batch_atoms = ts_params.get(
+        "parallel_neb_max_batch_atoms",
+        ts_defaults.get("parallel_neb_max_batch_atoms"),
+    )
     kwargs: dict[str, Any] = {
         "params": {
             "calculator": ts_params["calculator"],
@@ -124,6 +130,13 @@ def coerce_ts_params_to_runner_kwargs(
             ),
         },
     }
+    if ts_batch_atoms is not None and int(ts_batch_atoms) > 0:
+        # Mirror the GO pattern (geneticalgorithm_go_torchsim sets
+        # expected_max_atoms = mobile+fixed x pop_size): size the relaxer for the
+        # largest fused NEB force batch so the autobatcher probe stays capped to the
+        # real workload (native torch-sim estimation needs no synthetic probe).
+        kwargs["torchsim_params"]["expected_max_atoms"] = int(ts_batch_atoms)
+        kwargs["torchsim_params"]["max_atoms_to_try"] = int(ts_batch_atoms)
     if str(ts_params.get("calculator", "")).strip().upper() == "UMA":
         ck = ts_params.get("calculator_kwargs", {}) or {}
         model_name = ck.get("model_name")
@@ -170,6 +183,7 @@ def coerce_ts_params_to_runner_kwargs(
         "similarity_tolerance",
         "similarity_pair_cor_max",
         "connectivity_factor",
+        "cluster_adsorbate_config",
         "allow_cluster_fragmentation",
         "allow_adsorbate_surface_detachment",
         "enforce_adsorbate_subgraph_integrity",
@@ -196,7 +210,14 @@ def coerce_ts_params_to_runner_kwargs(
         "neb_surface_lattice_rotation",
         "neb_surface_max_lattice_shift",
         "max_endpoint_mismatch",
+        "neb_prescreen_clash_distance",
+        "min_saddle_prominence",
+        "neb_max_spurious_barrier",
+        "binding_penetration_tolerance_a",
+        "layer_cluster_threshold_ang",
+        "neb_interpolation_bond_tolerance_a",
         "parallel_neb_max_bands",
+        "parallel_neb_max_batch_atoms",
     ):
         kwargs[key] = ts_params.get(key, ts_defaults[key])
 

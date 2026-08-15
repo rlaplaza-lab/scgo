@@ -12,6 +12,7 @@ Parameter resolution
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Combine atoms
 -------------
@@ -20,6 +21,7 @@ Combine atoms
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Logging
 -------
@@ -28,6 +30,7 @@ Logging
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Phase logging
 -------------
@@ -36,6 +39,7 @@ Phase logging
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Timing JSON
 -----------
@@ -44,6 +48,7 @@ Timing JSON
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Output path helpers
 -------------------
@@ -52,6 +57,7 @@ Output path helpers
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*
 
 Path keys
 ---------
@@ -59,4 +65,48 @@ Path keys
 .. automodule:: scgo.utils.path_keys
    :members:
    :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+Helpers
+-------
+
+.. automodule:: scgo.utils.helpers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+Comparators
+-----------
+
+.. automodule:: scgo.utils.comparators
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+Parallel workers
+----------------
+
+.. automodule:: scgo.utils.parallel_workers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+TS runner kwargs
+----------------
+
+.. automodule:: scgo.utils.ts_runner_kwargs
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+Fitness strategies
+------------------
+
+.. autoclass:: scgo.utils.fitness_strategies.FitnessStrategy
+   :members:
    :show-inheritance:

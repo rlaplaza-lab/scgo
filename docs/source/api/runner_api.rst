@@ -3,7 +3,6 @@ API Reference
 
 High-level functions for running global optimization and transition state searches.
 
---------------
 Main Functions
 --------------
 
@@ -39,24 +38,27 @@ All functions accept:
 - ``params`` / ``go_params``: GO parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_default_params` at run time)
 - ``ts_params``: TS parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_ts_search_params` at run time)
 - ``seed``: random seed for reproducibility (must agree across ``seed=``, ``go_params['seed']``, and ``ts_params['seed']`` when more than one is set)
-- ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, ``"surface_cluster_adsorbate"``, ``"surface"``, or ``"surface_adsorbate"`` (run argument only — not inside preset dicts)
-- ``surface_config``: required for surface system types (run argument preferred; may also appear in ``go_params`` / ``ts_params``)
+- ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, ``"surface_cluster_adsorbate"``, ``"surface"``, or ``"surface_adsorbate"`` (run argument only — not inside preset dicts or optimizer slots)
+- ``surface_config``: required for surface system types (run argument preferred; may also appear as a top-level key in ``go_params`` / ``ts_params`` when it agrees with the run argument)
 - ``adsorbates``: ASE Atoms or list of Atoms, required for adsorbate system types
 - ``verbosity``: 0 quiet … 3 trace (progress bars when ``verbosity >= 1``)
+- ``calculator_for_global_optimization``: optional pre-warmed ASE/MLIP calculator
+  for ``run_go`` / ``run_go_campaign``. When supplied, the campaign reuses it
+  across every composition instead of reloading the model per run. The keyword
+  sits immediately after ``output_dir``, so purely positional calls that pass
+  arguments past ``output_dir`` shift by one position.
 
 ``scgo.runner_api`` is the public facade (implementation split across
 ``runner_composition``, ``runner_params``, ``runner_go``, ``runner_ts``).
 
 See :doc:`/parameters` for merge rules.
 
-------------------
 Output directories
 ------------------
 
 ``output_dir`` semantics differ by runner. See :doc:`/output_layout` for the
 full table and directory-tree examples.
 
------------------
 Complete Examples
 -----------------
 
@@ -74,7 +76,6 @@ Complete Examples
 
 See :doc:`/quickstart` for surface, adsorbate, TS, campaign, and output-layout examples.
 
------------------
 Utility Functions
 -----------------
 
@@ -93,7 +94,6 @@ Utility Functions
    * - ``log_go_ts_summary(logger, summary, *, wall_time_s=None)``
      - Print summary of a GO+TS run
 
---------------------
 Timing and Profiling
 --------------------
 
@@ -111,7 +111,6 @@ Timing and Profiling
 See :doc:`/api/utils` for timing JSON layout and output-path helpers. On-disk layout and
 provenance: :doc:`/quickstart` (*On-disk layout*).
 
-----------------
 Module Reference
 ----------------
 
@@ -119,3 +118,4 @@ Module Reference
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: _*

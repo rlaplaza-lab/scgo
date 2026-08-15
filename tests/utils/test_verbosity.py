@@ -11,8 +11,6 @@ from scgo.utils.logging import (
     configure_logging,
     get_logger,
     log_debug_v,
-    log_error_v,
-    log_exception_v,
     log_info_v,
     log_warning_v,
     should_show_progress,
@@ -255,52 +253,6 @@ class TestVerbosityGatedHelpers:
         captured = capfd.readouterr()
         assert "Warning message" in captured.out
 
-    def test_log_error_v_always_shown(self, capfd):
-        """Test log_error_v shown even at verbosity=0 with default min_verbosity=0."""
-        configure_logging(0)
-        logger = get_logger("test")
-        log_error_v(logger, "Error message", verbosity=0)
-        captured = capfd.readouterr()
-        assert "Error message" in captured.out
-
-    def test_log_exception_v_with_traceback(self, capfd):
-        """Test log_exception_v includes traceback at high verbosity."""
-        configure_logging(2)
-        logger = get_logger("test")
-        try:
-            raise ValueError("Test error")
-        except ValueError:
-            log_exception_v(
-                logger,
-                "Caught exception",
-                verbosity=2,
-                min_verbosity=1,
-                min_verbosity_for_traceback=2,
-            )
-        captured = capfd.readouterr()
-        assert "Caught exception" in captured.out
-        assert "ValueError" in captured.out
-        assert "Test error" in captured.out
-
-    def test_log_exception_v_without_traceback(self, capfd):
-        """Test log_exception_v does not include traceback at low verbosity."""
-        configure_logging(1)
-        logger = get_logger("test")
-        try:
-            raise ValueError("Test error")
-        except ValueError:
-            log_exception_v(
-                logger,
-                "Caught exception",
-                verbosity=1,
-                min_verbosity=1,
-                min_verbosity_for_traceback=2,
-            )
-        captured = capfd.readouterr()
-        assert "Caught exception" in captured.out
-        # At verbosity=1, should use error not exception, so no traceback
-        assert "Traceback" not in captured.out
-
     def test_lazy_evaluation_with_logger_level(self, capfd):
         """Test that logger respects level filtering (lazy evaluation)."""
         configure_logging(0)  # WARNING level only
@@ -372,3 +324,24 @@ class TestIntegration:
         captured2 = capfd.readouterr()
         output2 = captured2.out
         assert "Should appear now" in output2
+
+
+def test_trace_always_available():
+    """Trace method is now always available on import."""
+    assert hasattr(logging.Logger, "trace")
+
+
+def test_trace_method_works(capfd):
+    # Configure logging and ensure trace method is installed and works
+    configure_logging(3)
+    assert hasattr(logging.Logger, "trace")
+
+    logger = logging.getLogger("test_trace")
+    logger.trace("Trace message")
+    logger.debug("Debug message")
+
+    captured = capfd.readouterr()
+    output = captured.out
+
+    assert "Trace message" in output
+    assert "Debug message" in output

@@ -11,8 +11,7 @@ from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.ts_search.transition_state_io import write_final_unique_ts
-from scgo.ts_search.transition_state_run import integrate_ts_to_database
-from tests.test_utils import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_preparedb, mark_test_minima_as_final
 
 
 def _make_ts_result(
@@ -191,7 +190,7 @@ def test_validate_pair_id_valid(pair, expected):
 def test_validate_pair_id_invalid(bad):
     from scgo.utils.helpers import validate_pair_id
 
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="Invalid pair_id"):
         validate_pair_id(bad)
 
 
@@ -203,46 +202,8 @@ def test_write_final_unique_ts_rejects_malformed_pair_id(tmp_path):
     ]
     out = str(tmp_path / "Pt2_ts_results")
     os.makedirs(out, exist_ok=True)
-    with pytest.raises(SCGOValidationError):
+    with pytest.raises(SCGOValidationError, match="Invalid pair_id"):
         write_final_unique_ts(ts_results, out, ["Pt", "Pt"])
-
-
-def test_integrate_ts_to_database_calls_add(monkeypatch, tmp_path):
-    called = []
-
-    def fake_add_ts_to_database(**kwargs):
-        called.append(kwargs)
-        return True
-
-    # Patch the symbol used by integrate_ts_to_database (module-level import)
-    monkeypatch.setattr(
-        "scgo.ts_search.transition_state_run.add_ts_to_database",
-        fake_add_ts_to_database,
-    )
-
-    # touch a dummy db file so integrate_ts_to_database doesn't early-return
-    db_file = tmp_path / "minima.db"
-    db_file.write_text("")
-
-    # Make a simple TS result
-    a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
-    ts_results = [
-        {
-            "pair_id": "0_1",
-            "status": "success",
-            "transition_state": a,
-            "ts_energy": 0.5,
-            "barrier_height": 0.2,
-        }
-    ]
-
-    added = integrate_ts_to_database(ts_results, str(db_file), verbosity=0)
-    assert added == 1
-    assert len(called) == 1
-    assert called[0]["pair_id"] == "0_1"
-    assert called[0]["minima_idx_1"] == 0
-    assert called[0]["minima_idx_2"] == 1
-    assert called[0]["endpoint_provenance"] is None
 
 
 def test_add_ts_to_database_persists_marker(tmp_path):
@@ -320,43 +281,6 @@ def test_add_ts_to_database_persists_marker(tmp_path):
     assert prov == ep
 
 
-def test_integrate_ts_to_database_forwards_endpoint_provenance(monkeypatch, tmp_path):
-    called = []
-
-    def fake_add_ts_to_database(**kwargs):
-        called.append(kwargs)
-        return True
-
-    monkeypatch.setattr(
-        "scgo.ts_search.transition_state_run.add_ts_to_database",
-        fake_add_ts_to_database,
-    )
-
-    db_file = tmp_path / "minima.db"
-    db_file.write_text("")
-
-    a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
-    prov = [
-        {"run_id": "r1", "systems_row_id": 1},
-        {"run_id": "r1", "systems_row_id": 2},
-    ]
-    ts_results = [
-        {
-            "pair_id": "0_1",
-            "status": "success",
-            "transition_state": a,
-            "ts_energy": 0.5,
-            "barrier_height": 0.2,
-            "minima_provenance": prov,
-        }
-    ]
-
-    added = integrate_ts_to_database(ts_results, str(db_file), verbosity=0)
-    assert added == 1
-    assert called[0]["endpoint_provenance"] == prov
-    assert called[0]["canonical_ts"] is False
-
-
 def test_add_ts_to_database_returns_false_on_write_error(monkeypatch, tmp_path, caplog):
     import sqlite3
     from contextlib import contextmanager
@@ -395,35 +319,6 @@ def test_add_ts_to_database_returns_false_on_write_error(monkeypatch, tmp_path, 
 
     assert success is False
     assert "Error adding TS 0_1 to database" in caplog.text
-
-
-def test_integrate_ts_to_database_skips_when_add_returns_false(monkeypatch, tmp_path):
-    # Patch add_ts_to_database to return False and assert integrate_ts_to_database
-    # reports 0 added.
-    def fake_add_ts_to_database(**kwargs):
-        return False
-
-    monkeypatch.setattr(
-        "scgo.ts_search.transition_state_run.add_ts_to_database",
-        fake_add_ts_to_database,
-    )
-
-    db_file = tmp_path / "minima.db"
-    db_file.write_text("")
-
-    a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
-    ts_results = [
-        {
-            "pair_id": "0_1",
-            "status": "success",
-            "transition_state": a,
-            "ts_energy": 0.5,
-            "barrier_height": 0.2,
-        }
-    ]
-
-    added = integrate_ts_to_database(ts_results, str(db_file), verbosity=0)
-    assert added == 0
 
 
 def test_run_transition_state_search_skips_tagging_when_no_db(
@@ -890,59 +785,3 @@ def test_final_unique_ts_and_network_statistics_consistent(tmp_path):
 
     if summary.get("num_successful", 0) > 0:
         assert len(final_summary.get("unique_ts", [])) > 0
-
-
-def test_extract_transition_states_defaults_to_canonical_tag(tmp_path):
-    """Default TS extract returns only ``final_unique_ts`` rows; opt-in returns all TS."""
-    from scgo.database import extract_transition_states_from_database_file
-    from scgo.ts_search.ts_network import add_ts_to_database
-
-    db_file = tmp_path / "minima.db"
-    db = create_preparedb(Atoms("Pt2"), db_file, population_size=10)
-    a = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-    a.info.setdefault("key_value_pairs", {})["raw_score"] = -0.5
-    a.info["confid"] = 1
-    db.add_unrelaxed_candidate(a, description="Pt2_test")
-    from ase_ga.data import DataConnection
-
-    da = DataConnection(str(db_file))
-    if da.get_number_of_unrelaxed_candidates() > 0:
-        cand = da.get_an_unrelaxed_candidate()
-        cand.info.setdefault("key_value_pairs", {})["raw_score"] = -0.5
-        da.add_relaxed_step(cand)
-    mark_test_minima_as_final(db_file)
-
-    ts_a = Atoms("Pt2", positions=[[0, 0, 0], [1.2, 0, 0]])
-    assert add_ts_to_database(
-        ts_structure=ts_a,
-        ts_energy=0.4,
-        minima_idx_1=0,
-        minima_idx_2=1,
-        db_file=str(db_file),
-        pair_id="0_1",
-        barrier_height=0.1,
-        canonical_ts=True,
-        neb_converged=True,
-    )
-    ts_b = Atoms("Pt2", positions=[[0, 0, 0], [1.3, 0, 0]])
-    assert add_ts_to_database(
-        ts_structure=ts_b,
-        ts_energy=0.45,
-        minima_idx_1=0,
-        minima_idx_2=1,
-        db_file=str(db_file),
-        pair_id="1_2",
-        barrier_height=0.12,
-        canonical_ts=False,
-        neb_converged=True,
-    )
-
-    canonical = extract_transition_states_from_database_file(
-        db_file, run_id="run_test", require_final_unique_ts=True
-    )
-    assert len(canonical) == 1
-
-    all_ts = extract_transition_states_from_database_file(
-        db_file, run_id="run_test", require_final_unique_ts=False
-    )
-    assert len(all_ts) == 2

@@ -16,6 +16,7 @@ from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.metadata.atoms import get_tag
 from scgo.utils.helpers import perform_local_relaxation
+from tests.helpers import assert_minima_structurally_valid
 
 
 class MockFailingOptimizer:
@@ -109,6 +110,7 @@ def test_bh_extreme_temperature_zero(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
     energies = [float(e) for e, _a in minima]
     assert min(energies) <= energies[0] + 1e-6
 
@@ -132,6 +134,7 @@ def test_bh_extreme_temperature_high(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
 def test_bh_no_movement(tmp_path, rng):
@@ -171,6 +174,7 @@ def test_ga_no_mutations(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
 @pytest.mark.slow
@@ -192,6 +196,7 @@ def test_ga_always_mutate(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
 @pytest.mark.slow
@@ -212,6 +217,7 @@ def test_ga_minimum_population_size(tmp_path, rng):
     )
 
     assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
 def test_ga_pairing_failure_handling(tmp_path, rng):
@@ -234,6 +240,7 @@ def test_ga_pairing_failure_handling(tmp_path, rng):
 
     # Should handle pairing failures gracefully and still return results
     assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
 def test_very_close_atoms(tmp_path):

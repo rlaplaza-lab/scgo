@@ -61,9 +61,18 @@ def _safe_mtime(path: str) -> float:
         return 0.0
 
 
-def _load_candidates_from_file(db_file: str, mtime: float) -> list[CandidateEntry]:
-    """Load relaxed candidates from a single database file with mtime caching."""
-    _ = mtime
+def _load_candidates_from_file(db_file: str) -> list[CandidateEntry]:
+    """Load minima from a single database file.
+
+    Args:
+        db_file: Path to the database file to read.
+
+    Returns:
+        List of ``(symbols, energy, atoms)`` entries, or an empty list if the
+        file could not be read. Each atoms object is stamped with provenance
+        tags (``scgo_source_db`` / ``scgo_source_run_id``) so reused seeds are
+        traceable back to the originating database.
+    """
     try:
         run_id = resolve_run_id_from_db_path(db_file)
         minima = extract_minima_from_database_file(
@@ -74,10 +83,16 @@ def _load_candidates_from_file(db_file: str, mtime: float) -> list[CandidateEntr
         results: list[CandidateEntry] = []
         for energy, atoms in minima:
             symbols = tuple(atoms.get_chemical_symbols())
+            if db_file:
+                atoms.info.setdefault("key_value_pairs", {})["scgo_source_db"] = db_file
+            if run_id is not None:
+                atoms.info.setdefault("key_value_pairs", {})["scgo_source_run_id"] = (
+                    run_id
+                )
             results.append((symbols, energy, atoms))
         return results
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError, ValueError) as e:
-        logger.debug(f"Failed to load candidates from {db_file}: {e}")
+        logger.debug("Failed to load candidates from %s: %s", db_file, e)
         return []
 
 
@@ -109,7 +124,7 @@ def _load_db_candidates(db_file: str) -> tuple[float, list[CandidateEntry]]:
     if cached is not None:
         return canonical_mtime, cached
 
-    candidates = _load_candidates_from_file(db_file, canonical_mtime)
+    candidates = _load_candidates_from_file(db_file)
     get_global_cache().set(cache_ns, cache_key, candidates)
     return canonical_mtime, candidates
 
@@ -161,20 +176,6 @@ def _parse_composition_from_path(path: str) -> list[str] | None:
     return None
 
 
-def _could_path_contain_relevant_candidates(
-    path: str, target_counts: Counter[str]
-) -> bool:
-    """Check if a path might contain candidates that are subsets of target."""
-    is_relevant, is_parseable = _path_relevance_status(path, target_counts)
-    if not is_parseable:
-        logger.debug(
-            "Cannot parse composition from path %s; skipping candidate discovery scan",
-            path,
-        )
-        return False
-    return is_relevant
-
-
 def _path_relevance_status(
     path: str,
     target_counts: Counter[str],
@@ -209,7 +210,22 @@ def deduplicate_seed_candidates(
     precision: int = 4,
     energy_bin: float | None = None,
 ) -> list[tuple[float, Atoms]]:
-    """Deduplicate seed candidates by geometry signature."""
+    """Deduplicate seed candidates by geometry signature.
+
+    Candidates are first grouped into energy bins (width ``energy_bin``) and
+    then reduced to one entry per interatomic-distance signature within each
+    bin. When ``energy_bin`` is ``None`` it defaults to one hundredth of the
+    energy range; a bin width of zero deduplicates by signature only.
+
+    Args:
+        entries: List of ``(energy, atoms)`` candidates.
+        precision: Decimal places used when rounding the distance signature.
+        energy_bin: Optional energy bin width; ``None`` derives it from the
+            energy range and non-positive values disable binning.
+
+    Returns:
+        Deduplicated list of ``(energy, atoms)`` candidates (unordered).
+    """
     if len(entries) <= 1:
         return entries
 
@@ -247,14 +263,89 @@ def deduplicate_seed_candidates(
     return deduped
 
 
-def _find_smaller_candidates(
+def _postprocess_candidate_bucket(
+    candidates_by_formula: dict[str, list[tuple[float, Atoms]]],
+) -> dict[str, list[tuple[float, Atoms]]]:
+    """Sort, deduplicate and cap a formula->candidates bucket.
+
+    Mirrors the ordering used by the historical ``_find_smaller_candidates``:
+    candidates are grouped by formula, sorted by energy, deduplicated by
+    geometry signature (energy-binned), re-sorted by energy, and truncated to
+    ``_MAX_CANDIDATES_PER_FORMULA`` entries per formula.
+    """
+    processed: dict[str, list[tuple[float, Atoms]]] = {}
+    for formula, entries in candidates_by_formula.items():
+        sorted_entries = sorted(entries, key=lambda e: e[0])
+        deduped_entries = deduplicate_seed_candidates(sorted_entries)
+
+        # Deduplication groups by energy bin and geometry signature, so the
+        # surviving entries come back in an arbitrary (dict/bucket) order.
+        # Re-sort by energy so truncation keeps the lowest-energy candidates.
+        deduped_entries = sorted(deduped_entries, key=lambda e: e[0])
+
+        if len(deduped_entries) > _MAX_CANDIDATES_PER_FORMULA:
+            deduped_entries = deduped_entries[:_MAX_CANDIDATES_PER_FORMULA]
+        processed[formula] = deduped_entries
+    return processed
+
+
+def _copy_candidate_buckets(
+    buckets: tuple[
+        dict[str, list[tuple[float, Atoms]]],
+        dict[str, list[tuple[float, Atoms]]],
+    ],
+) -> tuple[
+    dict[str, list[tuple[float, Atoms]]],
+    dict[str, list[tuple[float, Atoms]]],
+]:
+    """Deep-copy the atoms in a cached ``(sub, exact)`` tuple for callers."""
+    sub, exact = buckets
+    return (
+        {
+            formula: [(energy, atom.copy()) for energy, atom in entries]
+            for formula, entries in sub.items()
+        },
+        {
+            formula: [(energy, atom.copy()) for energy, atom in entries]
+            for formula, entries in exact.items()
+        },
+    )
+
+
+def _discover_all_candidates(
     target_composition: list[str],
     db_glob_pattern: str,
-) -> dict[str, list[tuple[float, Atoms]]]:
-    """Find all relaxed database candidates that are sub-compositions of target."""
+) -> tuple[
+    dict[str, list[tuple[float, Atoms]]],
+    dict[str, list[tuple[float, Atoms]]],
+]:
+    """Scan DB candidates once and split into sub- and exact-match buckets.
+
+    The single glob scan + mtime cache is reused for both tiers. Entries must
+    be tagged ``final_unique_minimum``. Two buckets are produced:
+
+    - ``sub``: strict sub-compositions with strictly fewer atoms than the
+      target (the historical seed tier).
+    - ``exact``: full composition matches (identical element counts) with the
+      same number of atoms as the target.
+
+    Both buckets are grouped by formula, sorted by energy, deduplicated by
+    geometry, and truncated to ``_MAX_CANDIDATES_PER_FORMULA`` entries per
+    formula.
+
+    Args:
+        target_composition: Target composition as a list of element symbols.
+        db_glob_pattern: Glob pattern (relative to the current working
+            directory) used to locate database files.
+
+    Returns:
+        Tuple of ``(sub_dict, exact_dict)``. Atoms objects are copied so callers
+        can mutate them safely.
+    """
     cwd = os.getcwd()
     matches = glob.glob(os.path.join(cwd, db_glob_pattern), recursive=True)
-    candidates_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
+    sub_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
+    exact_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
     target_counts = get_composition_counts(target_composition)
     n_target_atoms = len(target_composition)
 
@@ -292,19 +383,19 @@ def _find_smaller_candidates(
     cached_entry = get_global_cache().get(_COMPOSITION_CACHE_NS, cache_key)
     if cached_entry is not None:
         stale_cache = False
-        for entries in cached_entry.values():
-            for _energy, atom in entries:
-                if not _get_db_tag(atom, "final_unique_minimum", False):
-                    stale_cache = True
+        for bucket in cached_entry:
+            for entries in bucket.values():
+                for _energy, atom in entries:
+                    if not _get_db_tag(atom, "final_unique_minimum", False):
+                        stale_cache = True
+                        break
+                if stale_cache:
                     break
             if stale_cache:
                 break
 
         if not stale_cache:
-            return {
-                formula: [(energy, atom.copy()) for energy, atom in entries]
-                for formula, entries in cached_entry.items()
-            }
+            return _copy_candidate_buckets(cached_entry)
 
     for db_file in filtered_matches:
         try:
@@ -322,30 +413,75 @@ def _find_smaller_candidates(
             if not _get_db_tag(atoms, "final_unique_minimum", False):
                 continue
 
-            if len(symbols) >= n_target_atoms:
-                continue
-
+            n_symbols = len(symbols)
             row_counts = get_composition_counts(list(symbols))
-            if not is_composition_subset(row_counts, target_counts):
-                continue
 
-            formula = get_cluster_formula(list(symbols))
-            if formula not in candidates_by_formula:
-                candidates_by_formula[formula] = []
-            candidates_by_formula[formula].append((energy, atoms))
+            if n_symbols < n_target_atoms and is_composition_subset(
+                row_counts, target_counts
+            ):
+                formula = get_cluster_formula(list(symbols))
+                sub_by_formula.setdefault(formula, []).append((energy, atoms))
+            elif n_symbols == n_target_atoms and dict(row_counts) == dict(
+                target_counts
+            ):
+                formula = get_cluster_formula(list(symbols))
+                exact_by_formula.setdefault(formula, []).append((energy, atoms))
+            # Larger-than-target candidates are excluded (unchanged behaviour).
 
-    processed: dict[str, list[tuple[float, Atoms]]] = {}
-    for formula, entries in candidates_by_formula.items():
-        sorted_entries = sorted(entries, key=lambda e: e[0])
-        deduped_entries = deduplicate_seed_candidates(sorted_entries)
+    sub = _postprocess_candidate_bucket(sub_by_formula)
+    exact = _postprocess_candidate_bucket(exact_by_formula)
 
-        if len(deduped_entries) > _MAX_CANDIDATES_PER_FORMULA:
-            deduped_entries = deduped_entries[:_MAX_CANDIDATES_PER_FORMULA]
-        processed[formula] = deduped_entries
+    get_global_cache().set(_COMPOSITION_CACHE_NS, cache_key, (sub, exact))
 
-    get_global_cache().set(_COMPOSITION_CACHE_NS, cache_key, processed)
+    return _copy_candidate_buckets((sub, exact))
 
-    return {
-        formula: [(energy, atom.copy()) for energy, atom in entries]
-        for formula, entries in processed.items()
-    }
+
+def _find_smaller_candidates(
+    target_composition: list[str],
+    db_glob_pattern: str,
+) -> dict[str, list[tuple[float, Atoms]]]:
+    """Find all relaxed database candidates that are sub-compositions of target.
+
+    Only entries tagged as ``final_unique_minimum`` and holding strictly fewer
+    atoms than the target are kept. Results are grouped by cluster formula,
+    sorted by energy, deduplicated by geometry, and truncated to
+    ``_MAX_CANDIDATES_PER_FORMULA`` entries per formula.
+
+    This is the historical seed tier; the exact-match tier is exposed separately
+    via :func:`_find_exact_candidates`.
+
+    Args:
+        target_composition: Target composition as a list of element symbols.
+        db_glob_pattern: Glob pattern (relative to the current working
+            directory) used to locate database files.
+
+    Returns:
+        Mapping of cluster formula to ``(energy, atoms)`` candidates, with the
+        atoms objects copied so callers can mutate them safely.
+    """
+    sub, _exact = _discover_all_candidates(target_composition, db_glob_pattern)
+    return sub
+
+
+def _find_exact_candidates(
+    target_composition: list[str],
+    db_glob_pattern: str,
+) -> dict[str, list[tuple[float, Atoms]]]:
+    """Find relaxed database candidates with the exact target composition.
+
+    Only entries tagged as ``final_unique_minimum`` whose element counts match
+    the target exactly (and have the same atom count) are kept. Results are
+    grouped by cluster formula, sorted by energy, deduplicated by geometry, and
+    truncated to ``_MAX_CANDIDATES_PER_FORMULA`` entries per formula.
+
+    Args:
+        target_composition: Target composition as a list of element symbols.
+        db_glob_pattern: Glob pattern (relative to the current working
+            directory) used to locate database files.
+
+    Returns:
+        Mapping of cluster formula to ``(energy, atoms)`` candidates, with the
+        atoms objects copied so callers can mutate them safely.
+    """
+    _sub, exact = _discover_all_candidates(target_composition, db_glob_pattern)
+    return exact

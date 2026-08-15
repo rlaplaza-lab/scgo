@@ -35,7 +35,7 @@ def validate_surface_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class SurfaceSystemConfig:
-    """Describe a fixed slab plus a movable adsorbate cluster for GA.
+    """Describe a slab plus a movable adsorbate cluster for global optimization.
 
     Atom ordering in combined systems must be ``slab`` atoms first, then the
     ``len(composition)`` adsorbate atoms (matching ASE GA patches: ``n_top``
@@ -82,6 +82,7 @@ class SurfaceSystemConfig:
     init_mode: str = "smart"
     max_placement_attempts: int = 200
     structure_connectivity_factor: float = CONNECTIVITY_FACTOR
+    defect_bias_probability: float = 0.0
 
     def __post_init__(self) -> None:
         # Copy slab so post-init pbc adjustments do not mutate a shared Atoms.
@@ -109,6 +110,12 @@ class SurfaceSystemConfig:
         if len(slab) == 0:
             raise SCGOValidationError("slab must contain at least one atom")
 
+        if not (0.0 <= self.defect_bias_probability <= 1.0):
+            raise SCGOValidationError(
+                "defect_bias_probability must be in [0, 1], "
+                f"got {self.defect_bias_probability}"
+            )
+
         if not any(slab.pbc):
             raise SCGOValidationError("Slab must have at least one periodic dimension.")
 
@@ -117,8 +124,10 @@ class SurfaceSystemConfig:
         vacuum_length = slab.cell.lengths()[self.surface_normal_axis]
         if vacuum_length < 10.0:
             logger.warning(
-                f"Slab vacuum size ({vacuum_length:.2f} A) on axis {self.surface_normal_axis} "
-                "might be too small to prevent periodic interaction.",
+                "Slab cell length along axis %d (%.2f Å) might be too small to "
+                "prevent periodic interaction across the vacuum gap",
+                self.surface_normal_axis,
+                vacuum_length,
             )
 
         if (
@@ -155,7 +164,7 @@ def make_surface_config(
     comparator_use_mic: bool = True,
     max_placement_attempts: int = 500,
 ) -> SurfaceSystemConfig:
-    """Build a :class:`SurfaceSystemConfig` from an arbitrary ASE slab."""
+    """Build a :class:`~scgo.surface.config.SurfaceSystemConfig` from an arbitrary ASE slab."""
     return SurfaceSystemConfig(
         slab=slab.copy(),
         name=name,
@@ -178,5 +187,6 @@ def describe_surface_config(cfg: SurfaceSystemConfig) -> str:
         f"n_relax_top_slab_layers={cfg.n_relax_top_slab_layers}, "
         f"comparator_use_mic={cfg.comparator_use_mic}, "
         f"cluster_init_vacuum={cfg.cluster_init_vacuum}, init_mode={cfg.init_mode!r}, "
-        f"max_placement_attempts={cfg.max_placement_attempts})"
+        f"max_placement_attempts={cfg.max_placement_attempts}, "
+        f"defect_bias_probability={cfg.defect_bias_probability})"
     )

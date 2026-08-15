@@ -10,6 +10,7 @@ from scgo.utils.logging import get_logger
 from .geometry_helpers import (
     _check_composition_feasibility,
     _generate_rotation_matrix,
+    _set_cubic_cell_and_center,
     analyze_disconnection,
     compute_bond_distance_params,
     get_covalent_radius,
@@ -88,7 +89,29 @@ def combine_seeds(
     connectivity_factor: float = CONNECTIVITY_FACTOR,
     min_distance_factor: float = SEED_CLASH_FACTOR,
 ) -> Atoms | None:
-    """Combines multiple seed clusters into a single new structure using facet-to-facet placement."""
+    """Combine seed clusters into one structure using facet-to-facet placement.
+
+    The first seed is used as the base; each further seed is randomly rotated
+    and placed against one of the three largest facets of the growing cluster,
+    with a random-direction offset as a last resort.
+
+    Args:
+        seeds: Seed clusters to combine.
+        cell_side: Cubic cell side length applied to the combined structure.
+        rng: Random number generator for rotations and fallback directions.
+        separation_scaling: Placement radius scaling used for seed separation.
+        connectivity_factor: Factor for the connectivity threshold.
+        min_distance_factor: Factor for minimum-distance (clash) checks.
+
+    Returns:
+        The combined :class:`ase.Atoms` object, or ``None`` if a seed could
+        not be placed without clashes or if a placement left the cluster
+        disconnected. For an empty ``seeds`` list, returns an empty ``Atoms``
+        object with the requested cubic cell.
+
+    Raises:
+        SCGOValidationError: If the combined cluster fails final validation.
+    """
     if not seeds:
         return Atoms(cell=[cell_side, cell_side, cell_side])
 
@@ -107,7 +130,7 @@ def combine_seeds(
             [get_covalent_radius(sym) for sym in existing_symbols]
         )
         # Use shared bond distance calculation for consistency
-        bond_distance, _, max_connectivity_distance = compute_bond_distance_params(
+        bond_distance, _, _ = compute_bond_distance_params(
             max_existing_radius=existing_avg_radius,
             avg_new_radius=seed_avg_radius,
             connectivity_factor=connectivity_factor,
@@ -125,7 +148,6 @@ def combine_seeds(
                 facet_centroid,
                 facet_normal,
                 bond_distance,
-                rng,
             )
 
             if _is_valid_placement(
@@ -151,7 +173,8 @@ def combine_seeds(
 
         if not placement_success:
             logger.warning(
-                f"Failed to place seed {i + 1} after trying all facets. Returning None."
+                f"Failed to place seed {i + 1} on the largest facets or at a "
+                f"random offset; discarding this seed combination"
             )
             return None
 
@@ -159,10 +182,8 @@ def combine_seeds(
         combined_atoms.center()
 
         if not is_cluster_connected(combined_atoms, connectivity_factor, use_mic=False):
-            disconnection_distance, suggested_factor, analysis_msg = (
-                analyze_disconnection(
-                    combined_atoms, connectivity_factor, use_mic=False
-                )
+            suggested_factor, analysis_msg = analyze_disconnection(
+                combined_atoms, connectivity_factor, use_mic=False
             )
             logger.warning(
                 f"Seed {i + 1} placement created disconnected cluster. "
@@ -172,8 +193,7 @@ def combine_seeds(
             )
             return None
 
-    combined_atoms.set_cell([cell_side, cell_side, cell_side])
-    combined_atoms.center()
+    _set_cubic_cell_and_center(combined_atoms, cell_side)
 
     validated_atoms, _, _ = validate_cluster(
         combined_atoms,
@@ -197,7 +217,21 @@ def combine_and_grow(
     min_distance_factor: float = SEED_CLASH_FACTOR,
     connectivity_factor: float = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
-    """Combines seeds and grows to target composition."""
+    """Combine seeds and grow the result to the target composition.
+
+    Args:
+        seeds: Seed clusters to combine.
+        target_composition: Target composition as a list of element symbols.
+        cell_side: Cubic cell side length.
+        rng: Random number generator.
+        vdw_scaling: Placement radius scaling for combination and growth.
+        min_distance_factor: Factor for minimum-distance (clash) checks.
+        connectivity_factor: Factor for the connectivity threshold.
+
+    Returns:
+        Grown :class:`ase.Atoms` with the target composition, or ``None`` if
+        the seed combination, the feasibility check, or the growth step failed.
+    """
     combined_seed = combine_seeds(
         seeds=seeds,
         cell_side=cell_side,
@@ -208,7 +242,7 @@ def combine_and_grow(
     )
 
     if combined_seed is None:
-        logger.warning("Initial seed combination failed.")
+        logger.warning("Initial seed combination failed")
         return None
 
     # Check composition feasibility before attempting growth

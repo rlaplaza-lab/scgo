@@ -7,74 +7,23 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
-from scipy.cluster.hierarchy import fclusterdata
 
 from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.surface.layers import (
+    _LAYER_CLUSTER_THRESHOLD_ANG,
+    _layer_indices_by_clustering,
+)
 from scgo.surface.validation import validate_surface_config_slab_prefix
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_LAYER_CLUSTER_THRESHOLD_ANG = 0.4
-
-
-def _layer_indices_by_clustering(
-    positions: np.ndarray,
-    axis: int,
-    *,
-    n_layers: int,
-    from_top: bool,
-) -> set[int]:
-    """Return atom indices in ``n_layers`` distinct coordinate layers along ``axis``."""
-    if n_layers < 1 or len(positions) == 0:
-        return set()
-
-    coord = positions[:, axis].reshape(-1, 1)
-    try:
-        clusters = fclusterdata(
-            coord,
-            _LAYER_CLUSTER_THRESHOLD_ANG,
-            criterion="distance",
-            method="single",
-        )
-        unique_clusters = np.unique(clusters)
-        cluster_means = np.array([coord[clusters == c].mean() for c in unique_clusters])
-        sorted_cluster_ids = unique_clusters[np.argsort(cluster_means)]
-
-        if from_top:
-            if len(sorted_cluster_ids) <= n_layers:
-                return set(range(len(positions)))
-            selected = sorted_cluster_ids[-n_layers:]
-        else:
-            if len(sorted_cluster_ids) < n_layers:
-                return set(range(len(positions)))
-            selected = sorted_cluster_ids[:n_layers]
-
-        return {i for i in range(len(positions)) if clusters[i] in selected}
-    except (ValueError, TypeError, np.linalg.LinAlgError):
-        logger.debug(
-            "fclusterdata layer selection failed; using coordinate rounding fallback",
-            exc_info=True,
-        )
-        coord_flat = positions[:, axis]
-        rounded = np.round(coord_flat, decimals=6)
-        unique_vals = np.sort(np.unique(rounded))
-        if from_top:
-            if len(unique_vals) <= n_layers:
-                return set(range(len(positions)))
-            top_vals = set(unique_vals[-n_layers:].tolist())
-            return {i for i in range(len(positions)) if rounded[i] in top_vals}
-        if len(unique_vals) < n_layers:
-            return set(range(len(positions)))
-        cutoff = unique_vals[n_layers - 1]
-        return {i for i in range(len(positions)) if rounded[i] <= cutoff + 1e-9}
-
 
 def _replace_slab_fixatoms(atoms: Atoms, fix_indices: list[int] | None) -> None:
-    """Replace ``FixAtoms`` while preserving other constraints (e.g. FixBondLength)."""
+    """Replace ``FixAtoms`` while preserving other constraints (e.g. FixBondLengths)."""
     kept = [c for c in (atoms.constraints or []) if not isinstance(c, FixAtoms)]
     if fix_indices:
         kept.append(FixAtoms(indices=fix_indices))
@@ -89,11 +38,12 @@ def attach_slab_constraints(
     n_fix_bottom_slab_layers: int | None,
     n_relax_top_slab_layers: int | None = None,
     surface_normal_axis: int,
+    layer_cluster_threshold_ang: float = _LAYER_CLUSTER_THRESHOLD_ANG,
 ) -> None:
     """Attach ``FixAtoms`` for slab atoms; preserve non-``FixAtoms`` constraints.
 
     Existing ``FixAtoms`` are removed and replaced. Other constraints (e.g.
-    adsorbate ``FixBondLength``) are kept.
+    adsorbate ``FixBondLengths``) are kept.
 
     To relax only the top N slab layers (typical surface region), either set
     ``n_relax_top_slab_layers=N`` or fix the bottom ``L - N`` layers via
@@ -109,6 +59,10 @@ def attach_slab_constraints(
         n_relax_top_slab_layers: If ``fix_all_slab_atoms`` is False and this is
             set, fix all slab atoms except those in the top N distinct layers.
         surface_normal_axis: Cartesian axis for layer grouping.
+
+    Raises:
+        SCGOValidationError: If ``n_slab`` exceeds ``len(atoms)``, or if both
+            ``n_fix_bottom_slab_layers`` and ``n_relax_top_slab_layers`` are set.
     """
     if n_slab > len(atoms):
         raise SCGOValidationError(
@@ -137,6 +91,7 @@ def attach_slab_constraints(
             surface_normal_axis,
             n_layers=n_relax_top_slab_layers,
             from_top=True,
+            threshold=layer_cluster_threshold_ang,
         )
         fix_idx = sorted(set(range(n_slab)) - mobile)
         _replace_slab_fixatoms(atoms, fix_idx or None)
@@ -151,18 +106,26 @@ def attach_slab_constraints(
         surface_normal_axis,
         n_layers=n_fix_bottom_slab_layers,
         from_top=False,
+        threshold=layer_cluster_threshold_ang,
     )
     _replace_slab_fixatoms(atoms, sorted(layer_idx))
 
 
 def attach_slab_constraints_from_surface_config(
-    atoms: Atoms, config: SurfaceSystemConfig
+    atoms: Atoms,
+    config: SurfaceSystemConfig,
+    layer_cluster_threshold_ang: float = _LAYER_CLUSTER_THRESHOLD_ANG,
 ) -> None:
-    """Apply the same ``FixAtoms`` policy as global optimization on ``SurfaceSystemConfig``.
+    """Apply the ``config`` slab ``FixAtoms`` policy to ``atoms``.
 
-    Use this (or pass ``surface_config`` into :func:`run_transition_state_search`) so
-    NEB endpoints match the slab freezing used during GA / local relaxation
-    (``fix_all_slab_atoms``, layer-relax modes, ``surface_normal_axis``).
+    Use this (or pass ``surface_config`` into :func:`~scgo.ts_search.run_transition_state_search`) so
+    NEB endpoints match the slab freezing used during global optimization and
+    local relaxation (``fix_all_slab_atoms``, layer-relax modes,
+    ``surface_normal_axis``).
+
+    Raises:
+        SCGOValidationError: If ``atoms`` does not start with ``config.slab``'s
+            chemical symbols in order.
     """
     validate_surface_config_slab_prefix(atoms, config)
     attach_slab_constraints(
@@ -172,6 +135,7 @@ def attach_slab_constraints_from_surface_config(
         n_fix_bottom_slab_layers=config.n_fix_bottom_slab_layers,
         n_relax_top_slab_layers=config.n_relax_top_slab_layers,
         surface_normal_axis=config.surface_normal_axis,
+        layer_cluster_threshold_ang=layer_cluster_threshold_ang,
     )
 
 

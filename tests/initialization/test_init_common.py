@@ -20,14 +20,20 @@ from ase import Atoms
 from ase.db import connect
 
 from scgo.database import get_global_cache
+from scgo.database.helpers import extract_minima_from_database_file
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import (
+    BatchInitPlan,
     compute_cell_side,
     create_initial_cluster,
+    create_initial_cluster_batch,
     is_cluster_connected,
+    plan_batch_initialization,
     random_spherical,
 )
 from scgo.initialization.candidate_discovery import (
+    _discover_all_candidates,
+    _find_exact_candidates,
     _load_candidates_from_file,
     _load_db_candidates,
 )
@@ -50,6 +56,7 @@ from scgo.initialization.initialization_config import (
 from scgo.initialization.initializers import (
     _boltzmann_sample,
     _find_smaller_candidates,
+    _try_exact_match,
 )
 from scgo.initialization.random_spherical import (
     _add_atoms_to_cluster_iteratively,
@@ -59,9 +66,10 @@ from scgo.initialization.random_spherical import (
 from scgo.initialization.seed_combiners import (
     _is_valid_placement,
 )
+from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.db_stamp import stamp_db
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     BATCH_TEST_SAMPLES,
     BATCH_TEST_SAMPLES_SLOW,
     MIXED_COMPOSITIONS,
@@ -117,10 +125,6 @@ class TestBasicInitialization:
 
         # Verify all invariants using helper
         assert_cluster_valid(atoms, comp, min_distance_factor=0.5)
-
-
-class TestEmptyAndSingleAtomInitialization:
-    """Tests for empty composition and single atom initialization across all modes."""
 
     @pytest.mark.parametrize(
         "mode", ["smart", "random_spherical", "seed+growth", "template"]
@@ -216,22 +220,13 @@ class TestCellSideComputation:
 class TestInvalidElementSymbols:
     """Tests for invalid element symbol handling."""
 
-    def test_invalid_element_symbol(self, rng):
-        """Test with invalid element symbol."""
-        # compute_cell_side should raise ValueError for unknown elements
+    @pytest.mark.parametrize("symbols", [["Xx"], ["Pt", "Xx"]])
+    def test_invalid_element_symbol(self, symbols, rng):
+        """Test that invalid element symbols raise SCGOValidationError."""
         with pytest.raises(SCGOValidationError, match="Unknown element symbol"):
-            compute_cell_side(["Xx"], vacuum=10.0)
-        # create_initial_cluster should also raise error for invalid elements
-        with pytest.raises(SCGOValidationError):
-            create_initial_cluster(["Xx"], rng=rng)
-
-    def test_mixed_valid_invalid_symbols(self, rng):
-        """Test with mix of valid and invalid symbols."""
+            compute_cell_side(symbols, vacuum=10.0)
         with pytest.raises(SCGOValidationError, match="Unknown element symbol"):
-            compute_cell_side(["Pt", "Xx"], vacuum=10.0)
-        # create_initial_cluster should also raise error
-        with pytest.raises(SCGOValidationError):
-            create_initial_cluster(["Pt", "Xx"], rng=rng)
+            create_initial_cluster(symbols, rng=rng)
 
 
 class TestDegenerateGeometries:
@@ -277,21 +272,12 @@ class TestDegenerateGeometries:
 class TestReproducibility:
     """Tests for reproducibility and RNG consistency."""
 
-    def test_same_seed_same_results(self):
-        """Test that same RNG seed produces same results."""
-        comp = ["Pt", "Pt", "Pt"]
-        seed = 42
-        rng1, rng2 = create_paired_rngs(seed)
-
-        atoms1 = create_initial_cluster(comp, rng=rng1, mode="random_spherical")
-        atoms2 = create_initial_cluster(comp, rng=rng2, mode="random_spherical")
-
-        assert positions_equal(atoms1, atoms2)
-        assert atoms1.get_chemical_symbols() == atoms2.get_chemical_symbols()
-
-    @pytest.mark.parametrize("seed1,seed2", [(42, 123)])
-    def test_different_seeds_different_results(self, seed1, seed2):
-        """Test that different seeds produce different results."""
+    @pytest.mark.parametrize(
+        "seed1,seed2,expect_equal",
+        [(42, 42, True), (42, 123, False)],
+    )
+    def test_seed_reproducibility(self, seed1, seed2, expect_equal):
+        """Test that same seeds give equal results and different seeds give different results."""
         comp = ["Pt", "Pt", "Pt"]
         rng1, _ = create_paired_rngs(seed1)
         _, rng2 = create_paired_rngs(seed2)
@@ -299,10 +285,8 @@ class TestReproducibility:
         atoms1 = create_initial_cluster(comp, rng=rng1, mode="random_spherical")
         atoms2 = create_initial_cluster(comp, rng=rng2, mode="random_spherical")
 
-        # Results should be different
-        from tests.test_utils import positions_equal
-
-        assert not positions_equal(atoms1, atoms2)
+        assert positions_equal(atoms1, atoms2) == expect_equal
+        assert atoms1.get_chemical_symbols() == atoms2.get_chemical_symbols()
 
 
 class TestCacheBehavior:
@@ -356,9 +340,8 @@ class TestCacheBehavior:
         )
 
         get_global_cache().clear_namespace("db_candidates")
-        mtime = db_path.stat().st_mtime
         with pytest.raises(AttributeError, match="simulated DB internals error"):
-            _load_candidates_from_file(str(db_path), mtime)
+            _load_candidates_from_file(str(db_path))
 
     def test_load_candidates_from_file_sqlite_error_returns_empty(
         self, tmp_path, monkeypatch, pt2_atoms
@@ -379,9 +362,52 @@ class TestCacheBehavior:
             raising=True,
         )
 
-        mtime = db_path.stat().st_mtime
-        entries = _load_candidates_from_file(str(db_path), mtime)
+        entries = _load_candidates_from_file(str(db_path))
         assert entries == []
+
+    def test_candidate_discovery_matches_extract_minima(self, tmp_path, pt2_atoms):
+        """Initialization discovery and extract_minima_from_database_file agree.
+
+        Folded from the deleted test_candidate_discovery_parity.py: both paths
+        must enumerate the same (energy, atoms) candidates for a mixed DB.
+        """
+        db_path = tmp_path / "test.db"
+        with connect(str(db_path)) as db:
+            final = pt2_atoms.copy()
+            db.write(
+                final,
+                relaxed=True,
+                key_value_pairs={"raw_score": -10.0, "final_unique_minimum": True},
+                gaid=1,
+            )
+            ts = pt2_atoms.copy()
+            ts.positions += 0.1
+            db.write(
+                ts,
+                relaxed=True,
+                key_value_pairs={"raw_score": -8.0, "is_transition_state": True},
+                gaid=2,
+            )
+            non_final = pt2_atoms.copy()
+            non_final.positions -= 0.1
+            db.write(
+                non_final, relaxed=True, key_value_pairs={"raw_score": -7.0}, gaid=3
+            )
+        _stamp_init_test_db(db_path)
+
+        extracted = extract_minima_from_database_file(
+            str(db_path), run_id="runx", require_final=False
+        )
+        discovered = _load_candidates_from_file(str(db_path))
+
+        assert len(discovered) == len(extracted)
+        discovered_sorted = sorted(discovered, key=lambda item: item[1])
+        extracted_sorted = sorted(extracted, key=lambda item: item[0])
+        for (_, energy, atoms), (exp_energy, exp_atoms) in zip(
+            discovered_sorted, extracted_sorted, strict=True
+        ):
+            assert energy == exp_energy
+            assert atoms.get_chemical_symbols() == exp_atoms.get_chemical_symbols()
 
     def test_composition_cache_behavior(self, tmp_path, pt2_atoms):
         """Test composition cache behavior."""
@@ -1493,23 +1519,21 @@ def _create_atoms_for_mode(
     Returns:
         Atoms object
     """
+    kwargs = {"connectivity_factor": connectivity_factor}
+    if placement_radius_scaling is not None:
+        kwargs["placement_radius_scaling"] = placement_radius_scaling
+    if min_distance_factor is not None:
+        kwargs["min_distance_factor"] = min_distance_factor
+
     if mode == "random_spherical":
         cell_side = compute_cell_side(composition)
-        kwargs = {"connectivity_factor": connectivity_factor}
-        if placement_radius_scaling is not None:
-            kwargs["placement_radius_scaling"] = placement_radius_scaling
-        if min_distance_factor is not None:
-            kwargs["min_distance_factor"] = min_distance_factor
         return random_spherical(
             composition=composition, cell_side=cell_side, rng=rng, **kwargs
         )
     else:
-        kwargs = {"mode": mode, "connectivity_factor": connectivity_factor}
-        if placement_radius_scaling is not None:
-            kwargs["placement_radius_scaling"] = placement_radius_scaling
-        if min_distance_factor is not None:
-            kwargs["min_distance_factor"] = min_distance_factor
-        return create_initial_cluster(composition=composition, rng=rng, **kwargs)
+        return create_initial_cluster(
+            composition=composition, rng=rng, mode=mode, **kwargs
+        )
 
 
 def _assert_connectivity_with_diagnostics(
@@ -1540,7 +1564,6 @@ def _assert_connectivity_with_diagnostics(
     is_connected = is_cluster_connected(atoms, connectivity_factor=connectivity_factor)
     if not is_connected:
         (
-            disconnection_distance,
             suggested_factor,
             analysis_msg,
         ) = analyze_disconnection(atoms, connectivity_factor)
@@ -1549,8 +1572,7 @@ def _assert_connectivity_with_diagnostics(
             f"(n_atoms={n_atoms}, seed={seed}). "
             f"Connectivity factor: {connectivity_factor}. "
             f"Analysis: {analysis_msg}. "
-            f"Suggested factor: {suggested_factor:.2f}. "
-            f"Largest gap: {disconnection_distance:.3f} Å"
+            f"Suggested factor: {suggested_factor:.2f}."
         )
 
 
@@ -1561,6 +1583,8 @@ class TestReproducibilityAllModes:
     @pytest.mark.parametrize(
         "mode", ["random_spherical", "seed+growth", "smart", "template"]
     )
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     @pytest.mark.parametrize("seed", [0, 42])
     def test_reproducibility_single_element(self, mode, seed):
         comp = ["Pt"] * 30
@@ -1571,6 +1595,8 @@ class TestReproducibilityAllModes:
             f"{mode} mode not reproducible with seed={seed}"
         )
 
+    @pytest.mark.reproducibility
+    @pytest.mark.requires_cache_isolation
     @pytest.mark.parametrize("mode", ["random_spherical", "seed+growth", "smart"])
     @pytest.mark.parametrize("seed", [0, 42])
     def test_reproducibility_bimetallic(self, mode, seed):
@@ -1654,3 +1680,197 @@ class TestReliabilityAllModes:
             connectivity_factor=LARGE_CLUSTER_FACTOR,
             context=f"mode={mode}, seed={seed}, n_atoms={n_atoms}",
         )
+
+
+class TestExactMatchReuse:
+    """Tests for the additive exact-match reuse tier (Tier E)."""
+
+    def _write_minimum(self, tmp_path, formula_hint, atoms, energy, *, final=True):
+        """Write a relaxed minimum to a *_searches DB so discovery can find it."""
+        db_path = _discovery_db_path(tmp_path, formula_hint)
+        atoms = atoms.copy()
+        set_tags(
+            atoms,
+            final_unique_minimum=final,
+            raw_score=-float(energy),
+        )
+        with connect(db_path) as db:
+            db.write(
+                atoms,
+                relaxed=True,
+                gaid=1,
+                key_value_pairs={
+                    "raw_score": -float(energy),
+                    "final_unique_minimum": final,
+                },
+            )
+        _stamp_init_test_db(db_path)
+        return db_path
+
+    def _build_db(self, tmp_path, rng):
+        """Populate a DB set with sub / exact / larger / non-subset minima."""
+        glob = str(tmp_path / "**" / "*.db")
+        pt3 = create_initial_cluster(["Pt"] * 3, mode="random_spherical", rng=rng)
+        pt5 = create_initial_cluster(["Pt"] * 5, mode="random_spherical", rng=rng)
+        pt6 = create_initial_cluster(["Pt"] * 6, mode="random_spherical", rng=rng)
+        au2 = create_initial_cluster(["Au"] * 2, mode="random_spherical", rng=rng)
+        self._write_minimum(tmp_path, "Pt3", pt3, 10.0)
+        pt5_path = self._write_minimum(tmp_path, "Pt5", pt5, 15.0)
+        # A Pt5 row WITHOUT the final flag must be ignored by both tiers.
+        pt5_nf = pt5.copy()
+        set_tags(pt5_nf, final_unique_minimum=False, raw_score=-99.0)
+        with connect(pt5_path) as db:
+            db.write(
+                pt5_nf,
+                relaxed=True,
+                gaid=2,
+                key_value_pairs={"raw_score": -99.0, "final_unique_minimum": False},
+            )
+        self._write_minimum(tmp_path, "Pt6", pt6, 20.0)
+        self._write_minimum(tmp_path, "Au2", au2, 8.0)
+        return glob
+
+    def test_find_exact_candidates(self, tmp_path, rng):
+        """Exact candidates: only same-composition final minima; no smaller/larger."""
+        glob = self._build_db(tmp_path, rng)
+        exact = _find_exact_candidates(["Pt"] * 5, glob)
+
+        assert "Pt5" in exact
+        assert len(exact["Pt5"]) == 1  # non-final Pt5b excluded
+        assert exact["Pt5"][0][0] == pytest.approx(15.0, rel=1e-6)
+
+        # Sub-composition and larger/non-subset candidates are excluded.
+        assert "Pt3" not in exact
+        assert "Pt6" not in exact
+        assert "Au2" not in exact
+
+    def test_discover_all_candidates_splits_sub_and_exact(self, tmp_path, rng):
+        """_discover_all_candidates returns sub and exact buckets from one scan."""
+        glob = self._build_db(tmp_path, rng)
+        sub, exact = _discover_all_candidates(["Pt"] * 5, glob)
+
+        assert "Pt3" in sub
+        assert "Pt5" in exact
+        assert "Pt5" not in sub
+        assert "Pt3" not in exact
+
+    def test_find_exact_candidates_dedups_geometry(self, tmp_path, rng):
+        """Two identical-geometry exact minima deduplicate to a single entry."""
+        pt5 = create_initial_cluster(["Pt"] * 5, mode="random_spherical", rng=rng)
+        self._write_minimum(tmp_path, "Pt5", pt5, 15.0)
+        self._write_minimum(tmp_path, "Pt5", pt5.copy(), 15.0)
+        glob = str(tmp_path / "**" / "*.db")
+        exact = _find_exact_candidates(["Pt"] * 5, glob)
+        assert "Pt5" in exact
+        assert len(exact["Pt5"]) == 1
+
+    def test_plan_populates_exact_candidates_smart(self, tmp_path, rng):
+        """Smart plan carries exact candidates; other modes leave it empty."""
+        glob = self._build_db(tmp_path, rng)
+        plan = plan_batch_initialization(
+            ["Pt"] * 5,
+            n_structures=10,
+            rng=rng,
+            previous_search_glob=glob,
+            mode="smart",
+        )
+        assert isinstance(plan, BatchInitPlan)
+        assert "Pt5" in plan.exact_candidates
+        assert any(s == "exact" for s, _ in plan.allocations)
+
+        # seed+growth mode never allocates exact, so the bucket stays empty.
+        plan_sg = plan_batch_initialization(
+            ["Pt"] * 5,
+            n_structures=10,
+            rng=rng,
+            previous_search_glob=glob,
+            mode="seed+growth",
+        )
+        assert plan_sg.exact_candidates == {}
+
+        # reuse_exact_matches=False forces an empty exact bucket.
+        plan_off = plan_batch_initialization(
+            ["Pt"] * 5,
+            n_structures=10,
+            rng=rng,
+            previous_search_glob=glob,
+            mode="smart",
+            reuse_exact_matches=False,
+        )
+        assert plan_off.exact_candidates == {}
+
+    def test_try_exact_match_reuses_and_strips_tags(self, tmp_path, rng):
+        """_try_exact_match returns a valid seed, stripping final_unique_minimum."""
+        glob = self._build_db(tmp_path, rng)
+        exact = _find_exact_candidates(["Pt"] * 5, glob)
+        rng2 = np.random.default_rng(0)
+        atoms = _try_exact_match(["Pt"] * 5, exact, rng2)
+        assert atoms is not None
+        assert len(atoms) == 5
+        assert get_tag(atoms, "final_unique_minimum") is None
+        assert get_tag(atoms, "scgo_reused_from_previous_search") is True
+
+        # Wrong composition yields no exact candidate.
+        assert _try_exact_match(["Au"] * 2, exact, rng2) is None
+
+    def test_gas_phase_exact_allocation_and_fallback(self, tmp_path, rng):
+        """Explicit 'exact' allocation reuses a prior minimum; falls back if none."""
+        db_rng, _ = create_paired_rngs(1)
+        glob = self._build_db(tmp_path, db_rng)
+
+        rng_a, rng_b = create_paired_rngs(123)
+        reused = create_initial_cluster_batch(
+            ["Pt"] * 5,
+            n_structures=1,
+            rng=rng_a,
+            mode="smart",
+            previous_search_glob=glob,
+            allocation=("exact", None),
+        )
+        assert len(reused) == 1
+        assert get_tag(reused[0], "scgo_reused_from_previous_search") is True
+        assert get_tag(reused[0], "final_unique_minimum") is None
+
+        # Deterministic for fixed rng seed (paired RNGs share the same state).
+        reused2 = create_initial_cluster_batch(
+            ["Pt"] * 5,
+            n_structures=1,
+            rng=rng_b,
+            mode="smart",
+            previous_search_glob=glob,
+            allocation=("exact", None),
+        )
+        assert positions_equal(reused[0], reused2[0])
+
+        # No DB: exact allocation degrades to a valid random_spherical cluster.
+        no_db = create_initial_cluster_batch(
+            ["Pt"] * 5,
+            n_structures=1,
+            rng=rng,
+            mode="smart",
+            previous_search_glob=str(tmp_path / "nope" / "**" / "*.db"),
+            allocation=("exact", None),
+        )
+        assert len(no_db) == 1
+        assert get_tag(no_db[0], "scgo_reused_from_previous_search") is None
+        assert len(no_db[0]) == 5
+
+    def test_smart_mix_includes_exact_seed(self, tmp_path, rng):
+        """Across a smart batch, at least one structure reuses the exact minimum."""
+        glob = self._build_db(tmp_path, rng)
+        batch = create_initial_cluster_batch(
+            ["Pt"] * 5,
+            n_structures=60,
+            rng=rng,
+            mode="smart",
+            previous_search_glob=glob,
+        )
+        assert len(batch) == 60
+        # Exact-tier reused seeds must not leak the source final_unique_minimum tag;
+        # sub-tier seeds from previous runs are untouched by this change.
+        reused = [
+            a for a in batch if get_tag(a, "scgo_reused_from_previous_search") is True
+        ]
+        assert len(reused) >= 1
+        for a in reused:
+            assert get_tag(a, "final_unique_minimum") is None

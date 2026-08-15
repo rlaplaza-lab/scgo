@@ -19,7 +19,7 @@ from ase import Atoms
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster, is_cluster_connected
 from tests.constants import INITIALIZATION_MODES
-from tests.test_utils import (
+from tests.helpers import (
     LARGE_SIZES,
     MEDIUM_SIZES,
     MIXED_COMPOSITIONS,
@@ -231,7 +231,7 @@ class TestInitializationModesEdgeCases:
             assert_cluster_valid(atoms, comp_list)
         except (ValueError, SCGOValidationError):
             if mode == "template":
-                pytest.skip("Template mode may fail for some compositions")
+                pytest.xfail("no valid template for this composition (known gap)")
             raise
 
     @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
@@ -245,7 +245,9 @@ class TestInitializationModesEdgeCases:
             assert_cluster_valid(atoms, comp)
         except (ValueError, SCGOValidationError):
             if mode == "template":
-                pytest.skip("Template mode may fail for non-magic numbers")
+                pytest.xfail(
+                    "no valid template for this non-magic composition (known gap)"
+                )
             raise
 
     @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
@@ -260,7 +262,9 @@ class TestInitializationModesEdgeCases:
             assert_cluster_valid(atoms, comp)
         except (ValueError, SCGOValidationError):
             if mode == "template":
-                pytest.skip("Template mode may fail for non-magic numbers")
+                pytest.xfail(
+                    "no valid template for this non-magic composition (known gap)"
+                )
             raise
 
     @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
@@ -275,7 +279,9 @@ class TestInitializationModesEdgeCases:
             assert_cluster_valid(atoms, comp)
         except (ValueError, SCGOValidationError):
             if mode == "template":
-                pytest.skip("Template mode may fail for non-magic numbers")
+                pytest.xfail(
+                    "no valid template for this non-magic composition (known gap)"
+                )
             raise
 
 
@@ -294,7 +300,9 @@ class TestInitializationModesReliability:
             assert_cluster_valid(atoms, comp, check_connectivity=len(atoms) > 2)
         except (ValueError, SCGOValidationError):
             if mode == "template":
-                pytest.skip("Template mode may fail for non-magic numbers")
+                pytest.xfail(
+                    "no valid template for this non-magic composition (known gap)"
+                )
             raise
 
     @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
@@ -309,5 +317,7 @@ class TestInitializationModesReliability:
             assert_cluster_valid(atoms, comp, check_connectivity=len(atoms) > 2)
         except (ValueError, SCGOValidationError):
             if mode == "template":
-                pytest.skip("Template mode may fail for non-magic numbers")
+                pytest.xfail(
+                    "no valid template for this non-magic composition (known gap)"
+                )
             raise

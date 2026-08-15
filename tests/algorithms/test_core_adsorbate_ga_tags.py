@@ -33,12 +33,16 @@ def test_apply_mobile_core_ads_tags() -> None:
     ("ads", "composition", "expected"),
     [
         (
-            {"core_symbols": ["Pt", "Pt"], "adsorbate_symbols": ["O", "H"]},
+            AdsorbateDefinition(
+                core_symbols=["Pt", "Pt"], adsorbate_symbols=["O", "H"]
+            ),
             ["Pt", "Pt", "O", "H"],
             (2, 2),
         ),
         (
-            {"core_symbols": ["Pt", "Pt", "O", "H"], "adsorbate_symbols": []},
+            AdsorbateDefinition(
+                core_symbols=["Pt", "Pt", "O", "H"], adsorbate_symbols=[]
+            ),
             ["Pt", "Pt", "O", "H"],
             None,
         ),
@@ -56,11 +60,11 @@ def test_core_adsorbate_partition_counts(
 
 
 def test_core_adsorbate_partition_details_fragment_lengths() -> None:
-    ads: AdsorbateDefinition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    ads: AdsorbateDefinition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
     details = core_adsorbate_partition_details(
         "gas_cluster_adsorbate",
         ["Pt", "Pt", "O", "H", "O", "H"],
@@ -71,10 +75,10 @@ def test_core_adsorbate_partition_details_fragment_lengths() -> None:
 
 def test_create_ga_pairing_use_tags_for_two_block() -> None:
     comp = ["Pt", "Pt", "O", "H"]
-    ads: AdsorbateDefinition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-    }
+    ads: AdsorbateDefinition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+    )
     at = Atoms(symbols=comp, positions=np.zeros((4, 3)), cell=[20, 20, 20], pbc=False)
     p = create_ga_pairing(
         at,
@@ -91,11 +95,11 @@ def test_create_ga_pairing_use_tags_for_two_block() -> None:
 
 def test_create_mutation_operators_two_block_tags_omit_distort() -> None:
     comp = ["Pt", "Pt", "O", "H"]
-    ads: AdsorbateDefinition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H"],
-        "adsorbate_fragment_lengths": [2],
-    }
+    ads: AdsorbateDefinition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
     tmpl = Atoms(symbols=comp, positions=np.zeros((4, 3)), pbc=False)
     blmin = closest_distances_generator(
         get_all_atom_types(tmpl, [0, 1, 2, 3]), ratio_of_covalent_radii=0.7
@@ -117,11 +121,11 @@ def test_create_mutation_operators_two_block_tags_omit_distort() -> None:
 
 def test_create_mutation_operators_freeze_omits_ads_distort_ops() -> None:
     comp = ["Pt", "Pt", "O", "H", "O", "H"]
-    ads: AdsorbateDefinition = {
-        "core_symbols": ["Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    ads: AdsorbateDefinition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
     tmpl = Atoms(symbols=comp, positions=np.zeros((6, 3)), pbc=False)
     blmin = closest_distances_generator(
         get_all_atom_types(tmpl, [0, 1, 2, 3, 4, 5]), ratio_of_covalent_radii=0.7
@@ -146,7 +150,7 @@ def test_maybe_apply_skips_monolithic_ads_def() -> None:
         a,
         0,
         ["H", "H"],
-        {"core_symbols": ["H", "H"], "adsorbate_symbols": []},
+        AdsorbateDefinition(core_symbols=["H", "H"], adsorbate_symbols=[]),
         "gas_cluster_adsorbate",
     )
     assert np.all(a.get_tags() == 0)

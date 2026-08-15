@@ -8,9 +8,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pickle
 import sqlite3
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +25,13 @@ from ase.io import write
 from ase_ga.utilities import get_all_atom_types
 
 from scgo.algorithms import bh_go, ga_go, simple_go
+from scgo.cluster_adsorbate.hierarchical import (
+    build_hierarchical_core_fragment_cluster,
+)
 from scgo.database import SCGODatabaseManager
 from scgo.exceptions import (
+    SCGODatabaseError,
+    SCGOFileError,
     SCGORuntimeError,
     SCGOValidationError,
 )
@@ -45,11 +54,12 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.system_types import (
-    _n_core_mobile_from_adsorbate_definition,
+    as_adsorbate_definition,
     get_system_policy,
     resolve_mobile_composition,
     resolve_structure_mic,
     validate_adsorbate_definition,
+    validate_minimum_structure,
     validate_system_type_settings,
 )
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
@@ -58,16 +68,17 @@ from scgo.utils.helpers import (
     apply_primary_cell_shift,
     canonicalize_storage_frame,
     ensure_directory_exists,
-    filter_dict_keys,
     filter_unique_minima,
     get_cluster_formula,
     is_true_minimum,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.parallel_workers import resolve_n_jobs_to_workers
+from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.validation import validate_composition
+
+logger = get_logger(__name__)
 
 _SURFACE_SYSTEM_TYPES = frozenset(
     {
@@ -104,6 +115,76 @@ def _validate_minimum_worker(
     return None
 
 
+def _validate_candidates_parallel(
+    calculator: Calculator,
+    payloads: list[tuple[float, Atoms, float, bool, float]],
+    n_workers: int,
+) -> tuple[bool, list[tuple[float, Atoms]]]:
+    """Validate candidates in a process pool; return ``(ok, minima)``.
+
+    Returns ``(False, [])`` when parallel startup is skipped or fails so the
+    caller can fall back to sequential validation. Successful runs return
+    ``(True, validated_minima)``.
+    """
+    if n_workers <= 1 or not payloads:
+        return False, []
+
+    try:
+        deepcopy(calculator)
+    except Exception as e:
+        logger.warning(
+            "Calculator is not deep-copyable (%s); "
+            "falling back to sequential validation",
+            e,
+        )
+        return False, []
+
+    logger.info(
+        "Validating %d unique candidates with up to %d parallel workers...",
+        len(payloads),
+        n_workers,
+    )
+    validated_minima: list[tuple[float, Atoms]] = []
+    try:
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_init_validation_worker,
+            initargs=(calculator,),
+        ) as executor:
+            futures = [
+                executor.submit(_validate_minimum_worker, payload)
+                for payload in payloads
+            ]
+            for i, future in enumerate(futures, 1):
+                try:
+                    validated = future.result()
+                except (
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    SCGOValidationError,
+                ) as e:
+                    logger.warning("Parallel validation task %d failed: %s", i, e)
+                    continue
+                if validated is not None:
+                    validated_minima.append(validated)
+    except (
+        TypeError,
+        AttributeError,
+        OSError,
+        RuntimeError,
+        pickle.PicklingError,
+        BrokenProcessPool,
+    ) as e:
+        logger.warning(
+            "Parallel validation failed to start (%s); falling back to sequential",
+            e,
+        )
+        return False, []
+
+    return True, validated_minima
+
+
 def _create_surface_initialized_atoms(
     *,
     composition: list[str],
@@ -127,12 +208,10 @@ def _create_surface_initialized_atoms(
             atoms.set_positions(pos)
             return atoms
         # Adsorbate-only deposit onto the reordered slab.
-        ads = (
-            adsorbate_definition.get("adsorbate_symbols", [])
-            if isinstance(adsorbate_definition, dict)
-            else []
+        ads_def = as_adsorbate_definition(adsorbate_definition)
+        deposit_composition = (
+            list(ads_def.adsorbate_symbols) if ads_def is not None else []
         )
-        deposit_composition = [str(s) for s in ads] if isinstance(ads, list) else []
     else:
         deposit_composition = list(composition)
 
@@ -186,12 +265,7 @@ def _create_gas_cluster_adsorbate_initial_atoms(
     previous_search_glob: str = "**/*.db",
 ) -> Atoms:
     """Build hierarchical gas-phase core+fragment seed for adsorbate runs."""
-    from scgo.cluster_adsorbate.hierarchical import (
-        build_hierarchical_core_fragment_cluster,
-    )
-
     atoms = build_hierarchical_core_fragment_cluster(
-        composition,
         adsorbate_definition,
         rng,
         previous_search_glob,
@@ -266,11 +340,11 @@ def _resolve_n_core_mobile_for_alignment(
             if n_core >= 0:
                 return n_core
 
-    ads_def = global_optimizer_kwargs.get("adsorbate_definition")
-    if isinstance(ads_def, dict):
-        n_core = _n_core_mobile_from_adsorbate_definition(ads_def)
-        if n_core is not None:
-            return int(n_core)
+    ads_def = as_adsorbate_definition(
+        global_optimizer_kwargs.get("adsorbate_definition")
+    )
+    if ads_def is not None:
+        return int(ads_def.n_core)
     return None
 
 
@@ -284,7 +358,11 @@ def _align_slab_minimum_to_reference(
     max_lattice_shift: int,
     n_core_mobile: int | None = None,
 ) -> None:
-    """Align ``candidate`` to ``reference`` using the TS slab PBC protocol (in-place)."""
+    """Align ``candidate`` to ``reference`` using the TS slab PBC protocol (in-place).
+
+    Writes the already-computed aligned coordinates without running constraint
+    projectors (same contract as NEB ``interpolate(..., apply_constraint=False)``).
+    """
     from scgo.ts_search.transition_state import _align_product_surface_pbc
 
     aligned = _align_product_surface_pbc(
@@ -296,7 +374,7 @@ def _align_slab_minimum_to_reference(
         max_lattice_shift=max_lattice_shift,
         n_core_mobile=n_core_mobile,
     )
-    candidate.set_positions(aligned)
+    candidate.set_positions(aligned, apply_constraint=False)
     candidate.set_cell(reference.cell)
     candidate.pbc = reference.pbc
 
@@ -335,7 +413,15 @@ def _optimizer_kwargs_for_algorithm_call(
 def _sanitize_global_optimizer_kwargs_for_metadata(
     global_optimizer_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Copy kwargs for JSON metadata: drop non-serializable objects (relaxer, slab)."""
+    """Copy GO kwargs for JSON metadata, dropping non-serializable objects.
+
+    ``relaxer``, ``adsorbate_fragment_template`` and ``cluster_adsorbate_config``
+    are dropped; ``surface_config`` is replaced by a plain-dict slab summary.
+
+    Raises:
+        SCGOValidationError: If ``surface_config`` is set but is not a
+            :class:`~scgo.surface.config.SurfaceSystemConfig`.
+    """
     gok = global_optimizer_kwargs.copy()
     gok.pop("relaxer", None)
     gok.pop("adsorbate_fragment_template", None)
@@ -351,7 +437,7 @@ def _sanitize_global_optimizer_kwargs_for_metadata(
         gok["surface_config"] = {
             "present": True,
             "n_slab_atoms": n_slab,
-            "slab_chemical_symbols": list(slab.get_chemical_symbols()),
+            "slab_chemical_symbols": slab.get_chemical_symbols(),
             "surface_normal_axis": surface_config.surface_normal_axis,
             "fix_all_slab_atoms": surface_config.fix_all_slab_atoms,
             "n_fix_bottom_slab_layers": surface_config.n_fix_bottom_slab_layers,
@@ -367,16 +453,10 @@ def _sanitize_global_optimizer_kwargs_for_metadata(
 
 
 # Algorithm registry
-_ALGORITHM_REGISTRY: dict[str, dict[str, Any]] = {
-    "simple": {
-        "function": simple_go,
-    },
-    "bh": {
-        "function": bh_go,
-    },
-    "ga": {
-        "function": ga_go,
-    },
+_ALGORITHM_REGISTRY: dict[str, Callable[..., list[tuple[float, Atoms]]]] = {
+    "simple": simple_go,
+    "bh": bh_go,
+    "ga": ga_go,
 }
 
 
@@ -393,7 +473,6 @@ def _require_calculator(calculator: Calculator | None) -> Calculator:
 def _validate_common_run_inputs(
     *,
     composition: list[str],
-    global_optimizer: str,
     global_optimizer_kwargs: dict[str, Any],
     output_dir: str,
     rng: np.random.Generator,
@@ -429,6 +508,56 @@ def _validate_common_run_inputs(
         raise SCGOValidationError("verbosity must be one of 0, 1, 2, or 3")
 
 
+def _gate_structurally_valid_candidates(
+    candidates: list[tuple[float, Atoms]],
+    system_type: str,
+    surface_config: SurfaceSystemConfig | None,
+    n_slab: int | None,
+    global_optimizer_kwargs: dict[str, Any],
+    cluster_adsorbate_config: object,
+) -> list[tuple[float, Atoms]]:
+    """Run the final structural gate over dedup'd candidates.
+
+    ``n_slab`` is applied uniformly when given; for non-surface systems it is
+    ``None`` and resolved per-candidate from the ``n_slab_atoms`` tag.
+    """
+    valid: list[tuple[float, Atoms]] = []
+    for energy, atoms in candidates:
+        resolved_n_slab = (
+            n_slab if n_slab is not None else (get_tag(atoms, "n_slab_atoms") or 0)
+        )
+        try:
+            validate_minimum_structure(
+                atoms,
+                system_type=system_type,
+                surface_config=surface_config,
+                n_slab=resolved_n_slab,
+                adsorbate_definition=global_optimizer_kwargs.get(
+                    "adsorbate_definition"
+                ),
+                cluster_adsorbate_config=cluster_adsorbate_config,
+                allow_cluster_fragmentation=global_optimizer_kwargs.get(
+                    "allow_cluster_fragmentation", False
+                ),
+                allow_adsorbate_surface_detachment=global_optimizer_kwargs.get(
+                    "allow_adsorbate_surface_detachment", False
+                ),
+                enforce_adsorbate_subgraph_integrity=global_optimizer_kwargs.get(
+                    "enforce_adsorbate_subgraph_integrity", True
+                ),
+            )
+        except SCGOValidationError as exc:
+            logger.warning(
+                "Dropping dedup'd candidate (E=%.4f eV) failing final structural "
+                "gate: %s",
+                energy,
+                exc,
+            )
+            continue
+        valid.append((energy, atoms))
+    return valid
+
+
 def scgo(
     composition: list[str],
     global_optimizer: str,
@@ -459,13 +588,12 @@ def scgo(
         List of (energy, Atoms) for minima.
 
     Raises:
-        ValueError: For invalid parameters.
+        SCGOValidationError: For invalid parameters (unknown ``global_optimizer``,
+            missing ``system_type``, missing calculator, or unusable
+            ``surface_config`` / ``adsorbate_definition``).
     """
-    logger = get_logger(__name__)
-
     _validate_common_run_inputs(
         composition=composition,
-        global_optimizer=global_optimizer,
         global_optimizer_kwargs=global_optimizer_kwargs,
         output_dir=output_dir,
         rng=rng,
@@ -488,10 +616,11 @@ def scgo(
             f"Unknown global_optimizer: {global_optimizer}. "
             f"Must be one of {list(_ALGORITHM_REGISTRY.keys())}"
         )
-    optimizer_kwargs = filter_dict_keys(
-        global_optimizer_kwargs,
-        {"run_id", "clean", "timing_output_dir", "timing_collector"},
-    )
+    optimizer_kwargs = {
+        k: v
+        for k, v in global_optimizer_kwargs.items()
+        if k not in {"run_id", "clean", "timing_output_dir", "timing_collector"}
+    }
     timing_kwargs: dict[str, Any] = {}
     if timing_output_dir is not None:
         timing_kwargs["timing_output_dir"] = timing_output_dir
@@ -515,29 +644,34 @@ def scgo(
         if isinstance(surface_cfg, SurfaceSystemConfig)
         else None,
     )
-    ads_def = optimizer_kwargs.get("adsorbate_definition")
-    if isinstance(ads_def, dict) and policy.has_adsorbate:
-        composition = resolve_mobile_composition(composition, ads_def, context="scgo")
+    ads_def = as_adsorbate_definition(optimizer_kwargs.get("adsorbate_definition"))
+    if ads_def is not None:
+        optimizer_kwargs["adsorbate_definition"] = ads_def
+    if ads_def is not None and policy.has_adsorbate:
+        composition, ads_def = resolve_mobile_composition(
+            composition, ads_def, context="scgo"
+        )
+        optimizer_kwargs["adsorbate_definition"] = ads_def
     validate_adsorbate_definition(
         system_type=system_type,
         composition=composition,
-        adsorbate_definition=optimizer_kwargs.get("adsorbate_definition"),
+        adsorbate_definition=ads_def,
         context="scgo",
     )
-    if policy.has_adsorbate and not policy.uses_surface:
-        ads_def = optimizer_kwargs.get("adsorbate_definition")
-        if isinstance(ads_def, dict):
-            core_symbols = [str(s) for s in ads_def.get("core_symbols", [])]
-            if len(core_symbols) == 0:
-                logger.info(
-                    "Gas adsorbate run with empty core_symbols: skipping global optimization."
-                )
-                return []
+    if (
+        policy.has_adsorbate
+        and not policy.uses_surface
+        and ads_def is not None
+        and ads_def.n_core == 0
+    ):
+        logger.info(
+            "Gas adsorbate run with empty core_symbols: skipping global optimization"
+        )
+        return []
 
     ensure_directory_exists(output_dir)
 
-    algo_config = _ALGORITHM_REGISTRY[optimizer_name_lower]
-    algo_function = algo_config["function"]
+    algo_function = _ALGORITHM_REGISTRY[optimizer_name_lower]
 
     if optimizer_name_lower == "ga":
         all_minima = ga_go(
@@ -579,12 +713,15 @@ def scgo(
             else:
                 optimizer_kwargs.setdefault("n_slab", len(surface_config.slab))
         elif policy.has_adsorbate:
-            ads_def = optimizer_kwargs.get("adsorbate_definition")
-            if not isinstance(ads_def, dict):
+            ads_def = as_adsorbate_definition(
+                optimizer_kwargs.get("adsorbate_definition")
+            )
+            if ads_def is None:
                 raise SCGOValidationError(
                     f"system_type={system_type!r} requires adsorbate_definition in "
                     f"global_optimizer_kwargs for {optimizer_name_lower.upper()}."
                 )
+            optimizer_kwargs["adsorbate_definition"] = ads_def
             if optimizer_kwargs.get("adsorbate_fragment_template") is None:
                 raise SCGOValidationError(
                     f"system_type={system_type!r} requires adsorbate_fragment_template "
@@ -628,7 +765,7 @@ def scgo(
         )
 
     if not all_minima:
-        logger.info("Global optimization finished but found no valid minima.")
+        logger.info("Global optimization finished but found no valid minima")
         return []
 
     for _, atoms_obj in all_minima:
@@ -648,12 +785,13 @@ def run_trials(
     fmax_threshold: float = 0.05,
     check_hessian: bool = True,
     imag_freq_threshold: float = 50.0,
-    validation_n_jobs: int = 1,
+    validation_n_jobs: int | None = None,
     tag_final_minima: bool = True,
     verbosity: int = 1,
     run_id: str | None = None,
     clean: bool = False,
     allow_metadata_mismatch: bool = False,
+    search_mobile_count: int | None = None,
 ) -> list[tuple[float, Atoms]]:
     """Run global optimization once, filter and validate results across runs.
 
@@ -665,18 +803,24 @@ def run_trials(
         rng: Random number generator.
         calculator_for_global_optimization: ASE calculator.
         validate_with_hessian: Whether to validate with Hessian.
+        check_hessian: Whether to compute the Hessian during validation.
+        imag_freq_threshold: Imaginary-frequency cutoff for validation (cm^-1).
+        validation_n_jobs: Parallel workers for Hessian/force validation; ``None``
+            inherits the top-level ``params["n_jobs"]`` (and defaults to
+            ``DEFAULT_N_JOBS`` when that is also unset).
         verbosity: Verbosity level.
         run_id: Optional run ID.
         clean: Start fresh if True.
+        search_mobile_count: Optional trailing-mobile atom count used as
+            ``n_top`` for uniqueness filtering. When omitted, defaults to
+            ``len(composition)``. Slab-target runs pass the true mobile count
+            here so dedupe does not collapse distinct top-layer geometries.
 
     Returns:
         List of (energy, Atoms) for unique minima.
     """
-    logger = get_logger(__name__)
-
     _validate_common_run_inputs(
         composition=composition,
-        global_optimizer=global_optimizer,
         global_optimizer_kwargs=global_optimizer_kwargs,
         output_dir=output_dir,
         rng=rng,
@@ -710,6 +854,9 @@ def run_trials(
         system_type=system_type_for_path,
         params=global_optimizer_kwargs,
     )
+    # Slab-target runs have an empty composition (and thus empty chemical
+    # formula); fall back to the directory identity so ``formula`` is never empty.
+    metadata_formula = composition_str or path_key
 
     # Save run metadata (include formula and run parameters for traceability)
     gok_for_metadata = _sanitize_global_optimizer_kwargs_for_metadata(
@@ -729,8 +876,9 @@ def run_trials(
         run_output_dir,
         run_id,
         record={
+            "path_key": path_key,
             "composition": composition,
-            "formula": composition_str,
+            "formula": metadata_formula,
             "params": params,
         },
     )
@@ -749,8 +897,9 @@ def run_trials(
             )
             if previous_minima:
                 logger.info(
-                    f"Loaded {len(previous_minima)} minima from previous runs "
-                    f"(excluding current run {run_id})"
+                    "Loaded %s minima from previous runs (excluding current run %s)",
+                    len(previous_minima),
+                    run_id,
                 )
 
     all_raw_minima = []
@@ -776,13 +925,15 @@ def run_trials(
     if previous_minima:
         all_minima_for_filtering = previous_minima + all_raw_minima
         logger.info(
-            f"Combined {len(previous_minima)} previous + {len(all_raw_minima)} current minima"
+            "Combined %s previous + %s current minima",
+            len(previous_minima),
+            len(all_raw_minima),
         )
     else:
         all_minima_for_filtering = all_raw_minima
 
     if not all_minima_for_filtering:
-        logger.info("No minima found.")
+        logger.info("No minima found")
         _write_results_summary(
             output_dir=output_dir,
             final_minima=[],
@@ -793,9 +944,10 @@ def run_trials(
         return []
 
     logger.info(
-        f"Run complete. Found {len(all_raw_minima)} raw minima from current run."
+        "Run complete. Found %s raw minima from current run",
+        len(all_raw_minima),
     )
-    logger.info("Filtering for unique structures across all runs...")
+    logger.info("Filtering for unique structures across all runs")
     surface_cfg = global_optimizer_kwargs.get("surface_config")
     system_type_for_mic = global_optimizer_kwargs.get("system_type")
     if not isinstance(system_type_for_mic, str):
@@ -803,14 +955,67 @@ def run_trials(
             "system_type must be set in global_optimizer_kwargs for minima dedupe."
         )
     dedupe_mic = resolve_structure_mic(system_type_for_mic, surface_cfg)
+    dedupe_n_top = (
+        int(search_mobile_count)
+        if search_mobile_count is not None
+        else len(composition)
+    )
     unique_candidates = filter_unique_minima(
         all_minima_for_filtering,
-        n_top=len(composition),
+        n_top=dedupe_n_top,
         mic=dedupe_mic,
     )
-    logger.info(f"Found {len(unique_candidates)} unique candidates.")
+    logger.info("Found %s unique candidates", len(unique_candidates))
 
+    # Final structural gate on the dedup'd candidates so *every* final minimum
+    # passes connectivity / connected-components checks regardless of which
+    # algorithm produced it (simple/BH/GA already gate internally; this is a
+    # defense-in-depth backstop before the physical hessian/vibration gate).
+    gate_system_type = str(system_type_for_mic)
+    gate_policy = get_system_policy(gate_system_type)
+    gate_surface_config_raw = global_optimizer_kwargs.get("surface_config")
+    gate_cluster_adsorbate_config_raw = global_optimizer_kwargs.get(
+        "cluster_adsorbate_config"
+    )
+    if gate_policy.uses_surface:
+        sc = gate_surface_config_raw
+        if sc is None:
+            logger.warning(
+                "Surface system %s missing surface_config at final gate; "
+                "skipping structural validation",
+                gate_system_type,
+            )
+            structurally_valid = list(unique_candidates)
+        else:
+            if gate_policy.slab_is_search_target:
+                prepared_sc, _ = prepare_slab_search_surface_config(sc)
+                gate_surface_config = prepared_sc
+            else:
+                gate_surface_config = sc
+            gate_n_slab = len(gate_surface_config.slab)
+            structurally_valid = _gate_structurally_valid_candidates(
+                unique_candidates,
+                gate_system_type,
+                gate_surface_config,
+                gate_n_slab,
+                global_optimizer_kwargs,
+                gate_cluster_adsorbate_config_raw,
+            )
+    else:
+        structurally_valid = _gate_structurally_valid_candidates(
+            unique_candidates,
+            gate_system_type,
+            gate_surface_config_raw,
+            None,
+            global_optimizer_kwargs,
+            gate_cluster_adsorbate_config_raw,
+        )
+    unique_candidates = structurally_valid
     if not unique_candidates:
+        logger.info(
+            "All dedup'd candidates rejected by the final structural gate; "
+            "no minima to validate."
+        )
         _write_results_summary(
             output_dir=output_dir,
             final_minima=[],
@@ -822,7 +1027,8 @@ def run_trials(
 
     if validate_with_hessian:
         logger.info(
-            f"Validating {len(unique_candidates)} unique candidates to confirm they are true minima...",
+            "Validating %s unique candidates to confirm they are true minima...",
+            len(unique_candidates),
         )
 
         # Ensure validation runs in a separate directory to avoid overwriting run files
@@ -832,51 +1038,34 @@ def run_trials(
             calculator_for_global_optimization.directory = val_dir
 
         validated_minima = []
-        n_validate_workers = (
-            resolve_n_jobs_to_workers(validation_n_jobs)
-            if check_hessian and validation_n_jobs != 1
-            else 1
-        )
         payloads = [
             (energy, atoms, fmax_threshold, check_hessian, imag_freq_threshold)
             for energy, atoms in unique_candidates
         ]
+        n_validate_workers = (
+            resolve_n_jobs_for_tasks(validation_n_jobs, len(payloads))
+            if check_hessian
+            else 1
+        )
 
+        parallel_ok = False
         if (
             n_validate_workers > 1
             and len(payloads) >= _MIN_PARALLEL_VALIDATION_CANDIDATES
         ):
-            logger.info(
-                "Validating %d unique candidates with %d parallel workers...",
-                len(payloads),
+            parallel_ok, validated_minima = _validate_candidates_parallel(
+                calculator_for_global_optimization,
+                payloads,
                 n_validate_workers,
             )
-            with ProcessPoolExecutor(
-                max_workers=min(n_validate_workers, len(payloads)),
-                initializer=_init_validation_worker,
-                initargs=(calculator_for_global_optimization,),
-            ) as executor:
-                futures = [
-                    executor.submit(_validate_minimum_worker, payload)
-                    for payload in payloads
-                ]
-                for i, future in enumerate(as_completed(futures), 1):
-                    try:
-                        validated = future.result()
-                    except (
-                        OSError,
-                        RuntimeError,
-                        ValueError,
-                        SCGOValidationError,
-                    ) as e:
-                        logger.warning("Validation failed for candidate %d: %s", i, e)
-                        continue
-                    if validated is not None:
-                        validated_minima.append(validated)
-        else:
+
+        if not parallel_ok:
             for i, (energy, atoms) in enumerate(unique_candidates):
                 logger.info(
-                    f"Validating candidate {i + 1}/{len(unique_candidates)} (E={energy:.4f} eV)...",
+                    "Validating candidate %s/%s (E=%.4f eV)...",
+                    i + 1,
+                    len(unique_candidates),
+                    energy,
                 )
                 try:
                     is_valid = is_true_minimum(
@@ -889,15 +1078,19 @@ def run_trials(
                     if is_valid:
                         validated_minima.append((energy, atoms))
                     else:
-                        logger.info(f"Candidate {i + 1} rejected")
+                        logger.info("Candidate %s rejected", i + 1)
                 except (OSError, RuntimeError, ValueError, SCGOValidationError) as e:
                     logger.warning(
-                        f"Validation failed for candidate {i + 1} (E={energy:.4f} eV): {e}"
+                        "Validation failed for candidate %s (E=%.4f eV): %s",
+                        i + 1,
+                        energy,
+                        e,
+                        exc_info=(verbosity >= 2),
                     )
 
         if not validated_minima:
             logger.info(
-                "Validation finished. No candidates were confirmed as true minima."
+                "Validation finished. No candidates were confirmed as true minima"
             )
             _write_results_summary(
                 output_dir=output_dir,
@@ -913,12 +1106,14 @@ def run_trials(
         final_minima = unique_candidates
 
     best_energy, _ = final_minima[0]
-    logger.info(f"Process complete. Found {len(final_minima)} final unique minima.")
-    logger.info(f"Best potential energy: {best_energy:.4f} eV")
+    logger.info("Process complete. Found %s final unique minima", len(final_minima))
+    logger.info("Best potential energy: %.4f eV", best_energy)
 
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")
     logger.info(
-        f'Writing {len(final_minima)} final structures to "{os.path.basename(final_xyz_dir)}"'
+        'Writing %s final structures to "%s"',
+        len(final_minima),
+        os.path.basename(final_xyz_dir),
     )
 
     # Write results summary file (composition_str already cached above)
@@ -1036,9 +1231,15 @@ def run_trials(
     if tag_final_minima:
         try:
             mark_final_minima_in_db(final_minima_info, base_dir=output_dir)
-        except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
+        except (
+            sqlite3.DatabaseError,
+            sqlite3.OperationalError,
+            OSError,
+            SCGODatabaseError,
+            SCGOFileError,
+        ) as e:
             # Consider DB tagging a systemic failure -- surface it after logging
-            logger.warning(f"Failed to tag final minima in DB: {e}")
+            logger.warning("Failed to tag final minima in DB: %s", e)
             raise
 
     return final_minima
@@ -1060,8 +1261,6 @@ def _write_results_summary(
         run_id: Current run ID.
         params: Same snapshot as ``run_*/metadata.json`` (optimizer, trials, etc.).
     """
-    logger = get_logger(__name__)
-
     # Count structures by run_id
     run_counts = Counter()
     for _, atoms in final_minima:
@@ -1090,7 +1289,7 @@ def _write_results_summary(
         with open(summary_file, "w") as f:
             json.dump(summary, f, indent=2, cls=RunDirJSONEncoder)
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Wrote results summary to {summary_file}")
+            logger.debug("Wrote results summary to %s", summary_file)
     except (OSError, TypeError) as e:
-        logger.warning(f"Failed to write results summary: {e}")
+        logger.warning("Failed to write results summary: %s", e)
         raise

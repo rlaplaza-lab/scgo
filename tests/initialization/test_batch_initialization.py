@@ -4,6 +4,7 @@ from collections import Counter
 
 import pytest
 
+from scgo.exceptions import SCGOValidationError
 from scgo.initialization import compute_cell_side, create_initial_cluster_batch
 from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
@@ -23,7 +24,7 @@ from scgo.initialization.initializers import (
     _find_valid_seed_combinations,
 )
 from scgo.utils.helpers import get_composition_counts
-from tests.test_utils import (
+from tests.helpers import (
     assert_cluster_valid,
     create_paired_rngs,
     get_structure_signature,
@@ -366,7 +367,11 @@ def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
             1 + n_templates * TEMPLATE_PREFACTOR
         )
         expected_template_raw = int(n_structures * template_scaling)
-        expected_template = min(expected_template_raw, 2 * n_templates, n_structures)
+        # Template allocations are additionally capped by the number of available
+        # templates (each template is used at most once when structures are plentiful).
+        expected_template = min(
+            expected_template_raw, 2 * n_templates, n_structures, n_templates
+        )
     else:
         expected_template = 0
 
@@ -552,3 +557,33 @@ def test_create_initial_cluster_batch_parallel(rng):
     from ase import Atoms
 
     assert all(isinstance(r, Atoms) for r in results)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"placement_radius_scaling": 0.0},
+            "placement_radius_scaling must be positive",
+        ),
+        (
+            {"placement_radius_scaling": -1.0},
+            "placement_radius_scaling must be positive",
+        ),
+        ({"min_distance_factor": -0.1}, "min_distance_factor must be non-negative"),
+        ({"vacuum": -1.0}, "vacuum must be non-negative"),
+    ],
+)
+def test_create_initial_cluster_batch_rejects_invalid_numeric_params(
+    rng, kwargs, match
+):
+    """Batch path rejects the same invalid numeric inputs as the single wrapper."""
+    with pytest.raises(SCGOValidationError, match=match):
+        create_initial_cluster_batch(
+            composition=["Pt", "Pt"],
+            n_structures=1,
+            rng=rng,
+            mode="random_spherical",
+            n_jobs=1,
+            **kwargs,
+        )

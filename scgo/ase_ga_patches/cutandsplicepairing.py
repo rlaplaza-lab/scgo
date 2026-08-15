@@ -1,3 +1,5 @@
+"""Implementation of the cut-and-splice paring operator."""
+
 # fmt: off
 
 from __future__ import annotations
@@ -6,7 +8,6 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 
-"""Implementation of the cut-and-splice paring operator."""
 import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
@@ -14,15 +15,41 @@ from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import (
     atoms_too_close,
     atoms_too_close_two_sets,
-    gather_atoms_by_tag,
 )
 
+from scgo.ase_ga_patches._tag_gather import (
+    gather_atoms_by_tag,
+    periodic_sheet_tag_to_skip,
+)
 from scgo.ase_ga_patches._vector_utils import (
     append_unique_unit_vector as _append_unique_unit_vector,
 )
 from scgo.ase_ga_patches._vector_utils import random_unit_vector as _random_unit_vector
 from scgo.system_types import uses_surface
+from scgo.utils.helpers import get_composition_counts
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
+
+
+def _assert_offspring_integrity(child: Atoms, parent: Atoms) -> None:
+    """Post-crossover guard: offspring must keep parent atom count and stoichiometry.
+
+    Catches bugs where cut-and-splice drops or duplicates atoms (e.g. the slab
+    prepend, the mobile-slice selection, or the symbol-ordering reconstruction).
+    """
+    if len(child) != len(parent):
+        raise SCGOValidationError(
+            f"{parent.info.get('key', 'CutAndSplicePairing')} produced "
+            f"{len(child)} atoms; expected {len(parent)} "
+            f"(slab + n_top)."
+        )
+    if get_composition_counts(
+        child.get_chemical_symbols()
+    ) != get_composition_counts(parent.get_chemical_symbols()):
+        raise SCGOValidationError(
+            f"CutAndSplicePairing changed stoichiometry: "
+            f"{dict(get_composition_counts(child.get_chemical_symbols()))} vs "
+            f"{dict(get_composition_counts(parent.get_chemical_symbols()))}."
+        )
 
 
 class Positions:
@@ -83,7 +110,7 @@ class CutAndSplicePairing(OffspringCreator):
     described in:
 
     :doi:`L.B. Vilhelmsen and B. Hammer, PRL, 108, 126101 (2012)
-    <10.1103/PhysRevLett.108.126101`>
+    <10.1103/PhysRevLett.108.126101>`
 
     The extension to variable unit cells is similar to:
 
@@ -163,7 +190,7 @@ class CutAndSplicePairing(OffspringCreator):
         the atoms and the slab satisfy the blmin.
 
     rng: Random number generator
-        By default numpy.random.
+        Must be an instance of ``np.random.Generator`` or ``None``.
 
     """
 
@@ -178,7 +205,10 @@ class CutAndSplicePairing(OffspringCreator):
         self.slab = slab
         self.n_top = n_top
         self.blmin = blmin
-        assert number_of_variable_cell_vectors in range(4)
+        if number_of_variable_cell_vectors not in range(4):
+            raise SCGOValidationError(
+                "number_of_variable_cell_vectors must be 0, 1, 2, or 3"
+            )
         self.number_of_variable_cell_vectors = number_of_variable_cell_vectors
         self.p1 = p1
         self.p2 = p2
@@ -331,11 +361,15 @@ class CutAndSplicePairing(OffspringCreator):
         return cut_candidates[:12]
 
     def update_scaling_volume(self, population, w_adapt=0.5, n_adapt=0):
-        """Updates the scaling volume that is used in the pairing
+        """Updates the scaling volume that is used in the pairing.
 
-        w_adapt: weight of the new vs the old scaling volume
-        n_adapt: number of best candidates in the population that
-                 are used to calculate the new scaling volume
+        Parameters
+        ----------
+        w_adapt : float
+            Weight of the new vs. the old scaling volume.
+        n_adapt : int
+            Number of best candidates in the population that
+            are used to calculate the new scaling volume.
         """
         if not n_adapt:
             # take best 20% of the population
@@ -370,6 +404,7 @@ class CutAndSplicePairing(OffspringCreator):
 
     def cross(self, a1, a2):
         """Crosses the two atoms objects and returns one"""
+        parent_full = a1
         if len(a1) != len(self.slab) + self.n_top:
             raise SCGOValidationError("Wrong size of structure to optimize")
         if len(a1) != len(a2):
@@ -393,40 +428,51 @@ class CutAndSplicePairing(OffspringCreator):
         cell2 = a2.get_cell()
         for i in range(self.number_of_variable_cell_vectors, 3):
             err = "Unit cells are supposed to be identical in direction %d"
-            assert np.allclose(cell1[i], cell2[i]), (err % i, cell1, cell2)
+            if not np.allclose(cell1[i], cell2[i]):
+                raise SCGOValidationError(err % i)
 
         counter = 0
         maxcount = self.max_pairing_attempts
         a1_copy = a1.copy()
         a2_copy = a2.copy()
+        # Crossover builds cartesian coordinates. SHAKE/FixBondLengths belongs
+        # to local relaxation, not to pairing geometry.
+        a1_copy.set_constraint()
+        a2_copy.set_constraint()
         self.last_attempt_count = 0
 
+        # The unit cell and the candidate cut configurations depend only on the
+        # parent cells / geometry, which are constant for the duration of one
+        # cross() call (the parents are never reassigned inside the loop). Compute
+        # each exactly once here instead of on every while-iteration, so repeated
+        # pairing attempts vary only by the random per-atom translation, not by
+        # re-drawing the cell / cut plane. For the fixed-cell branch the cell is
+        # just cell1 (deterministic); for the variable-cell branch the random
+        # draw now happens once, not once per attempt.
         newcell = self.generate_unit_cell(cell1, cell2)
         if newcell is None:
             return None
 
-        cached_cut_configs = None
         if self.number_of_variable_cell_vectors == 0:
             for a_copy, a in zip([a1_copy, a2_copy], [a1, a2], strict=False):
                 a_copy.set_positions(a.get_positions())
                 if self.use_tags:
-                    gather_atoms_by_tag(a_copy)
+                    gather_atoms_by_tag(
+                        a_copy,
+                        skip_tag=periodic_sheet_tag_to_skip(self.system_type),
+                    )
                 elif not uses_surface(self.system_type):
                     a_copy.center()
-            cached_cut_configs = self._candidate_cut_configurations(
-                a1_copy,
-                a2_copy,
-                newcell,
-            )
+
+        cached_cut_configs = self._candidate_cut_configurations(
+            a1_copy,
+            a2_copy,
+            newcell,
+        )
 
         # Run until a valid pairing is made or maxcount pairings are tested.
         while counter < maxcount:
             counter += 1
-
-            if self.number_of_variable_cell_vectors != 0:
-                newcell = self.generate_unit_cell(cell1, cell2)
-                if newcell is None:
-                    break
 
             cut_n = None
             if self.number_of_variable_cell_vectors != 0:
@@ -450,21 +496,17 @@ class CutAndSplicePairing(OffspringCreator):
                     # of-position of the multi-atom blocks,
                     # we need to group their constituent atoms
                     # together
-                    gather_atoms_by_tag(a_copy)
+                    gather_atoms_by_tag(
+                        a_copy,
+                        skip_tag=periodic_sheet_tag_to_skip(self.system_type),
+                    )
                 else:
                     # For clusters, just center without wrapping. For slab+adsorbate
                     # the top fragment must stay in the parent frame (no global center).
                     if not uses_surface(self.system_type):
                         a_copy.center()
 
-            if cached_cut_configs is not None:
-                cut_configurations = cached_cut_configs
-            else:
-                cut_configurations = self._candidate_cut_configurations(
-                    a1_copy,
-                    a2_copy,
-                    newcell,
-                )
+            cut_configurations = cached_cut_configs
 
             for _score, cut_p, cut_normal in cut_configurations:
                 self.last_attempt_count += 1
@@ -484,6 +526,7 @@ class CutAndSplicePairing(OffspringCreator):
                     continue
 
                 child = self.slab + child
+                _assert_offspring_integrity(child, parent_full)
                 child.set_cell(newcell, scale_atoms=False)
                 if not uses_surface(self.system_type):
                     child.center()
@@ -514,7 +557,8 @@ class CutAndSplicePairing(OffspringCreator):
 
         # Now the cell vectors
         if self.number_of_variable_cell_vectors == 0:
-            assert np.allclose(cell1, cell2), "Parent cells are not the same"
+            if not np.allclose(cell1, cell2):
+                raise SCGOValidationError("Parent cells are not the same")
             newcell = np.copy(cell1)
             self.last_cell_attempt_count = 1
         else:
@@ -590,8 +634,11 @@ class CutAndSplicePairing(OffspringCreator):
                 # crossover is requested for only a subset (e.g., core-only).
                 # Without this, those groups disappear from ``sym`` and offspring
                 # generation can become impossible for odd-sized target subsets.
+                # ``d > 0`` makes ``to_use()`` True only for the parent-0 copy
+                # (``origin == 0``), so the parent-1 copy is deterministically
+                # discarded instead of being pruned at random.
                 if self.target_tags is not None and not is_target_tag:
-                    d = 1.0 if parent_idx == 0 else -1.0
+                    d = 1.0
                 spos = a.get_scaled_positions()[indices]
                 scop = np.mean(spos, axis=0)
                 p.append(
@@ -633,7 +680,10 @@ class CutAndSplicePairing(OffspringCreator):
                 else:
                     not_used.append(all_points.pop(i))
 
-            assert len(used) + len(not_used) == types[s] * 2
+            if len(used) + len(not_used) != types[s] * 2:
+                raise SCGOValidationError(
+                    f"Internal pairing bookkeeping mismatch for type {s}"
+                )
 
             # While we have too few of the given atom type
             while len(used) < types[s]:
@@ -649,7 +699,8 @@ class CutAndSplicePairing(OffspringCreator):
             use_total[s] = used
 
         n_tot = sum(len(ll) for ll in use_total.values())
-        assert n_tot == len(sym)
+        if n_tot != len(sym):
+            raise SCGOValidationError("Internal pairing bookkeeping mismatch")
 
         # Check if the generated structure contains enough atoms from both
         # parents. For target-tag crossover, enforce this on the target subset
@@ -741,9 +792,19 @@ class DualCutAndSplicePairing:
         self.rng = _ensure_rng(rng)
 
     def get_new_individual(self, parents):
-        if self.rng.random() < self.exploratory_probability:
-            return self.exploratory.get_new_individual(parents)
-        return self.primary.get_new_individual(parents)
+        f, m = parents
+        use_exploratory = self.rng.random() < self.exploratory_probability
+        indi, desc = (
+            self.exploratory.get_new_individual(parents)
+            if use_exploratory
+            else self.primary.get_new_individual(parents)
+        )
+        if indi is not None and len(indi) != len(f):
+            raise SCGOValidationError(
+                "DualCutAndSplicePairing produced "
+                f"{len(indi)} atoms; expected {len(f)}."
+            )
+        return indi, desc
 
     def update_scaling_volume(self, population, **kwargs):
         self.primary.update_scaling_volume(population, **kwargs)

@@ -1,8 +1,8 @@
 """MACE machine learning potential wrapper for cluster optimization.
 
-This module provides a simplified wrapper around the MACE-MP pretrained models,
-handling device selection and initialization for seamless integration with
-global optimization workflows.
+This module provides a simplified wrapper around the MACE foundation models
+loaded through ``mace_mp``, handling device selection and initialization for
+seamless integration with global optimization workflows.
 """
 
 from __future__ import annotations
@@ -12,10 +12,7 @@ from typing import Any
 
 import torch
 
-from scgo.utils.mlip_extras import (
-    clear_torch_force_no_weights_only_load_env,
-    ensure_mace_uma_not_both_installed,
-)
+from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
 _torch_load_patched = False
 
@@ -35,14 +32,20 @@ def _ensure_torch_load_mace_checkpoints() -> None:
     _orig_load = torch.load
 
     def _load(*args: Any, **kwargs: Any) -> Any:
-        if "weights_only" not in kwargs:
-            kwargs["weights_only"] = False
+        # MACE/torch-sim foundation checkpoints pickle full model graphs with many
+        # custom globals (e.g. ``slice`` in ``constants.pt``). PyTorch 2.6+ defaults
+        # ``weights_only=True``, and some call sites pass it explicitly, so force
+        # it off here: SCGO only loads foundation checkpoints from trusted sources
+        # (same policy as upstream MACE).
+        kwargs["weights_only"] = False
         return _orig_load(*args, **kwargs)
 
     torch.load = _load  # type: ignore[method-assign]
 
 
-clear_torch_force_no_weights_only_load_env()
+# e3nn/o3/_wigner.py unpickles constants.pt via torch.load at import time.
+# PyTorch >=2.6 defaults weights_only=True and rejects the `slice` global; force
+# it off here (trusted MACE foundation checkpoints only) before the mace import.
 _ensure_torch_load_mace_checkpoints()
 
 from ase import Atoms
@@ -63,16 +66,12 @@ class MaceUrls(StrEnum):
 
 
 class MACE(Calculator):
-    """A wrapper for the MACE-MP-0 calculator for global optimization.
+    """A wrapper for MACE foundation-model calculators for global optimization.
 
     This class simplifies the initialization of a MACE calculator, handling
     automatic device selection (CUDA/MPS/CPU) and model loading. It serves as a
     standard ASE-compliant calculator, making it easy to integrate MACE into
     global optimization workflows.
-
-    Attributes:
-        implemented_properties (list): A list of properties that this calculator
-                                     can compute, which are "energy" and "forces".
 
     """
 
@@ -99,7 +98,7 @@ class MACE(Calculator):
             default_dtype: The default floating-point precision for calculations.
                 "float64" is recommended for stable optimizations.
                 Defaults to "float64".
-            **kwargs: Additional keyword arguments passed to the base ASE
+            ``**kwargs``: Additional keyword arguments passed to the base ASE
                 Calculator class.
         """
         ensure_mace_uma_not_both_installed()
@@ -113,20 +112,24 @@ class MACE(Calculator):
         else:
             model_selector = model_name
 
-        name = f"MACE-{model_name}"
-        # Pass the constructed name to the parent class initializer.
-        super().__init__(name=name, **kwargs)
+        super().__init__(**kwargs)
         self.model_name = model_name
+        # Store the resolved device so downstream helpers (e.g. TorchSim model
+        # extraction) can honour an explicit device="cpu" instead of guessing.
+        self.device = selected_device
 
         logger = get_logger(__name__)
         logger.info(
-            f'Initializing MACE calculator ("{model_name}" model) on device: "{selected_device}"',
+            'Initializing MACE calculator ("%s" model) on device: "%s"',
+            model_name,
+            selected_device,
         )
 
-        _ensure_torch_load_mace_checkpoints()
-        # The mace_mp function from mace.calculators automatically handles
-        # downloading and loading the specified pretrained MACE model.
-        # It returns a fully functional ASE calculator instance.
+        # The module-import-time patch (see ``_ensure_torch_load_mace_checkpoints``)
+        # permanently forces ``torch.load(weights_only=False)``, so the MACE
+        # checkpoint load below succeeds under PyTorch >=2.6 without a shim.
+        # mace_mp automatically handles downloading and loading the specified
+        # pretrained MACE model, returning a fully functional ASE calculator.
         self._mace_calc = mace_mp(
             model=model_selector,
             device=selected_device,
@@ -182,7 +185,12 @@ def infer_mace_model_name_from_calculator(calculator: Calculator) -> str | None:
 def try_extract_torchsim_model_from_mace_calculator(
     calculator: Calculator,
 ) -> object | None:
-    """Reuse the TorchSim/MACE model already loaded on an ASE MACE calculator."""
+    """Return the raw MACE torch module already loaded on an ASE MACE calculator.
+
+    Returns ``None`` when the calculator exposes no module (the caller then lets
+    TorchSim reload the checkpoint); TorchSim wraps the module in ``MaceModel``
+    before use.
+    """
     mace_calc = getattr(calculator, "_mace_calc", None)
     if mace_calc is None:
         return None

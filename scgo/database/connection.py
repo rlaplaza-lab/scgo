@@ -8,16 +8,66 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
+from ase.db.sqlite import SQLite3Database as _ASESQLiteDatabase
 from ase_ga.data import DataConnection
 
 from scgo.database.sync import PRESET_AGGRESSIVE, retry_on_lock
 from scgo.exceptions import (
-    SCGORuntimeError,
+    SCGODatabaseError,
     SCGOValidationError,
 )
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _force_close_ase_connection(conn: sqlite3.Connection) -> None:
+    """Reliably release an ASE-managed SQLite connection.
+
+    On CPython 3.12+ ``sqlite3.Connection.close()`` can be *deferred* when an
+    active statement is still associated with the connection. That deferred
+    close then surfaces as a ``ResourceWarning: unclosed database`` during
+    interpreter/GC teardown (e.g. pytest's ``gc_collect_harder``), even though
+    ASE already called ``close()``. Rolling back any open transaction before
+    closing forces the underlying handle to be released immediately.
+    """
+    with contextlib.suppress(sqlite3.Error, AttributeError):
+        conn.rollback()
+    with contextlib.suppress(sqlite3.Error, AttributeError):
+        conn.close()
+
+
+def _patch_ase_managed_connection() -> None:
+    """Wrap ASE's ``SQLite3Database.managed_connection`` so handles always close.
+
+    ASE opens ephemeral SQLite handles inside ``managed_connection`` and relies
+    on its own ``__exit__`` to commit and close them. Under heavy GC (pytest's
+    ``gc_collect_harder``) that deferred close can emit a ``ResourceWarning``.
+
+    This wrapper manually drives ASE's ``managed_connection`` generator so ASE's
+    own commit/close logic runs first, then force-closes the handle. Persistent
+    connections owned by ``self.connection`` are left intact for ASE to reuse
+    and close via its own context manager.
+    """
+    import sys
+
+    original = _ASESQLiteDatabase.managed_connection
+
+    @contextmanager
+    def _wrapped_managed_connection(self, commit_frequency=5000):
+        cm = original(self, commit_frequency)
+        conn = cm.__enter__()
+        try:
+            yield conn
+        finally:
+            cm.__exit__(*sys.exc_info()[:3])
+            if self.connection is None:
+                _force_close_ase_connection(conn)
+
+    _ASESQLiteDatabase.managed_connection = _wrapped_managed_connection
+
+
+_patch_ase_managed_connection()
 
 
 def _open_ase_db_backend(backend) -> None:
@@ -74,50 +124,6 @@ def _apply_scgo_sqlite_settings(
                 backend.__exit__(None, None, None)
 
 
-def configure_data_connection_settings(
-    da: DataConnection,
-    *,
-    busy_timeout: int = 30000,
-    wal_mode: bool = False,
-    cache_size_mb: int = 64,
-) -> None:
-    """Apply SCGO SQLite settings without leaving ASE's backend connection open.
-
-    ASE's ``with backend:`` context manager requires ``backend.connection`` to be
-    ``None`` on entry. Use this for long-lived :class:`~ase_ga.data.DataConnection`
-    objects (e.g. from :func:`~scgo.database.helpers.setup_database`) that will
-    manage connections via ``with da.c:`` or ``managed_connection()``.
-    """
-    _apply_scgo_sqlite_settings(
-        da,
-        busy_timeout=busy_timeout,
-        wal_mode=wal_mode,
-        cache_size_mb=cache_size_mb,
-        close_after=True,
-    )
-
-
-def activate_data_connection(
-    da: DataConnection,
-    *,
-    busy_timeout: int = 30000,
-    wal_mode: bool = False,
-    cache_size_mb: int = 64,
-) -> None:
-    """Open ASE's backend once and apply SCGO SQLite settings for a scoped session.
-
-    Used by :func:`get_connection` where the caller holds one persistent handle for
-    the entire context and closes it via :func:`close_data_connection`.
-    """
-    _apply_scgo_sqlite_settings(
-        da,
-        busy_timeout=busy_timeout,
-        wal_mode=wal_mode,
-        cache_size_mb=cache_size_mb,
-        close_after=False,
-    )
-
-
 def _apply_pragma(conn: sqlite3.Connection, statement: str) -> None:
     """Execute a PRAGMA statement, logging failures at debug level."""
     try:
@@ -162,16 +168,17 @@ def open_data_connection_for_setup(
 ) -> DataConnection:
     """Open a long-lived :class:`~ase_ga.data.DataConnection` for ``setup_database``.
 
-    Applies SCGO PRAGMAs via :func:`configure_data_connection_settings`, which performs
+    Applies SCGO PRAGMAs via :func:`_apply_scgo_sqlite_settings`, which performs
     the first SQLite open. Callers should wrap this in :func:`~scgo.database.sync.database_retry`
     when running on shared or contended filesystems.
     """
     da = DataConnection(str(db_path))
-    configure_data_connection_settings(
+    _apply_scgo_sqlite_settings(
         da,
         busy_timeout=busy_timeout,
         wal_mode=wal_mode,
         cache_size_mb=cache_size_mb,
+        close_after=True,
     )
     return da
 
@@ -185,11 +192,12 @@ def _open_data_connection(
 ) -> DataConnection:
     """Open a :class:`~ase_ga.data.DataConnection` and apply SCGO SQLite settings."""
     da = DataConnection(db_path)
-    activate_data_connection(
+    _apply_scgo_sqlite_settings(
         da,
         busy_timeout=busy_timeout,
         wal_mode=wal_mode,
         cache_size_mb=cache_size_mb,
+        close_after=False,
     )
     return da
 
@@ -271,6 +279,7 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
     if conn is None:
         return
 
+    # Release ASE's persistent handle first (commits + closes via __exit__).
     try:
         backend.__exit__(None, None, None)
     except (
@@ -280,9 +289,13 @@ def close_data_connection(da: DataConnection | None, log_errors: bool = True) ->
         AttributeError,
     ) as e:
         if log_errors:
-            logger.debug(f"Error closing database connection: {e}")
-        with contextlib.suppress(sqlite3.OperationalError, sqlite3.DatabaseError):
-            conn.close()
+            logger.debug("Error closing database connection: %s", e)
+
+    # Force-release any handle that ASE left open. On CPython 3.12+ the
+    # deferred close can otherwise surface as ``ResourceWarning`` during GC.
+    conn = getattr(backend, "connection", None)
+    if conn is not None:
+        _force_close_ase_connection(conn)
         backend.connection = None
 
 
@@ -328,7 +341,7 @@ def _ensure_sqlite_json1(
 
         _run_sqlite(db_path, _probe, timeout=5.0)
     except sqlite3.OperationalError as e:
-        raise SCGORuntimeError(
+        raise SCGODatabaseError(
             "SQLite JSON1 extension is required but not available. "
             "Please use a Python build or system SQLite with JSON1 support (e.g., install a sqlite3 package with JSON1 enabled)."
         ) from e

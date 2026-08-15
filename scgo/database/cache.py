@@ -24,12 +24,9 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from scgo.exceptions import SCGOValidationError
-
-K = TypeVar("K")
-V = TypeVar("V")
 
 
 class UnifiedCache:
@@ -40,7 +37,7 @@ class UnifiedCache:
     of cached data (e.g., "db_results", "metadata", "structures").
 
     The cache is thread-safe and uses LRU eviction when the maximum size
-    is exceeded. Cache metrics are tracked for monitoring performance.
+    is exceeded.
 
     Example:
         >>> cache = UnifiedCache(max_size=1000)
@@ -49,8 +46,6 @@ class UnifiedCache:
         >>> print(value)
         {'data': 42}
         >>> cache.clear_namespace("namespace1")
-        >>> print(cache.get_metrics())
-        {'hits': 1, 'misses': 0, 'evictions': 0, 'size': 0}
     """
 
     def __init__(self, max_size: int = 1000):
@@ -59,6 +54,9 @@ class UnifiedCache:
         Args:
             max_size: Maximum number of total entries across all namespaces
                      before LRU eviction begins
+
+        Raises:
+            SCGOValidationError: If ``max_size`` is not positive.
         """
         if max_size <= 0:
             raise SCGOValidationError("max_size must be a positive integer")
@@ -191,53 +189,6 @@ class UnifiedCache:
             for key in keys_to_remove:
                 del self._cache[key]
 
-    def clear(self) -> None:
-        """Clear all entries from the cache."""
-        with self._lock:
-            self._cache.clear()
-            # Reset metrics
-            self._hits = 0
-            self._misses = 0
-            self._evictions = 0
-
-    def get_metrics(self) -> dict[str, int]:
-        """Get cache performance metrics.
-
-        Returns:
-            Dictionary containing:
-                - hits: Number of cache hits
-                - misses: Number of cache misses
-                - evictions: Number of LRU evictions
-                - size: Current number of cached entries
-                - hit_rate: Hit rate as a percentage (0-100)
-        """
-        with self._lock:
-            total_requests = self._hits + self._misses
-            hit_rate = (
-                int(100 * self._hits / total_requests) if total_requests > 0 else 0
-            )
-            return {
-                "hits": self._hits,
-                "misses": self._misses,
-                "evictions": self._evictions,
-                "size": len(self._cache),
-                "hit_rate": hit_rate,
-            }
-
-    def __len__(self) -> int:
-        """Return the number of entries in the cache."""
-        with self._lock:
-            return len(self._cache)
-
-    def __contains__(self, item: tuple[str, Any]) -> bool:
-        """Check if (namespace, key) is in the cache.
-
-        Args:
-            item: Tuple of (namespace, key)
-        """
-        with self._lock:
-            return item in self._cache
-
 
 # Global cache instance
 _global_cache: UnifiedCache | None = None
@@ -245,7 +196,7 @@ _global_cache_lock = threading.Lock()
 
 
 def get_global_cache(max_size: int = 1000) -> UnifiedCache:
-    """Return the global cache singleton."""
+    """Return the global cache singleton (``max_size`` applies on creation only)."""
     global _global_cache
     if _global_cache is None:
         with _global_cache_lock:

@@ -16,11 +16,13 @@ from scgo.surface import deposition as deposition_module
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.surface.deposition import (
+    _place_cluster_above_slab,
     create_deposited_cluster,
     create_deposited_cluster_batch,
     slab_surface_extreme,
 )
 from scgo.surface.objectives import adsorption_energy
+from scgo.system_types import AdsorbateDefinition
 
 
 @pytest.fixture
@@ -76,6 +78,37 @@ def test_create_deposited_cluster_len_and_order(pt_slab: Atoms) -> None:
     z_top_slab = slab_surface_extreme(pt_slab, 2, upper=True)
     ads_pos = ads_sys.get_positions()[n_slab:]
     assert np.min(ads_pos[:, 2]) > z_top_slab - 0.1
+
+
+def test_place_cluster_above_slab_samples_the_configured_height_range(
+    pt_slab: Atoms,
+) -> None:
+    """The deposition gap must vary across the whole [min, max] height window."""
+    cfg = _surface_config(pt_slab, max_placement_attempts=50)
+    slab_top = slab_surface_extreme(pt_slab, 2, upper=True)
+    cluster = Atoms(
+        "Pt2", positions=[[0.0, 0.0, -1.2], [0.0, 0.0, 1.2]], cell=[20, 20, 20]
+    )
+    centered = cluster.get_positions() - cluster.get_positions().mean(axis=0)
+
+    gaps: list[float] = []
+    for seed in range(30):
+        placed = _place_cluster_above_slab(
+            cluster_positions=centered.copy(),
+            slab=pt_slab,
+            slab_top=slab_top,
+            axis=2,
+            rng=default_rng(seed),
+            config=cfg,
+            cluster_atomic_numbers=cluster.get_atomic_numbers(),
+        )
+        gaps.append(float(np.min(placed[:, 2])) - slab_top)
+
+    assert min(gaps) >= cfg.adsorption_height_min - 1e-9
+    assert max(gaps) <= cfg.adsorption_height_max + 1e-9
+    assert len({round(g, 6) for g in gaps}) >= 3
+    span = cfg.adsorption_height_max - cfg.adsorption_height_min
+    assert max(gaps) - min(gaps) > 0.5 * span
 
 
 def test_create_ga_pairing_surface_requires_matching_template(pt_slab: Atoms) -> None:
@@ -203,11 +236,11 @@ def test_create_deposited_cluster_preserves_adsorbate_symbol_order_with_two_oh(
     rng = default_rng(2026)
 
     # Use adsorbate definition to preserve order via hierarchical initialization
-    adsorbate_definition = {
-        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
 
     # Create a simple fragment template for the adsorbate
     from ase import Atoms as AtomsClass
@@ -264,11 +297,11 @@ def test_create_deposited_cluster_batch_preserves_adsorbate_symbol_order_with_tw
     )
 
     # Use adsorbate definition to preserve order via hierarchical initialization
-    adsorbate_definition = {
-        "core_symbols": ["Pt", "Pt", "Pt", "Pt", "Pt"],
-        "adsorbate_symbols": ["O", "H", "O", "H"],
-        "adsorbate_fragment_lengths": [2, 2],
-    }
+    adsorbate_definition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
 
     # Create a simple fragment template for the adsorbate
     from ase import Atoms as AtomsClass

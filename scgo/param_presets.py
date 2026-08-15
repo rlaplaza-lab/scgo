@@ -21,6 +21,7 @@ from scgo.system_types import (
     SystemType,
     get_system_policy,
 )
+from scgo.utils.parallel_workers import DEFAULT_N_JOBS
 
 # Available MACE model names for use in calculator_kwargs["model_name"]
 AVAILABLE_MACE_MODELS = [
@@ -57,8 +58,13 @@ __all__ = [
     "get_torchsim_ga_params",
     "get_diversity_params",
     "get_high_energy_params",
+    "get_low_effort_torchsim_ga_params",
+    "get_low_effort_upet_ga_params",
+    "get_low_effort_uma_ga_params",
+    "get_low_effort_ts_search_params",
     "get_ts_defaults",
     "get_ts_search_params",
+    "low_effort_neb_steps",
     "get_default_uma_params",
     "get_default_upet_params",
     "get_uma_ga_benchmark_params",
@@ -72,11 +78,34 @@ __all__ = [
 # values often collapse interior saddles to endpoints before forces reach 0.05.
 _TS_NEB_FMAX: float = 0.20
 
+# --- Low-effort ("~25% of production") preset knobs -------------------------
+# Consumed by `get_low_effort_torchsim_ga_params` / `get_low_effort_ts_search_params`.
+# These are the single tuning surface for the examples and the Kaggle GPU CI
+# matrix, which both build their params from those two functions.
+
+# Fraction of the production budget the low-effort presets aim for.
+_LOW_EFFORT_SCALE: float = 0.25
+
+# GA generations / population, scaled from the production benchmark reference
+# in `_get_base_ga_benchmark_params` (niter=10, population_size=50).
+_LOW_EFFORT_GA_NITER: int = 3
+_LOW_EFFORT_GA_POPULATION_SIZE: int = 13
+# Local relaxation steps per candidate. Surface system types clamp this up to
+# `SURFACE_GA_MIN_LOCAL_RELAX_STEPS` (400) in
+# `scgo.utils.run_helpers.prepare_algorithm_kwargs`, so surface GO stays
+# production-strength; only gas types actually run at this value.
+_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION: int = 70
+
+# NEB step floor for low-effort presets. Bare gas uses ``neb_steps="auto"``
+# (~372 for Pt5); 25% of that does not converge. Floor keeps bands reaching
+# ``neb_fmax`` and an interior saddle peak for CI assertions.
+_LOW_EFFORT_NEB_FLOOR: int = 1000
+
 # Per-system-type NEB defaults consumed by `get_ts_search_params` and
-# `coerce_ts_params_to_runner_kwargs`. Keep `neb_align_endpoints` and
-# `neb_interpolation_mic` coherent with `SystemPolicy.neb_disable_alignment` /
-# `neb_force_mic` (an import-time assertion below guards against drift). Other
-# knobs (n_images, steps, climb, pairing gates, ...) are independent per type.
+# `coerce_ts_params_to_runner_kwargs`. Keep `neb_interpolation_mic` coherent with
+# `SystemPolicy.neb_force_mic` (an import-time assertion below guards against
+# drift). Other knobs (n_images, steps, climb, alignment, pairing gates, ...) are
+# independent per type.
 # ``neb_fmax`` / ``torchsim_fmax`` are always ``_TS_NEB_FMAX`` (enforced in tests).
 _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_align_endpoints": True,
@@ -95,8 +124,20 @@ _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "torchsim_fmax": _TS_NEB_FMAX,
     "torchsim_max_steps": "auto",
     "max_endpoint_mismatch": None,
+    # Bare gas clusters get a looser clash gate and a tighter saddle-prominence
+    # floor (flat-PES rearrangements are common for small gas clusters).
+    "neb_prescreen_clash_distance": 1.0,
+    "min_saddle_prominence": 0.10,
+    "neb_max_spurious_barrier": 8.0,
+    "binding_penetration_tolerance_a": 0.1,
+    "layer_cluster_threshold_ang": 0.4,
+    "neb_interpolation_bond_tolerance_a": 0.5,
     # None = all selected bands in one ParallelNEBBatch.
     "parallel_neb_max_bands": None,
+    # Atom budget per fused force batch (sum of n_images * n_atoms), used when
+    # parallel_neb_max_bands is None. Gas cells are small, so a larger budget
+    # keeps the GPU saturated; parallel_neb_max_bands still overrides it.
+    "parallel_neb_max_batch_atoms": 6000,
 }
 
 _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -116,9 +157,24 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_tangent_method": DEFAULT_NEB_TANGENT_METHOD,
     "torchsim_fmax": _TS_NEB_FMAX,
     "torchsim_max_steps": 2000,
-    "max_endpoint_mismatch": None,
-    # Large slab cells OOM when many bands×images share one force batch.
-    "parallel_neb_max_bands": 1,
+    # Surface clusters newly gain the endpoint-displacement gate (was unset).
+    "neb_prescreen_clash_distance": 0.7,
+    "min_saddle_prominence": 0.40,
+    "neb_max_spurious_barrier": 8.0,
+    "binding_penetration_tolerance_a": 0.1,
+    "layer_cluster_threshold_ang": 0.4,
+    "neb_interpolation_bond_tolerance_a": 0.5,
+    "max_endpoint_mismatch": 1.25,
+    # Surface OOM safety: chunk parallel NEB + CUDA cleanup between chunks.
+    # 4 bands/force-batch trades some headroom for throughput. A chunk that
+    # still OOMs is retried once at half the atom budget before its bands fail,
+    # so lower this (down to 1) only for very large slab cells.
+    "parallel_neb_max_bands": 4,
+    # Atom budget per fused force batch (sum of n_images * n_atoms), applied
+    # when parallel_neb_max_bands is cleared to None. Kept at/below the previous
+    # 4-band x ~130-atom x 7-image path (~3.6k) so the on-disk memory-scaler
+    # cache bucket is reused instead of re-probed.
+    "parallel_neb_max_batch_atoms": 4000,
 }
 
 # Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),
@@ -134,6 +190,14 @@ _GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_climb": True,
     "torchsim_max_steps": 4000,
     "max_endpoint_mismatch": 1.25,  # Å; also enables pre-NEB path gates
+    # Explicitly preserve the adsorbate clash/prominence/barrier behavior (the
+    # bare-gas base dict loosens these; do not inherit the loose values).
+    "neb_prescreen_clash_distance": 0.7,
+    "min_saddle_prominence": 0.40,
+    "neb_max_spurious_barrier": 8.0,
+    "binding_penetration_tolerance_a": 0.1,
+    "layer_cluster_threshold_ang": 0.4,
+    "neb_interpolation_bond_tolerance_a": 0.5,
 }
 
 _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -147,6 +211,13 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     # Inherited surface defaults enable free in-plane Kabsch; that shifts
     # adsorbates off registry. Remap/MIC stay on via the surface base dict.
     "neb_surface_lattice_rotation": False,
+    # Explicitly preserve the adsorbate clash/prominence/barrier behavior.
+    "neb_prescreen_clash_distance": 0.7,
+    "min_saddle_prominence": 0.40,
+    "neb_max_spurious_barrier": 8.0,
+    "binding_penetration_tolerance_a": 0.1,
+    "layer_cluster_threshold_ang": 0.4,
+    "neb_interpolation_bond_tolerance_a": 0.5,
 }
 
 TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
@@ -174,6 +245,7 @@ def _get_default_params_template() -> GLOptimizerParams:
         "fmax_threshold": 0.05,
         "check_hessian": True,
         "imag_freq_threshold": 50.0,
+        "n_jobs": DEFAULT_N_JOBS,  # Single CPU knob (see DEFAULT_N_JOBS); opt in with -1/-2
         "tag_final_minima": True,
         "connectivity_factor": CONNECTIVITY_FACTOR,  # Default for cluster validation
         "allow_cluster_fragmentation": False,
@@ -190,7 +262,6 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "fmax": 0.05,
                 "niter": 1,
                 "niter_local_relaxation": "auto",
-                "system_type": "gas_cluster",
             },
             "bh": {
                 "optimizer": "FIRE",
@@ -210,7 +281,6 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "diversity_reference_db": None,  # For diversity strategy
                 "diversity_max_references": 100,  # Performance limit
                 "diversity_update_interval": 5,  # Update references every N iterations
-                "system_type": "gas_cluster",
             },
             "ga": {
                 "optimizer": "FIRE",
@@ -229,15 +299,14 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "aggressive_burst_multiplier": 1.8,
                 "max_mutation_probability": 0.65,
                 "early_stopping_niter": 10,  # Stop if no improvement after N generations
-                "n_jobs_population_init": -2,  # Parallel batch init: -2 = all CPUs except one
-                "n_jobs_offspring": -2,  # Parallel default aligned with n_jobs_population_init
+                "n_jobs_population_init": None,  # None = inherit top-level "n_jobs"
+                "n_jobs_offspring": None,  # None = inherit top-level "n_jobs"
                 "batch_size": None,
                 "relaxer": None,
                 "fitness_strategy": None,  # None = inherit from top-level
                 "diversity_reference_db": None,  # For diversity strategy
                 "diversity_max_references": 100,  # Performance limit
                 "diversity_update_interval": 5,  # Update references every N generations
-                "system_type": "gas_cluster",
             },
         },
     }
@@ -246,8 +315,8 @@ def _get_default_params_template() -> GLOptimizerParams:
 def get_ts_defaults(system_type: SystemType) -> dict[str, Any]:
     """Return a fresh copy of NEB knob defaults for one system type.
 
-    Single source of truth read by :func:`get_ts_search_params` and
-    :func:`scgo.utils.ts_runner_kwargs.coerce_ts_params_to_runner_kwargs`.
+    Single source of truth read by :func:`~scgo.get_ts_search_params` and
+    :func:`~scgo.utils.ts_runner_kwargs.coerce_ts_params_to_runner_kwargs`.
     """
     if system_type not in TS_DEFAULTS_BY_SYSTEM_TYPE:
         raise SCGOValidationError(
@@ -263,6 +332,11 @@ def get_default_params() -> GLOptimizerParams:
     Suitable for ``run_go`` / ``run_go_ts`` as ``params`` / ``go_params``; pass
     as-is or override keys (omitted keys are filled via
     :func:`scgo.utils.run_helpers.initialize_params`).
+
+    CPU parallelism is a single top-level knob: ``params["n_jobs"]`` defaults to
+    ``DEFAULT_N_JOBS`` (sequential) and is inherited by GA population init, GA
+    offspring construction, and post-GO validation. Set it to ``-2`` (all but one
+    CPU) or ``-1`` (all CPUs) to parallelize every CPU stage at once.
     """
     return copy.deepcopy(_get_default_params_template())
 
@@ -273,9 +347,11 @@ def get_minimal_ga_params(
 ) -> GLOptimizerParams:
     """Return compact GA-focused parameters derived from defaults.
 
-    Uses sequential population init and offspring work (``n_jobs_*`` set to 1) so
-    runners stay easy to reason about. Pass as-is to ``run_*`` or override keys;
-    omitted keys are filled via :func:`scgo.utils.run_helpers.initialize_params`.
+    Sequential population init and offspring (explicit ``n_jobs_* = 1``) so
+    runners stay easy to reason about; the top-level ``n_jobs`` default is
+    also ``1``, so nothing parallelizes unless the caller opts in. Pass as-is to
+    ``run_*`` or override keys; omitted keys are filled via
+    :func:`scgo.utils.run_helpers.initialize_params`.
     """
     params = get_default_params()
 
@@ -331,7 +407,6 @@ def get_testing_params() -> GLOptimizerParams:
             "offspring_fraction": 0.5,
             "niter": 2,
             "niter_local_relaxation": 2,
-            "n_jobs_population_init": -2,
         }
     )
     return params
@@ -342,6 +417,8 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
     params = get_default_params()
     params["seed"] = seed
     params["calculator_kwargs"]["default_dtype"] = "float32"
+    # HPC: one knob for every CPU stage (population init, offspring, validation).
+    params["n_jobs"] = -2
 
     # Customize GA parameters for benchmarking
     params["optimizer_params"]["ga"].update(
@@ -350,7 +427,8 @@ def _get_base_ga_benchmark_params(seed: int) -> GLOptimizerParams:
             "niter_local_relaxation": 200,
             "niter": 10,
             "population_size": 50,
-            "n_jobs_population_init": -2,  # Parallel for benchmarks
+            "n_jobs_population_init": -2,  # HPC: all but one CPU (same as top-level)
+            "n_jobs_offspring": -2,  # HPC: parallel offspring, aligned with init
         },
     )
 
@@ -364,8 +442,9 @@ def _attach_fairchem_torchsim_relaxer(
     max_steps: int,
     autobatcher: bool | None = None,
     expected_max_atoms: int | None = None,
+    dtype: Any | None = None,
 ) -> None:
-    """Set ``ga["relaxer"]`` to a FairChem-backed :class:`TorchSimBatchRelaxer`."""
+    """Set ``ga["relaxer"]`` to a FairChem-backed :class:`~scgo.calculators.TorchSimBatchRelaxer`."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
     fmax_val = float(ga.get("fmax", 0.05))
@@ -376,7 +455,7 @@ def _attach_fairchem_torchsim_relaxer(
         force_tol=fmax_val,
         optimizer_name="fire",
         max_steps=max_steps,
-        dtype=None,  # TorchSim default per model; keep lazy/portable
+        dtype=dtype,  # None -> model default; set torch.float32 for speed
         autobatcher=autobatcher,
         expected_max_atoms=expected_max_atoms,
     )
@@ -389,8 +468,9 @@ def _attach_upet_torchsim_relaxer(
     max_steps: int,
     autobatcher: bool | None = None,
     expected_max_atoms: int | None = None,
+    dtype: Any | None = None,
 ) -> None:
-    """Set ``ga["relaxer"]`` to a UPET-backed :class:`TorchSimBatchRelaxer`.
+    """Set ``ga["relaxer"]`` to a UPET-backed :class:`~scgo.calculators.TorchSimBatchRelaxer`.
 
     Device defaults to CUDA when available. ``autobatcher=None`` enables
     TorchSim ``InFlightAutoBatcher`` on GPU (batched population relaxations).
@@ -412,11 +492,118 @@ def _attach_upet_torchsim_relaxer(
         optimizer_name="fire",
         max_steps=max_steps,
         device=torch.device("cuda") if on_cuda else torch.device("cpu"),
-        dtype=None,  # synced from MetatomicModel capabilities in __post_init__
+        dtype=dtype,  # None -> model default; set torch.float32 for speed
         autobatcher=on_cuda if autobatcher is None else autobatcher,
         expected_max_atoms=expected_max_atoms,
         max_atoms_to_try=expected_max_atoms,
     )
+
+
+def _attach_mace_torchsim_relaxer(
+    ga: dict[str, Any],
+    calculator_kwargs: dict[str, Any],
+    *,
+    seed: int | None = None,
+    max_steps: int,
+    autobatcher: bool | None = True,
+    expected_max_atoms: int | None = 600,
+    dtype: Any | None = None,
+) -> None:
+    """Set ``ga["relaxer"]`` to a MACE-backed :class:`~scgo.calculators.TorchSimBatchRelaxer`."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    fmax_val = float(ga.get("fmax", 0.05))
+    mace_model = calculator_kwargs.get("model_name", "mace_matpes_0")
+    ga["relaxer"] = TorchSimBatchRelaxer(
+        force_tol=fmax_val,
+        optimizer_name="fire",
+        mace_model_name=mace_model,
+        seed=seed,
+        max_steps=max_steps,
+        dtype=dtype,  # None -> model default; set torch.float32 for speed
+        autobatcher=autobatcher,
+        expected_max_atoms=expected_max_atoms,
+    )
+
+
+def _build_ga_calculator_params(
+    calculator: str,
+    *,
+    effort: str,
+    seed: int | None = None,
+    model_name: str | None = None,
+    calculator_kwargs: dict[str, Any] | None = None,
+    relaxer_kind: str,
+) -> GLOptimizerParams:
+    """Build GA GO params for a calculator variant with a TorchSim relaxer.
+
+    Shared by the UMA/UPET benchmark + default presets and the MACE TorchSim
+    preset.     ``effort="benchmark"`` starts from ``_get_base_ga_benchmark_params``
+    (fixed 200-step local relaxation, ``n_jobs=-2``, float32 default dtype);
+    ``effort="default"`` starts from :func:`get_default_params` (``"auto"`` local
+    relaxation). The relaxer is attached via the matching ``_attach_*_torchsim_relaxer``
+    helper (or the equivalent MACE branch), with the local-relaxation budget mapped
+    to ``max_steps`` (200 for benchmark, 250 when default is ``"auto"``).
+    """
+    import torch
+
+    if effort == "benchmark":
+        base_seed = 0 if seed is None else int(seed)
+        params = _get_base_ga_benchmark_params(base_seed)
+    elif effort == "default":
+        params = get_default_params()
+    else:
+        raise SCGOValidationError(f"Unknown effort={effort!r}")
+
+    params["calculator"] = calculator
+    if calculator_kwargs is not None:
+        params["calculator_kwargs"] = dict(calculator_kwargs)
+    if model_name is not None:
+        params["calculator_kwargs"]["model_name"] = model_name
+
+    ga = params["optimizer_params"]["ga"]
+    niter_local = ga.get("niter_local_relaxation", "auto")
+    if effort == "benchmark":
+        max_steps = 200 if niter_local == "auto" else int(niter_local)
+        autobatcher: bool | None = True
+        expected_max_atoms: int | None = 600
+    else:
+        max_steps = 250 if niter_local == "auto" else int(niter_local)
+        autobatcher = None
+        expected_max_atoms = None
+
+    if relaxer_kind == "fairchem":
+        _attach_fairchem_torchsim_relaxer(
+            ga,
+            params["calculator_kwargs"],
+            max_steps=max_steps,
+            autobatcher=autobatcher,
+            expected_max_atoms=expected_max_atoms,
+            dtype=torch.float32,
+        )
+    elif relaxer_kind == "upet":
+        _attach_upet_torchsim_relaxer(
+            ga,
+            params["calculator_kwargs"],
+            max_steps=max_steps,
+            autobatcher=autobatcher,
+            expected_max_atoms=expected_max_atoms,
+            dtype=torch.float32,
+        )
+    elif relaxer_kind == "mace":
+        _attach_mace_torchsim_relaxer(
+            ga,
+            params["calculator_kwargs"],
+            seed=seed,
+            max_steps=max_steps,
+            autobatcher=autobatcher,
+            expected_max_atoms=expected_max_atoms,
+            dtype=torch.float32,
+        )
+    else:
+        raise SCGOValidationError(f"Unknown relaxer_kind={relaxer_kind!r}")
+
+    return params
 
 
 def get_uma_ga_benchmark_params(
@@ -425,30 +612,23 @@ def get_uma_ga_benchmark_params(
     model_name: str = "uma-s-1p2",
     uma_task: str = "oc25",
 ) -> GLOptimizerParams:
-    """GA benchmark parameters matching :func:`_get_base_ga_benchmark_params` but with UMA.
+    """GA benchmark parameters matching ``_get_base_ga_benchmark_params`` but with UMA.
 
     Tuned for regression and profiling alongside the MACE TorchSim benchmark preset
     (:func:`get_torchsim_ga_params`): fixed local relaxation budget from the base
     preset (200 steps, not ``"auto"``), with autobatching and ``expected_max_atoms=600``
-    for stable GPU memory behaviour. Pass as-is to ``run_*`` or override keys.
+    for stable GPU memory behavior. Pass as-is to ``run_*`` or override keys.
     For general UMA runs with default GA ``"auto"`` local steps, use
     :func:`get_default_uma_params` instead.
     """
-    params = _get_base_ga_benchmark_params(seed)
-    params["calculator"] = "UMA"
-    params["calculator_kwargs"] = {"model_name": model_name, "task_name": uma_task}
-
-    ga = params["optimizer_params"]["ga"]
-    niter_local = ga.get("niter_local_relaxation", 200)
-    max_steps = 200 if niter_local == "auto" else int(niter_local)
-    _attach_fairchem_torchsim_relaxer(
-        ga,
-        params["calculator_kwargs"],
-        max_steps=max_steps,
-        autobatcher=True,
-        expected_max_atoms=600,
+    return _build_ga_calculator_params(
+        "UMA",
+        effort="benchmark",
+        seed=seed,
+        model_name=model_name,
+        calculator_kwargs={"model_name": model_name, "task_name": uma_task},
+        relaxer_kind="fairchem",
     )
-    return params
 
 
 def get_default_uma_params() -> GLOptimizerParams:
@@ -457,27 +637,17 @@ def get_default_uma_params() -> GLOptimizerParams:
     Pass as-is to ``run_*`` or override keys. For typical campaigns with default
     GA settings: ``niter_local_relaxation`` is ``"auto"`` and the TorchSim relaxer
     uses 250 max steps in that case. Autobatcher and memory-probe defaults follow
-    :class:`TorchSimBatchRelaxer` (``autobatcher`` None: CUDA on, CPU off). Use
+    :class:`~scgo.calculators.TorchSimBatchRelaxer` (``autobatcher`` None: CUDA on, CPU off). Use
     :func:`get_uma_ga_benchmark_params` when you need the same structure as the MACE
     benchmark preset (fixed local steps, explicit autobatcher/expected_max_atoms).
     """
-    params = get_default_params()
-    params["calculator"] = "UMA"
-    params["calculator_kwargs"] = {
-        "model_name": "uma-s-1p2",
-        "task_name": "oc25",
-    }
-    ga = params.get("optimizer_params", {}).get("ga", {})
-    niter_local = ga.get("niter_local_relaxation", "auto")
-    max_steps = 250 if niter_local == "auto" else int(niter_local)
-    _attach_fairchem_torchsim_relaxer(
-        ga,
-        params["calculator_kwargs"],
-        max_steps=max_steps,
-        autobatcher=None,
-        expected_max_atoms=None,
+    return _build_ga_calculator_params(
+        "UMA",
+        effort="default",
+        model_name="uma-s-1p2",
+        calculator_kwargs={"model_name": "uma-s-1p2", "task_name": "oc25"},
+        relaxer_kind="fairchem",
     )
-    return params
 
 
 def get_upet_ga_benchmark_params(
@@ -493,24 +663,14 @@ def get_upet_ga_benchmark_params(
     ``run_*`` or override keys. For general UPET runs with default GA ``"auto"``
     local steps, use :func:`get_default_upet_params` instead.
     """
-    params = _get_base_ga_benchmark_params(seed)
-    params["calculator"] = "UPET"
-    params["calculator_kwargs"] = {
-        "model_name": model_name,
-        "version": version,
-    }
-
-    ga = params["optimizer_params"]["ga"]
-    niter_local = ga.get("niter_local_relaxation", 200)
-    max_steps = 200 if niter_local == "auto" else int(niter_local)
-    _attach_upet_torchsim_relaxer(
-        ga,
-        params["calculator_kwargs"],
-        max_steps=max_steps,
-        autobatcher=True,
-        expected_max_atoms=600,
+    return _build_ga_calculator_params(
+        "UPET",
+        effort="benchmark",
+        seed=seed,
+        model_name=model_name,
+        calculator_kwargs={"model_name": model_name, "version": version},
+        relaxer_kind="upet",
     )
-    return params
 
 
 def get_default_upet_params() -> GLOptimizerParams:
@@ -519,23 +679,13 @@ def get_default_upet_params() -> GLOptimizerParams:
     Pass as-is to ``run_*`` or override keys. Default model is ``pet-mad-s`` v1.5.0.
     For benchmark-style fixed local steps, use :func:`get_upet_ga_benchmark_params`.
     """
-    params = get_default_params()
-    params["calculator"] = "UPET"
-    params["calculator_kwargs"] = {
-        "model_name": "pet-mad-s",
-        "version": "1.5.0",
-    }
-    ga = params.get("optimizer_params", {}).get("ga", {})
-    niter_local = ga.get("niter_local_relaxation", "auto")
-    max_steps = 250 if niter_local == "auto" else int(niter_local)
-    _attach_upet_torchsim_relaxer(
-        ga,
-        params["calculator_kwargs"],
-        max_steps=max_steps,
-        autobatcher=None,
-        expected_max_atoms=None,
+    return _build_ga_calculator_params(
+        "UPET",
+        effort="default",
+        model_name="pet-mad-s",
+        calculator_kwargs={"model_name": "pet-mad-s", "version": "1.5.0"},
+        relaxer_kind="upet",
     )
-    return params
 
 
 def get_torchsim_ga_params(
@@ -554,10 +704,6 @@ def get_torchsim_ga_params(
     :class:`~scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer` uses the
     same MACE model name as the ASE calculator.
     """
-    import torch
-
-    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
-
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
         raise SCGOValidationError(
@@ -565,42 +711,23 @@ def get_torchsim_ga_params(
             "as a SurfaceSystemConfig when building go_params."
         )
 
-    effective_seed = 0 if seed is None else int(seed)
-    params = _get_base_ga_benchmark_params(effective_seed)
+    params = _build_ga_calculator_params(
+        "MACE",
+        effort="benchmark",
+        seed=seed,
+        model_name=model_name,
+        relaxer_kind="mace",
+    )
     if seed is None:
         params["seed"] = None
-    if model_name is not None:
-        params["calculator_kwargs"]["model_name"] = model_name
 
     # Keep TorchSim as the explicit relaxer backend, but let campaign scale
     # iteration budget and population size with composition complexity.
     params["optimizer_params"]["ga"]["niter"] = "auto"
     params["optimizer_params"]["ga"]["population_size"] = "auto"
 
-    mace_model = params["calculator_kwargs"].get("model_name", "mace_matpes_0")
-    fmax_val = params["optimizer_params"]["ga"]["fmax"]
-    niter_local = params["optimizer_params"]["ga"]["niter_local_relaxation"]
-
-    params["optimizer_params"]["ga"].update(
-        {
-            "relaxer": TorchSimBatchRelaxer(
-                force_tol=fmax_val,
-                optimizer_name="fire",
-                mace_model_name=mace_model,
-                seed=seed,
-                max_steps=niter_local,
-                dtype=torch.float32,
-                autobatcher=True,
-                expected_max_atoms=600,
-            ),
-        },
-    )
-    for algo in ("simple", "bh", "ga"):
-        params["optimizer_params"][algo]["system_type"] = system_type
     if policy.uses_surface:
         params["surface_config"] = surface_config
-        for algo in ("simple", "bh", "ga"):
-            params["optimizer_params"][algo]["surface_config"] = surface_config
 
     return params
 
@@ -658,7 +785,7 @@ def get_ts_search_params(
 ) -> dict[str, Any]:
     """TS-only settings (NEB, calculator, pairing). Not merged with GO defaults.
 
-    Suitable for ``run_ts_search`` / ``run_go_ts`` as ``ts_params``; pass as-is or
+    Suitable for ``run_ts_search`` / :func:`~scgo.run_go_ts` as ``ts_params``; pass as-is or
     override keys (omitted keys are filled via
     :func:`scgo.utils.run_helpers.initialize_ts_params`).
 
@@ -668,7 +795,7 @@ def get_ts_search_params(
     For surface system types, `surface_config` is required and stored in the
     returned dictionary so TS loading/validation always receives explicit slab
     context (no guessing).
-    If ``seed`` is set, it is stored in the returned dict; :func:`run_go_ts` / ``run_ts_*``
+    If ``seed`` is set, it is stored in the returned dict; :func:`~scgo.run_go_ts` / ``run_ts_*``
     require it to be consistent with ``go_params["seed"]`` and the ``seed=`` run argument.
     The ``connectivity_factor`` key sets the global connectivity threshold for cluster
     validation (default 1.4).
@@ -676,8 +803,9 @@ def get_ts_search_params(
     NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
     system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,
     and ``neb_surface_max_lattice_shift`` (default ``1``). Free in-plane
-    ``neb_surface_lattice_rotation`` is on for bare ``surface_cluster`` and off
-    for ``surface_cluster_adsorbate`` (registry-safe).
+    ``neb_surface_lattice_rotation`` is on for the bare surface types
+    (``surface_cluster``, ``surface``) and off for the adsorbate surface types
+    (``surface_cluster_adsorbate``, ``surface_adsorbate``) to stay registry-safe.
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
@@ -710,8 +838,9 @@ def get_ts_search_params(
         "similarity_tolerance": DEFAULT_COMPARATOR_TOL,
         "similarity_pair_cor_max": 0.1,
         "use_torchsim": True,
-        # Surface OOM safety is ``parallel_neb_max_bands=1`` (chunked parallel
-        # NEB + CUDA cleanup between chunks), not a separate batch-size knob.
+        # Surface OOM safety: chunk parallel NEB + CUDA cleanup between chunks.
+        # parallel_neb_max_bands defaults to 4 bands/force-batch (set in
+        # _SURFACE_TS_NEB_DEFAULTS); lower it for very large slab cells.
         "use_parallel_neb": True,
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
@@ -724,4 +853,227 @@ def get_ts_search_params(
     if seed is not None:
         params["seed"] = int(seed)
 
+    return params
+
+
+def get_low_effort_torchsim_ga_params(
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str | None = None,
+) -> GLOptimizerParams:
+    """Return reduced-budget GO params (~25% of production) for demos and CI.
+
+    Thin wrapper over :func:`get_torchsim_ga_params`: the calculator, TorchSim
+    relaxer, autobatcher, ``expected_max_atoms`` and float32 dtype are all
+    inherited unchanged, so the *physics* matches a production run. Only the
+    search budget shrinks:
+
+    - ``niter`` / ``population_size`` are scaled to ~25% of the production
+      benchmark reference in ``_get_base_ga_benchmark_params``
+      (``niter=10`` / ``population_size=50``).
+    - ``niter_local_relaxation`` drops to
+      ``_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION``. Surface system types clamp it
+      back up to ``SURFACE_GA_MIN_LOCAL_RELAX_STEPS`` at run time, so supported
+      and slab searches keep production-strength local relaxation.
+    - Population init runs sequentially, early stopping is disabled (so the run
+      length is deterministic), and timing JSON export is off.
+
+    Used by ``examples/example_*.py`` and mirrored by the Kaggle GPU example
+    matrix in ``tests/integration/test_gpu_examples_integration.py`` so the two
+    cannot drift. Pass as-is to ``run_*`` or override individual keys.
+    """
+    params = get_torchsim_ga_params(
+        system_type=system_type,
+        surface_config=surface_config,
+        seed=seed,
+        model_name=model_name,
+    )
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": _LOW_EFFORT_GA_NITER,
+            "population_size": _LOW_EFFORT_GA_POPULATION_SIZE,
+            "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
+            "offspring_fraction": 0.5,
+            "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
+            "early_stopping_niter": 0,
+            "write_timing_json": False,
+            "detailed_timing": False,
+        }
+    )
+    return params
+
+
+def get_low_effort_upet_ga_params(
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str = "pet-mad-s",
+    version: str = "1.5.0",
+) -> GLOptimizerParams:
+    """Return reduced-budget GO params (~25%) for UPET demos and CI.
+
+    Mirrors :func:`get_low_effort_torchsim_ga_params` but on the UPET calculator.
+    Thin wrapper over :func:`get_default_upet_params`: the calculator, TorchSim
+    relaxer (``_attach_upet_torchsim_relaxer``), autobatcher, ``expected_max_atoms``
+    and float32 dtype are all inherited unchanged, so the *physics* matches a
+    production run. Only the search budget shrinks:
+
+    - ``niter`` / ``population_size`` are scaled to ~25% of the production
+      benchmark reference in ``_get_base_ga_benchmark_params``
+      (``niter=10`` / ``population_size=50``).
+    - ``niter_local_relaxation`` drops to
+      ``_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION``. Surface system types clamp it
+      back up to ``SURFACE_GA_MIN_LOCAL_RELAX_STEPS`` at run time, so supported
+      and slab searches keep production-strength local relaxation — the same
+      clamp :func:`get_low_effort_torchsim_ga_params` relies on.
+    - Population init runs sequentially, early stopping is disabled (so the run
+      length is deterministic), and timing JSON export is off.
+
+    Used by the Kaggle GPU example matrix
+    (``tests/integration/test_gpu_examples_integration.py``) so UPET stays in
+    lockstep with the MACE low-effort path. Pass as-is to ``run_*`` or override
+    individual keys.
+    """
+    params = get_default_upet_params()
+    params["calculator_kwargs"] = {
+        "model_name": model_name,
+        "version": version,
+    }
+    if seed is not None:
+        params["seed"] = int(seed)
+
+    policy = get_system_policy(system_type)
+    if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
+        raise SCGOValidationError(
+            f"system_type={system_type!r} requires surface_config to be provided "
+            "as a SurfaceSystemConfig when building go_params."
+        )
+    if policy.uses_surface:
+        params["surface_config"] = surface_config
+
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": _LOW_EFFORT_GA_NITER,
+            "population_size": _LOW_EFFORT_GA_POPULATION_SIZE,
+            "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
+            "offspring_fraction": 0.5,
+            "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
+            "early_stopping_niter": 0,
+            "write_timing_json": False,
+            "detailed_timing": False,
+        }
+    )
+    return params
+
+
+def get_low_effort_uma_ga_params(
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+    model_name: str = "uma-s-1p2",
+    uma_task: str = "oc25",
+) -> GLOptimizerParams:
+    """Return reduced-budget GO params (~25%) for UMA demos and CI.
+
+    Mirrors :func:`get_low_effort_upet_ga_params` but on the UMA calculator
+    (fairchem). Thin wrapper over :func:`get_default_uma_params`: the calculator,
+    FairChem-backed TorchSim relaxer (``_attach_fairchem_torchsim_relaxer``),
+    autobatcher, ``expected_max_atoms`` and float32 dtype are all inherited
+    unchanged. Only the search budget shrinks to the same ~25% GA reduction as the
+    other low-effort wrappers, with the surface local-relaxation clamp preserved
+    at run time and timing JSON export off.
+
+    Delivered for API / docs completeness, GitHub-Actions UMA smoke, and local
+    runs — UMA is intentionally omitted from the Kaggle GPU matrix (HuggingFace
+    auth for fairchem weights is unavailable there). Pass as-is to ``run_*`` or
+    override individual keys.
+    """
+    params = get_default_uma_params()
+    params["calculator_kwargs"] = {
+        "model_name": model_name,
+        "task_name": uma_task,
+    }
+    if seed is not None:
+        params["seed"] = int(seed)
+
+    policy = get_system_policy(system_type)
+    if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
+        raise SCGOValidationError(
+            f"system_type={system_type!r} requires surface_config to be provided "
+            "as a SurfaceSystemConfig when building go_params."
+        )
+    if policy.uses_surface:
+        params["surface_config"] = surface_config
+
+    params["optimizer_params"]["ga"].update(
+        {
+            "niter": _LOW_EFFORT_GA_NITER,
+            "population_size": _LOW_EFFORT_GA_POPULATION_SIZE,
+            "niter_local_relaxation": _LOW_EFFORT_GA_NITER_LOCAL_RELAXATION,
+            "offspring_fraction": 0.5,
+            "n_jobs_population_init": 1,
+            "n_jobs_offspring": 1,
+            "early_stopping_niter": 0,
+            "write_timing_json": False,
+            "detailed_timing": False,
+        }
+    )
+    return params
+
+
+def low_effort_neb_steps(system_type: SystemType) -> int:
+    """Return the low-effort ``neb_steps`` budget for one system type.
+
+    ~25% of the production budget, floored so every band can still converge to
+    ``neb_fmax``. Gas system types use ``neb_steps="auto"`` in production (a
+    composition-dependent value resolved at run time), which cannot be scaled
+    here, so they fall back to the floor directly.
+    """
+    floor = _LOW_EFFORT_NEB_FLOOR
+    base = get_ts_defaults(system_type)["neb_steps"]
+    if not isinstance(base, int):
+        # "auto": resolved from composition at run time, so only the floor applies.
+        return floor
+    return max(floor, round(base * _LOW_EFFORT_SCALE))
+
+
+def get_low_effort_ts_search_params(
+    calculator: str = "MACE",
+    calculator_kwargs: dict[str, Any] | None = None,
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Return reduced-budget TS params (~25% of production) for demos and CI.
+
+    Thin wrapper over :func:`get_ts_search_params`. Every physics knob is
+    inherited unchanged — ``neb_n_images`` (7 for adsorbate types, 5 otherwise),
+    ``neb_climb``, ``neb_fmax``, spring constant, MIC / cell remap / lattice
+    rotation, ``max_endpoint_mismatch``, ``energy_gap_threshold`` and
+    ``parallel_neb_max_bands`` — so a saddle found here is as valid as one from
+    a production run. Only ``neb_steps`` / ``torchsim_max_steps`` shrink, to
+    :func:`low_effort_neb_steps`, and timing JSON export is off.
+
+    ``max_pairs`` is deliberately left at the preset default (``None`` = no cap):
+    it is the main cost lever for the TS stage, so callers set it explicitly for
+    their budget.
+    """
+    params = get_ts_search_params(
+        calculator,
+        calculator_kwargs,
+        system_type=system_type,
+        surface_config=surface_config,
+        seed=seed,
+    )
+    neb_steps = low_effort_neb_steps(system_type)
+    params["neb_steps"] = neb_steps
+    params["torchsim_max_steps"] = neb_steps
+    params["write_timing_json"] = False
     return params

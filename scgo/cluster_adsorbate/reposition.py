@@ -9,6 +9,11 @@ from ase_ga.utilities import atoms_too_close_two_sets
 from numpy.random import Generator
 
 from scgo.ase_ga_patches.mutations import _ensure_rng
+from scgo.ase_ga_patches.mutations._common import (
+    _preserves_mobile_connectivity,
+    _reanchor_mobile_to_slab,
+)
+from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.cluster_adsorbate.config import (
     ClusterAdsorbateConfig,
     resolve_cluster_adsorbate_config,
@@ -47,6 +52,7 @@ class FragmentRepositionMutation(OffspringCreator):
         *,
         rng: Generator | None = None,
         verbose: bool = False,
+        surface_normal_axis: int = 2,
     ) -> None:
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
@@ -57,17 +63,14 @@ class FragmentRepositionMutation(OffspringCreator):
         self.adsorbate_definition = adsorbate_definition
         self.fragment_templates = fragment_templates
         self.cluster_adsorbate_config = cluster_adsorbate_config
+        self.surface_normal_axis = surface_normal_axis
         self.descriptor = "FragmentRepositionMutation"
         self.min_inputs = 1
 
     def get_new_individual(self, parents):
         parent = parents[0]
         mutant = self.mutate(parent)
-        if mutant is None:
-            return mutant, "mutation: fragment_reposition"
-        mutant = self.initialize_individual(parent, mutant)
-        mutant.info["data"]["parents"] = [parent.info.get("confid")]
-        return self.finalize_individual(mutant), "mutation: fragment_reposition"
+        return _finalize_mutant(self, parent, mutant, "mutation: fragment_reposition")
 
     def _fragment_template_for_tag(
         self, mobile: Atoms, tag: int, frag_index: int
@@ -93,7 +96,7 @@ class FragmentRepositionMutation(OffspringCreator):
             return None
 
         lengths = parse_positive_fragment_lengths(
-            self.adsorbate_definition.get("adsorbate_fragment_lengths", [])
+            self.adsorbate_definition.adsorbate_fragment_lengths
         )
         target_tag = int(self.rng.choice(ads_tags))
         frag_index = target_tag - 1
@@ -114,23 +117,51 @@ class FragmentRepositionMutation(OffspringCreator):
         )
 
         fragment_tmpl = self._fragment_template_for_tag(mobile, target_tag, frag_index)
-        placed = place_fragment_on_cluster(
-            metal_core,
-            fragment_tmpl,
-            self.rng,
-            ca,
-            anchor_index=anchor,
-            bond_axis=bond_axis,
-            site_core=metal_core,
-            clash_atoms=clash_mobile,
+        use_mic = bool(self._policy.uses_surface)
+        relaxed = ClusterAdsorbateConfig(
+            max_placement_attempts=max(ca.max_placement_attempts * 3, 4000),
+            random_spin_about_normal=True,
+            height_min=ca.height_min * 0.75,
+            height_max=ca.height_max * 1.5,
+            blmin_ratio=min(ca.blmin_ratio, 0.6),
+            structure_min_distance_factor=min(ca.structure_min_distance_factor, 0.35),
+            validate_combined_structure=ca.validate_combined_structure,
+            structure_connectivity_factor=ca.structure_connectivity_factor,
+            structure_check_clashes=ca.structure_check_clashes,
+            structure_check_connectivity=ca.structure_check_connectivity,
         )
-        if placed is None:
-            return None
-
-        new_mobile = mobile.copy()
-        new_mobile.positions[ads_mask] = placed.get_positions()
-        if len(slab) > 0 and atoms_too_close_two_sets(new_mobile, slab, self.blmin):
-            return None
-        if not self._policy.uses_surface:
-            new_mobile.center()
-        return slab + new_mobile
+        configs = (ca, relaxed)
+        for _ in range(8):
+            for cfg in configs:
+                placed = place_fragment_on_cluster(
+                    metal_core,
+                    fragment_tmpl,
+                    self.rng,
+                    cfg,
+                    anchor_index=anchor,
+                    bond_axis=bond_axis,
+                    site_core=metal_core,
+                    clash_atoms=clash_mobile,
+                )
+                if placed is None:
+                    continue
+                new_mobile = mobile.copy()
+                new_mobile.positions[ads_mask] = placed.get_positions()
+                if len(slab) > 0 and atoms_too_close_two_sets(
+                    new_mobile, slab, self.blmin
+                ):
+                    continue
+                if not _preserves_mobile_connectivity(
+                    mobile, new_mobile, use_mic=use_mic
+                ):
+                    continue
+                if self._policy.uses_surface and len(slab) > 0:
+                    new_mobile = _reanchor_mobile_to_slab(
+                        mobile, new_mobile, slab, self.surface_normal_axis
+                    )
+                    if atoms_too_close_two_sets(new_mobile, slab, self.blmin):
+                        continue
+                elif not self._policy.uses_surface:
+                    new_mobile.center()
+                return slab + new_mobile
+        return None
