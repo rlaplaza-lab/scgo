@@ -17,6 +17,14 @@ from scipy.spatial import KDTree
 from scgo.exceptions import (
     SCGOValidationError,
 )
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    format_connectivity_factor,
+    max_connectivity_scale,
+    min_connectivity_scale,
+    normalize_connectivity_factor,
+)
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import InitDiagnosticsCollector
@@ -380,15 +388,17 @@ def _compute_effective_placement_params(
 
 
 def _raise_if_connectivity_below_steric_floor(
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     steric_floor: float,
 ) -> None:
     """Reject parameter combinations that cannot yield a connected, clash-free cluster."""
-    if connectivity_factor + 1e-9 < steric_floor:
+    cf = normalize_connectivity_factor(connectivity_factor)
+    cf_min = min_connectivity_scale(cf)
+    if cf_min + 1e-9 < steric_floor:
         raise SCGOValidationError(
-            f"connectivity_factor ({connectivity_factor}) must be >= steric floor "
+            f"connectivity_factor ({format_connectivity_factor(cf)}) must be >= steric floor "
             f"({steric_floor}) when GA blmin enforcement is active: bonded pairs "
-            f"need distance <= connectivity_factor*(r_i+r_j) and >= "
+            f"need distance <= connectivity threshold and >= "
             f"steric_floor*(r_i+r_j). Increase connectivity_factor or pass "
             f"blmin_ratio=None to disable the GA steric floor."
         )
@@ -461,7 +471,8 @@ def random_spherical(
     rng: np.random.Generator,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     max_connectivity_retries: int = MAX_CONNECTIVITY_RETRIES,
     blmin_ratio: float | None = BLMIN_RATIO_DEFAULT,
 ) -> Atoms:
@@ -644,7 +655,8 @@ def grow_from_seed(
     cell_side: float,
     rng: np.random.Generator,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     blmin_ratio: float | None = BLMIN_RATIO_DEFAULT,
 ) -> Atoms | None:
     """Try to grow a smaller candidate :class:`ase.Atoms` to the target composition.
@@ -768,7 +780,8 @@ def _add_atoms_to_cluster_iteratively(
     min_distance_factor: float,
     placement_radius_scaling: float,
     rng: np.random.Generator,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     *,
     steric_floor: float | None = None,
 ) -> Atoms | None:
@@ -800,6 +813,9 @@ def _add_atoms_to_cluster_iteratively(
 
     atoms_to_add = list(atoms_to_add)
     new_atoms = base_atoms.copy()
+    cf = normalize_connectivity_factor(connectivity_factor)
+    cf_scale = max_connectivity_scale(cf)
+    connectivity_factor = cf  # normalized for validation callers
 
     radii_to_add = {s: get_covalent_radius(s) for s in set(atoms_to_add)}
 
@@ -819,7 +835,7 @@ def _add_atoms_to_cluster_iteratively(
     # single-atom growth is more reliable than convex-hull batch placement.
     max_attempts_per_atom = MAX_PLACEMENT_ATTEMPTS_PER_ATOM
     steric_reference = steric_floor if steric_floor is not None else min_distance_factor
-    tight_connectivity = connectivity_factor <= steric_reference * (1.0 + 1e-6)
+    tight_connectivity = cf_scale <= steric_reference * (1.0 + 1e-6)
 
     if len(new_atoms) < 4 or tight_connectivity:
         return _add_atoms_single_mode(
@@ -860,7 +876,7 @@ def _add_atoms_single_mode(
     min_distance_factor: float,
     placement_radius_scaling: float,
     rng: np.random.Generator,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     is_two_atom_cluster: bool,
     max_attempts_per_atom: int,
     logger,
@@ -873,6 +889,9 @@ def _add_atoms_single_mode(
     Used for clusters with <4 atoms, when connectivity is as tight as the
     steric floor, and as the fallback when batch placement finds no candidates.
     """
+    cf = normalize_connectivity_factor(connectivity_factor)
+    cf_scale = max_connectivity_scale(cf)
+    connectivity_factor = cf
     for atom_idx, atom_symbol in enumerate(atoms_to_add):
         atom_radius = radii_to_add[atom_symbol]
         new_pos = None
@@ -997,9 +1016,7 @@ def _add_atoms_single_mode(
                 min_allowed_dists = (
                     current_radii + atom_radius
                 ) * effective_min_distance
-                max_connectivity_dists = (
-                    current_radii + atom_radius
-                ) * connectivity_factor
+                max_connectivity_dists = (current_radii + atom_radius) * cf_scale
 
                 if use_kdtree and tree is not None:
                     query_r = float(
@@ -1126,7 +1143,7 @@ def _add_atoms_batch_mode(
     min_distance_factor: float,
     placement_radius_scaling: float,
     rng: np.random.Generator,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     max_attempts_per_atom: int,
     logger,
     base_atoms: Atoms,
@@ -1134,6 +1151,9 @@ def _add_atoms_batch_mode(
     steric_floor: float | None = None,
 ) -> Atoms | None:
     """Batch placement mode for clusters with ≥4 atoms."""
+    cf = normalize_connectivity_factor(connectivity_factor)
+    cf_scale = max_connectivity_scale(cf)
+    connectivity_factor = cf
     total_target = len(base_atoms) + len(atoms_to_add)
     batch_attempt = 0
     max_batch_attempts = max_attempts_per_atom  # Limit total batch attempts
@@ -1247,9 +1267,7 @@ def _add_atoms_batch_mode(
                 min_allowed_dists = (
                     current_radii + atom_radius
                 ) * effective_min_distance
-                max_connectivity_dists = (
-                    current_radii + atom_radius
-                ) * connectivity_factor
+                max_connectivity_dists = (current_radii + atom_radius) * cf_scale
                 if use_kdtree:
                     query_r = float(
                         max(np.max(min_allowed_dists), np.max(max_connectivity_dists))

@@ -11,3 +11,12 @@ connectivity, adsorbate integrity, placement tuning, and GA operators.
    :undoc-members:
    :show-inheritance:
    :exclude-members: _*
+
+Connectivity factor
+-------------------
+
+.. automodule:: scgo.system_types.connectivity_factor
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*

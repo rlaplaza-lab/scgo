@@ -11,7 +11,7 @@ from scgo.exceptions import (
 )
 from scgo.param_presets import get_ts_defaults
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import ConnectivityFactorInput, SystemType, get_system_policy
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
 
 
@@ -44,7 +44,7 @@ class NebRunConfig:
     layer_cluster_threshold_ang: float
     neb_interpolation_bond_tolerance_a: float
     adsorbate_definition: Any | None
-    connectivity_factor: float | None
+    connectivity_factor: ConnectivityFactorInput | None
     allow_cluster_fragmentation: bool
     allow_adsorbate_surface_detachment: bool
     enforce_adsorbate_subgraph_integrity: bool
@@ -53,7 +53,7 @@ class NebRunConfig:
     torchsim_params: dict[str, Any] | None
     # Per-config connectivity factor source (ClusterAdsorbateConfig). When a
     # NebRunConfig is built with connectivity_factor=None, this is honored by the
-    # validation gateway (precedence: explicit float → cluster_adsorbate_config →
+    # validation gateway (precedence: explicit value → cluster_adsorbate_config →
     # surface_config → module default). Optional for parity with the GO gate.
     cluster_adsorbate_config: Any | None = None
     # Atom budget (sum of n_images * n_atoms) for one fused parallel-NEB force

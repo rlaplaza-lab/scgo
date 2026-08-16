@@ -97,8 +97,11 @@ Use the same ``seed`` everywhere it appears (``seed=``, ``go_params['seed']``,
 Connectivity and steric checks
 ------------------------------
 
-- ``connectivity_factor`` (default ``1.4`` in GO presets) scales covalent radii
-  for connectivity validation during initialization and after GA operators.
+- ``connectivity_factor`` (default ``1.4`` in GO presets) is the shared
+  connectivity spec for initialization, post-operator GA checks, per-minimum
+  algorithm gates, the ``run_trials`` final structural gate, and TS. It accepts
+  a global float or a dict of per-element and/or per-pair multipliers (see
+  :doc:`/validation_and_constraints` and :doc:`/parameters`).
 - Placement clash tables use ``BLMIN_RATIO_DEFAULT`` (``0.7``), aligned with GA
   ``blmin`` tables via :func:`~scgo.initialization.atomic_radii.build_blmin`.
 

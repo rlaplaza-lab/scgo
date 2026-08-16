@@ -79,6 +79,8 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
     SystemType,
     get_system_policy,
     resolve_search_mobile_composition,
@@ -243,7 +245,7 @@ class OffspringBuildContext:
     slab_for_pairing: Atoms | None
     surface_normal_axis: int
     adsorbate_definition: AdsorbateDefinition | None
-    connectivity_factor: float | None
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor | None
     allow_cluster_fragmentation: bool
     allow_adsorbate_surface_detachment: bool
     enforce_adsorbate_subgraph_integrity: bool
@@ -255,6 +257,7 @@ class OffspringBuildContext:
     operators_list: list
     name_map: dict[str, int]
     operators_epoch: int
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None
 
 
 _OFFSPRING_WORKER_STATE: dict[str, Any] = {}
@@ -398,6 +401,7 @@ def _build_offspring_worker(
             n_slab=ctx.n_slab,
             adsorbate_definition=ctx.adsorbate_definition,
             connectivity_factor=ctx.connectivity_factor,
+            cluster_adsorbate_config=ctx.cluster_adsorbate_config,
             allow_cluster_fragmentation=ctx.allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=ctx.allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
@@ -482,12 +486,13 @@ class GAWriteContext:
     system_type: SystemType
     surface_mode: bool
     surface_config: SurfaceSystemConfig | None
-    connectivity_factor: float | None
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor | None
     allow_cluster_fragmentation: bool
     allow_adsorbate_surface_detachment: bool
     enforce_adsorbate_subgraph_integrity: bool
     freeze_adsorbate_internal_geometry: bool = False
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None
 
 
 def _write_relaxed_candidate(
@@ -530,6 +535,7 @@ def _write_relaxed_candidate(
         surface_config=ctx.surface_config,
         adsorbate_definition=ctx.adsorbate_definition,
         connectivity_factor=ctx.connectivity_factor,
+        cluster_adsorbate_config=ctx.cluster_adsorbate_config,
         allow_cluster_fragmentation=ctx.allow_cluster_fragmentation,
         allow_adsorbate_surface_detachment=ctx.allow_adsorbate_surface_detachment,
         enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
@@ -669,7 +675,10 @@ def _relax_unrelaxed_candidates(
     counters: dict[str, int] | None = None,
     composition: list[str] | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
@@ -761,6 +770,7 @@ def _relax_unrelaxed_candidates(
                         surface_mode=surface_mode,
                         surface_config=surface_config,
                         connectivity_factor=connectivity_factor,
+                        cluster_adsorbate_config=cluster_adsorbate_config,
                         allow_cluster_fragmentation=allow_cluster_fragmentation,
                         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                         enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
@@ -853,7 +863,9 @@ def ga_go(
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
@@ -1299,6 +1311,7 @@ def ga_go(
                     surface_config=surface_config,
                     adsorbate_definition=adsorbate_definition,
                     connectivity_factor=connectivity_factor,
+                    cluster_adsorbate_config=cluster_adsorbate_config,
                     allow_cluster_fragmentation=allow_cluster_fragmentation,
                     allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                     enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
@@ -1346,6 +1359,7 @@ def ga_go(
                             surface_mode=surface_mode,
                             surface_config=surface_config,
                             connectivity_factor=connectivity_factor,
+                            cluster_adsorbate_config=cluster_adsorbate_config,
                             allow_cluster_fragmentation=allow_cluster_fragmentation,
                             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
@@ -1555,6 +1569,7 @@ def ga_go(
                 ),
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
+                cluster_adsorbate_config=cluster_adsorbate_config,
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                 enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
@@ -1810,6 +1825,7 @@ def ga_go(
                 composition=composition,
                 adsorbate_definition=adsorbate_definition,
                 connectivity_factor=connectivity_factor,
+                cluster_adsorbate_config=cluster_adsorbate_config,
                 allow_cluster_fragmentation=allow_cluster_fragmentation,
                 allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                 enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
@@ -1911,6 +1927,7 @@ def ga_go(
             composition=composition,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
+            cluster_adsorbate_config=cluster_adsorbate_config,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,

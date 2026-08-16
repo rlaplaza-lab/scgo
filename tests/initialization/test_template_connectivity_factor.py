@@ -15,9 +15,20 @@ from scgo.initialization.templates import (
     _find_valid_template_types,
     generate_template_matches,
 )
+from scgo.system_types.connectivity_factor import (
+    connectivity_factor_cache_key,
+    normalize_connectivity_factor,
+)
 
 STRICT_FACTOR = 0.3
 LENIENT_FACTOR = CONNECTIVITY_FACTOR  # 1.4
+
+
+def _cache_key(n_atoms: int, factor) -> tuple:
+    return (
+        n_atoms,
+        connectivity_factor_cache_key(normalize_connectivity_factor(factor)),
+    )
 
 
 @pytest.fixture
@@ -38,8 +49,8 @@ class TestConnectivityFactorCacheKey:
         _find_valid_template_types(8, LENIENT_FACTOR)
 
         assert set(isolated_template_cache) == {
-            (8, STRICT_FACTOR),
-            (8, LENIENT_FACTOR),
+            _cache_key(8, STRICT_FACTOR),
+            _cache_key(8, LENIENT_FACTOR),
         }
 
     def test_repeated_calls_reuse_the_same_entry(self, isolated_template_cache):
@@ -48,7 +59,7 @@ class TestConnectivityFactorCacheKey:
         second = _find_valid_template_types(8, STRICT_FACTOR)
 
         assert first == second
-        assert set(isolated_template_cache) == {(8, STRICT_FACTOR)}
+        assert set(isolated_template_cache) == {_cache_key(8, STRICT_FACTOR)}
 
     def test_default_factor_matches_explicit_default(self, isolated_template_cache):
         """Omitting the factor is equivalent to passing the default."""
@@ -56,7 +67,16 @@ class TestConnectivityFactorCacheKey:
         explicit = _find_valid_template_types(13, CONNECTIVITY_FACTOR)
 
         assert implicit == explicit
-        assert set(isolated_template_cache) == {(13, float(CONNECTIVITY_FACTOR))}
+        assert set(isolated_template_cache) == {_cache_key(13, CONNECTIVITY_FACTOR)}
+
+    def test_dict_factor_gets_its_own_cache_entry(self, isolated_template_cache):
+        """Element/pair dicts must not collide with a global float key."""
+        _find_valid_template_types(8, 1.4)
+        _find_valid_template_types(8, {"Pt": 1.4})
+        assert set(isolated_template_cache) == {
+            _cache_key(8, 1.4),
+            _cache_key(8, {"Pt": 1.4}),
+        }
 
 
 class TestConnectivityFactorAffectsValidity:

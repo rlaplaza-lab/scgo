@@ -58,8 +58,9 @@ Radii and steric scoring
 ------------------------
 
 Operator clash checks and placement ranking use covalent-radius ``blmin`` tables
-(``BLMIN_RATIO_DEFAULT = 0.7``). Structure validation uses ``connectivity_factor``
-(typically 1.4) via :func:`~scgo.system_types.validate_structure_for_system_type`.
+(``BLMIN_RATIO_DEFAULT = 0.7``). Structure validation uses the shared
+``connectivity_factor`` spec (float or dict; default ``1.4``) via
+:func:`~scgo.system_types.validate_structure_for_system_type`.
 
 .. autofunction:: scgo.initialization.atomic_radii.build_blmin
 .. autofunction:: scgo.initialization.atomic_radii.build_blmin_from_zs

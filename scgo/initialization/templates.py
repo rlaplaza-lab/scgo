@@ -55,6 +55,14 @@ from scgo.database.cache import get_global_cache
 from scgo.exceptions import (
     SCGOValidationError,
 )
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    bond_threshold_matrix,
+    connectivity_factor_cache_key,
+    max_connectivity_scale,
+    normalize_connectivity_factor,
+)
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.rng_helpers import ensure_rng_or_create
@@ -340,7 +348,8 @@ def remove_atoms_from_vertices(
     cluster: Atoms,
     n_remove: int,
     target_composition: list[str] | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     rng: np.random.Generator | None = None,
 ) -> Atoms | None:
@@ -440,7 +449,9 @@ def remove_atoms_from_vertices(
         if len(current) > 1:
             radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
             dist_matrix = cdist(positions, positions)
-            thresh = (radii[:, None] + radii[None, :]) * connectivity_factor
+            thresh = bond_threshold_matrix(
+                radii, symbols, normalize_connectivity_factor(connectivity_factor)
+            )
             # Exclude self-pairs on the diagonal.
             coordination = np.sum(
                 (dist_matrix <= thresh) & ~np.eye(len(current), dtype=bool),
@@ -573,7 +584,8 @@ def grow_template_via_facets(
     cell_side: float,
     rng: np.random.Generator,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     template_name: str | None = None,
 ) -> Atoms | None:
     """Grow a template seed to target composition by placing atoms on all facets.
@@ -857,7 +869,8 @@ def _generate_custom_template(
         [list[str], int, float, float], list[np.ndarray] | list[list[float]]
     ],
     rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     n_atoms_validator: Callable[[int], tuple[bool, str | None]] | None = None,
     post_process: Callable[[Atoms, list[str], int], Atoms] | None = None,
     expected_n_atoms: int | None = None,
@@ -930,7 +943,7 @@ def _generate_custom_template(
 def _rescale_cluster_to_bond_length(
     atoms: Atoms,
     composition: list[str],
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
 ) -> None:
     """Rescale ASE-generated cluster so nn distances match covalent-based bond length.
 
@@ -958,7 +971,10 @@ def _rescale_cluster_to_bond_length(
     current_scale = float(np.mean(min_dists))
     if current_scale <= 0:
         return
-    target_scale: float = a * min(1.0, connectivity_factor * 0.95)
+    cf_scale = max_connectivity_scale(
+        normalize_connectivity_factor(connectivity_factor)
+    )
+    target_scale: float = a * min(1.0, cf_scale * 0.95)
     scale: float = target_scale / current_scale
     com = np.mean(positions, axis=0)
     new_positions = com + (positions - com) * scale
@@ -1024,7 +1040,8 @@ def _generate_ase_template_with_common_pattern(
     template_name: str,
     find_params_func: Callable[[int], Any],
     generate_base_func: Callable[[str, Any], Atoms],
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Helper function for ASE-based template generators with common pattern.
 
@@ -1106,7 +1123,8 @@ def _adjust_template_to_target(
     composition: list[str],
     rng: np.random.Generator,
     template_name: str,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
@@ -1239,7 +1257,8 @@ def _generate_ase_template_from_registry(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Helper to generate ASE-based template from registry.
 
@@ -1410,7 +1429,8 @@ def _generate_custom_template_by_name(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Generate a custom template by consulting the ``_CUSTOM_TEMPLATE_SPECS`` table.
 
@@ -1446,7 +1466,8 @@ def _generate_ase_template(
     composition: list[str],
     n_atoms: int,
     rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     return _generate_ase_template_from_registry(
         template_name, composition, n_atoms, rng, connectivity_factor
@@ -1471,7 +1492,8 @@ def generate_template_structure(
     n_atoms: int,
     template_type: str = "auto",
     rng: np.random.Generator | None = None,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Generate a template structure of the specified type.
 
@@ -1521,7 +1543,9 @@ def generate_template_structure(
 
 
 def _find_valid_template_types(
-    n_atoms: int, connectivity_factor: float = CONNECTIVITY_FACTOR
+    n_atoms: int,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> list[str]:
     """Find all template types that can successfully generate a structure with n_atoms.
 
@@ -1540,7 +1564,12 @@ def _find_valid_template_types(
     if n_atoms <= 0:
         return []
 
-    cache_key = (n_atoms, float(connectivity_factor))
+    cache_key = (
+        n_atoms,
+        connectivity_factor_cache_key(
+            normalize_connectivity_factor(connectivity_factor)
+        ),
+    )
 
     leader = False
     with _VALID_TEMPLATE_TYPES_LOCK:
@@ -1604,7 +1633,8 @@ def _generate_template_with_atom_adjustment(
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Generate a template structure and adjust atom count to match target.
 
@@ -1689,7 +1719,7 @@ def _validate_and_add_template(
     template_type: str,
     template_description: str,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     logger_instance: Any = None,
     composition: list[str] | None = None,
 ) -> bool:
@@ -1755,7 +1785,8 @@ def generate_template_matches(
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     include_exact: bool = True,
     include_near: bool = True,
 ) -> list[Atoms]:

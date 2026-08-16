@@ -119,17 +119,25 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Glob pattern for reference DBs (for diversity mode)
    * - ``connectivity_factor``
      - ``1.4``
-     - Connectivity threshold (covalent radii multiplier) for initialization
-       validation and post-operator GA checks; see :doc:`/api/initialization`.
-       For surface/adsorbate runs the *effective* factor resolves through
+     - Connectivity threshold for initialization, post-operator GA checks,
+       per-minimum algorithm gates, the ``run_trials`` final structural gate, and
+       TS. Accepts a global float or a dict of per-element and/or per-pair
+       multipliers (see :doc:`/validation_and_constraints`). Bonded means
+       distance ≤ threshold:
+
+       - float ``f``: ``(r_i + r_j) * f``
+       - element dict ``{"Pt": 1.8, "C": 1.4}``: ``r_i*f_i + r_j*f_j``
+         (missing symbols use ``1.4``)
+       - pair entry ``"Pt-C"`` or ``("Pt", "C")``: ``(r_i + r_j) * f_ij``
+         (order-independent; pair overrides element-derived thresholds)
+
+       Example for Pt on graphite: ``{"Pt": 1.4, "C": 1.4, "Pt-C": 1.8}``.
+       Effective value resolves via
        :func:`~scgo.system_types.resolve_connectivity_factor` with precedence
        ``connectivity_factor`` → ``ClusterAdsorbateConfig.structure_connectivity_factor``
-       → ``SurfaceSystemConfig.structure_connectivity_factor`` → ``1.4``; set the
-       config-level values on ``cluster_adsorbate_config`` / ``surface_config``
-       (not as a top-level key). The algorithm gates pass ``connectivity_factor``
-       explicitly, while the ``run_trials`` final structural gate resolves it from
-       the same precedence without the explicit top-level override — see
-       :doc:`/validation_and_constraints`.
+       → ``SurfaceSystemConfig.structure_connectivity_factor`` → ``1.4``. Set
+       config-level fallbacks on ``cluster_adsorbate_config`` / ``surface_config``
+       (not as a separate top-level key).
    * - ``allow_cluster_fragmentation``
      - ``False``
      - Allow cluster to split (surface only)
@@ -346,7 +354,8 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Remove duplicate minima before pairing
    * - ``connectivity_factor``
      - ``1.4``
-     - Connectivity threshold
+     - Same connectivity spec as GO (float or per-element/pair dict); resolved
+       with the same precedence for TS structural gates.
    * - ``similarity_tolerance``
      - (default)
      - Minima similarity tolerance for pairing
@@ -525,7 +534,8 @@ Surface Config
      - Max cluster placement attempts on slab
    * - ``structure_connectivity_factor``
      - ``1.4``
-     - Connectivity factor for surface slab validation. Read by
+     - Fallback connectivity spec (float or dict; same forms as top-level
+       ``connectivity_factor``) when the GO/TS param is omitted. Read by
        :func:`~scgo.system_types.resolve_connectivity_factor` after any explicit
        ``connectivity_factor`` and the ``ClusterAdsorbateConfig`` value, before the
        module default. Used for slab-contact / supported-deposit checks, not only
@@ -561,6 +571,10 @@ Adsorbate Config
    * - ``blmin_ratio``
      - ``0.7``
      - Clash threshold
+   * - ``structure_connectivity_factor``
+     - ``1.4``
+     - Fallback connectivity spec (float or dict; same forms as top-level
+       ``connectivity_factor``) when the GO/TS param is omitted.
 
 See Also
 ----------

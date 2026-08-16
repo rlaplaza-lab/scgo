@@ -22,6 +22,10 @@ from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.layers import _layer_indices_by_clustering
 from scgo.surface.pbc import normalize_slab_pbc
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+)
 
 DEFAULT_GRAPHITE_SLAB_LAYERS = 5
 DEFAULT_GRAPHITE_SLAB_REPEAT_XY = 4
@@ -185,7 +189,8 @@ def make_graphene_surface_config(
     reconstruct: bool = False,
     reconstruction_shift: float = 0.10,
     name: str = "graphene",
-    structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     defect_bias_probability: float | None = None,
 ) -> SurfaceSystemConfig:
     """Single-layer graphene (or monovacancy) preset for ``surface_cluster`` search."""
@@ -293,7 +298,8 @@ def make_graphite_surface_config(
     slab_layers: int = DEFAULT_GRAPHITE_SLAB_LAYERS,
     slab_repeat_xy: int = DEFAULT_GRAPHITE_SLAB_REPEAT_XY,
     vacuum: float = DEFAULT_GRAPHITE_SLAB_VACUUM,
-    structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> SurfaceSystemConfig:
     """Graphite slab preset (top layer relaxes with adsorbate during GO/NEB)."""
     slab = build_graphite_slab(
@@ -319,7 +325,8 @@ def make_defected_graphite_surface_config(
     vacuum: float = DEFAULT_GRAPHITE_SLAB_VACUUM,
     n_vacancies: int = 1,
     seed: int = 0,
-    structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> SurfaceSystemConfig:
     """Defected graphite preset for ``system_type='surface'`` slab search."""
     slab = build_defected_graphite_slab(
@@ -349,7 +356,8 @@ def make_n_doped_graphite_surface_config(
     vacuum: float = DEFAULT_GRAPHITE_SLAB_VACUUM,
     n_dopants: int = 1,
     seed: int = 0,
-    structure_connectivity_factor: float = CONNECTIVITY_FACTOR,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> SurfaceSystemConfig:
     """N-doped graphite preset for ``system_type='surface_adsorbate'`` search."""
     slab = build_n_doped_graphite_slab(

@@ -9,6 +9,11 @@ from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    normalize_connectivity_factor,
+)
 from scgo.utils.validation import validate_positive
 
 
@@ -24,7 +29,9 @@ class ClusterAdsorbateConfig:
     random_spin_about_normal: bool = True
     validate_combined_structure: bool = True
     structure_min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT
-    structure_connectivity_factor: float = CONNECTIVITY_FACTOR
+    structure_connectivity_factor: (
+        ConnectivityFactorInput | NormalizedConnectivityFactor
+    ) = CONNECTIVITY_FACTOR
     structure_check_clashes: bool = True
     structure_check_connectivity: bool = True
 
@@ -42,10 +49,13 @@ class ClusterAdsorbateConfig:
             self.structure_min_distance_factor,
             strict=True,
         )
-        validate_positive(
+        object.__setattr__(
+            self,
             "structure_connectivity_factor",
-            self.structure_connectivity_factor,
-            strict=True,
+            normalize_connectivity_factor(
+                self.structure_connectivity_factor,
+                name="structure_connectivity_factor",
+            ),
         )
 
 

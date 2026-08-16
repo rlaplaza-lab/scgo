@@ -18,6 +18,7 @@ from scgo.surface import make_surface_config
 from scgo.surface.deposition import combine_slab_adsorbate, slab_surface_extreme
 from scgo.system_types import (
     AdsorbateDefinition,
+    normalize_connectivity_factor,
     resolve_connectivity_factor,
     validate_connectivity_policy,
     validate_minimum_structure,
@@ -44,30 +45,21 @@ def test_resolve_connectivity_factor_precedence() -> None:
     surf = make_surface_config(_pt_slab())
 
     # Explicit value wins over both configs.
-    assert (
-        resolve_connectivity_factor(
-            1.1, cluster_adsorbate_config=ca, surface_config=surf
-        )
-        == 1.1
-    )
+    assert resolve_connectivity_factor(
+        1.1, cluster_adsorbate_config=ca, surface_config=surf
+    ) == normalize_connectivity_factor(1.1)
     # cluster_adsorbate_config beats surface_config.
-    assert (
-        resolve_connectivity_factor(
-            None, cluster_adsorbate_config=ca, surface_config=surf
-        )
-        == 2.5
-    )
+    assert resolve_connectivity_factor(
+        None, cluster_adsorbate_config=ca, surface_config=surf
+    ) == normalize_connectivity_factor(2.5)
     # surface_config beats module default.
     assert resolve_connectivity_factor(
         None, cluster_adsorbate_config=None, surface_config=surf
-    ) == float(surf.structure_connectivity_factor)
+    ) == normalize_connectivity_factor(surf.structure_connectivity_factor)
     # module default when nothing is set.
-    assert (
-        resolve_connectivity_factor(
-            None, cluster_adsorbate_config=None, surface_config=None
-        )
-        == 1.4
-    )
+    assert resolve_connectivity_factor(
+        None, cluster_adsorbate_config=None, surface_config=None
+    ) == normalize_connectivity_factor(1.4)
 
 
 # --- Task 1: unified policy across system types -----------------------------

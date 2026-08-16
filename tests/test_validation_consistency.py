@@ -161,6 +161,56 @@ def test_run_trials_final_gate_drops_fragmented_candidate(
     assert len(surviving) == 3
 
 
+def test_final_gate_honors_top_level_connectivity_factor() -> None:
+    """params connectivity_factor must apply at the dump-time structural gate."""
+    from scgo.initialization.atomic_radii import get_covalent_radius
+    from scgo.minima_search.core import _gate_structurally_valid_candidates
+
+    r = get_covalent_radius("Pt")
+    # Distance between default 1.4× and a permissive 2.0× threshold.
+    d = (r + r) * 1.7
+    loose = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 0.0], [d, 0.0, 0.0]],
+        cell=[30.0, 30.0, 30.0],
+        pbc=False,
+    )
+    candidates = [(0.0, loose)]
+
+    dropped = _gate_structurally_valid_candidates(
+        candidates,
+        "gas_cluster",
+        None,
+        None,
+        {},  # no explicit connectivity_factor → default 1.4
+        None,
+        verbosity=0,
+    )
+    assert dropped == []
+
+    kept = _gate_structurally_valid_candidates(
+        candidates,
+        "gas_cluster",
+        None,
+        None,
+        {"connectivity_factor": 2.0},
+        None,
+        verbosity=0,
+    )
+    assert len(kept) == 1
+
+    kept_dict = _gate_structurally_valid_candidates(
+        candidates,
+        "gas_cluster",
+        None,
+        None,
+        {"connectivity_factor": {"Pt": 2.0}},
+        None,
+        verbosity=0,
+    )
+    assert len(kept_dict) == 1
+
+
 # --- Task 4b/4c: NEB energy profile gate for bare gas ------------------------
 
 

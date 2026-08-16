@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
     SystemPolicy,
     SystemType,
     get_system_policy,
@@ -30,7 +32,7 @@ class ResolvedRunContext:
 
     system_type: SystemType
     policy: SystemPolicy
-    connectivity_factor: float
+    connectivity_factor: NormalizedConnectivityFactor
     fitness_strategy: FitnessStrategy
 
 
@@ -38,7 +40,9 @@ def validate_and_resolve_run_context(
     *,
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     fitness_strategy: str | FitnessStrategy | None = None,
 ) -> ResolvedRunContext:
@@ -64,6 +68,6 @@ def validate_and_resolve_run_context(
     return ResolvedRunContext(
         system_type=system_type,
         policy=policy,
-        connectivity_factor=float(resolved_cf),
+        connectivity_factor=resolved_cf,
         fitness_strategy=resolved_fitness,
     )

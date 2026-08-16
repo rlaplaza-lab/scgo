@@ -546,6 +546,7 @@ def _gate_structurally_valid_candidates(
                 adsorbate_definition=global_optimizer_kwargs.get(
                     "adsorbate_definition"
                 ),
+                connectivity_factor=global_optimizer_kwargs.get("connectivity_factor"),
                 cluster_adsorbate_config=cluster_adsorbate_config,
                 allow_cluster_fragmentation=global_optimizer_kwargs.get(
                     "allow_cluster_fragmentation", False

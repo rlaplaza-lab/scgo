@@ -93,8 +93,10 @@ Adsorbate placement tuning
 For ``*_adsorbate`` GO runs, the placement and validation knobs live in
 ``go_params`` only:
 
-- ``connectivity_factor`` — primary threshold for structure validation (and the
-  fallback for hierarchical placement when no config is set).
+- ``connectivity_factor`` — primary connectivity spec for *all* structural gates
+  (initialization, post-operator checks, per-minimum algorithm gates, the
+  ``run_trials`` final gate, and TS). Accepts a float or a per-element/pair
+  dict; see :doc:`/validation_and_constraints`.
 - ``cluster_adsorbate_config`` — optional
   :class:`~scgo.cluster_adsorbate.config.ClusterAdsorbateConfig` (fragment height
   range, ``max_placement_attempts``, ``blmin_ratio``, clash/connectivity checks).
@@ -123,8 +125,8 @@ partitions the mobile region with ASE tags (core = ``0``, each fragment =
   the same placement engine as initialization.
 
 Operator clash checks use :func:`~scgo.initialization.atomic_radii.build_blmin`
-(``BLMIN_RATIO_DEFAULT = 0.7``). Post-operator validation uses
-``connectivity_factor`` (typically 1.4) via
+(``BLMIN_RATIO_DEFAULT = 0.7``). Post-operator validation uses the shared
+``connectivity_factor`` spec (float or dict; default ``1.4``) via
 :func:`~scgo.system_types.validate_structure_for_system_type`.
 
 Full module reference (policies, ``AdsorbateDefinition``,

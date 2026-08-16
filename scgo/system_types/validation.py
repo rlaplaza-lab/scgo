@@ -18,6 +18,12 @@ from scgo.initialization.initialization_config import (
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types.composition import AdsorbateDefinition
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    format_connectivity_factor,
+    normalize_connectivity_factor,
+)
 from scgo.system_types.policy import (
     SystemType,
     get_system_policy,
@@ -58,7 +64,7 @@ def validate_connectivity_policy(
     uses_surface: bool,
     n_slab: int,
     n_core_mobile: int,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
@@ -97,7 +103,7 @@ def validate_connectivity_policy(
 
 def _validate_gas_connectivity_policy(
     atoms: Atoms,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
 ) -> tuple[bool, str]:
     """Non-surface path: the whole structure must be one connected component."""
@@ -112,7 +118,7 @@ def _validate_surface_connectivity_policy(
     *,
     n_slab: int,
     n_core_mobile: int,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
     allow_cluster_fragmentation: bool,
     allow_adsorbate_surface_detachment: bool,
@@ -202,7 +208,7 @@ def _validate_surface_connectivity_policy(
                 False,
                 "Every mobile subgroup must touch the slab "
                 f"(subgroup size {len(subgroup)} has no slab contact within "
-                f"connectivity_factor={connectivity_factor})",
+                f"connectivity_factor={format_connectivity_factor(normalize_connectivity_factor(connectivity_factor))})",
             )
     return True, ""
 
@@ -249,7 +255,9 @@ def validate_structure_for_system_type(
     surface_config: SurfaceSystemConfig | None = None,
     n_slab: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
@@ -269,10 +277,10 @@ def validate_structure_for_system_type(
         surface_config: Surface configuration (for surface systems)
         n_slab: Number of slab atoms (for surface systems)
         adsorbate_definition: Adsorbate definition (for adsorbate systems)
-        connectivity_factor: Explicit connectivity factor, used verbatim when not
-            None. Otherwise resolved from ``cluster_adsorbate_config`` then
-            ``surface_config`` then the module default (precedence matches
-            :func:`resolve_connectivity_factor`).
+        connectivity_factor: Explicit connectivity factor (float or per-element/pair
+            dict), used verbatim when not None. Otherwise resolved from
+            ``cluster_adsorbate_config`` then ``surface_config`` then the module
+            default (precedence matches :func:`resolve_connectivity_factor`).
         cluster_adsorbate_config: Per-config connectivity factor source. When
             ``connectivity_factor`` is None, its ``structure_connectivity_factor``
             is honored (overriding ``surface_config``).
@@ -486,7 +494,9 @@ def validate_minimum_structure(
     surface_config: SurfaceSystemConfig | None = None,
     n_slab: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,

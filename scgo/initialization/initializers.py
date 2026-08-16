@@ -23,6 +23,10 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.metadata.atoms import set_tags
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+)
 from scgo.utils.helpers import (
     get_cluster_formula,
     get_composition_counts,
@@ -338,7 +342,7 @@ def _prepare_template_candidates(
     cell_side: float,
     placement_radius_scaling: float,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
 ) -> list[Atoms]:
     """Build the deduplicated, deterministically sorted template candidate list.
 
@@ -443,7 +447,7 @@ def _apply_template_rotation_and_validate(
     cell_side: float,
     rng: np.random.Generator,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     composition: list[str] | None = None,
 ) -> Atoms | None:
     """Apply rotation diversity, set cell, center, and validate a template structure.
@@ -491,7 +495,7 @@ def _try_template_generation(
     rng: np.random.Generator,
     placement_radius_scaling: float,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     template_index: int | None = None,
     discovery_templates: list[Atoms] | None = None,
 ) -> Atoms | None:
@@ -696,7 +700,7 @@ def _grow_from_random_seed(
     rng: np.random.Generator,
     placement_radius_scaling: float,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
 ) -> Atoms | None:
     """Generate a small random seed and grow it to the target composition.
 
@@ -902,7 +906,7 @@ def _try_seed_growth(
     rng: np.random.Generator,
     placement_radius_scaling: float,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     candidates_by_formula: dict[str, list[tuple[float, Atoms]]],
     valid_combinations: list[tuple[str, ...]],
 ) -> Atoms | None:
@@ -1015,7 +1019,7 @@ def _discover_available_strategies(
     rng: np.random.Generator,
     placement_radius_scaling: float,
     min_distance_factor: float,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     candidates_by_formula: dict[str, list[tuple[float, Atoms]]],
     valid_combinations: list[tuple[str, ...]],
     n_exact: int = 0,
@@ -1071,7 +1075,7 @@ def _discover_available_strategies(
 def _try_strategies_in_order(
     strategies: list[tuple[str, Callable[..., Atoms]]],
     composition: list[str],
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
     return_strategy: bool = False,
 ) -> Atoms | tuple[Atoms, str, str | None]:
@@ -1175,7 +1179,8 @@ def create_initial_cluster(
     vacuum: float = VACUUM_DEFAULT,
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     *,
     plan: BatchInitPlan | None = None,
     allocation: tuple[str, int | None] | None = None,
@@ -1341,7 +1346,8 @@ def _generate_single_structure_internal(
     vacuum: float = VACUUM_DEFAULT,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     template_index: int | None = None,
     discovery_templates: list[Atoms] | None = None,
     precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]]
@@ -1439,7 +1445,8 @@ def _generate_structure_batch_item(
     vacuum: float = VACUUM_DEFAULT,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     discovery_templates: list[Atoms] | None = None,
     precomputed_candidates_by_formula: dict[str, list[tuple[float, Atoms]]]
     | None = None,
@@ -1531,7 +1538,8 @@ def plan_batch_initialization(
     mode: str = "smart",
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     reuse_exact_matches: bool = True,
 ) -> BatchInitPlan:
     """Run discovery + strategy allocation once for a whole batch.
@@ -1633,7 +1641,8 @@ def create_initial_cluster_batch(
     vacuum: float = VACUUM_DEFAULT,
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     n_jobs: int | None = None,
     *,
     plan: BatchInitPlan | None = None,

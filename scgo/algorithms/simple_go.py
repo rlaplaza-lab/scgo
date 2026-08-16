@@ -23,6 +23,8 @@ from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     AdsorbateDefinition,
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
     SystemType,
     validate_minimum_structure,
 )
@@ -90,7 +92,9 @@ def simple_go(
     surface_config: SurfaceSystemConfig | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     n_slab: int | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,

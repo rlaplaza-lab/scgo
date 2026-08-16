@@ -5,6 +5,12 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    format_connectivity_factor,
+    normalize_connectivity_factor,
+)
 from scgo.utils.logging import get_logger
 
 from .geometry_helpers import (
@@ -55,7 +61,7 @@ def _apply_random_rotation(atoms: Atoms, rng: np.random.Generator) -> Atoms:
 def _is_valid_placement(
     seed_to_add: Atoms,
     combined_atoms: Atoms,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     min_distance_factor: float = SEED_CLASH_FACTOR,
 ) -> bool:
     """Check if a seed placement is valid (no clashes and maintains connectivity)."""
@@ -86,7 +92,8 @@ def combine_seeds(
     cell_side: float,
     rng: np.random.Generator,
     separation_scaling: float = 1.0,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     min_distance_factor: float = SEED_CLASH_FACTOR,
 ) -> Atoms | None:
     """Combine seed clusters into one structure using facet-to-facet placement.
@@ -187,7 +194,8 @@ def combine_seeds(
             )
             logger.warning(
                 f"Seed {i + 1} placement created disconnected cluster. "
-                f"Current connectivity_factor={connectivity_factor:.2f}. "
+                f"Current connectivity_factor="
+                f"{format_connectivity_factor(normalize_connectivity_factor(connectivity_factor))}. "
                 f"Analysis: {analysis_msg}. "
                 f"Suggested connectivity_factor: {suggested_factor:.2f}"
             )
@@ -215,7 +223,8 @@ def combine_and_grow(
     rng: np.random.Generator,
     vdw_scaling: float = 1.0,
     min_distance_factor: float = SEED_CLASH_FACTOR,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Combine seeds and grow the result to the target composition.
 

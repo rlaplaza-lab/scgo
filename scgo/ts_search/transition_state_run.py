@@ -27,6 +27,8 @@ from scgo.surface.constraints import (
     surface_slab_constraint_summary,
 )
 from scgo.system_types import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
     SystemType,
     as_adsorbate_definition,
     get_system_policy,
@@ -433,7 +435,9 @@ def _apply_surface_ts_geometry_gate(
     surface_config: SurfaceSystemConfig | None,
     system_type: SystemType,
     adsorbate_definition: Any | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     cluster_adsorbate_config: Any | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
@@ -538,7 +542,9 @@ def run_transition_state_search(
     surface_config: SurfaceSystemConfig | None = None,
     write_timing_json: bool = False,
     adsorbate_definition: Any | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,

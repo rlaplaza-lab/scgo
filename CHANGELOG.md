@@ -4,6 +4,10 @@
 
 ### Added
 
+- `connectivity_factor` and `structure_connectivity_factor` accept a float or a
+  dict of per-element and/or per-pair multipliers (`"Pt-C"` or `("Pt", "C")`;
+  pair entries override element-derived thresholds; missing keys fall back to
+  `1.4`). See :mod:`scgo.system_types.connectivity_factor`.
 - Single top-level `n_jobs` CPU-parallelism knob. It defaults to `1`
   (sequential) in `get_default_params()` and, when set (e.g. `-2` = all but one
   CPU, `-1` = all CPUs, or a positive count), scales every CPU-bound stage at
@@ -49,6 +53,18 @@
 
 ### Changed
 
+- `run_trials` final structural gate now honors top-level `connectivity_factor`
+  (same precedence as algorithm and TS gates: explicit →
+  `ClusterAdsorbateConfig.structure_connectivity_factor` →
+  `SurfaceSystemConfig.structure_connectivity_factor` → `1.4`). Previously the
+  dump-time gate resolved only from config fallbacks, so
+  `go_params["connectivity_factor"]` did not affect it.
+- Connectivity / clash validation hot paths specialize by factor kind (global /
+  element / pair / mixed): vectorized threshold matrices, shared distance
+  matrices for clash+connectivity diagnostics, nearest-neighbor-only slab
+  contact thresholds, and cross-set adsorbate-fragment thresholds. The same
+  resolved `connectivity_factor` (plus `cluster_adsorbate_config` fallback) is
+  threaded through GA storage, BH/simple/TS entry points, and surface gates.
 - Split `scgo.system_types` into a package (`policy`, `composition`,
   `validation`, `params`). Public import path unchanged.
 - Run identity (`system_type`, `surface_config`, adsorbate context) is resolved

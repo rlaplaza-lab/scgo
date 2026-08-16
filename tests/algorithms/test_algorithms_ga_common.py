@@ -256,7 +256,7 @@ def test_layer_stacking_cutoff_follows_template_physics() -> None:
         graphite.slab,
         int(gpart.n_fixed),
         surface_normal_axis=graphite.surface_normal_axis,
-        connectivity_factor=float(graphite.structure_connectivity_factor),
+        connectivity_factor=graphite.structure_connectivity_factor,
         use_mic=bool(graphite.comparator_use_mic),
     )
     assert g_cut is not None
@@ -283,7 +283,7 @@ def test_layer_stacking_cutoff_follows_template_physics() -> None:
         pt_cfg.slab,
         int(pt_part.n_fixed),
         surface_normal_axis=pt_cfg.surface_normal_axis,
-        connectivity_factor=float(pt_cfg.structure_connectivity_factor),
+        connectivity_factor=pt_cfg.structure_connectivity_factor,
         use_mic=True,
     )
     assert pt_cut is None

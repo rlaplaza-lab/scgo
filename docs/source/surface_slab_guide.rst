@@ -74,6 +74,11 @@ Both configs set ``fix_all_slab_atoms=False`` with ``n_relax_top_slab_layers=1``
 so the surface layer can relax with the deposited cluster; raise the layer count
 or pass ``fix_all_slab_atoms=True`` to freeze the whole slab.
 
+Metal–carbon contacts (e.g. Pt on graphite/graphene) are often longer than a
+default ``1.4×`` covalent-radius sum. Loosen only that contact via
+``go_params["connectivity_factor"]`` (also honored by the final structural gate),
+for example ``{"Pt": 1.4, "C": 1.4, "Pt-C": 1.8}``.
+
 Defective slabs
 ---------------
 

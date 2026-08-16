@@ -12,6 +12,11 @@ from scgo.exceptions import (
 )
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.pbc import normalize_slab_pbc
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    normalize_connectivity_factor,
+)
 from scgo.utils.logging import get_logger
 from scgo.utils.validation import validate_positive
 
@@ -81,7 +86,9 @@ class SurfaceSystemConfig:
     cluster_init_vacuum: float = 8.0
     init_mode: str = "smart"
     max_placement_attempts: int = 200
-    structure_connectivity_factor: float = CONNECTIVITY_FACTOR
+    structure_connectivity_factor: (
+        ConnectivityFactorInput | NormalizedConnectivityFactor
+    ) = CONNECTIVITY_FACTOR
     defect_bias_probability: float = 0.0
 
     def __post_init__(self) -> None:
@@ -97,10 +104,13 @@ class SurfaceSystemConfig:
         validate_positive(
             "adsorption_height_max", self.adsorption_height_max, strict=True
         )
-        validate_positive(
+        object.__setattr__(
+            self,
             "structure_connectivity_factor",
-            self.structure_connectivity_factor,
-            strict=True,
+            normalize_connectivity_factor(
+                self.structure_connectivity_factor,
+                name="structure_connectivity_factor",
+            ),
         )
         if self.adsorption_height_min > self.adsorption_height_max:
             raise SCGOValidationError(

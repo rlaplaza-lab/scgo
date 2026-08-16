@@ -23,6 +23,13 @@ from scgo.initialization.initialization_config import (
 from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import validate_connectivity_policy
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    bond_thresholds_for_cross_pairs,
+    format_connectivity_factor,
+    normalize_connectivity_factor,
+)
 from scgo.utils.combine_atoms import (
     slab_surface_extreme,
     top_layer_indices,
@@ -178,7 +185,7 @@ def _mobile_indices_touch_slab(
     n_slab: int,
     mobile_global_indices: Iterable[int],
     *,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
     surface_normal_axis: int,
     stacking_cutoff_a: float | None = None,
@@ -210,9 +217,15 @@ def _mobile_indices_touch_slab(
     positions = combined.get_positions()
     mob_pos = positions[mobile_indices]
     slab_pos = positions[slab_indices]
-    r_mobile = np.array([get_covalent_radius(symbols[i]) for i in mobile_indices])
-    r_slab = np.array([get_covalent_radius(symbols[j]) for j in slab_indices])
-    thresholds = (r_mobile[:, None] + r_slab[None, :]) * connectivity_factor
+    r_mobile = np.array(
+        [get_covalent_radius(symbols[i]) for i in mobile_indices], dtype=float
+    )
+    r_slab = np.array(
+        [get_covalent_radius(symbols[j]) for j in slab_indices], dtype=float
+    )
+    sym_mobile = [symbols[i] for i in mobile_indices]
+    sym_slab = [symbols[j] for j in slab_indices]
+    cf = normalize_connectivity_factor(connectivity_factor)
     stack_cut = (
         float(stacking_cutoff_a)
         if stacking_cutoff_a is not None and float(stacking_cutoff_a) > 0.0
@@ -247,11 +260,18 @@ def _mobile_indices_touch_slab(
     dists = np.atleast_1d(np.asarray(dists, dtype=float))
     nn = np.atleast_1d(np.asarray(nn, dtype=int))
     min_dist = float(np.min(dists)) if len(dists) else float("inf")
-    touched = False
-    for mi, (d, sj) in enumerate(zip(dists, nn, strict=True)):
-        j = int(slab_tree_j[int(sj)])
-        if d <= float(thresholds[mi, j]):
-            touched = True
+    nn_j = slab_tree_j[nn.astype(int)]
+    i_local = np.arange(len(mobile_indices), dtype=int)
+    thresholds = bond_thresholds_for_cross_pairs(
+        r_mobile,
+        sym_mobile,
+        i_local,
+        r_slab,
+        sym_slab,
+        nn_j.astype(int),
+        cf,
+    )
+    touched = bool(np.any(dists <= thresholds)) if thresholds.size else False
     if not touched and stack_cut is not None and min_dist <= stack_cut:
         touched = True
     return touched, min_dist
@@ -262,7 +282,7 @@ def layer_stacking_cutoff_from_template(
     n_fixed: int,
     *,
     surface_normal_axis: int,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
 ) -> float | None:
     """Stacking cutoff for slab-as-search-target contact, or ``None``.
@@ -292,7 +312,7 @@ def _adsorbate_subgroup_touches_slab(
     n_slab: int,
     subgroup_local_indices: list[int],
     *,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
     surface_normal_axis: int,
     stacking_cutoff_a: float | None = None,
@@ -328,17 +348,18 @@ def _check_mobile_touches_slab(
     combined: Atoms,
     n_slab: int,
     *,
-    connectivity_factor: float,
+    connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool,
     surface_normal_axis: int = 2,
     stacking_cutoff_a: float | None = None,
 ) -> tuple[bool, str]:
     """True when a mobile atom is within bonding distance of the slab surface layer."""
+    cf = normalize_connectivity_factor(connectivity_factor)
     touches, min_cross = _mobile_indices_touch_slab(
         combined,
         n_slab,
         range(n_slab, len(combined)),
-        connectivity_factor=connectivity_factor,
+        connectivity_factor=cf,
         use_mic=use_mic,
         surface_normal_axis=surface_normal_axis,
         stacking_cutoff_a=stacking_cutoff_a,
@@ -353,7 +374,7 @@ def _check_mobile_touches_slab(
             False,
             "No mobile-slab contact within connectivity distance "
             f"(min mobile-to-surface-layer distance={min_cross:.3f} Å, "
-            f"connectivity_factor={connectivity_factor}{extra})",
+            f"connectivity_factor={format_connectivity_factor(cf)}{extra})",
         )
     return True, ""
 
@@ -365,7 +386,8 @@ def validate_supported_cluster_deposit(
     surface_normal_axis: int,
     use_mic: bool = False,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     binding_penetration_tolerance_a: float = _BINDING_PENETRATION_TOLERANCE_A,
     n_core_mobile: int | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
@@ -383,21 +405,22 @@ def validate_supported_cluster_deposit(
     **Default** (both relaxation flags False): the mobile region must form one
     connected component (when ``len(mobile) >= 2``) and touch the slab.
 
-    **``allow_cluster_fragmentation``**: multiple core/mixed mobile subgroups are allowed;
+    ``allow_cluster_fragmentation``: multiple core/mixed mobile subgroups are allowed;
     detached adsorbate-only subgroups are still rejected unless
     ``allow_adsorbate_surface_detachment`` is also True.
 
-    **``allow_adsorbate_surface_detachment``**: exactly one core/mixed subgroup is required
+    ``allow_adsorbate_surface_detachment``: exactly one core/mixed subgroup is required
     when cluster fragmentation is disabled; additional adsorbate-only subgroups on the slab
     are allowed.
 
     **Both flags True**: any mobile split is allowed if every subgroup touches the slab.
 
     Clash screening always uses
-    :func:`~scgo.initialization.validate_cluster_structure` on the **mobile slice
-    only** — it does not screen mobile-atom vs slab-atom clashes (slab<->mobile
-    contact is gated earlier, at placement, by ``atoms_too_close_two_sets`` with the
-    blmin table). Optionally uses MIC for distances when ``use_mic`` is True (match
+    :func:`~scgo.initialization.validate_cluster_structure` on the
+    **mobile slice only** — it does not screen mobile-atom vs slab-atom clashes
+    (slab<->mobile contact is gated earlier, at placement, by
+    ``atoms_too_close_two_sets`` with the blmin table). Optionally uses MIC for
+    distances when ``use_mic`` is True (match
     :attr:`~scgo.surface.config.SurfaceSystemConfig.comparator_use_mic`).
 
     ``binding_penetration_tolerance_a`` guards against mobile atoms straying below the

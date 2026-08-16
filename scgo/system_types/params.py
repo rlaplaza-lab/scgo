@@ -8,6 +8,7 @@ from ase import Atoms
 
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types.composition import AdsorbateDefinition
+from scgo.system_types.connectivity_factor import ConnectivityFactorInput
 
 
 class CalculatorKwargs(TypedDict, total=False):
@@ -73,7 +74,7 @@ class GLOptimizerParams(TypedDict, total=False):
     adsorbate_definition: NotRequired[AdsorbateDefinition]
     adsorbate_fragment_template: NotRequired[Atoms | list[Atoms]]
     cluster_adsorbate_config: NotRequired[Any]
-    connectivity_factor: float
+    connectivity_factor: ConnectivityFactorInput
     allow_cluster_fragmentation: bool
     allow_adsorbate_surface_detachment: bool
     enforce_adsorbate_subgraph_integrity: bool

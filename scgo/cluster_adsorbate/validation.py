@@ -17,6 +17,12 @@ from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    bond_threshold_cross_matrix,
+    normalize_connectivity_factor,
+)
 
 # Covalent H-X contact distance (Å) above which an inter-fragment H contact is
 # treated as a hydrogen bond rather than a newly formed covalent bond.
@@ -27,7 +33,8 @@ def validate_combined_cluster_structure(
     atoms: Atoms,
     *,
     min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     check_clashes: bool = True,
     check_connectivity: bool = True,
     use_mic: bool = False,
@@ -49,7 +56,8 @@ def validate_adsorbate_fragment_integrity(
     n_slab: int,
     n_core_mobile: int,
     adsorbate_fragment_lengths: Sequence[int],
-    connectivity_factor: float = CONNECTIVITY_FACTOR,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     use_mic: bool = False,
 ) -> tuple[bool, str]:
     """Validate that adsorbate fragments preserve their chemical identities.
@@ -115,24 +123,28 @@ def validate_adsorbate_fragment_integrity(
 
     symbols = atoms.get_chemical_symbols()
     positions = atoms.get_positions()
+    cf = normalize_connectivity_factor(connectivity_factor)
     for i, fragment_i in enumerate(fragment_index_ranges):
         for j in range(i + 1, len(fragment_index_ranges)):
             fragment_j = fragment_index_ranges[j]
             dist = pairwise_distances(
                 positions[fragment_i], positions[fragment_j], atoms, use_mic=use_mic
             )
-            radii_i = np.array([get_covalent_radius(symbols[k]) for k in fragment_i])
-            radii_j = np.array([get_covalent_radius(symbols[k]) for k in fragment_j])
-            is_h_i = np.array([symbols[k] == "H" for k in fragment_i])
-            is_h_j = np.array([symbols[k] == "H" for k in fragment_j])
+            radii_i = np.array(
+                [get_covalent_radius(symbols[k]) for k in fragment_i], dtype=float
+            )
+            radii_j = np.array(
+                [get_covalent_radius(symbols[k]) for k in fragment_j], dtype=float
+            )
+            sym_i = [symbols[k] for k in fragment_i]
+            sym_j = [symbols[k] for k in fragment_j]
+            is_h_i = np.array([s == "H" for s in sym_i])
+            is_h_j = np.array([s == "H" for s in sym_j])
             h_pair = is_h_i[:, None] | is_h_j[None, :]
             # Hydrogen bonds between fragments are allowed; only covalent H-X
             # contacts (e.g. unwanted HOH formation) are rejected.
-            thresholds = np.where(
-                h_pair,
-                _H_CONTACT_THRESHOLD_A,
-                (radii_i[:, None] + radii_j[None, :]) * connectivity_factor,
-            )
+            covalent = bond_threshold_cross_matrix(radii_i, sym_i, radii_j, sym_j, cf)
+            thresholds = np.where(h_pair, _H_CONTACT_THRESHOLD_A, covalent)
             violations = np.argwhere(dist <= thresholds)
             if violations.size == 0:
                 continue

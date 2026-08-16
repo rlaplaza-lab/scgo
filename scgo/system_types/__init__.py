@@ -18,6 +18,11 @@ from scgo.system_types.composition import (
     validate_adsorbate_definition,
     validate_composition_against_adsorbate,
 )
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    normalize_connectivity_factor,
+)
 from scgo.system_types.params import (
     CalculatorKwargs,
     GLOptimizerParams,
@@ -49,7 +54,9 @@ __all__ = [
     "AdsorbateFragmentInput",
     "AdsorbatesInput",
     "CalculatorKwargs",
+    "ConnectivityFactorInput",
     "GLOptimizerParams",
+    "NormalizedConnectivityFactor",
     "OptimizerSlotParams",
     "SYSTEM_TYPE_POLICIES",
     "SystemPolicy",
@@ -61,6 +68,7 @@ __all__ = [
     "flatten_adsorbate_symbols",
     "get_system_policy",
     "normalize_adsorbates_input",
+    "normalize_connectivity_factor",
     "resolve_adsorbate_fragments",
     "resolve_adsorbate_run_composition",
     "resolve_connectivity_factor",

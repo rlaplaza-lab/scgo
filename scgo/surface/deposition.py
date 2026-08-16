@@ -49,9 +49,11 @@ from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
+    normalize_connectivity_factor,
     resolve_adsorbate_fragments,
     resolve_connectivity_factor,
 )
+from scgo.system_types.connectivity_factor import max_connectivity_scale
 from scgo.utils.combine_atoms import (
     concatenate_inherit_cell_pbc,
     random_rotation_matrix,
@@ -392,7 +394,9 @@ def _place_cluster_above_slab(
     else:
         cluster_radius_est = 1.36
 
-    connectivity_threshold = cf * (slab_radius + cluster_radius_est)
+    connectivity_threshold = max_connectivity_scale(
+        normalize_connectivity_factor(cf)
+    ) * (slab_radius + cluster_radius_est)
 
     cluster_min = float(np.min(rotated_positions[:, axis]))
 

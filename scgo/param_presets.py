@@ -798,7 +798,9 @@ def get_ts_search_params(
     If ``seed`` is set, it is stored in the returned dict; :func:`~scgo.run_go_ts` / ``run_ts_*``
     require it to be consistent with ``go_params["seed"]`` and the ``seed=`` run argument.
     The ``connectivity_factor`` key sets the global connectivity threshold for cluster
-    validation (default 1.4).
+    validation (default 1.4). It accepts a float or a dict of per-element and/or
+    per-pair multipliers (see :mod:`scgo.system_types.connectivity_factor`); the
+    same spec is used by GO algorithm gates, the ``run_trials`` final gate, and TS.
 
     NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
     system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,

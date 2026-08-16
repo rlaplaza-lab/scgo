@@ -6,8 +6,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from scgo.exceptions import SCGOValidationError
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    normalize_connectivity_factor,
+)
 
 if TYPE_CHECKING:
     from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
@@ -183,19 +187,35 @@ def resolve_neb_mic(system_type: SystemType) -> bool:
 
 
 def resolve_connectivity_factor(
-    connectivity_factor: float | None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     *,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     surface_config: SurfaceSystemConfig | None = None,
-) -> float:
-    """Resolve structure connectivity factor from explicit value or configs."""
+) -> NormalizedConnectivityFactor:
+    """Resolve structure connectivity factor from explicit value or configs.
+
+    Precedence: explicit ``connectivity_factor`` →
+    ``ClusterAdsorbateConfig.structure_connectivity_factor`` →
+    ``SurfaceSystemConfig.structure_connectivity_factor`` → module default ``1.4``.
+
+    Accepts a global float or a dict of per-element and/or per-pair multipliers
+    (see :mod:`scgo.system_types.connectivity_factor`).
+    """
     if connectivity_factor is not None:
-        return float(connectivity_factor)
+        return normalize_connectivity_factor(connectivity_factor)
     if cluster_adsorbate_config is not None:
-        return float(cluster_adsorbate_config.structure_connectivity_factor)
+        return normalize_connectivity_factor(
+            cluster_adsorbate_config.structure_connectivity_factor,
+            name="structure_connectivity_factor",
+        )
     if surface_config is not None:
-        return float(surface_config.structure_connectivity_factor)
-    return float(CONNECTIVITY_FACTOR)
+        return normalize_connectivity_factor(
+            surface_config.structure_connectivity_factor,
+            name="structure_connectivity_factor",
+        )
+    return normalize_connectivity_factor(None)
 
 
 def validate_system_type_settings(

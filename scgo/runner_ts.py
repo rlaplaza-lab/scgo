@@ -178,9 +178,7 @@ def _run_go_ts_pipeline(
     ts_kwargs_local.pop("cluster_adsorbate_config", None)
     write_ts_json = bool(ts_kwargs_local.pop("write_timing_json", False))
 
-    connectivity_factor_raw: float | None = ts_kwargs_local.pop(
-        "connectivity_factor", None
-    )
+    connectivity_factor_raw = ts_kwargs_local.pop("connectivity_factor", None)
     surface_config_ts = ts_kwargs_local.get("surface_config")
     surface_cfg = (
         surface_config_ts

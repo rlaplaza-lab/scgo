@@ -75,6 +75,8 @@ from scgo.surface.partition import resolve_slab_search_partition
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
     SystemType,
     get_system_policy,
     uses_surface,
@@ -266,7 +268,10 @@ def validate_structure_for_ga_storage(
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: (
+        ConnectivityFactorInput | NormalizedConnectivityFactor | None
+    ) = None,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
@@ -301,6 +306,7 @@ def validate_structure_for_ga_storage(
             n_slab=n_slab if surface_mode else None,
             adsorbate_definition=adsorbate_definition,
             connectivity_factor=connectivity_factor,
+            cluster_adsorbate_config=cluster_adsorbate_config,
             allow_cluster_fragmentation=allow_cluster_fragmentation,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,

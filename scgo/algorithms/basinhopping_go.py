@@ -39,6 +39,8 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
     SystemType,
     resolve_structure_mic,
     validate_minimum_structure,
@@ -270,7 +272,9 @@ def bh_go(
     timing_output_dir: str | None = None,
     timing_collector: list[dict[str, Any]] | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-    connectivity_factor: float | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,

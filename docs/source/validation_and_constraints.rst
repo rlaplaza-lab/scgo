@@ -83,7 +83,11 @@ All validation is reached through
 
    validate_structure_for_system_type (system_types.validation)
    │  resolves connectivity_factor once:
-   │    explicit → ClusterAdsorbateConfig → SurfaceSystemConfig → default
+   │    explicit params['connectivity_factor']
+   │      → ClusterAdsorbateConfig.structure_connectivity_factor
+   │      → SurfaceSystemConfig.structure_connectivity_factor
+   │      → default 1.4
+   │    (float or per-element/pair dict; see Tunables)
    │
    ├── surface policy ──▶ validate_surface_config_slab_prefix
    │                     └─▶ validate_supported_cluster_deposit (surface/validation.py)
@@ -171,12 +175,11 @@ any dedup'd candidate that fails
 :func:`~scgo.system_types.validate_minimum_structure` is dropped before the
 physical Hessian/vibration gate. Surface candidates are validated against the
 *prepared* slab search config when ``slab_is_search_target`` is set, so the final
-gate is exact rather than relying on stored ``n_slab_atoms`` tags. Note the final
-gate does **not** receive the explicit top-level ``connectivity_factor``: it
-resolves the factor from the same precedence (``ClusterAdsorbateConfig`` →
-``SurfaceSystemConfig`` → ``1.4``), so a top-level ``connectivity_factor`` override
-is honored by the algorithm gates and the transition-state gate but not by this
-backstop.
+gate is exact rather than relying on stored ``n_slab_atoms`` tags. The final gate
+honors the same connectivity-factor precedence as the algorithm and TS gates
+(explicit ``connectivity_factor`` → ``ClusterAdsorbateConfig`` →
+``SurfaceSystemConfig`` → ``1.4``), including float or per-element/pair dict
+specs.
 
 NEB pre-screen gates
 --------------------
@@ -294,11 +297,19 @@ Connectivity and legal topology
 - ``connectivity_factor`` / ``structure_connectivity_factor``: default ``1.4``;
   defined in ``CONNECTIVITY_FACTOR`` in :mod:`scgo.initialization.initialization_config`.
 - This is the main structural legality check for connectivity during
-  initialization and after GA operators. The transition-state gate resolves the
-  factor with the same precedence as the GO gate (explicit ``connectivity_factor``
-  → ``ClusterAdsorbateConfig.structure_connectivity_factor`` →
-  ``SurfaceSystemConfig.structure_connectivity_factor`` → ``1.4``) so the two
-  paths enforce identical admissible connectivity.
+  initialization, after GA operators, at per-minimum algorithm gates, at the
+  ``run_trials`` final structural gate, and in TS. All paths resolve the same
+  precedence (explicit ``connectivity_factor`` →
+  ``ClusterAdsorbateConfig.structure_connectivity_factor`` →
+  ``SurfaceSystemConfig.structure_connectivity_factor`` → ``1.4``).
+- The value may be a global float or a dict:
+
+  - float ``f``: bonded if ``d <= (r_i + r_j) * f``
+  - element dict: bonded if ``d <= r_i*f_i + r_j*f_j`` (missing symbols use ``1.4``)
+  - pair keys ``"Pt-C"`` or ``("Pt", "C")``: bonded if ``d <= (r_i + r_j) * f_ij``;
+    pair entries override element-derived thresholds
+
+  Example (Pt on graphite): ``{"Pt": 1.4, "C": 1.4, "Pt-C": 1.8}``.
 
 Surface contact and penetration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
