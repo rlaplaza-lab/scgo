@@ -16,6 +16,7 @@ from scgo.constants import (
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_NEB_TANGENT_METHOD,
 )
+from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import is_cuda_oom_error
 from scgo.metadata.run_dir import ensure_run_id, save_run_dir_record
@@ -808,7 +809,21 @@ def run_transition_state_search(
         )
 
     if not minima_by_formula:
-        logger.error("No minima found in %s", minima_dir)
+        n_dbs = len(
+            list_discovered_db_paths_with_run(
+                str(minima_dir), composition=composition, use_cache=False
+            )
+        )
+        xyz_dir = Path(minima_dir) / "final_unique_minima"
+        n_xyz = len(list(xyz_dir.glob("*.xyz"))) if xyz_dir.is_dir() else 0
+        logger.error(
+            "No minima found in %s (discovered_dbs=%d, "
+            "final_unique_minima_xyz=%d). TS loads only DB rows tagged "
+            "final_unique_minimum; XYZ under final_unique_minima is export-only.",
+            minima_dir,
+            n_dbs,
+            n_xyz,
+        )
         cleanup_torch_cuda(logger=logger)
         return []
 

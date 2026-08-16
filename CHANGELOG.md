@@ -129,7 +129,9 @@
   pops stay safe. Constraint classes are unchanged.
 - Parallel NEB no longer evaluates forces twice per step; `force_calls` is no
   longer double-counted; non-finite NEB forces mark the band failed.
-- Empty DB-discovery results are not cached (stale GO→TS reads).
+- DB discovery no longer memoizes path lists (empty or non-empty); registry hits
+  merge with a filesystem scan, and registration clears the process discovery
+  singleton so same-process GO→TS reload sees the current ``ga_go.db``.
 - e3nn `torch.load` `weights_only` protected at MACE import time (torch>=2.6).
 - UMA/UPET CI no longer loads MACE; MLIP stacks detected by installed extra.
 - SQLite connections closed on read paths (silences `ResourceWarning`).

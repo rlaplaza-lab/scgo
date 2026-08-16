@@ -14,7 +14,10 @@ from scgo.database.connection import (
     close_data_connection,
     get_connection,
 )
-from scgo.database.discovery import list_discovered_db_paths_with_run
+from scgo.database.discovery import (
+    clear_discovery_cache,
+    list_discovered_db_paths_with_run,
+)
 from scgo.database.helpers import (
     extract_minima_from_database_file,
     load_previous_run_results,
@@ -39,6 +42,7 @@ __all__ = [
     "load_previous_run_results",
     "load_reference_structures",
     "list_discovered_db_paths_with_run",
+    "clear_discovery_cache",
     "SCGODatabaseManager",
     "database_transaction",
     "HPC_DATABASE_EXCEPTIONS",

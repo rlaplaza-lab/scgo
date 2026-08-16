@@ -1230,7 +1230,21 @@ def run_trials(
     # Mark final minima in DB (if enabled) to avoid re-scanning later
     if tag_final_minima:
         try:
-            mark_final_minima_in_db(final_minima_info, base_dir=output_dir)
+            tag_summary = mark_final_minima_in_db(
+                final_minima_info, base_dir=output_dir
+            )
+            rows_updated = int(tag_summary.get("rows_updated", 0))
+            n_final = len(final_minima_info)
+            log_fn = (
+                logger.warning if rows_updated == 0 and n_final > 0 else logger.info
+            )
+            log_fn(
+                "Tagged %d/%d final minima in DB under %s (dbs_touched=%d)",
+                rows_updated,
+                n_final,
+                output_dir,
+                int(tag_summary.get("dbs_touched", 0)),
+            )
         except (
             sqlite3.DatabaseError,
             sqlite3.OperationalError,

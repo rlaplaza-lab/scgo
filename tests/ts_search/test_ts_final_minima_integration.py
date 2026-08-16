@@ -3,12 +3,38 @@ import sqlite3
 
 from ase import Atoms
 
-from scgo.database.helpers import setup_database
+from scgo.database.connection import close_data_connection
+from scgo.database.discovery import (
+    clear_discovery_cache,
+    list_discovered_db_paths_with_run,
+)
+from scgo.database.helpers import extract_minima_from_database_file, setup_database
+from scgo.database.registry import get_registry
 from scgo.metadata.atoms import ensure_final_id
 from scgo.metadata.persist import mark_final_minima_in_db
 from scgo.ts_search.transition_state_io import load_minima_by_composition
 from scgo.ts_search.transition_state_run import run_transition_state_search
 from tests.helpers import assert_db_final_row
+
+
+def _add_relaxed_pt2(da, positions, energy: float, description: str) -> None:
+    a = Atoms("Pt2", positions=positions)
+    a.info.setdefault("key_value_pairs", {})["raw_score"] = -energy
+    a.info.setdefault("data", {})
+    da.add_unrelaxed_candidate(a, description=description)
+    da.add_relaxed_step(a)
+
+
+def _setup_pt2_run(formula_dir, run_id: str, positions, energy: float):
+    run_dir = formula_dir / run_id
+    run_dir.mkdir(parents=True)
+    template = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    da = setup_database(
+        run_dir, "ga_go.db", template, initial_candidate=template, run_id=run_id
+    )
+    _add_relaxed_pt2(da, positions, energy, f"ga:{run_id}")
+    close_data_connection(da)
+    return run_dir / "ga_go.db"
 
 
 def test_ts_search_uses_only_tagged_final_minima(tmp_path):
@@ -57,8 +83,6 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
                 (json.dumps(kvp), row_id),
             )
         conn.commit()
-
-    from scgo.database.connection import close_data_connection
 
     close_data_connection(da)
 
@@ -127,15 +151,32 @@ def test_ts_search_uses_only_tagged_final_minima(tmp_path):
 
 
 def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
-    """TS loader with prefer_final_unique=True must see every tagged final minimum."""
-    formula_dir = tmp_path / "Pt2_searches"
-    run_dir = formula_dir / "run_loader"
-    trial_dir = run_dir
-    trial_dir.mkdir(parents=True)
-    db_path = trial_dir / "ga_go.db"
+    """TS loader sees every tagged final, including after prior untagged DBs.
 
+    Also covers same-process GO→TS handoff: discovering prior runs must not
+    hide a newly written/tagged current DB from prefer_final_unique=True.
+    """
+    clear_discovery_cache()
+    formula_dir = tmp_path / "Pt2_searches"
+    composition = ["Pt", "Pt"]
+
+    # Prior untagged runs (as when GO loads previous results before current DB).
+    _setup_pt2_run(formula_dir, "run_prior_a", [[0, 0, 0], [2.5, 0, 0]], 1.0)
+    _setup_pt2_run(formula_dir, "run_prior_b", [[0, 0, 0], [2.55, 0, 0]], 1.1)
+    assert (
+        len(
+            list_discovered_db_paths_with_run(
+                formula_dir, composition=composition, use_cache=True
+            )
+        )
+        == 2
+    )
+
+    run_dir = formula_dir / "run_loader"
+    run_dir.mkdir(parents=True)
+    db_path = run_dir / "ga_go.db"
     template = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
-    da = setup_database(trial_dir, "ga_go.db", template, initial_candidate=template)
+    da = setup_database(run_dir, "ga_go.db", template, initial_candidate=template)
 
     energies = [0.0, 0.15, 0.3]
     positions = [
@@ -144,20 +185,11 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
         [[0, 0, 0], [2.9, 0, 0]],
     ]
     for idx, (pos, energy) in enumerate(zip(positions, energies, strict=True)):
-        a = Atoms("Pt2", positions=pos)
-        a.info.setdefault("key_value_pairs", {})
-        a.info["key_value_pairs"]["raw_score"] = -energy
-        a.info.setdefault("data", {})
-        da.add_unrelaxed_candidate(a, description=f"ga:loader_{idx}")
-        da.add_relaxed_step(a)
-
-    from scgo.database.connection import close_data_connection
-    from scgo.database.helpers import extract_minima_from_database_file
-    from scgo.database.registry import get_registry
+        _add_relaxed_pt2(da, pos, energy, f"ga:loader_{idx}")
 
     close_data_connection(da)
     get_registry(formula_dir).register_database(
-        db_path, composition=["Pt", "Pt"], run_id="run_loader"
+        db_path, composition=composition, run_id="run_loader"
     )
 
     db_minima = extract_minima_from_database_file(
@@ -167,7 +199,6 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
 
     final_info = []
     for rank, (energy, atoms) in enumerate(db_minima, start=1):
-        # extract_minima_from_database_file may annotate run_id in tags.
         atoms.info.get("key_value_pairs", {}).pop("run_id", None)
         final_info.append(
             {
@@ -188,18 +219,17 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
 
     minima_by_formula = load_minima_by_composition(
         str(formula_dir),
-        ["Pt", "Pt"],
+        composition,
         prefer_final_unique=True,
     )
     assert list(minima_by_formula.keys()) == ["Pt2"]
     assert len(minima_by_formula["Pt2"]) == len(final_info)
 
+    # Untagged prior runs must not leak into prefer_final_unique load.
     with sqlite3.connect(str(db_path)) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT key_value_pairs FROM systems")
         tagged = sum(
             1
-            for (kvp_json,) in cur.fetchall()
+            for (kvp_json,) in conn.execute("SELECT key_value_pairs FROM systems")
             if (json.loads(kvp_json) if kvp_json else {}).get("final_unique_minimum")
         )
     assert tagged == len(final_info)

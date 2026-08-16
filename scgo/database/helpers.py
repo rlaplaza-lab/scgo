@@ -23,7 +23,10 @@ from scgo.database.connection import (
     open_data_connection_for_setup,
 )
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
-from scgo.database.discovery import list_discovered_db_paths_with_run
+from scgo.database.discovery import (
+    clear_discovery_cache,
+    list_discovered_db_paths_with_run,
+)
 from scgo.database.exceptions import DatabaseSetupError
 from scgo.database.registry import get_registry
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
@@ -200,6 +203,7 @@ def _register_database_best_effort(
                 run_id=run_id,
             )
             logger.debug("Registered database in registry root %s: %s", root, db_file)
+            clear_discovery_cache(root)
         except (ValueError, OSError) as _e:
             logger.debug(
                 "Registry registration failed for %s in %s: %s", db_file, root, _e

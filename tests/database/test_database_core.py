@@ -28,7 +28,11 @@ from scgo.database import (
     get_connection,
     setup_database,
 )
-from scgo.database.discovery import DatabaseDiscovery
+from scgo.database.discovery import (
+    DatabaseDiscovery,
+    clear_discovery_cache,
+    list_discovered_db_paths_with_run,
+)
 from scgo.database.streaming import (
     iter_database_minima,
     iter_relaxed_structures,
@@ -661,28 +665,39 @@ class TestDiscovery:
         assert db_files
 
     def test_empty_result_is_not_cached(self, tmp_path):
-        """A miss recorded before the DB exists must not be cached.
+        """Discovery must see DBs written after an earlier miss or hit.
 
-        GO writes its database mid-run and TS reads it back in the same
-        process, so caching an empty result would pin the stale answer and
-        make TS report zero minima.
+        GO may query before any DB exists, then write one; or load prior DBs
+        then write the current run. Same-process TS reload must see all of them.
         """
+        clear_discovery_cache()
         discovery = DatabaseDiscovery(tmp_path)
-
-        # Queried before any run has written a database.
-        assert discovery.find_databases() == []
-        assert discovery._cache == {}, "empty results must not be cached"
-
-        run_dir = tmp_path / "run_20260204_120000"
-        run_dir.mkdir(parents=True)
         atoms = Atoms("Pt3")
-        da = setup_database(run_dir, "ga_go.db", atoms, initial_candidate=atoms)
+
+        assert discovery.find_databases() == []
+
+        run1 = tmp_path / "run_20260204_120000"
+        run1.mkdir(parents=True)
+        da = setup_database(run1, "ga_go.db", atoms, initial_candidate=atoms)
         close_data_connection(da)
         del da
 
-        # The same discovery instance must now observe the new database.
-        db_files = discovery.find_databases()
-        assert any(Path(str(f)).name == "ga_go.db" for f in db_files)
+        assert len(discovery.find_databases()) == 1
+        assert len(list_discovered_db_paths_with_run(tmp_path)) == 1
+
+        run2 = tmp_path / "run_20260204_130000"
+        run2.mkdir(parents=True)
+        da2 = setup_database(run2, "ga_go.db", atoms, initial_candidate=atoms)
+        close_data_connection(da2)
+        del da2
+
+        found = discovery.find_databases()
+        assert len(found) == 2
+        assert {Path(str(p)).parent.name for p in found} == {
+            "run_20260204_120000",
+            "run_20260204_130000",
+        }
+        assert len(list_discovered_db_paths_with_run(tmp_path, use_cache=True)) == 2
 
 
 class TestRobustness:

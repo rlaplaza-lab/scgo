@@ -1,7 +1,9 @@
 """Database discovery service for SCGO.
 
-Centralizes logic for finding and indexing database files across
-run directories with caching for performance.
+Centralizes finding and indexing database files across run directories.
+Path lists are not memoized: GO may write a new ``run_*/ga_go.db`` after an
+earlier same-process discovery (e.g. loading previous results), and TS must
+see that file on reload.
 """
 
 from __future__ import annotations
@@ -39,8 +41,6 @@ class DatabaseDiscovery:
             base_dir: Base directory to search (usually output directory)
         """
         self.base_dir = Path(base_dir)
-        self._cache: dict[str, list[Path]] = {}
-
         self._registry = get_registry(self.base_dir)
         logger.debug("Initialized DatabaseDiscovery for %s", self.base_dir)
 
@@ -51,71 +51,55 @@ class DatabaseDiscovery:
         db_filename: str = "*.db",
         use_cache: bool = True,
     ) -> list[Path]:
-        """Find databases matching criteria."""
-        cache_key = self._build_cache_key(composition, run_id, db_filename)
+        """Find databases matching criteria.
 
-        if use_cache and cache_key in self._cache:
-            logger.trace("Using cached results for: %s", cache_key)
-            return self._cache[cache_key]
+        ``use_cache`` is accepted for API compatibility but ignored. Registry
+        hits are always merged with a ``run_*/`` filesystem scan so a DB on
+        disk that is not yet registered is still found.
+        """
+        _ = use_cache
+        by_resolved: dict[str, Path] = {}
 
         if db_filename == "*.db":
-            db_files = self._registry.find_databases(
+            registry_files = self._registry.find_databases(
                 composition=composition,
                 run_id=run_id,
             )
-            logger.debug("Registry found %d databases", len(db_files))
-
-            if db_files:
-                filtered = _filter_scgo_databases(db_files)
-                if len(filtered) != len(db_files):
-                    logger.debug(
-                        "Dropped %d non-SCGO paths from registry results",
-                        len(db_files) - len(filtered),
-                    )
-                db_files = filtered
-                if db_files:
-                    if use_cache:
-                        self._cache[cache_key] = db_files
-                    return db_files
-
-            logger.debug("Registry returned no databases; running filesystem scan")
+            logger.debug("Registry found %d databases", len(registry_files))
+            filtered = _filter_scgo_databases(registry_files)
+            if len(filtered) != len(registry_files):
+                logger.debug(
+                    "Dropped %d non-SCGO paths from registry results",
+                    len(registry_files) - len(filtered),
+                )
+            for path in filtered:
+                by_resolved[str(path.resolve())] = path
 
         pattern = self._build_glob_pattern(run_id, db_filename)
         full_pattern = str(self.base_dir / pattern)
-        db_files = [Path(p) for p in glob.glob(full_pattern, recursive=True)]
+        glob_files = [Path(p) for p in glob.glob(full_pattern, recursive=True)]
 
-        logger.debug("Found %d databases matching pattern: %s", len(db_files), pattern)
+        logger.debug(
+            "Found %d databases matching pattern: %s", len(glob_files), pattern
+        )
 
         if composition:
-            db_files = self._filter_by_composition(db_files, composition)
-            logger.debug("After composition filter: %d databases remain", len(db_files))
-
-        orig_count = len(db_files)
-        db_files = _filter_scgo_databases(db_files)
-        if len(db_files) != orig_count:
+            glob_files = self._filter_by_composition(glob_files, composition)
             logger.debug(
-                "Filtered non-SCGO DBs: %d -> %d databases", orig_count, len(db_files)
+                "After composition filter: %d databases remain", len(glob_files)
             )
 
-        # Never cache empty results: databases are written while a run is in
-        # progress (GO writes its DB, then TS reads it back in the same
-        # process). Caching a miss recorded before the DB existed would pin
-        # that stale answer for the rest of the process.
-        if use_cache and db_files:
-            self._cache[cache_key] = db_files
+        orig_count = len(glob_files)
+        glob_files = _filter_scgo_databases(glob_files)
+        if len(glob_files) != orig_count:
+            logger.debug(
+                "Filtered non-SCGO DBs: %d -> %d databases", orig_count, len(glob_files)
+            )
 
-        return db_files
+        for path in glob_files:
+            by_resolved[str(path.resolve())] = path
 
-    def _build_cache_key(
-        self,
-        composition: list[str] | None,
-        run_id: str | None,
-        db_filename: str,
-    ) -> str:
-        """Build unique cache key from parameters."""
-        comp_str = "-".join(sorted(composition)) if composition else "any"
-        run_str = run_id or "any"
-        return f"{comp_str}:{run_str}:{db_filename}"
+        return list(by_resolved.values())
 
     def _build_glob_pattern(
         self,
@@ -209,6 +193,18 @@ def _get_discovery(base_dir: str | Path) -> DatabaseDiscovery:
     return _discovery_by_base[key]
 
 
+def clear_discovery_cache(base_dir: str | Path | None = None) -> None:
+    """Drop process-wide database discovery instances for *base_dir* (or all).
+
+    Args:
+        base_dir: When set, clear only that resolved path; otherwise clear all.
+    """
+    if base_dir is None:
+        _discovery_by_base.clear()
+        return
+    _discovery_by_base.pop(os.path.abspath(str(base_dir)), None)
+
+
 def list_discovered_db_paths_with_run(
     base_dir: str | Path,
     *,
@@ -220,13 +216,15 @@ def list_discovered_db_paths_with_run(
 
     Returns tuples ``(absolute_path, run_id)``. ``run_id`` is empty if the path
     is not under a recognizable ``run_*`` directory.
+
+    ``use_cache`` is accepted for API compatibility; discovery always rescans.
     """
+    _ = use_cache
     base_s = os.path.abspath(str(base_dir))
     discovery = _get_discovery(base_s)
     filename_pattern = db_filename if db_filename else "*.db"
     db_paths = discovery.find_databases(
         composition=composition,
-        use_cache=use_cache,
         db_filename=filename_pattern,
     )
 
