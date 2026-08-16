@@ -223,9 +223,15 @@ def setup_database(
 ) -> DataConnection:
     """Create or open the ASE database ``db_filename`` inside ``output_dir``.
 
-    The template structure is written first, then indices are created, the file
-    is stamped as an SCGO database and registered in the registry (both best
-    effort), and the connection is wrapped so writes are validated and tagged.
+    The template structure is written first (at most one ``simulation_cell=True``
+    row), then indices are created, the file is stamped as an SCGO database and
+    registered in the registry (both best effort), and the connection is wrapped
+    so writes are validated and tagged.
+
+    When ``remove_existing=False`` and the file already exists, a second template
+    row is not written. The stored stoichiometry must match ``atoms_template``
+    (else :exc:`~scgo.exceptions.SCGOValidationError`). More than one existing
+    template row raises ``DatabaseSetupError``.
 
     Args:
         output_dir: Directory holding the database file (created if missing)

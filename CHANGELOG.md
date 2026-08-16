@@ -50,6 +50,15 @@
   `parallel_neb_max_bands` is `None`, parallel NEB bands are greedily binned so
   each fused force batch stays within this atom budget.
 - Low-effort UMA/UPET/TorchSim GA + TS presets for examples and Kaggle CI.
+- `default_calculator_kwargs(calculator)` returns a fresh default
+  `calculator_kwargs` dict for MACE / UMA / UPET (empty for EMT and unknown
+  names).
+- `DEFAULT_TS_PAIR_COR_MAX` (`0.1` Å) for TS pair near-dupe gating, distinct
+  from GO uniqueness (`DEFAULT_PAIR_COR_MAX` = `0.7` Å).
+- NEB resume: `run_transition_state_search(run_id=...)` skips pairs whose
+  `neb_{pair_id}_metadata.json` already has `status="success"`
+  (`load_completed_neb_result`). Run-dir `metadata.json` and NEB metadata are
+  written via temp + `os.replace`.
 
 ### Changed
 
@@ -108,6 +117,23 @@
   dedupe.
 - CI marker contract tightened; PR matrix shrinks UMA/UPET to fast-only; Kaggle
   GPU supports `mode=smoke` (default/weekly) and `mode=full` (manual).
+- Changing `calculator` vs GO defaults (or vs inherited GO settings in
+  `initialize_ts_params`) replaces `calculator_kwargs` wholesale instead of
+  nested-merging backend keys (e.g. UMA `task_name` no longer leaks into MACE).
+- BH/GA slot `diversity_max_references` / `diversity_update_interval` default
+  to `None` (inherit top-level). `get_diversity_params` stamps both top-level
+  and slots.
+- TorchSim GA attach uses `max_steps=None`; the GA assigns `relaxer.max_steps`
+  from `niter_local_relaxation` at run time.
+- Low-effort UMA/UPET builders attach the TorchSim relaxer after `model_name` /
+  `version` / `task_name` and set top-level `n_jobs=1`.
+- `resolve_run_id_from_db_path` returns `None` (callers skip the database)
+  instead of falling back to the filename basename.
+- Top-level `surface_config` in `go_params` / `ts_params` is enough when the
+  run argument is omitted (must still agree when both are set).
+- Parallel NEB persists each finished chunk immediately; energy-screen forces
+  are reused at step 0 instead of a second `relax_batch`. Serial NEB runs the
+  full-band single-point only when the energy-profile gate is enabled.
 
 ### Fixed
 
@@ -156,6 +182,13 @@
 - Low-effort NEB `neb_steps` floor raised to `1000` for bare system types so
   bands still converge for CI interior-TS assertions.
 - GA generational-loop regression from the Phase 3 perf rewrite fixed.
+- `setup_database(..., remove_existing=False)` no longer writes a second
+  `simulation_cell=True` template row (ASE GA `assert len(rows) == 1`);
+  a stored stoichiometry that disagrees with `atoms_template` raises.
+- Chunked DB streaming loads each id batch with one `WHERE id IN (...)`
+  (falls back to per-id `get_atoms` if ASE's private row decoder is missing).
+- GO/TS param copies no longer `deepcopy` TorchSim relaxers when injecting
+  `surface_config`.
 
 ### Removed
 
@@ -178,6 +211,8 @@
 - Documentation builds with zero Sphinx warnings under `nitpicky=True`.
 - Documented `n_jobs`, vacancy / hollow sites, NEB energy-profile gating,
   `calculator_for_global_optimization`, and mirror-mutation omissions.
+- Documented calculator-change kwargs replacement, TS vs GO pair-correlation
+  caps, params-only `surface_config`, NEB pair resume, and database reuse.
 - Fixed documentation inaccuracies, normalized headings, and cleaned up
   cross-references.
 

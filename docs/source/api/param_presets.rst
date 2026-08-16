@@ -21,11 +21,11 @@ Preset Functions
    * - ``get_torchsim_ga_params(*, system_type, surface_config, seed, model_name)``
      - MACE + TorchSim for GPU acceleration. Requires ``scgo[mace]``.
    * - ``get_low_effort_torchsim_ga_params(*, system_type, surface_config, seed, model_name)``
-     - Reduced-budget (~25%) variant of ``get_torchsim_ga_params`` for demos and CI. Same calculator and relaxer; smaller GA budget.
+     - Reduced-budget (~25%) variant of ``get_torchsim_ga_params`` for demos and CI. Same calculator and relaxer; smaller GA budget; ``n_jobs=1``.
    * - ``get_low_effort_upet_ga_params(*, system_type, surface_config, seed, model_name, version)``
-     - Reduced-budget (~25%) variant of ``get_default_upet_params`` for demos and CI. Same UPET calculator and TorchSim relaxer; smaller GA budget.
+     - Reduced-budget (~25%) UPET GO for demos and CI. TorchSim relaxer is attached after ``model_name`` / ``version``; ``n_jobs=1``.
    * - ``get_low_effort_uma_ga_params(*, system_type, surface_config, seed, model_name, uma_task)``
-     - Reduced-budget (~25%) variant of ``get_default_uma_params`` for demos and local/Actions CI. Same UMA calculator and FairChem TorchSim relaxer; smaller GA budget. (UMA is omitted from the Kaggle GPU matrix.)
+     - Reduced-budget (~25%) UMA GO for demos and local/Actions CI. FairChem TorchSim relaxer is attached after ``model_name`` / ``uma_task``; ``n_jobs=1``. (UMA is omitted from the Kaggle GPU matrix.)
    * - ``get_default_uma_params()``
      - Default UMA (fairchem) parameters
    * - ``get_uma_ga_benchmark_params(seed, *, model_name, uma_task)``
@@ -45,7 +45,7 @@ Preset Functions
    :widths: 35 65
 
    * - ``get_ts_search_params(calculator, calculator_kwargs, *, system_type, surface_config, seed)``
-     - TS-only settings (NEB, calculator, pairing). Requires ``system_type``. For surfaces, also requires ``surface_config``. Default calculator is ``"MACE"``.
+     - TS-only settings (NEB, calculator, pairing). Requires ``system_type``. For surfaces, also requires ``surface_config``. Default calculator is ``"MACE"``. Empty ``calculator_kwargs`` are filled by :func:`~scgo.param_presets.default_calculator_kwargs`.
    * - ``get_low_effort_ts_search_params(calculator, calculator_kwargs, *, system_type, surface_config, seed)``
      - Reduced-budget (~25%, floored) variant of ``get_ts_search_params`` for demos and CI. Every NEB physics knob is inherited unchanged; only ``neb_steps`` / ``torchsim_max_steps`` shrink. ``max_pairs`` is left uncapped for the caller.
    * - ``low_effort_neb_steps(system_type)``
@@ -76,17 +76,17 @@ Preset effects (vs defaults)
      - MACE benchmark GA stack + TorchSim relaxer; for surface types stamps
        top-level ``surface_config`` only (not into optimizer slots)
    * - ``get_low_effort_torchsim_ga_params()``
-     - As ``get_torchsim_ga_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time.
+     - As ``get_torchsim_ga_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential (``n_jobs=1``), no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time.
    * - ``get_low_effort_upet_ga_params()``
-     - As ``get_default_upet_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time. Mirrors ``get_low_effort_torchsim_ga_params`` on the UPET calculator; stamps top-level ``surface_config`` only.
+     - Reduced ~25% GA budget on UPET; TorchSim relaxer attached after ``model_name`` / ``version`` so the PES matches the ASE calculator; ``n_jobs=1``. Surface types still clamp local relaxation up to 400 steps at run time. Stamps top-level ``surface_config`` only.
    * - ``get_low_effort_uma_ga_params()``
-     - As ``get_default_uma_params()``, but ~25% of the benchmark GA budget (``niter``, ``population_size``, ``niter_local_relaxation``), sequential population init, no early stopping, no timing JSON. Surface types still clamp local relaxation up to 400 steps at run time. Mirrors ``get_low_effort_torchsim_ga_params`` on the UMA calculator; stamps top-level ``surface_config`` only.
+     - Reduced ~25% GA budget on UMA; FairChem TorchSim relaxer attached after ``model_name`` / ``uma_task``; ``n_jobs=1``. Surface types still clamp local relaxation up to 400 steps at run time. Stamps top-level ``surface_config`` only.
    * - ``get_default_uma_params()``
      - ``calculator="UMA"`` + FairChem TorchSim relaxer with auto local-step budget
    * - ``get_uma_ga_benchmark_params()``
-     - UMA + fixed 200 local steps, autobatcher, ``expected_max_atoms=600`` (benchmark parity with TorchSim GA preset)
+     - UMA + autobatcher, ``expected_max_atoms=600`` (benchmark parity with TorchSim GA preset); ``relaxer.max_steps`` is ``None`` until GA assigns it from ``niter_local_relaxation``
    * - ``get_diversity_params()``
-     - ``fitness_strategy="diversity"`` + reference DB glob and update interval
+     - ``fitness_strategy="diversity"`` + reference DB glob and update interval (top-level and BH/GA slots)
    * - ``get_high_energy_params()``
      - ``fitness_strategy="high_energy"``; BH temperature raised to 1000 K
    * - ``get_ts_search_params()``

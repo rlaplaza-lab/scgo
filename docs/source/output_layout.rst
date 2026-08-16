@@ -147,7 +147,10 @@ UTC-based):
    * - ``run_go_campaign``
      - One shared ``run_id`` for all compositions (override with ``run_id=``)
    * - ``run_ts_search`` / ``run_go_ts``
-     - TS mints a fresh ``run_*`` under ``{path_key}_ts_results/`` (independent of GO)
+     - TS mints a fresh ``run_*`` under ``{path_key}_ts_results/`` (independent of GO).
+       Re-running :func:`~scgo.ts_search.run_transition_state_search` with the same
+       ``run_id`` skips pairs whose ``neb_{pair_id}_metadata.json`` already has
+       ``status="success"``.
 
 Repeat ``run_go`` to add sibling ``run_*`` directories; SCGO merges prior minima
 via database discovery and deduplication.
@@ -163,15 +166,16 @@ Under each ``run_*`` directory:
 - ``metadata.json`` — composition, params snapshot, ``path_key`` (the
   component-aware directory identity), and output-JSON provenance header
   (``schema_version`` = 4, ``scgo_version``, ``created_at`` UTC ISO-8601 with
-  ``Z``, ``python_version``). This ``schema_version`` is the **output-JSON**
+  ``Z``, ``python_version``). Written via a same-directory temp file then
+  ``os.replace``. This ``schema_version`` is the **output-JSON**
   header version, not the SQLite DB stamp version. ``created_at`` is the single
   run timestamp (there is no legacy ``timestamp`` field).
 - ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db`` — optimizer database (GO only)
 - ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``); includes
   ``run_id`` and the same single provenance header (``schema_version`` = 4). There
   is no separate ``timing_schema_version`` key.
-- ``pair_<i>_<j>/`` — NEB artifacts, ``neb_{i}_{j}_metadata.json``, and optional
-  ``timing_{i}_{j}.json`` per pair (TS only)
+- ``pair_<i>_<j>/`` — NEB artifacts, ``neb_{i}_{j}_metadata.json`` (atomic
+  write), and optional ``timing_{i}_{j}.json`` per pair (TS only)
 
 Campaign-level files:
 
@@ -211,7 +215,9 @@ TS results record endpoint lineage in ``minima_provenance`` (in
      - Chemical composition formula when non-empty; for slab-target types equals
        ``path_key``.
    * - ``run_id``
-     - GO run that produced the endpoint minimum
+     - GO run that produced the endpoint minimum. Databases whose path is not
+       under a recognizable ``run_*`` directory are skipped (no filename-basename
+       fallback).
    * - ``source_db`` / ``source_db_relpath``
      - Optimizer database (basename and campaign-relative path)
    * - ``confid`` / ``gaid`` / ``systems_row_id``

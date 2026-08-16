@@ -757,7 +757,8 @@ def get_diversity_params(
 
     Pass as-is to ``run_*`` or override keys. ``reference_db_glob`` must match at
     least one database with reference structures when you run; there is no runtime
-    check that the glob is non-empty.
+    check that the glob is non-empty. Values are written at top-level and into
+    the BH/GA optimizer slots so slot ``None`` defaults cannot shadow them.
     """
     params = get_default_params()
     params["fitness_strategy"] = "diversity"

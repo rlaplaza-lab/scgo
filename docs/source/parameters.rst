@@ -21,9 +21,9 @@ All high-level ``run_*`` functions share the same contract:
    * - Dict
      - Merge behavior
    * - ``params`` / ``go_params``
-     - Deep-merge onto :func:`~scgo.param_presets.get_default_params` via :func:`~scgo.utils.run_helpers.initialize_params`. Nested dicts (e.g. ``optimizer_params["ga"]``, ``calculator_kwargs``) merge recursively; user keys win.
+     - Deep-merge onto :func:`~scgo.param_presets.get_default_params` via :func:`~scgo.utils.run_helpers.initialize_params`. Nested dicts (e.g. ``optimizer_params["ga"]``) merge recursively; user keys win. Changing ``calculator`` vs the MACE default replaces ``calculator_kwargs`` wholesale (new-calculator defaults from :func:`~scgo.param_presets.default_calculator_kwargs`, then any user kwargs) so MACE keys do not leak into EMT/UMA/UPET.
    * - ``ts_params``
-     - Deep-merge onto :func:`~scgo.param_presets.get_ts_search_params` via :func:`~scgo.utils.run_helpers.initialize_ts_params`. Not merged with GO defaults. For ``run_go_ts*``, calculator settings align with merged ``go_params`` unless overridden in ``ts_params``.
+     - Deep-merge onto :func:`~scgo.param_presets.get_ts_search_params` via :func:`~scgo.utils.run_helpers.initialize_ts_params`. Not merged with GO defaults. For ``run_go_ts*``, calculator settings align with merged ``go_params`` unless ``ts_params`` sets ``calculator``, in which case ``calculator_kwargs`` are replaced wholesale.
    * - Forbidden in dicts
      - Top-level ``system_type`` in ``go_params`` / ``ts_params`` (use the run
        ``system_type=`` argument). Identity keys
@@ -35,8 +35,8 @@ All high-level ``run_*`` functions share the same contract:
      - ``system_type``, ``surface_config``, ``adsorbates``, ``seed``,
        ``verbosity``, ``output_*`` belong on the ``run_*`` call.
        Top-level ``surface_config`` / adsorbate keys in ``go_params`` (or
-       ``ts_params`` for ``surface_config``) are allowed when they agree with
-       the run argument.
+       ``ts_params`` for ``surface_config``) are enough when the run argument
+       is omitted, and must agree when both are set.
 
 **Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list of user overrides, then the resolved GO optimizer settings or TS NEB configuration. See :doc:`/api/utils`.
 
@@ -107,9 +107,10 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``"MACE"``
      - Calculator: ``"MACE"``, ``"UMA"``, ``"UPET"``, or ``"EMT"``
    * - ``calculator_kwargs``
-     - ``{}``
-     - Calculator options (e.g. ``{"model_name": "mace_mp_small"}``). Unsupported
-       ``device`` values raise ``SCGOValidationError``.
+     - ``{"model_name": "mace_matpes_0"}``
+     - Calculator options. Changing ``calculator`` replaces this dict with that
+       calculator's defaults (:func:`~scgo.param_presets.default_calculator_kwargs`).
+       Unsupported ``device`` values raise ``SCGOValidationError``.
    * - ``seed``
      - ``None``
      - Random seed (function argument overrides)
@@ -119,6 +120,13 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
    * - ``diversity_reference_db``
      - ``None``
      - Glob pattern for reference DBs (for diversity mode)
+   * - ``diversity_max_references``
+     - ``100``
+     - Cap on reference structures loaded for diversity scoring
+   * - ``diversity_update_interval``
+     - ``5``
+     - Refresh diversity references every N BH iterations / GA generations.
+       BH/GA slot copies default to ``None`` (inherit these top-level values).
    * - ``connectivity_factor``
      - ``1.4``
      - Connectivity threshold for initialization, post-operator GA checks,
@@ -154,8 +162,8 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Keep adsorbate fragments rigid
    * - ``surface_config``
      - ``None``
-     - Required for surface runs (prefer the run-function ``surface_config=``;
-       a top-level key in ``go_params`` is also allowed)
+     - Required for surface runs. Prefer the run-function ``surface_config=``;
+       a top-level key in ``go_params`` is enough when that argument is omitted.
    * - ``cluster_adsorbate_config``
      - ``None``
      - Adsorbate placement knobs (in ``go_params`` only)
@@ -365,7 +373,10 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
        similar pairs; adsorbate systems keep them)
    * - ``similarity_pair_cor_max``
      - ``0.1``
-     - Pair-correlation cap for the structure comparator
+     - Pair-correlation cap (Å) for the TS structure comparator
+       (``DEFAULT_TS_PAIR_COR_MAX``). Tighter than GO uniqueness
+       (``DEFAULT_PAIR_COR_MAX`` = ``0.7`` Å) so near-duplicates are rejected
+       before NEB.
    * - ``pair_core_rms_max``
      - see **Pair selection** below
      - Hard max core RMS (Å) for adsorbate+core pairing
