@@ -44,14 +44,14 @@ Issues = "https://github.com/rlaplaza-lab/scgo/issues"
 mace = [
     "e3nn==0.4.4",
     "mace-torch==0.3.16",
-    "nvalchemi-toolkit-ops==0.3.1",
+    "nvalchemi-toolkit-ops[torch]==0.4.1",
     "nvidia-nccl-cu12>=2.28",
     "torch>=2.12.0,<2.13",
-    "torch-sim-atomistic[mace]==0.6.0",
+    "torch-sim-atomistic[mace]==0.6.1",
 ]
 uma = [
-    "fairchem-core>=2.19.0",
-    "torch-sim-atomistic[fairchem]==0.6.0",
+    "fairchem-core>=2.20.0",
+    "torch-sim-atomistic[fairchem]==0.6.1",
 ]
 upet = [
     "upet>=0.2.6",
@@ -59,7 +59,7 @@ upet = [
     # vesin 0.6.0 required at runtime for NeighborList(skin=...).
     # Install after this extra: pip install 'vesin==0.6.0' --force-reinstall --no-deps
     # See docs/source/installation.rst for details.
-    "torch-sim-atomistic==0.6.0",
+    "torch-sim-atomistic==0.6.1",
 ]
 dev = [
     "pytest>=7.0.0",

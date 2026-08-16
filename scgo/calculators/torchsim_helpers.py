@@ -154,6 +154,38 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
     AtomConstraint._scgo_device_patch = True
 
 
+def _patch_torchsim_model_detach_outputs(model: object) -> None:
+    """Detach ``forward`` outputs unless ``retain_graph`` is set (ModelInterface).
+
+    TorchSim 0.6.1 detaches states in ``_chunked_apply`` before the autobatcher
+    split (#590), but ``InFlightAutoBatcher.next_batch`` still ``pop``/splits
+    *before* detaching completed states. Graph-carrying forces plus ``FixAtoms``
+    then raise ``SplitWithSizesBackward0`` inplace. Honoring the documented
+    contract (detached outputs unless ``retain_graph``) keeps later FIRE swaps
+    safe without changing constraint implementations.
+    """
+    if getattr(model, "_scgo_detach_outputs_patch", False):
+        return
+    orig_forward = getattr(model, "forward", None)
+    if not callable(orig_forward):
+        return
+
+    @functools.wraps(orig_forward)
+    def forward(state, **kwargs):  # noqa: ANN001
+        out = orig_forward(state, **kwargs)
+        if getattr(model, "retain_graph", False):
+            return out
+        if not isinstance(out, dict) or torch is None:
+            return out
+        return {
+            key: value.detach() if torch.is_tensor(value) else value
+            for key, value in out.items()
+        }
+
+    model.forward = forward  # type: ignore[method-assign]
+    model._scgo_detach_outputs_patch = True
+
+
 _TORCHSIM_WARNINGS_REGISTERED = False
 
 
@@ -645,7 +677,7 @@ class TorchSimBatchRelaxer:
     cutoff:
         Neighbor cutoff (Å). Only forwarded to the batchers when
         ``memory_scales_with == "n_edges"``; for the default
-        ``"n_atoms_x_density"`` metric it must NOT be passed (torch-sim 0.6.0
+        ``"n_atoms_x_density"`` metric it must NOT be passed (torch-sim 0.6.x
         raises ``TypeError``). Safe to overestimate when ``n_edges`` is enabled.
     init_kwargs:
         Extra kwargs forwarded to the torch-sim optimizer init function via
@@ -772,6 +804,8 @@ class TorchSimBatchRelaxer:
             )
         self._sync_device_dtype_from_model()
         self._patch_model_for_cuda()
+        _patch_torchsim_constraint_device_mismatch()
+        _patch_torchsim_model_detach_outputs(self.model)
 
         device_type = torch.device(self.device).type
         self._on_cpu = device_type == "cpu"

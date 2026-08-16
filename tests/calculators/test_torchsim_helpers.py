@@ -1257,3 +1257,69 @@ def test_torchsim_fixatoms_atom_does_not_move_during_relaxation():
     assert moved <= 1e-6
     # The free atom should have relaxed toward the LJ minimum (~3.8 A).
     assert relaxed.get_distance(0, 1) > 1.5
+
+
+def test_torchsim_061_exposes_detach_state_graph():
+    """Pinned torch-sim 0.6.1 detaches FIRE states before the autobatcher split."""
+    torch_sim = pytest.importorskip("torch_sim")
+    from importlib.metadata import version
+
+    assert version("torch-sim-atomistic") == "0.6.1"
+    assert hasattr(torch_sim, "detach_state_graph") or hasattr(
+        torch_sim.state, "detach_state_graph"
+    )
+
+
+def test_relax_batch_fixatoms_with_graph_carrying_forces():
+    """Graph-carrying forces + FixAtoms must not crash ts.optimize split/pop.
+
+    Production GPU GO failed with SplitWithSizesBackward0 when FIRE states still
+    had requires_grad and FixAtoms wrote inplace after autobatcher split.
+    """
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch_sim")
+    from ase import Atoms
+    from ase.constraints import FixAtoms
+    from torch_sim.models.interface import ModelInterface
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    class GraphForcesModel(ModelInterface):
+        def __init__(self, device, dtype) -> None:
+            super().__init__()
+            self._device = torch.device(device)
+            self._dtype = dtype
+            self._compute_forces = True
+            self._compute_stress = False
+            self._memory_scales_with = "n_atoms"
+
+        def forward(self, state, **_kwargs):
+            pos = state.positions.detach().to(dtype=self._dtype).requires_grad_(True)
+            per_atom = pos.pow(2).sum(dim=-1)
+            energy = torch.zeros(state.n_systems, device=pos.device, dtype=pos.dtype)
+            energy = energy.index_add(0, state.system_idx, per_atom)
+            (forces,) = torch.autograd.grad(energy.sum(), pos, create_graph=True)
+            return {"energy": energy, "forces": -forces}
+
+    def _h2(xshift: float) -> Atoms:
+        atoms = Atoms(
+            "H2",
+            positions=[[xshift, 0.0, 0.0], [xshift, 0.0, 0.74]],
+        )
+        atoms.center(vacuum=4.0)
+        atoms.set_constraint(FixAtoms(indices=[0]))
+        return atoms
+
+    relaxer = TorchSimBatchRelaxer(
+        model=GraphForcesModel(device="cpu", dtype=torch.float64),
+        device="cpu",
+        dtype=torch.float64,
+        force_tol=1.0,
+        max_steps=2,
+        autobatcher=False,
+    )
+    results = relaxer.relax_batch([_h2(0.0), _h2(1.0)], steps=2)
+    assert len(results) == 2
+    for energy, atoms in results:
+        assert isinstance(energy, float)
+        assert len(atoms) == 2
