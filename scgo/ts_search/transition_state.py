@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import sys
+import tempfile
 from copy import deepcopy
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,7 @@ from ase.calculators.calculator import Calculator
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.constraints import FixAtoms, FixBondLengths
 from ase.geometry import find_mic
-from ase.io import write
+from ase.io import read, write
 from ase.mep import NEB
 from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
@@ -1445,9 +1446,18 @@ def validate_initial_neb_energy_profile(
 
 
 def evaluate_neb_image_energies(images: list[Atoms], relaxer: Any) -> list[float]:
-    """Single-point energies for a NEB band via TorchSim ``relax_batch(steps=0)``."""
+    """Single-point energies for a NEB band via TorchSim ``relax_batch(steps=0)``.
+
+    Attaches energy/forces onto each live image for later NEB force reuse.
+    """
     batch = relaxer.relax_batch(list(images), steps=0)
-    return [float(energy) for energy, _atoms in batch]
+    energies: list[float] = []
+    for atoms, (energy, relaxed_atoms) in zip(images, batch, strict=True):
+        attach_singlepoint_from_relax_output(
+            atoms, energy, relaxed_atoms, require_forces=True
+        )
+        energies.append(float(energy))
+    return energies
 
 
 def evaluate_neb_image_energies_ase(images: list[Atoms]) -> list[float]:
@@ -1898,11 +1908,20 @@ def find_transition_state(
                 result["product_energy"] = float(prod_e)
             else:
                 ep_results = ts_relaxer.relax_batch([images[0], images[-1]], steps=0)
+                for atoms, (energy, relaxed_atoms) in zip(
+                    [images[0], images[-1]], ep_results, strict=True
+                ):
+                    attach_singlepoint_from_relax_output(
+                        atoms, energy, relaxed_atoms, require_forces=True
+                    )
                 result["reactant_energy"] = float(ep_results[0][0])
                 result["product_energy"] = float(ep_results[1][0])
 
-            band_energies = evaluate_neb_image_energies(images, ts_relaxer)
+            # Full-band SP only when the energy-profile gate is enabled (mirrors
+            # parallel). Forces attach for step-0 reuse.
+            band_energies: list[float] | None = None
             if max_endpoint_mismatch is not None:
+                band_energies = evaluate_neb_image_energies(images, ts_relaxer)
                 validate_initial_neb_energy_profile(
                     band_energies,
                     reference_reactant_energy=reactant_energy,
@@ -1910,10 +1929,8 @@ def find_transition_state(
                     min_saddle_prominence=min_saddle_prominence,
                     max_spurious_barrier=neb_max_spurious_barrier,
                 )
-            # Prefer SP energies of the aligned band over possibly stale
-            # raw_score metadata on the endpoint Atoms copies.
-            result["reactant_energy"] = float(band_energies[0])
-            result["product_energy"] = float(band_energies[-1])
+                result["reactant_energy"] = float(band_energies[0])
+                result["product_energy"] = float(band_energies[-1])
 
             log_debug_v(
                 logger,
@@ -1933,6 +1950,10 @@ def find_transition_state(
                 climb=bool(climb) and not use_two_stage,
                 method=neb_tangent_method,
             )
+            if band_energies is not None and all(
+                _image_has_cached_forces(img) for img in images
+            ):
+                neb._force_calls += 1
         else:
             if calculator is None:
                 raise SCGOValidationError("Calculator required when use_torchsim=False")
@@ -2147,6 +2168,100 @@ _PROVENANCE_KEYS = (
 )
 
 
+def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
+    """Write JSON via a same-directory temp file then ``os.replace``."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".tmp_neb_",
+        suffix=".json",
+        dir=directory,
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def load_completed_neb_result(
+    output_dir: str | os.PathLike[str],
+    pair_id: str,
+) -> dict[str, Any] | None:
+    """Return a prior NEB result if ``neb_{pair_id}_metadata.json`` is complete.
+
+    Only ``status == "success"`` with parseable JSON counts as resume-ready.
+    Corrupt or truncated files return ``None`` so the pair is re-run.
+    """
+    metadata_path = os.path.join(str(output_dir), f"neb_{pair_id}_metadata.json")
+    if not os.path.isfile(metadata_path):
+        return None
+    try:
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(metadata, dict) or metadata.get("status") != "success":
+        return None
+
+    use_torchsim = metadata.get("neb_backend") == "torchsim" or bool(
+        metadata.get("use_torchsim", False)
+    )
+    result = make_ts_result(
+        pair_id=str(metadata.get("pair_id", pair_id)),
+        n_images=int(metadata.get("n_images") or 0),
+        spring_constant=float(metadata.get("spring_constant") or 0.0),
+        use_torchsim=use_torchsim,
+        fmax=float(metadata.get("fmax") or 0.0),
+        neb_steps=metadata.get("neb_steps"),
+        interpolation_method=str(metadata.get("interpolation_method") or "idpp"),
+        climb=bool(metadata.get("climb", False)),
+        align_endpoints=bool(metadata.get("align_endpoints", True)),
+        perturb_sigma=float(metadata.get("perturb_sigma") or 0.0),
+        neb_interpolation_mic=bool(metadata.get("neb_interpolation_mic", False)),
+        neb_tangent_method=str(
+            metadata.get("neb_tangent_method") or DEFAULT_NEB_TANGENT_METHOD
+        ),
+        use_parallel_neb=bool(metadata.get("use_parallel_neb", False)),
+        reactant_energy=metadata.get("reactant_energy"),
+        product_energy=metadata.get("product_energy"),
+        error=metadata.get("error"),
+    )
+    result["status"] = "success"
+    result["neb_converged"] = bool(metadata.get("neb_converged", True))
+    result["ts_energy"] = metadata.get("ts_energy")
+    result["ts_image_index"] = metadata.get("ts_image_index")
+    result["barrier_height"] = metadata.get("barrier_height")
+    result["final_fmax"] = metadata.get("final_fmax")
+    result["steps_taken"] = metadata.get("steps_taken")
+    result["force_calls"] = metadata.get("force_calls")
+    result["resumed"] = True
+
+    ts_path = os.path.join(str(output_dir), f"ts_{pair_id}.xyz")
+    if os.path.isfile(ts_path):
+        with contextlib.suppress(OSError, ValueError):
+            result["transition_state"] = read(ts_path)
+
+    for label, key in (
+        ("reactant", "reactant_structure"),
+        ("product", "product_structure"),
+    ):
+        ep_path = os.path.join(str(output_dir), f"{label}_{pair_id}.xyz")
+        if os.path.isfile(ep_path):
+            with contextlib.suppress(OSError, ValueError):
+                result[key] = read(ep_path)
+
+    for key in _PROVENANCE_KEYS:
+        if key in metadata:
+            result[key] = metadata[key]
+    return result
+
+
 def save_neb_result(
     result: dict[str, Any],
     output_dir: str,
@@ -2163,7 +2278,7 @@ def save_neb_result(
       ``reactant_structure`` / ``product_structure`` are on the result dict
     - ``neb_{pair_id}_metadata.json`` (includes schema/version/time and NEB params)
 
-    Per-file paths are logged only at verbosity >= 2.
+    Metadata uses temp + ``os.replace``. Per-file paths log at verbosity >= 2.
     """
     logger = get_logger(__name__)
 
@@ -2218,6 +2333,16 @@ def save_neb_result(
             "final_fmax": result.get("final_fmax"),
             "steps_taken": result.get("steps_taken"),
             "force_calls": result.get("force_calls"),
+            "fmax": result.get("fmax"),
+            "neb_steps": result.get("neb_steps"),
+            "interpolation_method": result.get("interpolation_method"),
+            "climb": result.get("climb"),
+            "align_endpoints": result.get("align_endpoints"),
+            "perturb_sigma": result.get("perturb_sigma"),
+            "neb_interpolation_mic": result.get("neb_interpolation_mic"),
+            "neb_tangent_method": result.get("neb_tangent_method"),
+            "use_parallel_neb": result.get("use_parallel_neb"),
+            "use_torchsim": result.get("use_torchsim"),
         }
     )
 
@@ -2225,8 +2350,7 @@ def save_neb_result(
         metadata["ts_image_index"] = result.get("ts_image_index")
 
     metadata_path = os.path.join(output_dir, f"neb_{pair_id}_metadata.json")
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2)
+    _atomic_write_json(metadata_path, metadata)
 
     log_debug_v(
         logger,

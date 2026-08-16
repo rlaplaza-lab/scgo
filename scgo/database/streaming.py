@@ -22,23 +22,14 @@ from scgo.utils.logging import TRACE, get_logger
 
 logger = get_logger(__name__)
 
+# ASE sqlite ``_select`` projects 26 ``systems`` fields plus ``data``.
+_ASE_SYSTEMS_COLUMN_COUNT = 26
+_ASE_ROW_VALUE_COUNT = _ASE_SYSTEMS_COLUMN_COUNT + 1
 
-def _load_atoms_chunk(row_ids: list[int], da) -> list[tuple[int, Atoms]]:
-    """Load atom rows for a chunk of ids through ASE's row decoder.
 
-    ASE stores ``numbers`` / ``positions`` / ``cell`` as blobs, so rows have to
-    be decoded by ASE itself (``DataConnection.get_atoms``); a hand-rolled bulk
-    ``SELECT *`` cannot turn those raw buffers back into an ``Atoms`` object.
-
-    Args:
-        row_ids: ``systems`` row ids to load, in the desired output order
-        da: ASE ``DataConnection`` used to decode each row
-
-    Returns:
-        ``(row_id, atoms)`` pairs for every row that could be decoded; rows that
-        fail to decode are logged and skipped.
-    """
-    out: list[tuple[int, Atoms]] = []
+def _load_atoms_chunk_via_get_atoms(row_ids: list[int], da) -> list[tuple[int, Atoms]]:
+    """Decode one id at a time when bulk sqlite projection is unavailable."""
+    out: dict[int, Atoms] = {}
     for row_id in row_ids:
         try:
             atoms = da.get_atoms(row_id)
@@ -48,14 +39,86 @@ def _load_atoms_chunk(row_ids: list[int], da) -> list[tuple[int, Atoms]]:
             sqlite3.DatabaseError,
             ValueError,
             TypeError,
-        ) as exc:
+        ) as row_exc:
             logger.warning(
-                "Failed to fetch atoms id=%s from chunked stream: %s", row_id, exc
+                "Failed to fetch atoms id=%s from chunked stream: %s",
+                row_id,
+                row_exc,
             )
             continue
         if atoms is not None:
-            out.append((row_id, atoms))
-    return out
+            out[int(row_id)] = atoms
+    return [(row_id, out[row_id]) for row_id in row_ids if row_id in out]
+
+
+def _load_atoms_chunk(row_ids: list[int], da) -> list[tuple[int, Atoms]]:
+    """Load atom rows for a chunk of ids through ASE's row decoder.
+
+    ASE's public ``select`` accepts only a single id, so we fetch the chunk with
+    one ``WHERE id IN (...)`` using ASE's column projection, then
+    ``_convert_tuple_to_row`` + ``toatoms(add_additional_information=True)``.
+    """
+    if not row_ids:
+        return []
+
+    convert = getattr(da.c, "_convert_tuple_to_row", None)
+    colnames = getattr(da.c, "columnnames", None)
+    if convert is None or colnames is None or len(colnames) < _ASE_ROW_VALUE_COUNT:
+        return _load_atoms_chunk_via_get_atoms(row_ids, da)
+
+    columnindex = list(range(_ASE_SYSTEMS_COLUMN_COUNT)) + [_ASE_SYSTEMS_COLUMN_COUNT]
+    what = ", ".join("systems." + colnames[i] for i in columnindex)
+    placeholders = ",".join("?" * len(row_ids))
+    try:
+        with da.c.managed_connection() as conn:
+            cur = conn.execute(
+                f"SELECT {what} FROM systems WHERE id IN ({placeholders})",
+                tuple(int(i) for i in row_ids),
+            )
+            value_rows = cur.fetchall()
+    except (
+        sqlite3.DatabaseError,
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        logger.warning(
+            "Failed to select atoms chunk ids=%s (%s); falling back to per-id get_atoms",
+            row_ids,
+            exc,
+        )
+        return _load_atoms_chunk_via_get_atoms(row_ids, da)
+
+    loaded: dict[int, Atoms] = {}
+    for shortvalues in value_rows:
+        try:
+            values: list[object | None] = [None] * _ASE_ROW_VALUE_COUNT
+            values[_ASE_SYSTEMS_COLUMN_COUNT - 1] = "{}"
+            values[_ASE_SYSTEMS_COLUMN_COUNT] = "null"
+            for idx, col_i in enumerate(columnindex):
+                values[col_i] = shortvalues[idx]
+            row = convert(tuple(values))
+            atoms = row.toatoms(add_additional_information=True)
+        except (
+            KeyError,
+            IndexError,
+            sqlite3.DatabaseError,
+            ValueError,
+            TypeError,
+            AttributeError,
+        ) as exc:
+            row_id = shortvalues[0] if shortvalues else None
+            logger.warning(
+                "Failed to decode atoms id=%s from chunked stream: %s",
+                row_id,
+                exc,
+            )
+            continue
+        if atoms is not None:
+            loaded[int(row.id)] = atoms
+
+    return [(row_id, loaded[row_id]) for row_id in row_ids if row_id in loaded]
 
 
 def relaxed_rows_where_clause(

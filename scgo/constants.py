@@ -18,7 +18,14 @@ DEFAULT_COMPARATOR_TOL: float = 0.015
 """Cumulative structure-comparator difference tolerance (normalized, unitless)."""
 
 DEFAULT_PAIR_COR_MAX: float = 0.7
-"""Max single interatomic-distance difference (Å) for structure comparison."""
+"""Max single interatomic-distance difference (Å) for GO uniqueness comparison."""
+
+DEFAULT_TS_PAIR_COR_MAX: float = 0.1
+"""Max single interatomic-distance difference (Å) for TS pair near-dupe gating.
+
+Tighter than :data:`DEFAULT_PAIR_COR_MAX` because TS pairing must reject near-
+duplicates before NEB, while GO uniqueness tolerates more structural variation.
+"""
 
 DEFAULT_PAIR_COR_CUM_DIFF: float = DEFAULT_COMPARATOR_TOL
 """Cumulative pair-correlation difference tolerance (same as DEFAULT_COMPARATOR_TOL)."""

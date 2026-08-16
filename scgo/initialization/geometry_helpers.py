@@ -1157,13 +1157,17 @@ def analyze_disconnection(
     component_list = list(components.values())
     for i in range(len(component_list)):
         for j in range(i + 1, len(component_list)):
-            comp1, comp2 = component_list[i], component_list[j]
-            for atom1 in comp1:
-                for atom2 in comp2:
-                    distance = np.linalg.norm(positions[atom1] - positions[atom2])
-                    if distance < min_inter_component_distance:
-                        min_inter_component_distance = distance
-                        closest_atoms = (atom1, atom2, symbols[atom1], symbols[atom2])
+            comp1 = np.asarray(component_list[i], dtype=int)
+            comp2 = np.asarray(component_list[j], dtype=int)
+            inter = cdist(positions[comp1], positions[comp2])
+            flat_idx = int(np.argmin(inter))
+            local_i, local_j = np.unravel_index(flat_idx, inter.shape)
+            distance = float(inter[local_i, local_j])
+            if distance < min_inter_component_distance:
+                min_inter_component_distance = distance
+                atom1 = int(comp1[local_i])
+                atom2 = int(comp2[local_j])
+                closest_atoms = (atom1, atom2, symbols[atom1], symbols[atom2])
 
     if closest_atoms is None:
         return max_connectivity_scale(cf), "Unable to analyze disconnection"
@@ -1192,6 +1196,9 @@ def _build_connectivity_adjacency(
     cluster: Atoms,
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool = False,
+    *,
+    dist: np.ndarray | None = None,
+    radii: np.ndarray | None = None,
 ) -> list[list[int]]:
     """Build an undirected adjacency list using covalent-radius connectivity."""
     n = len(cluster)
@@ -1199,7 +1206,9 @@ def _build_connectivity_adjacency(
     if n <= 1:
         return adj
 
-    i_idx, j_idx = _bonded_pairs(cluster, connectivity_factor, use_mic)
+    i_idx, j_idx = _bonded_pairs(
+        cluster, connectivity_factor, use_mic, dist=dist, radii=radii
+    )
     for i, j in zip(i_idx.tolist(), j_idx.tolist(), strict=True):
         adj[i].append(j)
         adj[j].append(i)
@@ -1230,6 +1239,9 @@ def _identify_safe_removal_candidates(
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     use_mic: bool = False,
     max_to_check: int = 10,
+    *,
+    dist: np.ndarray | None = None,
+    radii: np.ndarray | None = None,
 ) -> list[int]:
     """Identify which candidates can be safely removed without disconnecting.
 
@@ -1242,6 +1254,8 @@ def _identify_safe_removal_candidates(
         connectivity_factor: Connectivity multiplier (float or dict)
         use_mic: If True, use minimum image convention for distance calculations
         max_to_check: Maximum number of candidates to check (for performance)
+        dist: Optional precomputed pairwise distance matrix
+        radii: Optional precomputed covalent-radii array
 
     Returns:
         List of atom indices that can be safely removed without disconnecting
@@ -1257,7 +1271,13 @@ def _identify_safe_removal_candidates(
     # Limit checks for performance
     candidates_to_check = candidate_indices[:max_to_check]
     n = len(cluster)
-    adj = _build_connectivity_adjacency(cluster, connectivity_factor, use_mic=use_mic)
+    adj = _build_connectivity_adjacency(
+        cluster,
+        connectivity_factor,
+        use_mic=use_mic,
+        dist=dist,
+        radii=radii,
+    )
     safe_candidates: list[int] = []
 
     for idx in candidates_to_check:

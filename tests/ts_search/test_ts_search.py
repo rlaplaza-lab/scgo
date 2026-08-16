@@ -14,10 +14,12 @@ from ase.constraints import FixAtoms, FixBondLengths
 
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
+from scgo.ts_search import transition_state_run as ts_run_mod
 from scgo.ts_search.transition_state import (
     calculate_structure_similarity,
     find_transition_state,
     interpolate_path,
+    load_completed_neb_result,
     neb_max_atom_force,
     save_neb_result,
 )
@@ -25,6 +27,7 @@ from scgo.ts_search.transition_state_io import (
     adsorbate_pair_select_cap,
     select_structure_pairs,
 )
+from scgo.utils.ts_runner_kwargs import NebRunConfig
 
 
 def test_neb_max_atom_force_uses_per_atom_norm():
@@ -728,6 +731,12 @@ def test_save_neb_result_success(temp_output_dir, default_rel_tol):
     assert metadata["ts_image_index"] == 3
     assert "steps_taken" in metadata
     assert metadata.get("neb_backend") == "ase"
+    loaded = load_completed_neb_result(temp_output_dir, "0_1")
+    assert loaded is not None
+    assert loaded["status"] == "success"
+    assert loaded["resumed"] is True
+    assert loaded["transition_state"] is not None
+    assert not any(name.startswith(".tmp_neb_") for name in os.listdir(temp_output_dir))
 
 
 def test_save_neb_result_failed(temp_output_dir):
@@ -758,6 +767,108 @@ def test_save_neb_result_failed(temp_output_dir):
 
     # TS structure should not be saved for failed runs
     assert not os.path.exists(os.path.join(temp_output_dir, "ts_1_2.xyz"))
+    assert load_completed_neb_result(temp_output_dir, "1_2") is None
+
+    corrupt_path = os.path.join(temp_output_dir, "neb_3_4_metadata.json")
+    with open(corrupt_path, "w") as f:
+        f.write('{"status": "success", "pair_id": "3_4"')
+    assert load_completed_neb_result(temp_output_dir, "3_4") is None
+
+
+def test_serial_resume_skips_completed_pair(tmp_path, monkeypatch):
+    """Completed success metadata under run_dir skips find_transition_state."""
+    atoms_a = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    atoms_a.center(vacuum=5.0)
+    atoms_b = atoms_a.copy()
+    atoms_b.positions[1, 0] += 0.3
+    minima = [(-1.0, atoms_a), (-0.9, atoms_b)]
+    run_dir = tmp_path / "run_resume"
+    pair_dir = run_dir / "pair_0_1"
+    pair_dir.mkdir(parents=True)
+    save_neb_result(
+        {
+            "status": "success",
+            "pair_id": "0_1",
+            "neb_converged": True,
+            "n_images": 5,
+            "spring_constant": 0.1,
+            "reactant_energy": -1.0,
+            "product_energy": -0.9,
+            "ts_energy": -0.5,
+            "barrier_height": 0.5,
+            "transition_state": atoms_a.copy(),
+            "ts_image_index": 2,
+            "error": None,
+            "use_torchsim": False,
+            "fmax": 0.05,
+            "neb_steps": 10,
+            "interpolation_method": "idpp",
+            "climb": False,
+            "align_endpoints": True,
+            "perturb_sigma": 0.0,
+            "neb_interpolation_mic": False,
+            "neb_tangent_method": "improvedtangent",
+        },
+        str(pair_dir),
+        "0_1",
+    )
+
+    calls = {"n": 0}
+
+    def _boom(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("find_transition_state should not run on resume")
+
+    monkeypatch.setattr(ts_run_mod, "find_transition_state", _boom)
+    neb_cfg = NebRunConfig(
+        neb_n_images=5,
+        neb_spring_constant=0.1,
+        neb_fmax=0.05,
+        neb_steps=10,
+        neb_climb=False,
+        neb_interpolation_method="idpp",
+        neb_align_endpoints=True,
+        neb_perturb_sigma=0.0,
+        neb_interpolation_mic=False,
+        neb_tangent_method="improvedtangent",
+        neb_surface_cell_remap=True,
+        neb_surface_lattice_rotation=True,
+        neb_surface_max_lattice_shift=1,
+        n_slab=0,
+        n_core_mobile=None,
+        n_adsorbate_mobile=None,
+        adsorbate_fragment_lengths=None,
+        max_endpoint_mismatch=None,
+        neb_prescreen_clash_distance=1.0,
+        min_saddle_prominence=0.10,
+        neb_max_spurious_barrier=8.0,
+        binding_penetration_tolerance_a=0.35,
+        layer_cluster_threshold_ang=0.8,
+        neb_interpolation_bond_tolerance_a=0.0,
+        adsorbate_definition=None,
+        connectivity_factor=None,
+        allow_cluster_fragmentation=False,
+        allow_adsorbate_surface_detachment=False,
+        enforce_adsorbate_subgraph_integrity=True,
+        system_type="gas_cluster",
+        surface_config=None,
+        torchsim_params={},
+    )
+    results = ts_run_mod._run_serial_neb_search(
+        [(0, 1)],
+        minima,
+        neb_cfg=neb_cfg,
+        run_dir=run_dir,
+        calculator_class=EMT,
+        calculator_kwargs={},
+        rng=None,
+        use_torchsim=False,
+        verbosity=0,
+    )
+    assert len(results) == 1
+    assert results[0]["status"] == "success"
+    assert results[0].get("resumed") is True
+    assert calls["n"] == 0
 
 
 def test_adsorbate_pair_select_cap_bounds_oversample() -> None:

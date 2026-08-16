@@ -20,6 +20,7 @@ from scgo.runner_params import (
     _prepare_run_go_context,
     _prepare_run_go_ts_context,
     _prepare_run_ts_search_context,
+    _resolve_go_params,
     _with_surface_on_params,
     format_completion_details,
     resolve_workflow_seed,
@@ -48,7 +49,11 @@ def _emt_ts_params(*, system_type: str, surface_config=None) -> dict:
 
 
 def test_copy_params_isolates_optimizer_slots() -> None:
-    relaxer = object()
+    class _NonCopyable:
+        def __deepcopy__(self, memo):
+            raise RuntimeError("deepcopy should not clone the relaxer")
+
+    relaxer = _NonCopyable()
     src = {
         "calculator": "EMT",
         "optimizer_params": {
@@ -64,6 +69,19 @@ def test_copy_params_isolates_optimizer_slots() -> None:
     copied["optimizer_params"]["ga"]["niter"] = 99
     assert src["optimizer_params"]["ga"]["niter"] == 2
     assert _copy_params(None) == {}
+
+    # surface_config inject must share the relaxer (no deepcopy).
+    cfg = _pt111()
+    merged = _resolve_go_params(
+        {
+            "calculator": "EMT",
+            "calculator_kwargs": {},
+            "optimizer_params": {"ga": {"relaxer": relaxer}},
+        },
+        surface_config=cfg,
+    )
+    assert merged["surface_config"] is cfg
+    assert merged["optimizer_params"]["ga"]["relaxer"] is relaxer
 
 
 def test_as_int_seed_and_workflow_seed() -> None:
@@ -158,6 +176,25 @@ def test_prepare_run_go_context(tmp_path: Path) -> None:
     assert ads.core_symbols == ["Pt", "Pt"]
     assert ads.adsorbate_symbols == ["O", "H"]
 
+    # Top-level params['surface_config'] is enough when the run arg is omitted.
+    cfg = _pt111()
+    surface_params = get_testing_params()
+    surface_params["surface_config"] = cfg
+    surface_ctx = _prepare_run_go_context(
+        ["Pt", "Pt"],
+        params=surface_params,
+        seed=1,
+        verbosity=0,
+        run_id=None,
+        clean=False,
+        output_dir=tmp_path,
+        calculator_for_global_optimization=None,
+        surface_config=None,
+        system_type="surface_cluster",
+        adsorbates=None,
+    )
+    assert surface_ctx.params.get("surface_config") is cfg
+
 
 def test_prepare_run_go_ts_and_ts_search_context(tmp_path: Path) -> None:
     cfg = _pt111()
@@ -179,6 +216,23 @@ def test_prepare_run_go_ts_and_ts_search_context(tmp_path: Path) -> None:
     assert go_ts.seed == 7
     assert go_ts.go_params.get("surface_config") is cfg
     assert go_ts.output_dir == tmp_path.resolve()
+
+    go_only = get_testing_params()
+    go_only["surface_config"] = cfg
+    go_ts_from_params = _prepare_run_go_ts_context(
+        ["Pt", "Pt"],
+        go_params=go_only,
+        ts_params=_emt_ts_params(system_type="surface_cluster", surface_config=cfg),
+        seed=7,
+        verbosity=0,
+        output_dir=tmp_path,
+        output_root=None,
+        output_stem=None,
+        surface_config=None,
+        system_type="surface_cluster",
+        adsorbates=None,
+    )
+    assert go_ts_from_params.go_params.get("surface_config") is cfg
 
     ts = _prepare_run_ts_search_context(
         ["Pt", "Pt"],

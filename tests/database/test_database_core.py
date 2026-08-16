@@ -829,6 +829,42 @@ class TestRobustness:
 
         assert mode.lower() == "wal"
 
+    def test_setup_database_reuse_keeps_single_simulation_cell(
+        self, tmp_path, pt2_atoms
+    ):
+        """Resume (remove_existing=False) must not write a second template row."""
+        from ase.db import connect as ase_db_connect
+
+        da = setup_database(
+            tmp_path,
+            "reuse.db",
+            pt2_atoms,
+            initial_candidate=pt2_atoms,
+            remove_existing=True,
+        )
+        close_data_connection(da)
+
+        da2 = setup_database(
+            tmp_path,
+            "reuse.db",
+            pt2_atoms,
+            remove_existing=False,
+        )
+        close_data_connection(da2)
+
+        db_file = tmp_path / "reuse.db"
+        with ase_db_connect(str(db_file)) as db:
+            assert len(list(db.select(simulation_cell=True))) == 1
+
+        other = Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+        with pytest.raises(SCGOValidationError, match="stoichiometry"):
+            setup_database(
+                tmp_path,
+                "reuse.db",
+                other,
+                remove_existing=False,
+            )
+
 
 class TestDatabaseStreaming:
     """Test streaming iterators."""
@@ -908,21 +944,19 @@ class TestDatabaseStreaming:
         close_data_connection(da)
         del da
 
-        # Make get_atoms fail for a specific row id to simulate a malformed row
-        from ase_ga.data import DataConnection
+        # Make row decoding fail once to simulate a malformed blob row.
+        from ase.db.row import AtomsRow
 
-        orig_get_atoms = DataConnection.get_atoms
-
+        orig_toatoms = AtomsRow.toatoms
         call = {"n": 0}
 
-        def _maybe_fail(self, row_id):
+        def _maybe_fail(self, *args, **kwargs):
             call["n"] += 1
-            # Fail the first get_atoms invocation to simulate a bad row
             if call["n"] == 1:
                 raise ValueError("simulated malformed row")
-            return orig_get_atoms(self, row_id)
+            return orig_toatoms(self, *args, **kwargs)
 
-        monkeypatch.setattr(DataConnection, "get_atoms", _maybe_fail)
+        monkeypatch.setattr(AtomsRow, "toatoms", _maybe_fail)
 
         caplog.clear()
         items = list(iter_database_minima(db_file))
@@ -930,7 +964,7 @@ class TestDatabaseStreaming:
         # Ensure streaming returned remaining rows and skipped the failing one
         assert len(items) >= 2
         assert any(
-            "Failed to fetch atoms id=" in rec.message
+            "Failed to decode atoms id=" in rec.message
             for rec in caplog.records
             if rec.levelname == "WARNING"
         )
@@ -965,24 +999,40 @@ class TestDatabaseStreaming:
             }
         assert set(row_ids) == db_ids
 
-    def test_streaming_does_not_issue_bulk_select_star(self, tmp_path):
-        """The dead ``SELECT * FROM systems`` bulk path must be gone (D2)."""
+    def test_streaming_does_not_issue_bulk_select_star(self, tmp_path, monkeypatch):
+        """Chunk load uses ``WHERE id IN``; no unbounded ``SELECT *`` or N get_atoms."""
+        from ase_ga.data import DataConnection
+
         db_file = _build_relaxed_db(tmp_path, "stream_no_bulk.db", 4)
+        get_atoms_calls: list[int] = []
+        real_get_atoms = DataConnection.get_atoms
+
+        def _counting_get_atoms(self, row_id, *a, **k):
+            get_atoms_calls.append(int(row_id))
+            return real_get_atoms(self, row_id, *a, **k)
+
+        monkeypatch.setattr(DataConnection, "get_atoms", _counting_get_atoms)
 
         yielded, statements = _stream_with_recording_connection(db_file)
 
         assert len(yielded) == 4
-        bulk = [s for s in statements if "SELECT * FROM systems" in s]
-        assert bulk == [], f"unexpected bulk row query issued: {bulk}"
+        unbounded = [
+            s
+            for s in statements
+            if "SELECT * FROM systems" in s and "WHERE ID IN" not in s.upper()
+        ]
+        assert unbounded == [], f"unexpected unbounded bulk query: {unbounded}"
+        assert any("WHERE ID IN" in s.upper() for s in statements)
+        assert get_atoms_calls == []
 
     def test_streaming_survives_failing_bulk_query(self, tmp_path):
-        """A failing bulk query must not surface as ``UnboundLocalError`` (D1)."""
+        """A failing bulk id-IN query must fall back without ``UnboundLocalError``."""
         n_rows = 4
         db_file = _build_relaxed_db(tmp_path, "stream_failure.db", n_rows)
 
         try:
             yielded, _statements = _stream_with_recording_connection(
-                db_file, fail_on="SELECT * FROM systems"
+                db_file, fail_on="WHERE id IN"
             )
         except UnboundLocalError as exc:  # pragma: no cover - regression guard
             pytest.fail(f"chunk loader leaked UnboundLocalError: {exc}")

@@ -13,6 +13,7 @@ import numpy as np
 from ase import Atom, Atoms
 from ase.data import atomic_masses, atomic_numbers
 from scipy.spatial import KDTree
+from scipy.spatial.distance import cdist
 
 from scgo.exceptions import (
     SCGOValidationError,
@@ -979,19 +980,23 @@ def _add_atoms_single_mode(
                         )
                     )
 
-                    candidates = _generate_batch_positions_on_convex_hull(
-                        new_atoms,
-                        n_candidates=1,
-                        bond_distance=bond_distance,
-                        rng=rng,
-                        min_connectivity_dist=min_dist,
-                        max_connectivity_dist=max_connectivity_dist,
-                        use_all_facets=False,
-                        connectivity_factor=connectivity_factor,
-                    )
+                    # Hull needs >=4 atoms; otherwise use the anchored fallback.
+                    if n_current >= 4:
+                        candidates = _generate_batch_positions_on_convex_hull(
+                            new_atoms,
+                            n_candidates=1,
+                            bond_distance=bond_distance,
+                            rng=rng,
+                            min_connectivity_dist=min_dist,
+                            max_connectivity_dist=max_connectivity_dist,
+                            use_all_facets=False,
+                            connectivity_factor=connectivity_factor,
+                        )
+                    else:
+                        candidates = []
                     if not candidates:
-                        # Convex hull needs >=4 atoms; anchor on an existing atom so
-                        # bond_distance is measured from a real neighbor, not the COM.
+                        # Anchor on an existing atom so bond_distance is measured
+                        # from a real neighbor, not the COM.
                         anchor_idx = int(rng.integers(n_current))
                         anchor_pos = current_positions[anchor_idx]
                         anchor_radius = get_covalent_radius_by_z(
@@ -1096,8 +1101,12 @@ def _add_atoms_single_mode(
 
         new_atoms.append(Atom(atom_symbol, new_pos))
 
-        if len(new_atoms) >= 2 and not is_cluster_connected(
-            new_atoms, connectivity_factor, use_mic=False
+        # Global factors: placement already enforced ≥1 bond. Non-global specs
+        # need the exact threshold check (placement uses max_connectivity_scale).
+        if (
+            len(new_atoms) >= 2
+            and not cf.is_global()
+            and not is_cluster_connected(new_atoms, connectivity_factor, use_mic=False)
         ):
             suggested_factor, analysis_msg = analyze_disconnection(
                 new_atoms, connectivity_factor, use_mic=False
@@ -1252,6 +1261,17 @@ def _add_atoms_batch_mode(
         atoms_to_place = atoms_to_add[: len(candidates)]
         valid_placements = []
 
+        cand_pos = np.asarray(candidates, dtype=float)
+        cand_radii = np.array([radii_to_add[s] for s in atoms_to_place], dtype=float)
+        inter_clash_free = np.ones(len(atoms_to_place), dtype=bool)
+        if len(atoms_to_place) > 1:
+            inter_d = cdist(cand_pos, cand_pos)
+            inter_thresh = (
+                cand_radii[:, None] + cand_radii[None, :]
+            ) * effective_min_distance
+            eye = np.eye(len(atoms_to_place), dtype=bool)
+            inter_clash_free = ~np.any((inter_d < inter_thresh) & ~eye, axis=1)
+
         # Use KDTree for large clusters to optimize distance checks
         use_kdtree = len(new_atoms) >= KDTREE_THRESHOLD
         if use_kdtree and len(current_positions) > 0:
@@ -1260,7 +1280,10 @@ def _add_atoms_batch_mode(
         for i, (atom_symbol, candidate_pos) in enumerate(
             zip(atoms_to_place, candidates, strict=True)
         ):
-            atom_radius = radii_to_add[atom_symbol]
+            if not inter_clash_free[i]:
+                continue
+
+            atom_radius = cand_radii[i]
 
             # Check distance to existing atoms
             if len(current_positions) > 0:
@@ -1295,22 +1318,7 @@ def _add_atoms_batch_mode(
                     if not np.any(dists_to_existing <= max_connectivity_dists):
                         continue  # Too far for connectivity
 
-            # Check distance to other candidates in batch
-            valid = True
-            for j, (other_symbol, other_pos) in enumerate(
-                zip(atoms_to_place, candidates, strict=True)
-            ):
-                if i == j:
-                    continue
-                other_radius = radii_to_add[other_symbol]
-                dist = np.linalg.norm(candidate_pos - other_pos)
-                min_allowed = (atom_radius + other_radius) * effective_min_distance
-                if dist < min_allowed:
-                    valid = False
-                    break
-
-            if valid:
-                valid_placements.append((atom_symbol, candidate_pos))
+            valid_placements.append((atom_symbol, candidate_pos))
 
         # Place all valid candidates
         if not valid_placements:
@@ -1330,8 +1338,10 @@ def _add_atoms_batch_mode(
         for atom_symbol, pos in valid_placements:
             new_atoms.append(Atom(atom_symbol, pos))
 
-        if len(new_atoms) >= 2 and not is_cluster_connected(
-            new_atoms, connectivity_factor, use_mic=False
+        if (
+            len(new_atoms) >= 2
+            and not cf.is_global()
+            and not is_cluster_connected(new_atoms, connectivity_factor, use_mic=False)
         ):
             suggested_factor, analysis_msg = analyze_disconnection(
                 new_atoms, connectivity_factor, use_mic=False

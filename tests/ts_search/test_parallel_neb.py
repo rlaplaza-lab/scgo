@@ -846,8 +846,9 @@ def test_run_parallel_neb_batches_single_screen_relax_batch(
         f"to be the first call, got {screen_relaxer.batch_sizes}"
     )
 
-    # Cross-check against the same run with the energy screen disabled: enabling
-    # the screen must add exactly one extra relax_batch call.
+    # Cross-check against the same run with the energy screen disabled: the
+    # screen SP attaches forces that step 0 reuses, so enabling the screen does
+    # not add a net extra relax_batch (screen replaces the step-0 eval).
     no_screen_relaxer = _CountingFakeRelaxer()
     with (
         patch(
@@ -870,8 +871,8 @@ def test_run_parallel_neb_batches_single_screen_relax_batch(
             relaxer=no_screen_relaxer,
         )
 
-    assert screen_relaxer.calls == no_screen_relaxer.calls + 1, (
-        f"screen should add exactly one batched call: "
+    assert screen_relaxer.calls == no_screen_relaxer.calls, (
+        f"screen SP should be reused at step 0 (no net extra call): "
         f"{screen_relaxer.batch_sizes} vs {no_screen_relaxer.batch_sizes}"
     )
 

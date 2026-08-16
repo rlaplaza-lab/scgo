@@ -30,6 +30,7 @@ from scgo.metadata.run_dir import (
     get_run_directories,
     get_run_id_from_dir,
     load_run_dir_record,
+    resolve_run_id_from_db_path,
     save_run_dir_record,
 )
 from scgo.minima_search import run_trials
@@ -66,6 +67,20 @@ def test_run_id_from_directory():
     assert re.match(
         r"^run_\d{8}_\d{6}_\d{6}$", get_run_id_from_dir("run_20250124_143022_123456")
     )
+
+
+def test_resolve_run_id_from_db_path_none_without_run_dir(tmp_path):
+    db = tmp_path / "orphan" / "ga_go.db"
+    db.parent.mkdir()
+    db.write_text("")
+    assert resolve_run_id_from_db_path(db) is None
+    assert resolve_run_id_from_db_path(db, base_dir=tmp_path) is None
+
+    run_id = "run_20240101_000000_abcdef"
+    nested = tmp_path / run_id / "ga_go.db"
+    nested.parent.mkdir()
+    nested.write_text("")
+    assert resolve_run_id_from_db_path(nested) == run_id
 
 
 def test_save_and_load_metadata(tmp_path):

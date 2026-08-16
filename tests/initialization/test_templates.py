@@ -777,7 +777,7 @@ class TestGenerateTemplateWithAtomAdjustment:
         assert len(result) == 50
 
     def test_adjustment_multi_element(self, rng):
-        """Test adjustment with multi-element composition."""
+        """Grow icosahedron 13→15 with Pt/Au via grow_template_via_facets."""
         from scgo.utils.helpers import get_composition_counts
 
         target_composition = ["Pt", "Au"] * 8  # 16 elements, will be truncated to 15
@@ -790,14 +790,13 @@ class TestGenerateTemplateWithAtomAdjustment:
             connectivity_factor=TEMPLATE_GENERATION_FACTOR,
         )
         if result is not None:
-            assert len(result) == 15
-            symbols = result.get_chemical_symbols()
-            assert all(sym in ["Pt", "Au"] for sym in symbols)
-            # Verify exact composition counts match (cycling should produce 8 Pt, 7 Au)
-            expected_counts = get_composition_counts(target_composition[:15])
-            actual_counts = get_composition_counts(symbols)
-            assert actual_counts == expected_counts, (
-                f"Composition mismatch: expected {expected_counts}, got {actual_counts}"
+            expected = target_composition[:15]
+            _assert_template_ok(result, 15, composition=expected)
+            assert get_composition_counts(
+                result.get_chemical_symbols()
+            ) == get_composition_counts(expected)
+            assert is_cluster_connected(
+                result, connectivity_factor=TEMPLATE_GENERATION_FACTOR
             )
 
     def test_adjustment_zero_atoms(self, rng):

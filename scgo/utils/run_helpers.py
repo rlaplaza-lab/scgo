@@ -19,7 +19,11 @@ from scgo.constants import BOLTZMANN_K_EV_PER_K, SURFACE_GA_MIN_LOCAL_RELAX_STEP
 from scgo.exceptions import (
     SCGOValidationError,
 )
-from scgo.param_presets import get_default_params, get_ts_search_params
+from scgo.param_presets import (
+    default_calculator_kwargs,
+    get_default_params,
+    get_ts_search_params,
+)
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     SystemType,
@@ -141,22 +145,44 @@ def _get_calculators() -> dict[str, Any]:
     return _CALCULATORS
 
 
+def _normalize_calculator_name(name: str) -> str:
+    return name.strip().upper()
+
+
+def _calculator_kwargs_for_change(
+    calculator: str,
+    user_kwargs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Defaults for ``calculator``, overlaid with explicit user kwargs."""
+    merged = default_calculator_kwargs(calculator)
+    if user_kwargs:
+        merged.update(dict(user_kwargs))
+    return merged
+
+
 def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
     """Initialize and merge params with defaults.
 
-    Handles None check and deep merge with default parameters.
-
-    Args:
-        params: User-provided parameters dict or None.
-
-    Returns:
-        Deep copy of params merged with defaults.
+    When ``calculator`` changes vs defaults, ``calculator_kwargs`` are replaced
+    wholesale (new-calculator defaults, then any user kwargs).
     """
     default_params = get_default_params()
     if params is None:
         return default_params
 
-    return deep_merge_dicts(default_params, params, copy_base=False)
+    # copy_base=False mutates default_params; capture calculator first.
+    default_calc = _normalize_calculator_name(
+        str(default_params.get("calculator", "MACE"))
+    )
+    merged = deep_merge_dicts(default_params, params, copy_base=False)
+    if "calculator" in params:
+        user_calc = _normalize_calculator_name(str(params["calculator"]))
+        if user_calc != default_calc:
+            merged["calculator_kwargs"] = _calculator_kwargs_for_change(
+                str(params["calculator"]),
+                params.get("calculator_kwargs"),
+            )
+    return merged
 
 
 def initialize_ts_params(
@@ -169,7 +195,9 @@ def initialize_ts_params(
     """Initialize and merge TS params with :func:`~scgo.get_ts_search_params` defaults.
 
     When ``go_params`` is provided, calculator settings are aligned with the
-    merged GO dict unless overridden in ``ts_params``.
+    merged GO dict unless overridden in ``ts_params``. Changing ``calculator``
+    in ``ts_params`` replaces ``calculator_kwargs`` wholesale (new-calculator
+    defaults plus any explicit TS kwargs) so GO backend keys do not leak.
     """
     resolved_surface = surface_config
     if ts_params is not None:
@@ -181,28 +209,58 @@ def initialize_ts_params(
         if go_sc is not None:
             resolved_surface = go_sc
 
-    calc = "MACE"
-    calc_kwargs: dict[str, Any] | None = None
+    inherited_calc = "MACE"
+    inherited_kwargs: dict[str, Any] | None = None
     if go_params is not None:
-        calc = str(go_params.get("calculator", "MACE"))
+        inherited_calc = str(go_params.get("calculator", "MACE"))
         ck = go_params.get("calculator_kwargs")
         if ck:
-            calc_kwargs = dict(ck)
+            inherited_kwargs = dict(ck)
     elif ts_params is not None:
         if "calculator" in ts_params:
-            calc = str(ts_params["calculator"])
+            inherited_calc = str(ts_params["calculator"])
         ck = ts_params.get("calculator_kwargs")
         if ck:
-            calc_kwargs = dict(ck)
+            inherited_kwargs = dict(ck)
+
+    if ts_params is not None and "calculator" in ts_params:
+        final_calc = str(ts_params["calculator"])
+    else:
+        final_calc = inherited_calc
+
+    calc_changed = (
+        go_params is not None
+        and ts_params is not None
+        and "calculator" in ts_params
+        and _normalize_calculator_name(final_calc)
+        != _normalize_calculator_name(inherited_calc)
+    )
+
+    if calc_changed:
+        assert ts_params is not None
+        calc_kwargs: dict[str, Any] | None = _calculator_kwargs_for_change(
+            final_calc,
+            ts_params.get("calculator_kwargs"),
+        )
+    else:
+        calc_kwargs = inherited_kwargs
 
     base = get_ts_search_params(
-        calculator=calc,
+        calculator=final_calc,
         calculator_kwargs=calc_kwargs,
         system_type=system_type,
         surface_config=resolved_surface,
     )
     if ts_params is None:
         return base
+
+    if calc_changed:
+        # Keep kwargs atomic: base already has defaults + explicit TS overlay.
+        override = {k: v for k, v in ts_params.items() if k != "calculator_kwargs"}
+        merged = deep_merge_dicts(base, override, copy_base=False)
+        merged["calculator_kwargs"] = dict(base["calculator_kwargs"])
+        return merged
+
     return deep_merge_dicts(base, ts_params, copy_base=False)
 
 

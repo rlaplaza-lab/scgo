@@ -446,6 +446,8 @@ def remove_atoms_from_vertices(
         remaining_to_remove: int = n_remove - total_removed
 
         coordination: np.ndarray = np.zeros(len(current), dtype=np.int_)
+        dist_matrix: np.ndarray | None = None
+        radii: np.ndarray | None = None
         if len(current) > 1:
             radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
             dist_matrix = cdist(positions, positions)
@@ -523,6 +525,8 @@ def remove_atoms_from_vertices(
             remove_indices,
             connectivity_factor,
             max_to_check=len(remove_indices),
+            dist=dist_matrix,
+            radii=radii,
         )
 
         if not safe_candidates:
@@ -642,6 +646,8 @@ def grow_template_via_facets(
     current: Atoms = base.copy()
     to_add: list[str] = list(atoms_to_add)
     radii_to_add: dict[str, float] = {s: get_covalent_radius(s) for s in set(to_add)}
+    cf = normalize_connectivity_factor(connectivity_factor)
+    cf_scale = max_connectivity_scale(cf)
 
     max_round_retries = 3
     round_retry_count = 0
@@ -658,12 +664,13 @@ def grow_template_via_facets(
         bond_distance, min_dist, max_conn = compute_bond_distance_params(
             max_existing,
             avg_new,
-            connectivity_factor,
+            cf,
             min_distance_factor,
             placement_radius_scaling,
         )
 
-        new_atom_symbol: str | None = to_add[0] if to_add else None
+        # Smallest remaining radius: hull clash pre-filter stays permissive.
+        new_atom_symbol: str = min(to_add, key=lambda s: radii_to_add[s])
         use_smart_filtering: bool = template_name == "cuboctahedron"
 
         candidates: list[np.ndarray[tuple[Any, ...], np.dtype[Any]]] = (
@@ -678,7 +685,7 @@ def grow_template_via_facets(
                 min_distance_factor=min_distance_factor,
                 new_atom_symbol=new_atom_symbol,
                 smart_facet_filtering=use_smart_filtering,
-                connectivity_factor=connectivity_factor,
+                connectivity_factor=cf,
             )
         )
         if not candidates:
@@ -694,28 +701,25 @@ def grow_template_via_facets(
 
         placed_count = 0
         candidate_idx = 0
+        positions = current.get_positions()
+        radii = np.asarray(current_radii, dtype=float)
 
         while placed_count < len(to_add) and candidate_idx < len(candidates):
             sym: str = to_add[placed_count]
             pos: np.ndarray[tuple[Any, ...], np.dtype[Any]] = candidates[candidate_idx]
             candidate_idx += 1
 
-            test_atom = Atom(sym, pos)
-            has_clash = False
-            for existing_atom in current:
-                dist: np.floating[Any] = np.linalg.norm(
-                    test_atom.position - existing_atom.position
-                )
-                r_new: float = get_covalent_radius(sym)
-                r_existing: float = get_covalent_radius(existing_atom.symbol)
-                min_allowed: float = (r_new + r_existing) * min_distance_factor
-                if dist < min_allowed:
-                    has_clash = True
-                    break
+            r_new: float = radii_to_add[sym]
+            dists = np.linalg.norm(positions - pos, axis=1)
+            if np.any(dists < (radii + r_new) * min_distance_factor):
+                continue
+            if not np.any(dists <= (radii + r_new) * cf_scale):
+                continue
 
-            if not has_clash:
-                current.append(test_atom)
-                placed_count += 1
+            current.append(Atom(sym, pos))
+            positions = np.vstack([positions, pos])
+            radii = np.append(radii, r_new)
+            placed_count += 1
 
         to_add = to_add[placed_count:]
 
@@ -963,12 +967,9 @@ def _rescale_cluster_to_bond_length(
         return
     a: float = _get_typical_bond_length(composition)
     positions: Any | np.ndarray[tuple[Any, ...], np.dtype[Any]] = atoms.get_positions()
-    n: int = len(positions)
-    min_dists: list[np.floating[Any]] = [
-        min(np.linalg.norm(positions[i] - positions[j]) for j in range(n) if j != i)
-        for i in range(n)
-    ]
-    current_scale = float(np.mean(min_dists))
+    dist_matrix = cdist(positions, positions)
+    np.fill_diagonal(dist_matrix, np.inf)
+    current_scale = float(np.min(dist_matrix, axis=1).mean())
     if current_scale <= 0:
         return
     cf_scale = max_connectivity_scale(

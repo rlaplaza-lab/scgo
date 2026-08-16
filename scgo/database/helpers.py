@@ -279,22 +279,49 @@ def setup_database(
     all_atom_numbers = [int(num) for num in atoms_template.get_atomic_numbers()]
 
     with ase_db_connect(db_file) as prep_db:
-        prep_db.write(
-            atoms_template,
-            data={"stoichiometry": all_atom_numbers},
-            simulation_cell=True,
-        )
+        template_rows = list(prep_db.select(simulation_cell=True))
+        n_templates = len(template_rows)
 
-        if initial_candidate is not None:
-            gaid = prep_db.write(
-                initial_candidate,
-                origin="StartingCandidateUnrelaxed",
-                relaxed=0,
-                generation=0,
-                extinct=0,
+        if n_templates > 1:
+            raise DatabaseSetupError(
+                f"Database {db_file} has {n_templates} simulation_cell template "
+                "rows; expected at most one. Remove the file or pass "
+                "remove_existing=True to recreate it."
             )
-            prep_db.update(gaid, gaid=gaid)
-            initial_candidate.info["confid"] = gaid
+
+        if n_templates == 1:
+            stored_row = template_rows[0]
+            stored_data = getattr(stored_row, "data", None) or {}
+            stored_stoich = stored_data.get("stoichiometry")
+            if stored_stoich is None:
+                stored_stoich = [
+                    int(n) for n in stored_row.toatoms().get_atomic_numbers()
+                ]
+            stored_stoich = [int(n) for n in stored_stoich]
+            if Counter(stored_stoich) != Counter(all_atom_numbers):
+                raise SCGOValidationError(
+                    f"Reusing database {db_file}: stored stoichiometry "
+                    f"{stored_stoich} does not match atoms_template "
+                    f"{all_atom_numbers}."
+                )
+            all_atom_numbers = stored_stoich
+        else:
+            prep_db.write(
+                atoms_template,
+                data={"stoichiometry": all_atom_numbers},
+                simulation_cell=True,
+            )
+
+            if initial_candidate is not None:
+                gaid = prep_db.write(
+                    initial_candidate,
+                    origin="StartingCandidateUnrelaxed",
+                    relaxed=0,
+                    generation=0,
+                    extinct=0,
+                )
+                prep_db.update(gaid, gaid=gaid)
+                initial_candidate.info["confid"] = gaid
 
         if not db_file_existed_before or remove_existing:
             with contextlib.suppress(AttributeError, sqlite3.OperationalError):
@@ -558,6 +585,21 @@ def load_reference_structures(
     for db_file in db_files:
         try:
             resolved_run_id = resolve_run_id_from_db_path(db_file, base_dir=base_dir)
+            if not resolved_run_id:
+                logger.warning(
+                    "Skipping reference database %s: could not resolve run_id "
+                    "from path layout",
+                    db_file,
+                )
+                continue
+            try:
+                db_relpath = os.path.relpath(
+                    db_file,
+                    str(base_dir) if base_dir is not None else os.getcwd(),
+                )
+            except (OSError, ValueError):
+                db_relpath = os.path.basename(db_file)
+
             for energy, atoms in iter_database_minima(
                 db_file,
                 chunk_size=200,
@@ -569,28 +611,18 @@ def load_reference_structures(
                 ):
                     continue
 
-                if len(heap) < max_structures:
+                if len(heap) < max_structures or energy < -heap[0][0]:
                     set_tags(
                         atoms,
                         run_id=resolved_run_id,
-                        source_db_relpath=os.path.relpath(
-                            db_file,
-                            str(base_dir) if base_dir is not None else os.getcwd(),
-                        ),
+                        source_db_relpath=db_relpath,
                     )
-                    heapq.heappush(heap, (-energy, counter, atoms))
+                    entry = (-energy, counter, atoms)
                     counter += 1
-                elif energy < -heap[0][0]:
-                    counter += 1
-                    set_tags(
-                        atoms,
-                        run_id=resolved_run_id,
-                        source_db_relpath=os.path.relpath(
-                            db_file,
-                            str(base_dir) if base_dir is not None else os.getcwd(),
-                        ),
-                    )
-                    heapq.heapreplace(heap, (-energy, counter, atoms))
+                    if len(heap) < max_structures:
+                        heapq.heappush(heap, entry)
+                    else:
+                        heapq.heapreplace(heap, entry)
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
             logger.debug("Failed to extract minima from %s: %s", db_file, e)
             continue

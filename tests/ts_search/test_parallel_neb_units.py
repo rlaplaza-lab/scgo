@@ -14,8 +14,15 @@ import numpy as np
 from ase import Atoms
 
 from scgo.ts_search.parallel_neb import (
+    ParallelNEBBatch,
     _evaluate_bands_in_chunks,
     _stage1_band_climb_eligible,
+)
+from scgo.ts_search.transition_state import (
+    TorchSimNEB,
+    _image_has_cached_forces,
+    evaluate_neb_image_energies,
+    interpolate_path,
 )
 
 # Tagged so a GPU log scan can tell simulated OOM apart from a real one.
@@ -155,18 +162,22 @@ class _RecordingEnergyRelaxer:
     def relax_batch(self, atoms_list, steps=0):
         self.calls += 1
         self.batch_atom_counts.append(sum(len(a) for a in atoms_list))
-        return [(float(a.get_positions()[0, 0]), a.copy()) for a in atoms_list]
+        results = []
+        for a in atoms_list:
+            ra = a.copy()
+            ra.arrays["forces"] = np.zeros((len(a), 3))
+            results.append((float(a.get_positions()[0, 0]), ra))
+        return results
 
 
 class _OomFirstCallRelaxer(_RecordingEnergyRelaxer):
     """Recording relaxer that raises a CUDA OOM on its first ``relax_batch``."""
 
     def relax_batch(self, atoms_list, steps=0):
-        self.calls += 1
-        if self.calls == 1:
+        if self.calls == 0:
+            self.calls += 1
             raise RuntimeError(SIMULATED_OOM)
-        self.batch_atom_counts.append(sum(len(a) for a in atoms_list))
-        return [(float(a.get_positions()[0, 0]), a.copy()) for a in atoms_list]
+        return super().relax_batch(atoms_list, steps)
 
 
 def _flatten(band_lists: list[list[float]]) -> list[float]:
@@ -205,6 +216,7 @@ def test_evaluate_bands_in_chunks_no_budget_single_batch():
     assert relaxer.calls == 1
     assert relaxer.batch_atom_counts == [4 * 3 * 2]
     assert _flatten(result) == [float(i) for i in range(4 * 3)]
+    assert all(_image_has_cached_forces(img) for band in bands for img in band)
 
 
 def test_evaluate_bands_in_chunks_band_cap_limits_bands_per_batch():
@@ -249,3 +261,20 @@ def test_evaluate_bands_in_chunks_retries_once_on_cuda_oom(monkeypatch):
     # First call OOM'd (unrecorded); the retry re-binned that chunk at half cost
     # (15 atoms each), then the second chunk ran normally.
     assert relaxer.batch_atom_counts == [15, 15, 30]
+
+
+def test_parallel_step0_reuses_energy_screen_forces(cu3_triangle, cu3_linear):
+    """Energy-screen SP attaches forces; parallel step 0 must not re-evaluate."""
+    relaxer = _RecordingEnergyRelaxer()
+    images = interpolate_path(cu3_triangle, cu3_linear, n_images=3, method="idpp")
+    evaluate_neb_image_energies(images, relaxer)
+    assert relaxer.calls == 1
+    assert all(_image_has_cached_forces(img) for img in images)
+
+    neb = TorchSimNEB(images, relaxer, k=0.1, climb=False)
+    ParallelNEBBatch([neb], relaxer, max_total_steps=5).run_optimization(
+        fmax=1.0, max_steps=1
+    )
+    # screen + post-loop PES refresh; step 0 reused the screen cache
+    assert relaxer.calls == 2
+    assert neb.get_force_calls() == 1

@@ -16,12 +16,16 @@ from scgo.algorithms.ga_common import (
     extract_constraint_index_lists,
     reconstruct_constraints_from_index_lists,
 )
-from scgo.constants import DEFAULT_COMPARATOR_TOL, DEFAULT_ENERGY_TOLERANCE
+from scgo.constants import (
+    DEFAULT_COMPARATOR_TOL,
+    DEFAULT_ENERGY_TOLERANCE,
+    DEFAULT_TS_PAIR_COR_MAX,
+)
 from scgo.database import (
     extract_minima_from_database_file,
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run
-from scgo.metadata.atoms import get_tag, set_tags
+from scgo.metadata.atoms import get_tag
 from scgo.metadata.provenance import output_json_provenance
 from scgo.pair_selection_defaults import pair_selection_param_defaults
 from scgo.surface.validation import (
@@ -30,7 +34,7 @@ from scgo.surface.validation import (
 )
 from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.comparators import PureInteratomicDistanceComparator
-from scgo.utils.helpers import copy_atoms, get_cluster_formula, validate_pair_id
+from scgo.utils.helpers import get_cluster_formula, validate_pair_id
 from scgo.utils.logging import get_logger
 
 from .transition_state import (
@@ -95,13 +99,18 @@ def load_minima_by_composition(
     )
 
     for db_file, run_id in db_files_with_run:
+        if not run_id:
+            logger.warning(
+                "Skipping database %s: could not resolve run_id from path layout",
+                db_file,
+            )
+            continue
         try:
             try:
                 db_relpath = os.path.relpath(db_file, base_dir)
             except (OSError, ValueError):
                 db_relpath = os.path.basename(db_file)
-            # When prefer_final_unique=True, require_final=True so we only load
-            # GO's canonical final unique minima (DB rows tagged final_unique_minimum).
+            # prefer_final_unique -> require_final so only final_unique_minimum rows load.
             minima = extract_minima_from_database_file(
                 db_file,
                 run_id=run_id,
@@ -126,28 +135,21 @@ def load_minima_by_composition(
                 minima_by_formula[formula] = []
 
             for energy, atoms in minima:
-                atoms_copy = copy_atoms(atoms)
-                set_tags(
-                    atoms_copy,
-                    run_id=run_id,
-                    source_db=os.path.basename(db_file),
-                    source_db_relpath=db_relpath,
-                )
                 # Rebuild slab FixAtoms / adsorbate FixBondLengths from the
                 # persisted index lists (the TorchSim GA path otherwise writes an
                 # unconstrained relaxed row). Additive: a constraint already
                 # present on the loaded Atoms (e.g. the native DB round-trip) is
                 # never overwritten.
                 reconstruct_constraints_from_index_lists(
-                    atoms_copy,
-                    fix_atoms_indices=get_tag(atoms_copy, "fix_atoms_indices_json"),
+                    atoms,
+                    fix_atoms_indices=get_tag(atoms, "fix_atoms_indices_json"),
                     fix_bond_lengths_pairs=get_tag(
-                        atoms_copy, "fix_bond_lengths_pairs_json"
+                        atoms, "fix_bond_lengths_pairs_json"
                     ),
                 )
-                validate_stored_slab_adsorbate_metadata(atoms_copy)
-                validate_stored_mobile_partition_metadata(atoms_copy)
-                minima_by_formula[formula].append((energy, atoms_copy))
+                validate_stored_slab_adsorbate_metadata(atoms)
+                validate_stored_mobile_partition_metadata(atoms)
+                minima_by_formula[formula].append((energy, atoms))
 
         except (ValueError, OSError) as e:
             logger.warning(
@@ -321,7 +323,7 @@ def select_structure_pairs(
     max_pairs: int | None = None,
     energy_gap_threshold: float | None = None,
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
-    similarity_pair_cor_max: float = 0.1,
+    similarity_pair_cor_max: float = DEFAULT_TS_PAIR_COR_MAX,
     surface_aware: bool = False,
     *,
     use_mic: bool,
@@ -803,7 +805,7 @@ def write_final_unique_ts(
     composition: list[str],
     energy_tolerance: float = DEFAULT_ENERGY_TOLERANCE,
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
-    similarity_pair_cor_max: float = 0.1,
+    similarity_pair_cor_max: float = DEFAULT_TS_PAIR_COR_MAX,
     minima: list | None = None,
     minima_base_dir: str | None = None,
     run_context: dict[str, Any] | None = None,

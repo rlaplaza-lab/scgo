@@ -15,6 +15,7 @@ from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_NEB_TANGENT_METHOD,
+    DEFAULT_TS_PAIR_COR_MAX,
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.exceptions import SCGOValidationError
@@ -73,6 +74,7 @@ from .transition_state import (
     find_transition_state,
     idpp_band_optimization_priority,
     interpolate_path,
+    load_completed_neb_result,
     make_ts_result,
     save_neb_result,
     validate_initial_neb_energy_profile,
@@ -283,6 +285,22 @@ def _run_serial_neb_search(
         pair_id = f"{i}_{j}"
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
+
+        resumed = load_completed_neb_result(pair_dir, pair_id)
+        if resumed is not None:
+            log_info_v(
+                logger,
+                "[%d/%d] Skipping pair %s (resumed success)",
+                idx,
+                len(pairs),
+                pair_id,
+                verbosity=verbosity,
+            )
+            resumed["system_type"] = system_type
+            if "minima_indices" not in resumed:
+                attach_minima_traceability(resumed, minima, i, j)
+            ts_results.append(resumed)
+            continue
 
         log_debug_v(
             logger,
@@ -514,7 +532,7 @@ def run_transition_state_search(
     max_pairs: int | None = None,
     energy_gap_threshold: float | None = None,
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
-    similarity_pair_cor_max: float = 0.1,
+    similarity_pair_cor_max: float = DEFAULT_TS_PAIR_COR_MAX,
     pair_core_rms_max: float | None = None,
     pair_score_gap_center: float | None = None,
     pair_score_gap_width: float | None = None,
@@ -566,6 +584,7 @@ def run_transition_state_search(
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
+    run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run transition state search for clusters of given composition.
 
@@ -652,6 +671,10 @@ def run_transition_state_search(
             constraints are applied to match GO behavior.
         adsorbate_definition: Optional; two-block mobile runs use blockwise NEB alignment
             when ``neb_align_endpoints`` is True.
+        run_id: Optional existing TS run directory name under
+            ``{path_key}_ts_results/``. When set, resumes that run and skips pairs
+            whose ``neb_{pair_id}_metadata.json`` already has ``status="success"``.
+            When ``None``, a new run id is generated.
 
     Returns:
         List of per-pair TS result dictionaries (one entry per selected pair,
@@ -1026,7 +1049,7 @@ def run_transition_state_search(
     )
 
     ts_results_root.mkdir(parents=True, exist_ok=True)
-    run_id = ensure_run_id(None, verbosity=verbosity, logger=logger)
+    run_id = ensure_run_id(run_id, verbosity=verbosity, logger=logger)
     run_dir = ts_results_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 

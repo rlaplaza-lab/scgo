@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -124,8 +126,21 @@ def save_run_dir_record(
     payload = {**output_json_provenance(), **record_obj.to_dict()}
 
     metadata_file = os.path.join(run_dir, "metadata.json")
-    with open(metadata_file, "w") as f:
-        json.dump(payload, f, indent=2, cls=RunDirJSONEncoder)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".tmp_run_",
+        suffix=".json",
+        dir=run_dir,
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2, cls=RunDirJSONEncoder)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, metadata_file)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
@@ -176,11 +191,12 @@ def resolve_run_id_from_db_path(
     db_path: str | Path,
     *,
     base_dir: str | Path | None = None,
-) -> str:
+) -> str | None:
     """Resolve GO run ID from a database path (``run_*`` segment when present).
 
-    Falls back to the database file name (with a warning) when no ``run_*``
-    segment is found, so the return value is never empty for a real path.
+    Returns ``None`` (with a warning) when no ``run_*`` segment is found, so
+    callers can skip the database instead of poisoning provenance with the
+    filename basename.
     """
     db_path_str = os.path.abspath(str(db_path))
     if base_dir is not None:
@@ -207,13 +223,11 @@ def resolve_run_id_from_db_path(
     if parent_name.startswith("run_"):
         return parent_name
 
-    basename = os.path.basename(db_path_str)
     logger.warning(
-        "Could not resolve run_id from path %s; using database basename %r as fallback",
+        "Could not resolve run_id from path %s; leaving run_id unset",
         db_path,
-        basename,
     )
-    return basename
+    return None
 
 
 def get_run_id_from_dir(run_dir: str) -> str | None:

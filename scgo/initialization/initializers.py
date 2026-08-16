@@ -840,11 +840,14 @@ def _sample_suitable_seed(
     Returns:
         Tuple of (suitable seed Atoms object or None, failure reason if None)
     """
-    # Pre-filter candidates to remove already-tried positions
+    # Precompute position hashes once; seeds are not mutated during sampling.
+    precomputed: list[tuple[float, Atoms, int]] = [
+        (e, a, hash(a.get_positions().tobytes())) for e, a in candidates
+    ]
     available_candidates = [
-        (e, a)
-        for e, a in candidates
-        if hash(a.get_positions().tobytes()) not in tried_positions
+        (e, a, pos_hash)
+        for e, a, pos_hash in precomputed
+        if pos_hash not in tried_positions
     ]
 
     if not available_candidates:
@@ -854,7 +857,7 @@ def _sample_suitable_seed(
 
     for attempt in range(max_attempts):
         sampled = _sample_seed_with_strategy(
-            available_candidates,
+            [(e, a) for e, a, _ in available_candidates],
             strategy=(strategy + attempt) % 5,
             rng=rng,
         )
@@ -865,15 +868,12 @@ def _sample_suitable_seed(
         _, sampled_seed = sampled
         geometry = _classify_seed_geometry(sampled_seed)
 
-        # Mark this position as tried
+        # Same positions as the precomputed entry even if the sampler returned a copy.
         pos_hash = hash(sampled_seed.get_positions().tobytes())
         tried_positions.add(pos_hash)
 
-        # Remove from available candidates to avoid sampling again
         available_candidates = [
-            (e, a)
-            for e, a in available_candidates
-            if hash(a.get_positions().tobytes()) != pos_hash
+            (e, a, h) for e, a, h in available_candidates if h != pos_hash
         ]
 
         # Accept if suitable geometry

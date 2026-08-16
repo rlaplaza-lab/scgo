@@ -23,10 +23,12 @@ from .transition_state import (
     TorchSimNEB,
     _detach_calc,
     _finalize_neb_result,
+    _image_has_cached_forces,
     attach_minima_traceability,
     attach_singlepoint_from_relax_output,
     evaluate_neb_image_energies,
     interpolate_path,
+    load_completed_neb_result,
     make_ts_result,
     neb_max_atom_force,
     neb_uses_two_stage_climb,
@@ -337,47 +339,50 @@ class ParallelNEBBatch:
                 f"{'' if evaluate_endpoints else ' (interiors only)'}"
             )
 
-            try:
-                unique_results = self.relaxer.relax_batch(unique_images, steps=0)
-            except (RuntimeError, ValueError) as e:
-                if is_cuda_oom_error(e):
-                    # Propagate GPU pressure so ``_run_chunk_with_oom_retry`` can
-                    # re-bin this chunk at half its atom cost. Swallowing it here
-                    # (the historical behavior) made that safety net unreachable
-                    # and silently produced zero transition states.
-                    logger.warning(
-                        "Batched force evaluation hit CUDA OOM at step %d "
-                        "(%d image(s), %d band(s)); propagating for re-binning: %s",
-                        self.step_count,
-                        len(unique_images),
-                        len(self.active_nebs),
-                        e,
-                    )
-                    raise
-                kind = (
-                    "Invalid input"
-                    if isinstance(e, ValueError)
-                    else "Batched force evaluation"
-                )
-                logger.error("%s failed: %s", kind, e)
-                for neb_idx in self.active_nebs:
-                    self.failed_nebs[neb_idx] = str(e)
-                    results[neb_idx]["error"] = str(e)
-                break
+            # Reuse energy-screen forces at step 0 when present.
+            reuse_cached = evaluate_endpoints and all(
+                _image_has_cached_forces(img) for img in unique_images
+            )
 
-            # ``force_calls`` = number of batched relax_batch evaluations a band
-            # actually took part in. The batch runner owns the counter here;
-            # ``TorchSimNEB.get_forces`` only counts for the serial fallback (its
-            # cached-forces fast path is taken right below).
+            if not reuse_cached:
+                try:
+                    unique_results = self.relaxer.relax_batch(unique_images, steps=0)
+                except (RuntimeError, ValueError) as e:
+                    if is_cuda_oom_error(e):
+                        # Propagate GPU pressure so ``_run_chunk_with_oom_retry`` can
+                        # re-bin this chunk at half its atom cost. Swallowing it here
+                        # (the historical behavior) made that safety net unreachable
+                        # and silently produced zero transition states.
+                        logger.warning(
+                            "Batched force evaluation hit CUDA OOM at step %d "
+                            "(%d image(s), %d band(s)); propagating for re-binning: %s",
+                            self.step_count,
+                            len(unique_images),
+                            len(self.active_nebs),
+                            e,
+                        )
+                        raise
+                    kind = (
+                        "Invalid input"
+                        if isinstance(e, ValueError)
+                        else "Batched force evaluation"
+                    )
+                    logger.error("%s failed: %s", kind, e)
+                    for neb_idx in self.active_nebs:
+                        self.failed_nebs[neb_idx] = str(e)
+                        results[neb_idx]["error"] = str(e)
+                    break
+
+                for neb_idx, img_idx, unique_slot in neb_image_map:
+                    energy, relaxed_atoms = unique_results[unique_slot]
+                    atoms = self.neb_instances[neb_idx].images[img_idx]
+                    attach_singlepoint_from_relax_output(
+                        atoms, energy, relaxed_atoms, require_forces=True
+                    )
+
+            # Count one PES eval per participating band (includes screen reuse).
             for neb_idx in batch_participants:
                 self.neb_instances[neb_idx]._force_calls += 1
-
-            for neb_idx, img_idx, unique_slot in neb_image_map:
-                energy, relaxed_atoms = unique_results[unique_slot]
-                atoms = self.neb_instances[neb_idx].images[img_idx]
-                attach_singlepoint_from_relax_output(
-                    atoms, energy, relaxed_atoms, require_forces=True
-                )
 
             still_active: list[int] = []
             for neb_idx in self.active_nebs:
@@ -593,6 +598,16 @@ def run_parallel_neb_search(
     setup_pairs: list[tuple[int, str, int, int, float, float, list[Any]]] = []
     for pair_ord, (i, j) in enumerate(pairs):
         pair_id = f"{i}_{j}"
+        pair_dir = run_dir / f"pair_{pair_id}"
+        resumed = load_completed_neb_result(pair_dir, pair_id)
+        if resumed is not None:
+            logger.info("Skipping pair %s (resumed success)", pair_id)
+            resumed["system_type"] = system_type
+            if "minima_indices" not in resumed:
+                attach_minima_traceability(resumed, minima, i, j)
+            pair_results[pair_ord] = resumed
+            continue
+
         react_e = float(minima[i][0])
         prod_e = float(minima[j][0])
         try:
@@ -694,6 +709,67 @@ def run_parallel_neb_search(
         result["system_type"] = system_type
         pair_results[pair_ord] = result
         neb_meta.append((pair_ord, i, j))
+
+    def _finalize_and_persist_band(neb_idx: int) -> None:
+        """Finalize one optimized band and write pair artifacts immediately."""
+        pair_ord, i, j = neb_meta[neb_idx]
+        neb = neb_instances[neb_idx]
+        summary = batch_results[neb_idx]
+        result = pair_results[pair_ord]
+        if result is None:
+            raise SCGOValidationError("Parallel NEB produced a missing pair result")
+        result["neb_converged"] = bool(summary.get("converged", False))
+        result["error"] = summary.get("error")
+        result["final_fmax"] = summary.get("final_fmax")
+        result["force_calls"] = neb.get_force_calls()
+        result["steps_taken"] = summary.get("steps_taken")
+
+        # Batch failures (e.g. CUDA OOM) leave only GO endpoint energies on the
+        # band; finalize would overwrite the real error with endpoint-as-TS.
+        error_text = str(result.get("error") or "")
+        batch_never_ran = bool(
+            error_text
+            and (result.get("force_calls") or 0) == 0
+            and not result.get("steps_taken")
+        )
+        # Non-finite NEB forces (nan/inf fmax) mean the band's geometry and
+        # energies are meaningless even though steps were taken, so finalize must
+        # not turn them into a reported saddle either.
+        forces_non_finite = "non-finite" in error_text.lower()
+        band_unusable = batch_never_ran or forces_non_finite
+        if band_unusable:
+            result["status"] = "failed"
+            result["neb_converged"] = False
+            logger.warning(
+                "Parallel NEB band unusable for pair %s (%s): %s",
+                result.get("pair_id"),
+                "non-finite forces" if forces_non_finite else "no steps taken",
+                error_text,
+            )
+        else:
+            try:
+                _finalize_neb_result(
+                    result,
+                    neb.images,
+                    logger=logger,
+                    max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
+                )
+            except (RuntimeError, SCGOValidationError) as e:
+                result["status"] = "failed"
+                result["error"] = str(e)
+                _detach_calc(result.get("transition_state"))
+
+        if result["neb_converged"] and result.get("status") != "success":
+            logger.warning(
+                "Parallel NEB converged but no usable TS for pair %s; marking failed",
+                result.get("pair_id"),
+            )
+
+        attach_minima_traceability(result, minima, i, j)
+        pair_id = str(result["pair_id"])
+        pair_dir = run_dir / f"pair_{pair_id}"
+        pair_dir.mkdir(parents=True, exist_ok=True)
+        save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
 
     if neb_instances:
         t_batch0 = perf_counter()
@@ -827,6 +903,8 @@ def run_parallel_neb_search(
             )
             for local_i, neb_i in enumerate(chunk):
                 batch_results[neb_i] = chunk_results[local_i]
+            for neb_i in chunk:
+                _finalize_and_persist_band(neb_i)
         for chunk in _chunk_indices(two_idx):
             # Interior-max IDPP: relax without climb, then climb (always).
             chunk_nebs = [neb_instances[i] for i in chunk]
@@ -875,6 +953,8 @@ def run_parallel_neb_search(
                     }
             for local_i, neb_i in enumerate(chunk):
                 batch_results[neb_i] = stage1_results[local_i]
+            for neb_i in chunk:
+                _finalize_and_persist_band(neb_i)
         neb_batch_s = perf_counter() - t_batch0
     else:
         batch_results = []
@@ -885,67 +965,11 @@ def run_parallel_neb_search(
     neb_each = neb_batch_s / n_active
     wall_each = wall_total / max(1, len(pairs))
 
-    for neb_idx, (pair_ord, i, j) in enumerate(neb_meta):
-        neb = neb_instances[neb_idx]
-        summary = batch_results[neb_idx]
+    # Timings are averages; pair metadata was already written per chunk.
+    for pair_ord, _i, _j in neb_meta:
         result = pair_results[pair_ord]
         if result is None:
             raise SCGOValidationError("Parallel NEB produced a missing pair result")
-        result["neb_converged"] = bool(summary.get("converged", False))
-        result["error"] = summary.get("error")
-        result["final_fmax"] = summary.get("final_fmax")
-        result["force_calls"] = neb.get_force_calls()
-        result["steps_taken"] = summary.get("steps_taken")
-
-        # Batch failures (e.g. CUDA OOM) leave only GO endpoint energies on the
-        # band; finalize would overwrite the real error with endpoint-as-TS.
-        error_text = str(result.get("error") or "")
-        batch_never_ran = bool(
-            error_text
-            and (result.get("force_calls") or 0) == 0
-            and not result.get("steps_taken")
-        )
-        # Non-finite NEB forces (nan/inf fmax) mean the band's geometry and
-        # energies are meaningless even though steps were taken, so finalize must
-        # not turn them into a reported saddle either.
-        forces_non_finite = "non-finite" in error_text.lower()
-        band_unusable = batch_never_ran or forces_non_finite
-        if band_unusable:
-            result["status"] = "failed"
-            result["neb_converged"] = False
-            logger.warning(
-                "Parallel NEB band unusable for pair %s (%s): %s",
-                result.get("pair_id"),
-                "non-finite forces" if forces_non_finite else "no steps taken",
-                error_text,
-            )
-        else:
-            try:
-                _finalize_neb_result(
-                    result,
-                    neb.images,
-                    logger=logger,
-                    max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
-                )
-            except (RuntimeError, SCGOValidationError) as e:
-                result["status"] = "failed"
-                result["error"] = str(e)
-                _detach_calc(result.get("transition_state"))
-
-        if result["neb_converged"] and result.get("status") != "success":
-            logger.warning(
-                "Parallel NEB converged but no usable TS for pair %s; marking failed",
-                result.get("pair_id"),
-            )
-
-        attach_minima_traceability(result, minima, i, j)
-        pair_id = str(result["pair_id"])
-        pair_dir = run_dir / f"pair_{pair_id}"
-        pair_dir.mkdir(parents=True, exist_ok=True)
-        save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
-        # Chunk wall time divided across pairs, not per-pair measurements: the
-        # ``*_avg_s`` suffix keeps that explicit. Consumers read these via
-        # :func:`~scgo.utils.timing_report.neb_seconds_from_pair_timings`.
         result["timings_s"] = {
             "kind": "neb",
             "total_wall_avg_s": wall_each,

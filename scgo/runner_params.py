@@ -8,7 +8,6 @@ dataclasses consumed by :mod:`scgo.runner_api`'s public run functions.
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -231,10 +230,11 @@ def _prepare_run_context(
     SurfaceSystemConfig | None,
 ]:
     st = _require_system_type(system_type, context)
-    validate_system_type_settings(system_type=st, surface_config=surface_config)
+    resolved_surface = _resolve_surface_config(surface_config, params)
     if params is not None:
         _reject_system_keys(params, context=context, kind="go")
         _reject_slot_identity_keys(params)
+    validate_system_type_settings(system_type=st, surface_config=resolved_surface)
     policy = get_system_policy(st)
     allow_empty = policy.slab_is_search_target
     comp = _as_composition(composition, allow_empty=allow_empty)
@@ -250,7 +250,6 @@ def _prepare_run_context(
         preset_adsorbate_definition=preset_ads,
         context=context,
     )
-    resolved_surface = _resolve_surface_config(surface_config, params)
     params_prep = _with_surface_on_params(params, surface_config=resolved_surface)
     return st, params_prep, ads_def, ads_template, full_comp, resolved_surface
 
@@ -368,7 +367,7 @@ def _resolve_go_params(
     merged = initialize_params(go_params)
     _reject_slot_identity_keys(merged)
     if surface_config is not None and merged.get("surface_config") is None:
-        merged = copy.deepcopy(merged)
+        merged = _copy_params(merged)
         merged["surface_config"] = surface_config
     return merged
 
@@ -391,7 +390,7 @@ def _resolve_ts_params(
         go_params=merged_go,
     )
     if surface_config is not None and merged.get("surface_config") is None:
-        merged = copy.deepcopy(merged)
+        merged = _copy_params(merged)
         merged["surface_config"] = surface_config
     return merged
 
@@ -606,11 +605,12 @@ def _prepare_run_go_campaign_context(
     adsorbates: AdsorbatesInput | None,
 ) -> RunGOCampaignContext:
     st = _require_system_type(system_type, "run_go_campaign")
-    validate_system_type_settings(system_type=st, surface_config=surface_config)
+    resolved_surface = _resolve_surface_config(surface_config, params)
     if params is not None:
         _reject_system_keys(params, context="run_go_campaign")
         _reject_slot_identity_keys(params)
-    params_prep = _with_surface_on_params(params, surface_config=surface_config)
+    validate_system_type_settings(system_type=st, surface_config=resolved_surface)
+    params_prep = _with_surface_on_params(params, surface_config=resolved_surface)
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=params)
     preset_ads_def = (
         extract_adsorbate_definition_from_params(params_prep)
@@ -632,7 +632,6 @@ def _prepare_run_go_campaign_context(
         )
         full_compositions.append(full_comp)
         composition_adsorbate.append((ads_def, ads_temp))
-    resolved_surface = _resolve_surface_config(surface_config, params_prep)
     out_path = _resolved_path(output_dir)
     first_ads, _first_temp = (
         composition_adsorbate[0] if composition_adsorbate else (None, None)
@@ -678,20 +677,24 @@ def _prepare_run_go_ts_context(
 ) -> RunGOTSContext:
     context_name = "run_go_ts"
     st = _require_system_type(system_type, context_name)
-    validate_system_type_settings(system_type=st, surface_config=surface_config)
     if go_params is not None:
         _reject_system_keys(go_params, context=context_name)
         _reject_slot_identity_keys(go_params)
     if ts_params is not None:
         _reject_system_keys(ts_params, context=context_name, kind="ts")
+    resolved_surface = _resolve_surface_config(surface_config, go_params)
+    if resolved_surface is None:
+        resolved_surface = _resolve_surface_config(None, ts_params)
+    if surface_config is not None:
+        validate_system_type_settings(system_type=st, surface_config=surface_config)
     go_mat, ts_mat = _resolve_go_ts_params(
         system_type=st,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
         go_params=go_params,
         ts_params=ts_params,
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
-    go_prep = _with_surface_on_params(go_mat, surface_config=surface_config)
+    go_prep = _with_surface_on_params(go_mat, surface_config=resolved_surface)
     policy = get_system_policy(st)
     core_comp = _as_composition(composition, allow_empty=policy.slab_is_search_target)
     preset_ads = (
@@ -708,20 +711,19 @@ def _prepare_run_go_ts_context(
         go_prepared=go_prep,
         ts_params=ts_mat,
         system_type=st,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
     )
     _validate_go_ts_surface_config(
         system_type=st,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
     )
     go_local = _merge_adsorbate_context_into_params(
         go_prep,
         adsorbate_definition=ads_def,
         adsorbate_fragment_template=ads_temp,
     )
-    resolved_surface = _resolve_surface_config(surface_config, go_local)
     ts_kwargs = _coerce_ts_for_runner(
-        ts_mat, fn_name=context_name, system_type=st, surface_config=surface_config
+        ts_mat, fn_name=context_name, system_type=st, surface_config=resolved_surface
     )
     out_path = _resolved_path(output_dir) or _default_go_ts_output_path(
         comp,
@@ -757,23 +759,26 @@ def _prepare_run_ts_search_context(
     adsorbates: AdsorbatesInput | None,
 ) -> RunTSContext:
     context_name = "run_ts_search"
-    st, _, ads_def, _ads_temp, comp, _resolved_surface = _prepare_run_context(
+    if ts_params is not None:
+        _reject_system_keys(ts_params, context=context_name, kind="ts")
+    resolved_surface = _resolve_surface_config(surface_config, ts_params)
+    st, _, ads_def, _ads_temp, comp, resolved_surface = _prepare_run_context(
         composition,
         system_type=system_type,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
         params=None,
         adsorbates=adsorbates,
         context=context_name,
     )
-    if ts_params is not None:
-        _reject_system_keys(ts_params, context=context_name, kind="ts")
     ts_mat = _resolve_ts_params(
-        ts_params, system_type=st, surface_config=surface_config
+        ts_params, system_type=st, surface_config=resolved_surface
     )
-    ts_base = initialize_ts_params(None, system_type=st, surface_config=surface_config)
+    ts_base = initialize_ts_params(
+        None, system_type=st, surface_config=resolved_surface
+    )
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     ts_kwargs = _coerce_ts_for_runner(
-        ts_mat, fn_name=context_name, system_type=st, surface_config=surface_config
+        ts_mat, fn_name=context_name, system_type=st, surface_config=resolved_surface
     )
     ts_kwargs.pop("system_type", None)
     return RunTSContext(

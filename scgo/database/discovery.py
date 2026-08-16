@@ -211,10 +211,10 @@ def list_discovered_db_paths_with_run(
     composition: list[str] | None = None,
     use_cache: bool = True,
     db_filename: str | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str | None]]:
     """List DB paths via :class:`~scgo.database.discovery.DatabaseDiscovery` with run parsed from layout.
 
-    Returns tuples ``(absolute_path, run_id)``. ``run_id`` is empty if the path
+    Returns tuples ``(absolute_path, run_id)``. ``run_id`` is ``None`` if the path
     is not under a recognizable ``run_*`` directory.
 
     ``use_cache`` is accepted for API compatibility; discovery always rescans.
@@ -228,7 +228,7 @@ def list_discovered_db_paths_with_run(
         db_filename=filename_pattern,
     )
 
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str | None]] = []
     for db_path in db_paths:
         db_path_str = os.path.abspath(str(db_path))
         run_id = resolve_run_id_from_db_path(db_path_str, base_dir=base_s)

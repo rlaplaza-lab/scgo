@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -107,10 +108,19 @@ def test_low_effort_builders_stamp_surface_config_top_level_only(
             p["surface_config"] = kwargs["surface_config"]
         return p
 
+    def _fake_build(calculator, **kwargs):
+        p = get_default_params()
+        p["calculator"] = calculator
+        if kwargs.get("calculator_kwargs") is not None:
+            p["calculator_kwargs"] = dict(kwargs["calculator_kwargs"])
+        if kwargs.get("model_name") is not None:
+            p["calculator_kwargs"]["model_name"] = kwargs["model_name"]
+        p["optimizer_params"]["ga"]["relaxer"] = object()
+        return p
+
     # Bypass MLIP / TorchSim construction so this stays a cheap unit test.
     monkeypatch.setattr(presets, "get_torchsim_ga_params", _fake_torchsim)
-    monkeypatch.setattr(presets, "get_default_upet_params", get_default_params)
-    monkeypatch.setattr(presets, "get_default_uma_params", get_default_params)
+    monkeypatch.setattr(presets, "_build_ga_calculator_params", _fake_build)
 
     builder = getattr(presets, builder_name)
     kwargs: dict = {"system_type": "surface_cluster", "surface_config": cfg, "seed": 1}
@@ -165,8 +175,9 @@ def test_initialize_params_deep_merge_user_overrides():
     }
     merged = initialize_params(user)
 
-    # Calculator override is respected
+    # Calculator override is respected (and drops MACE default kwargs).
     assert merged["calculator"] == "EMT"
+    assert merged["calculator_kwargs"] == {}
 
     # BH niter overridden, but other BH keys preserved from defaults
     bh_params = merged["optimizer_params"]["bh"]
@@ -175,6 +186,12 @@ def test_initialize_params_deep_merge_user_overrides():
 
     # GA params untouched except for defaults
     assert "ga" in merged["optimizer_params"]
+
+    uma = initialize_params({"calculator": "UMA"})
+    assert uma["calculator_kwargs"] == {
+        "model_name": "uma-s-1p2",
+        "task_name": "oc25",
+    }
 
 
 def test_validate_algorithm_params_raises_on_unexpected_keys():
@@ -248,6 +265,19 @@ def test_initialize_ts_params_calculator_kwargs_deep_merge():
     merged = initialize_ts_params(user, system_type="gas_cluster")
     assert merged["calculator_kwargs"]["model_name"] == "mace_mp_small"
 
+    # Calculator change must replace GO kwargs wholesale (no UMA task_name leak).
+    go = {
+        "calculator": "UMA",
+        "calculator_kwargs": {"model_name": "uma-s-1p2", "task_name": "oc25"},
+    }
+    switched = initialize_ts_params(
+        {"calculator": "MACE", "calculator_kwargs": {"model_name": "mace_mp_small"}},
+        system_type="gas_cluster",
+        go_params=go,
+    )
+    assert switched["calculator"] == "MACE"
+    assert switched["calculator_kwargs"] == {"model_name": "mace_mp_small"}
+
 
 def test_diff_param_overrides_nested_paths():
     base = get_default_params()
@@ -294,9 +324,17 @@ def test_get_high_energy_params_sets_fitness_strategy():
 
 
 def test_get_diversity_params_sets_reference_db():
-    params = get_diversity_params(reference_db_glob="Pt*_searches/**/*.db")
+    params = get_diversity_params(
+        reference_db_glob="Pt*_searches/**/*.db",
+        max_references=50,
+        update_interval=2,
+    )
     assert params["fitness_strategy"] == "diversity"
     assert params["diversity_reference_db"] == "Pt*_searches/**/*.db"
+    # Slot None defaults must not shadow the top-level values.
+    diversity = resolve_diversity_params(params["optimizer_params"]["ga"], params, "ga")
+    assert diversity["diversity_max_references"] == 50
+    assert diversity["diversity_update_interval"] == 2
 
 
 @pytest.mark.requires_uma
@@ -690,18 +728,46 @@ def test_get_low_effort_upet_ga_params_structure():
         version="1.5.0",
     )
     assert params["calculator"] == "UPET"
+    assert params["n_jobs"] == 1
     assert params["calculator_kwargs"] == {
         "model_name": "pet-mad-s",
         "version": "1.5.0",
     }
     ga = params["optimizer_params"]["ga"]
-    # Reduced GA budget vs the production TorchSim benchmark preset.
     assert ga["niter"] == 3
     assert ga["population_size"] == 13
     assert ga["niter_local_relaxation"] == 70
     assert ga["n_jobs_population_init"] == 1
     assert ga["early_stopping_niter"] == 0
     assert ga["relaxer"] is not None
+    assert ga["relaxer"].upet_model_name == "pet-mad-s"
+    assert ga["relaxer"].upet_version == "1.5.0"
+    assert ga["relaxer"].max_steps is None
+
+
+def test_get_low_effort_upet_ga_params_relaxer_matches_nondefault_model(monkeypatch):
+    """Non-default model_name must reach attach (same PES as ASE calc)."""
+    from scgo.param_presets import get_low_effort_upet_ga_params
+
+    captured: dict = {}
+
+    def _fake_attach(ga, calculator_kwargs, **kwargs):
+        captured["calculator_kwargs"] = dict(calculator_kwargs)
+        ga["relaxer"] = SimpleNamespace(max_steps=kwargs.get("max_steps"))
+
+    monkeypatch.setattr(
+        "scgo.param_presets._attach_upet_torchsim_relaxer", _fake_attach
+    )
+    params = get_low_effort_upet_ga_params(
+        system_type="gas_cluster",
+        model_name="pet-mad-xl",
+        version="2.0.0",
+    )
+    assert captured["calculator_kwargs"] == {
+        "model_name": "pet-mad-xl",
+        "version": "2.0.0",
+    }
+    assert params["optimizer_params"]["ga"]["relaxer"].max_steps is None
 
 
 @pytest.mark.requires_uma
@@ -775,7 +841,7 @@ def test_get_torchsim_ga_params_relaxer_invariants():
     assert relaxer.model_kind == "mace"
     assert relaxer.autobatcher is True
     assert relaxer.expected_max_atoms == 600
-    assert relaxer.max_steps == 200
+    assert relaxer.max_steps is None
     assert ga["niter"] == "auto"
     assert ga["population_size"] == "auto"
 
@@ -790,7 +856,7 @@ def test_get_uma_ga_benchmark_params_relaxer_invariants():
     relaxer = ga["relaxer"]
     assert relaxer.autobatcher is True
     assert relaxer.expected_max_atoms == 600
-    assert relaxer.max_steps == 200
+    assert relaxer.max_steps is None
 
 
 def test_get_default_uma_params_relaxer_invariants():
@@ -803,7 +869,7 @@ def test_get_default_uma_params_relaxer_invariants():
     relaxer = ga["relaxer"]
     assert relaxer.autobatcher is None
     assert relaxer.expected_max_atoms is None
-    assert relaxer.max_steps == 250
+    assert relaxer.max_steps is None
 
 
 def test_get_upet_ga_benchmark_params_relaxer_invariants():
@@ -816,7 +882,7 @@ def test_get_upet_ga_benchmark_params_relaxer_invariants():
     relaxer = ga["relaxer"]
     assert relaxer.autobatcher is True
     assert relaxer.expected_max_atoms == 600
-    assert relaxer.max_steps == 200
+    assert relaxer.max_steps is None
 
 
 def test_get_default_upet_params_relaxer_invariants():
@@ -829,4 +895,4 @@ def test_get_default_upet_params_relaxer_invariants():
     relaxer = ga["relaxer"]
     assert relaxer.autobatcher is None
     assert relaxer.expected_max_atoms is None
-    assert relaxer.max_steps == 250
+    assert relaxer.max_steps is None

@@ -77,7 +77,7 @@ def _load_candidates_from_file(db_file: str) -> list[CandidateEntry]:
         run_id = resolve_run_id_from_db_path(db_file)
         minima = extract_minima_from_database_file(
             db_file,
-            run_id,
+            run_id or "",
             require_final=False,
         )
         results: list[CandidateEntry] = []
