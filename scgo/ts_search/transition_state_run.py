@@ -51,6 +51,7 @@ from scgo.utils.logging import (
 )
 from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.path_keys import resolve_run_path_key
+from scgo.utils.phase_logging import log_neb_search_summaries
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import cleanup_torch_cuda, get_calculator_class
 from scgo.utils.timing_report import (
@@ -287,14 +288,12 @@ def _run_serial_neb_search(
             len(pairs),
             pair_id,
             verbosity=verbosity,
+            min_verbosity=2,
         )
 
         try:
             react_ep, prod_ep = prepare_neb_endpoints(atoms_i, atoms_j, neb_cfg)
         except (ValueError, SCGOValidationError) as e:
-            logger.warning(
-                "Skipping pair %s due to structure validation error: %s", pair_id, e
-            )
             skipped = make_ts_result(
                 pair_id=pair_id,
                 n_images=neb_cfg.neb_n_images,
@@ -374,7 +373,7 @@ def _run_serial_neb_search(
 
         attach_minima_traceability(result, minima, i, j)
         ts_results.append(result)
-        save_neb_result(result, str(pair_dir), pair_id)
+        save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
 
         if not use_torchsim and calculator is not None:
             del calculator
@@ -382,6 +381,12 @@ def _run_serial_neb_search(
     if use_torchsim:
         cleanup_torch_cuda(logger=logger)
 
+    log_neb_search_summaries(
+        logger,
+        ts_results,
+        verbosity=verbosity,
+        run_dir=str(run_dir),
+    )
     return ts_results
 
 
@@ -1053,6 +1058,7 @@ def run_transition_state_search(
             rng=rng,
             parallel_neb_max_bands=parallel_neb_max_bands,
             relaxer=shared_relaxer,
+            verbosity=verbosity,
         )
         cleanup_torch_cuda(logger=logger)
     else:

@@ -43,6 +43,7 @@ from scgo.utils.logging import (
     log_info_v,
     log_warning_v,
 )
+from scgo.utils.phase_logging import infer_verbosity
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
     build_timing_payload,
@@ -1637,7 +1638,7 @@ def _finalize_neb_result(
             "no interior saddle found"
         )
         if logger is not None:
-            logger.warning(
+            logger.debug(
                 "NEB highest-energy image is an endpoint for pair %s (image %d) "
                 "— marking as non-converged",
                 pair_id,
@@ -1651,7 +1652,7 @@ def _finalize_neb_result(
             f"{max_final_barrier:.3f} eV (likely discontinuous path)"
         )
         if logger is not None:
-            logger.warning(
+            logger.debug(
                 "NEB barrier too high for pair %s (%.3f eV) — marking as failed",
                 pair_id,
                 barrier_height,
@@ -1793,15 +1794,27 @@ def find_transition_state(
             )
 
     log_info_v(
-        logger, "Finding transition state for pair %s", pair_id, verbosity=verbosity
+        logger,
+        "Finding transition state for pair %s",
+        pair_id,
+        verbosity=verbosity,
+        min_verbosity=2,
     )
     if reactant_energy is not None:
         log_info_v(
-            logger, "  Reactant energy: %.6f eV", reactant_energy, verbosity=verbosity
+            logger,
+            "  Reactant energy: %.6f eV",
+            reactant_energy,
+            verbosity=verbosity,
+            min_verbosity=2,
         )
     if product_energy is not None:
         log_info_v(
-            logger, "  Product energy: %.6f eV", product_energy, verbosity=verbosity
+            logger,
+            "  Product energy: %.6f eV",
+            product_energy,
+            verbosity=verbosity,
+            min_verbosity=2,
         )
 
     result = make_ts_result(
@@ -2017,6 +2030,7 @@ def find_transition_state(
                 fmax_str,
                 fmax,
                 verbosity=verbosity,
+                min_verbosity=2,
             )
         else:
             log_warning_v(
@@ -2026,6 +2040,7 @@ def find_transition_state(
                 fmax_str,
                 fmax,
                 verbosity=verbosity,
+                min_verbosity=2,
             )
 
         # Last optimizer step can invalidate SinglePoint caches; refresh PES at
@@ -2043,22 +2058,28 @@ def find_transition_state(
         if use_torchsim and result["status"] == "success":
             result["force_calls"] = neb.get_force_calls()
 
-        if verbosity >= 1 and result["status"] == "success":
+        if result["status"] == "success":
             log_info_v(
                 logger,
                 "TS found at image %d/%d",
                 result["ts_image_index"],
                 len(neb.images) - 1,
                 verbosity=verbosity,
+                min_verbosity=2,
             )
             log_info_v(
-                logger, "  TS energy: %.6f eV", result["ts_energy"], verbosity=verbosity
+                logger,
+                "  TS energy: %.6f eV",
+                result["ts_energy"],
+                verbosity=verbosity,
+                min_verbosity=2,
             )
             log_info_v(
                 logger,
                 "  Barrier height: %.6f eV",
                 result["barrier_height"],
                 verbosity=verbosity,
+                min_verbosity=2,
             )
             if use_torchsim:
                 log_info_v(
@@ -2066,6 +2087,7 @@ def find_transition_state(
                     "  GPU-batched force calls: %s",
                     result.get("force_calls"),
                     verbosity=verbosity,
+                    min_verbosity=2,
                 )
 
     except KeyboardInterrupt:
@@ -2080,13 +2102,16 @@ def find_transition_state(
                 pair_id,
                 verbosity=verbosity,
             )
-        logger.error(
-            "Failed to find TS for pair %s: %s: %s",
-            pair_id,
-            type(e).__name__,
-            e,
-            exc_info=(verbosity >= 2),
-        )
+        if isinstance(e, SCGOValidationError):
+            result["status"] = "skipped"
+        else:
+            logger.error(
+                "Failed to find TS for pair %s: %s: %s",
+                pair_id,
+                type(e).__name__,
+                e,
+                exc_info=(verbosity >= 2),
+            )
 
     if t_wall0 is not None:
         total_s = perf_counter() - t_wall0
@@ -2098,7 +2123,8 @@ def find_transition_state(
         }
         result["timings_s"] = ts_timings
         neb_backend = "neb_torchsim" if use_torchsim else "neb_ase"
-        log_timing_summary(logger, neb_backend, ts_timings, verbosity=verbosity)
+        if verbosity >= 2:
+            log_timing_summary(logger, neb_backend, ts_timings, verbosity=verbosity)
         if write_timing_json:
             write_timing_file(
                 output_dir,
@@ -2133,6 +2159,8 @@ def save_neb_result(
     result: dict[str, Any],
     output_dir: str,
     pair_id: str,
+    *,
+    verbosity: int | None = None,
 ) -> None:
     """Save NEB result: TS and endpoint XYZ (when present) plus metadata JSON.
 
@@ -2142,8 +2170,11 @@ def save_neb_result(
     - ``reactant_{pair_id}.xyz`` / ``product_{pair_id}.xyz`` when
       ``reactant_structure`` / ``product_structure`` are on the result dict
     - ``neb_{pair_id}_metadata.json`` (includes schema/version/time and NEB params)
+
+    Per-file paths are logged only at verbosity >= 2.
     """
     logger = get_logger(__name__)
+    resolved_verbosity = infer_verbosity(logger, verbosity)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -2151,7 +2182,13 @@ def save_neb_result(
         _detach_calc(result["transition_state"])
         ts_path = os.path.join(output_dir, f"ts_{pair_id}.xyz")
         write(ts_path, result["transition_state"])
-        logger.info("Saved TS structure to %s", ts_path)
+        log_info_v(
+            logger,
+            "Saved TS structure to %s",
+            ts_path,
+            verbosity=resolved_verbosity,
+            min_verbosity=2,
+        )
 
     for label, key in (
         ("reactant", "reactant_structure"),
@@ -2163,7 +2200,14 @@ def save_neb_result(
             _detach_calc(ep)
             ep_path = os.path.join(output_dir, f"{label}_{pair_id}.xyz")
             write(ep_path, ep)
-            logger.info("Saved %s endpoint structure to %s", label, ep_path)
+            log_info_v(
+                logger,
+                "Saved %s endpoint structure to %s",
+                label,
+                ep_path,
+                verbosity=resolved_verbosity,
+                min_verbosity=2,
+            )
 
     extra = {key: result[key] for key in _PROVENANCE_KEYS if key in result}
     extra["neb_backend"] = (
@@ -2195,4 +2239,10 @@ def save_neb_result(
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    logger.info("Saved NEB metadata to %s", metadata_path)
+    log_info_v(
+        logger,
+        "Saved NEB metadata to %s",
+        metadata_path,
+        verbosity=resolved_verbosity,
+        min_verbosity=2,
+    )

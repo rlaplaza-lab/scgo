@@ -14,6 +14,7 @@ from scgo.calculators import torchsim_helpers as _tsh
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import is_cuda_oom_error
 from scgo.utils.logging import get_logger
+from scgo.utils.phase_logging import log_neb_search_summaries
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 
@@ -438,9 +439,11 @@ class ParallelNEBBatch:
         # Refresh PES at the final geometries so barrier finalize can read energies.
         self._refresh_pes_after_optimization()
 
-        logger.info(
-            f"Parallel NEB batch complete: {self.step_count} steps, "
-            f"{len(self.converged_nebs)} converged, {len(self.failed_nebs)} failed"
+        logger.debug(
+            "Parallel NEB batch complete: %d steps, %d converged, %d failed",
+            self.step_count,
+            len(self.converged_nebs),
+            len(self.failed_nebs),
         )
 
         return results
@@ -502,6 +505,7 @@ def run_parallel_neb_search(
     rng: np.random.Generator | None,
     parallel_neb_max_bands: int | None = None,
     relaxer: Any | None = None,
+    verbosity: int = 1,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Run all pairs through ParallelNEBBatch. Returns (results, timing meta).
 
@@ -581,7 +585,7 @@ def run_parallel_neb_search(
         attach_minima_traceability(skipped, minima, i, j)
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
-        save_neb_result(skipped, str(pair_dir), pair_id)
+        save_neb_result(skipped, str(pair_dir), pair_id, verbosity=verbosity)
         pair_results[pair_ord] = skipped
 
     # Build NEB instances for every valid pair first; defer the per-band single-point
@@ -598,9 +602,6 @@ def run_parallel_neb_search(
                 neb_cfg,
             )
         except (ValueError, SCGOValidationError) as e:
-            logger.warning(
-                "Skipping pair %s due to structure validation error: %s", pair_id, e
-            )
             _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
             continue
 
@@ -631,7 +632,6 @@ def run_parallel_neb_search(
                 clash_distance=neb_cfg.neb_prescreen_clash_distance,
             )
         except SCGOValidationError as e:
-            logger.warning("Skipping pair %s: %s", pair_id, e)
             _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
             continue
         setup_pairs.append((pair_ord, pair_id, i, j, react_e, prod_e, images))
@@ -671,7 +671,6 @@ def run_parallel_neb_search(
                     max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
                 )
             except SCGOValidationError as e:
-                logger.warning("Skipping pair %s: %s", pair_id, e)
                 _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
                 continue
         pair_two_stage = neb_uses_two_stage_climb(
@@ -942,7 +941,7 @@ def run_parallel_neb_search(
         pair_id = str(result["pair_id"])
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
-        save_neb_result(result, str(pair_dir), pair_id)
+        save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
         # Chunk wall time divided across pairs, not per-pair measurements: the
         # ``*_avg_s`` suffix keeps that explicit. Consumers read these via
         # :func:`~scgo.utils.timing_report.neb_seconds_from_pair_timings`.
@@ -959,4 +958,6 @@ def run_parallel_neb_search(
     }
     if not all(r is not None for r in pair_results):
         raise SCGOValidationError("Parallel NEB produced a missing pair result")
-    return pair_results, meta  # type: ignore[return-value]
+    results: list[dict[str, Any]] = [r for r in pair_results if r is not None]
+    log_neb_search_summaries(logger, results, verbosity=verbosity, run_dir=str(run_dir))
+    return results, meta

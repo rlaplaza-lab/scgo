@@ -148,7 +148,7 @@ def add_ts_to_database(
                 exception_types=(sqlite3.OperationalError, OSError),
             )
 
-        logger.info(
+        logger.debug(
             "Added TS %s (E=%.6f eV) to DB (minima %s-%s)",
             pair_id,
             ts_energy,
@@ -292,6 +292,9 @@ def tag_unique_ts_in_databases(
             base_dir,
             missing_db_pairs[:5],
         )
+
+    if added:
+        logger.info("Added %d unique TS to DB", added)
 
     return added
 
