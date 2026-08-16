@@ -186,11 +186,20 @@ def test_build_torchsim_fixbondlengths_none_when_unconstrained() -> None:
     )
 
 
-def test_select_constraint_packs_pairs_when_first_system_dropped() -> None:
-    """InFlight pop of system 0 must renumber remaining bonds to local [0, 1]."""
+def test_select_constraint_packs_pairs_when_first_system_dropped(
+    monkeypatch,
+) -> None:
+    """InFlight pop of system 0 must renumber remaining bonds to local [0, 1].
+
+    Also guards the adsorbate CUDA crash: ``select_constraint`` / ``Constraint.to``
+    reconstruct via ``__init__`` with device tensors; that must not call
+    ``np.asarray`` (CUDA tensors raise ``TypeError`` there).
+    """
     torch = pytest.importorskip("torch")
 
     from scgo.calculators.torchsim_constraints import TorchSimFixBondLengths
+
+    _patch_asarray_reject_tensors(monkeypatch, torch)
 
     constraint = TorchSimFixBondLengths(
         [[0, 1], [2, 3]],
@@ -198,6 +207,8 @@ def test_select_constraint_packs_pairs_when_first_system_dropped() -> None:
         [0, 1],
         device=torch.device("cpu"),
     )
+    # ``to`` is what torch-sim ``initialize_state`` / ``SimState.to`` invoke.
+    constraint = constraint.to(device=torch.device("cpu"), dtype=torch.float64)
     packed = constraint.select_constraint(
         torch.tensor([False, False, True, True]),
         torch.tensor([False, True]),
@@ -208,8 +219,28 @@ def test_select_constraint_packs_pairs_when_first_system_dropped() -> None:
     assert packed.bond_lengths.tolist() == pytest.approx([1.2], abs=1e-6)
 
 
-def test_fixbondlengths_survives_simstate_pop_of_system_zero() -> None:
-    """torch-sim InFlight pop must leave a valid packed bond constraint."""
+def _patch_asarray_reject_tensors(
+    monkeypatch: pytest.MonkeyPatch, torch_mod: object
+) -> None:
+    """Make ``np.asarray(tensor)`` fail like CUDA ``Tensor.numpy()`` does."""
+    real_asarray = np.asarray
+
+    def _asarray_guard(a, *args, **kwargs):
+        if isinstance(a, torch_mod.Tensor):
+            raise TypeError(
+                "can't convert cuda:0 device type tensor to numpy. "
+                "Use Tensor.cpu() to copy the tensor to host memory first."
+            )
+        return real_asarray(a, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_constraints.np.asarray",
+        _asarray_guard,
+    )
+
+
+def _run_fixbondlengths_simstate_pop(*, device: object) -> None:
+    """Shared SimState attach → to(device) → pop → enforce bond length."""
     torch = pytest.importorskip("torch")
     torch_sim = pytest.importorskip("torch_sim")
     from ase.constraints import FixBondLengths
@@ -224,11 +255,13 @@ def test_fixbondlengths_survives_simstate_pop_of_system_zero() -> None:
     s1 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 1.2]], cell=[20, 20, 20])
     s1.set_constraint(FixBondLengths([(0, 1)]))
 
-    device = torch.device("cpu")
+    # Match TorchSimBatchRelaxer: initialize on device, attach SCGO bond
+    # constraints, then let torch-sim move/clone the state (Constraint.to).
     state = torch_sim.initialize_state([s0, s1], device, torch.float64)
     built = build_torchsim_fixbondlengths_from_ase_batch([s0, s1], device=device)
     assert built is not None
     state.constraints = [built]
+    state = state.to(device, torch.float64)
 
     state.pop(0)
     assert state.n_systems == 1
@@ -236,6 +269,7 @@ def test_fixbondlengths_survives_simstate_pop_of_system_zero() -> None:
     assert len(state.constraints) == 1
     remaining = state.constraints[0]
     assert isinstance(remaining, TorchSimFixBondLengths)
+    assert remaining.pairs.device == torch.device(device)
     assert remaining.pairs.tolist() == [[0, 1]]
     assert remaining.system_idx.tolist() == [0]
 
@@ -246,69 +280,25 @@ def test_fixbondlengths_survives_simstate_pop_of_system_zero() -> None:
     assert abs(dist - 1.2) <= 1e-5
 
 
-def test_fixbondlengths_to_accepts_device_tensors_without_numpy(
-    monkeypatch,
-) -> None:
-    """Regression: ``Constraint.to(cuda)`` must not route CUDA tensors via numpy.
+def test_fixbondlengths_survives_simstate_pop_of_system_zero(monkeypatch) -> None:
+    """torch-sim InFlight pop must leave a valid packed bond constraint.
 
-    torch-sim ``initialize_state(...).to(device)`` calls each constraint's ``to``.
-    The old constructor used ``np.asarray(pairs)``, which fails for CUDA tensors
-    with ``TypeError: can't convert cuda:0 device type tensor to numpy``.
+    CPU CI cannot exercise real CUDA tensors, so ``np.asarray`` is patched to
+    reject tensors the way CUDA ``Tensor.numpy()`` does — covering the ORR /
+    adsorbate ``initialize_state`` → ``Constraint.to(cuda)`` failure mode.
     """
     torch = pytest.importorskip("torch")
-
-    from scgo.calculators.torchsim_constraints import TorchSimFixBondLengths
-
-    real_asarray = np.asarray
-
-    def _asarray_no_tensor(a, *args, **kwargs):
-        if isinstance(a, torch.Tensor):
-            raise TypeError(
-                "can't convert cuda:0 device type tensor to numpy. "
-                "Use Tensor.cpu() to copy the tensor to host memory first."
-            )
-        return real_asarray(a, *args, **kwargs)
-
-    monkeypatch.setattr(
-        "scgo.calculators.torchsim_constraints.np.asarray",
-        _asarray_no_tensor,
-    )
-
-    base = TorchSimFixBondLengths([[0, 1]], [0.96], [0], device=torch.device("cpu"))
-    moved = base.to(device=torch.device("cpu"), dtype=torch.float64)
-    assert moved.pairs.tolist() == [[0, 1]]
-    assert moved.system_idx.tolist() == [0]
-    assert moved.bond_lengths.tolist() == pytest.approx([0.96])
+    _patch_asarray_reject_tensors(monkeypatch, torch)
+    _run_fixbondlengths_simstate_pop(device=torch.device("cpu"))
 
 
 @pytest.mark.requires_cuda
-def test_fixbondlengths_survives_initialize_state_to_cuda() -> None:
-    """End-to-end: ASE FixBondLengths attached then moved to CUDA like TorchSim."""
+def test_fixbondlengths_survives_simstate_to_cuda_and_pop() -> None:
+    """Same SimState path on a real CUDA device (user's ORR traceback)."""
     torch = pytest.importorskip("torch")
-    torch_sim = pytest.importorskip("torch_sim")
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    from ase.constraints import FixBondLengths
-
-    from scgo.calculators.torchsim_constraints import (
-        build_torchsim_fixbondlengths_from_ase_batch,
-    )
-
-    atoms = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]])
-    atoms.set_constraint(FixBondLengths([(0, 1)]))
-    cpu = torch.device("cpu")
-    cuda = torch.device("cuda")
-    state = torch_sim.initialize_state([atoms], cpu, torch.float64)
-    built = build_torchsim_fixbondlengths_from_ase_batch([atoms], device=cpu)
-    assert built is not None
-    state.constraints = [built]
-    moved = state.to(cuda, torch.float64)
-    assert moved.constraints[0].pairs.device.type == "cuda"
-    stretched = moved.positions.clone()
-    stretched[1, 2] = 2.0
-    moved.set_constrained_positions(stretched)
-    dist = torch.linalg.norm(moved.positions[1] - moved.positions[0]).item()
-    assert abs(dist - 0.96) <= 1e-5
+    _run_fixbondlengths_simstate_pop(device=torch.device("cuda"))
 
 
 def test_fixbondlengths_adjust_positions_uses_minimum_image() -> None:
