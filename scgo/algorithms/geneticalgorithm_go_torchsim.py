@@ -1224,14 +1224,13 @@ def ga_go(
     ]
     profile_timings["initial_population_generation_s"] = perf_counter() - t0
 
-    if verbosity >= 1:
-        log_info_v(
-            logger,
-            "Generated initial population of %d candidates (batched, parallel: %s)",
-            population_size,
-            f"{resolve_n_jobs_for_tasks(n_jobs_population_init, population_size)} workers",
-            verbosity=verbosity,
-        )
+    log_info_v(
+        logger,
+        "Generated initial population of %d candidates (batched, parallel: %s)",
+        population_size,
+        f"{resolve_n_jobs_for_tasks(n_jobs_population_init, population_size)} workers",
+        verbosity=verbosity,
+    )
 
     # Do not pass initial_population to setup_database (avoids formula keys in
     # key_value_pairs). Insert unrelaxed starters via the low-level API, then
@@ -1252,13 +1251,12 @@ def ga_go(
     offspring_executor: ProcessPoolExecutor | None = None
 
     try:
-        if verbosity >= 1:
-            log_info_v(
-                logger,
-                "Relaxing initial population of up to %d candidates",
-                population_size,
-                verbosity=verbosity,
-            )
+        log_info_v(
+            logger,
+            "Relaxing initial population of up to %d candidates",
+            population_size,
+            verbosity=verbosity,
+        )
 
         logger.debug(
             "Using GA database at %s",
@@ -1452,24 +1450,22 @@ def ga_go(
             **population_kwargs,
         )
         population._write_log()
-        if verbosity >= 1:
-            eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
-            log_info_v(
-                logger,
-                "Initial population: size=%d, %d GA-eligible, %d discarded pre-relax, %d ineligible post-relax",
-                len(population.pop),
-                eligible_initial,
-                initial_discarded_count,
-                initial_ineligible_relaxed_count,
-                verbosity=verbosity,
-            )
-        if verbosity >= 2:
-            log_debug_v(
-                logger,
-                "Initial population confids=%s",
-                [a.info.get("confid") for a in population.pop],
-                verbosity=verbosity,
-            )
+        eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
+        log_info_v(
+            logger,
+            "Initial population: size=%d, %d GA-eligible, %d discarded pre-relax, %d ineligible post-relax",
+            len(population.pop),
+            eligible_initial,
+            initial_discarded_count,
+            initial_ineligible_relaxed_count,
+            verbosity=verbosity,
+        )
+        log_debug_v(
+            logger,
+            "Initial population confids=%s",
+            [a.info.get("confid") for a in population.pop],
+            verbosity=verbosity,
+        )
 
         log_early_stopping_info(
             verbosity=verbosity,
@@ -1894,21 +1890,20 @@ def ga_go(
                     )
                 )
                 if should_stop:
-                    if verbosity >= 1:
-                        stopping_metric = (
-                            "fitness"
-                            if fitness_strategy != FitnessStrategy.LOW_ENERGY
-                            else "energy"
-                        )
-                        log_info_v(
-                            logger,
-                            "Early stopping triggered: no %s improvement for %d generations (best %s: %.6f)",
-                            stopping_metric,
-                            generations_without_improvement,
-                            stopping_metric,
-                            best_value,
-                            verbosity=verbosity,
-                        )
+                    stopping_metric = (
+                        "fitness"
+                        if fitness_strategy != FitnessStrategy.LOW_ENERGY
+                        else "energy"
+                    )
+                    log_info_v(
+                        logger,
+                        "Early stopping triggered: no %s improvement for %d generations (best %s: %.6f)",
+                        stopping_metric,
+                        generations_without_improvement,
+                        stopping_metric,
+                        best_value,
+                        verbosity=verbosity,
+                    )
                     break
 
         _relax_unrelaxed_candidates(
@@ -1949,13 +1944,12 @@ def ga_go(
         ]
         all_minima = extract_minima_from_database(all_candidates)
 
-        if verbosity >= 1:
-            log_info_v(
-                logger,
-                "GA evolution complete: found %d minima",
-                len(all_minima),
-                verbosity=verbosity,
-            )
+        log_info_v(
+            logger,
+            "GA evolution complete: found %d minima",
+            len(all_minima),
+            verbosity=verbosity,
+        )
 
         # Sort by fitness (highest first) for non-default strategies
         sort_minima_by_fitness(

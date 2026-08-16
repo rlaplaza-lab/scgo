@@ -39,12 +39,13 @@ from scgo.exceptions import (
 from scgo.metadata.atoms import set_tags
 from scgo.metadata.provenance import is_cuda_oom_error
 from scgo.utils.helpers import copy_atoms, ensure_float64_forces
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, suppress_matching_stdout
 from scgo.utils.run_helpers import cleanup_torch_cuda
 
 logger = get_logger(__name__)
 
 _DEFAULT_UPET_VERSION = "1.5.0"
+_MODEL_MEMORY_ESTIMATION = "Model Memory Estimation:"
 
 __all__ = [
     "TorchSimBatchRelaxer",
@@ -833,6 +834,8 @@ class TorchSimBatchRelaxer:
         else:
             self._runner_kwargs["autobatcher"] = False
 
+        self._announced_autobatcher_kinds: set[str] = set()
+
         if self.init_kwargs and "init_kwargs" not in self._runner_kwargs:
             self._runner_kwargs["init_kwargs"] = dict(self.init_kwargs)
         # ts.optimize forwards **optimizer_kwargs to the step function; flatten them in.
@@ -973,12 +976,16 @@ class TorchSimBatchRelaxer:
         # Persistent BinningAutoBatcher when native batching was enabled; else False.
         static_batcher = getattr(self, "_static_batcher", None)
         static_arg = static_batcher if static_batcher is not None else False
-        try:
-            props = self._ts.static(  # type: ignore[call-arg]
+
+        def _static_once():
+            return self._ts.static(  # type: ignore[call-arg]
                 system=system_in,
                 model=self.model,
                 autobatcher=static_arg,
             )
+
+        try:
+            props = self._call_torchsim_quiet("single-point", _static_once)
         except ValueError as exc:
             if self._is_max_metric_value_error(exc):
                 logger.warning(
@@ -989,11 +996,7 @@ class TorchSimBatchRelaxer:
                 self._reset_and_reprobe()
                 # One retry with a fresh, re-estimated Binning batcher.
                 try:
-                    props = self._ts.static(  # type: ignore[call-arg]
-                        system=system_in,
-                        model=self.model,
-                        autobatcher=static_arg,
-                    )
+                    props = self._call_torchsim_quiet("single-point", _static_once)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
                     if self._is_cuda_oom_error(retry_exc):
                         cleanup_torch_cuda(logger=logger)
@@ -1031,6 +1034,49 @@ class TorchSimBatchRelaxer:
         """True for a genuine GPU OOM (delegates to provenance.is_cuda_oom_error)."""
         return is_cuda_oom_error(exc)
 
+    def _autobatcher_probe_cap(self) -> int:
+        """Atom count cap passed to the native InFlight/Binning probe."""
+        return int(self.max_atoms_to_try or self.expected_max_atoms or 50_000)
+
+    def _call_torchsim_quiet(self, kind: str, fn: Any) -> Any:
+        """Run ``fn`` while suppressing torch-sim Model Memory Estimation prints.
+
+        Emits one INFO summary the first time the corresponding native batcher
+        gains a ``max_memory_scaler``. Captured probe lines are re-logged at DEBUG.
+        """
+        captured: list[str] = []
+        with suppress_matching_stdout(_MODEL_MEMORY_ESTIMATION, captured=captured):
+            result = fn()
+        self._maybe_announce_autobatcher(kind, captured)
+        return result
+
+    def _maybe_announce_autobatcher(
+        self, kind: str, captured: list[str]
+    ) -> None:
+        """Log a one-line autobatcher summary once per kind/scaler generation."""
+        if captured and logger.isEnabledFor(logging.DEBUG):
+            for line in captured:
+                logger.debug("%s", line.rstrip("\n"))
+
+        batcher_attr = (
+            "_optimize_batcher" if kind == "relax" else "_static_batcher"
+        )
+        batcher = getattr(self, batcher_attr, None)
+        if batcher is None:
+            return
+        scaler = getattr(batcher, "max_memory_scaler", None)
+        announced = self.__dict__.setdefault("_announced_autobatcher_kinds", set())
+        if scaler is None or kind in announced:
+            return
+        announced.add(kind)
+        logger.info(
+            "TorchSim autobatcher (%s): estimated max_memory_scaler=%.4g "
+            "(probe cap %d atoms)",
+            kind,
+            float(scaler),
+            self._autobatcher_probe_cap(),
+        )
+
     def _reset_and_reprobe(self) -> None:
         """Drop the sticky native-batcher scalers and re-probe on the next call.
 
@@ -1046,6 +1092,7 @@ class TorchSimBatchRelaxer:
             batcher = getattr(self, batcher_attr, None)
             if batcher is not None:
                 batcher.max_memory_scaler = None
+        self.__dict__.setdefault("_announced_autobatcher_kinds", set()).clear()
         cleanup_torch_cuda(logger=logger)
 
     def _relax_batch_once(
@@ -1070,13 +1117,16 @@ class TorchSimBatchRelaxer:
 
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
 
-        try:
-            state = self._ts.optimize(  # type: ignore[call-arg]
+        def _optimize_once():
+            return self._ts.optimize(  # type: ignore[call-arg]
                 system=system_in,
                 model=self.model,
                 optimizer=self.optimizer,
                 **runner_kwargs,
             )
+
+        try:
+            state = self._call_torchsim_quiet("relax", _optimize_once)
         except (ValueError, torch.cuda.OutOfMemoryError, RuntimeError) as exc:
             if isinstance(exc, ValueError) and self._is_max_metric_value_error(exc):
                 logger.warning(
@@ -1087,12 +1137,7 @@ class TorchSimBatchRelaxer:
                 self._reset_and_reprobe()
                 # One retry with a fresh, re-estimated autobatcher.
                 try:
-                    state = self._ts.optimize(  # type: ignore[call-arg]
-                        system=system_in,
-                        model=self.model,
-                        optimizer=self.optimizer,
-                        **runner_kwargs,
-                    )
+                    state = self._call_torchsim_quiet("relax", _optimize_once)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
                     if self._is_cuda_oom_error(retry_exc):
                         cleanup_torch_cuda(logger=logger)

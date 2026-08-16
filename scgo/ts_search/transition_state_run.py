@@ -47,6 +47,7 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import (
     configure_logging,
     get_logger,
+    log_debug_v,
     log_info_v,
 )
 from scgo.utils.output_paths import resolve_ts_campaign_paths
@@ -281,14 +282,13 @@ def _run_serial_neb_search(
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
 
-        log_info_v(
+        log_debug_v(
             logger,
             "[%d/%d] Finding TS for pair %s",
             idx,
             len(pairs),
             pair_id,
             verbosity=verbosity,
-            min_verbosity=2,
         )
 
         try:
@@ -876,8 +876,8 @@ def run_transition_state_search(
         formula,
         verbosity=verbosity,
     )
-    if verbosity >= 2 and neb_align_endpoints:
-        log_info_v(
+    if neb_align_endpoints:
+        log_debug_v(
             logger,
             "NEB endpoint alignment enabled (align=%s, mic=%s, cell_remap=%s, "
             "lattice_rotation=%s)",
@@ -886,7 +886,6 @@ def run_transition_state_search(
             neb_surface_cell_remap,
             neb_surface_lattice_rotation,
             verbosity=verbosity,
-            min_verbosity=2,
         )
     _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 

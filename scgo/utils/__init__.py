@@ -31,10 +31,13 @@ from .logging import (
     VERBOSITY_LEVELS,
     configure_logging,
     get_logger,
+    infer_verbosity,
     log_debug_v,
     log_info_v,
+    log_v,
     log_warning_v,
     should_show_progress,
+    suppress_matching_stdout,
 )
 from .mutation_weights import get_adaptive_mutation_config
 from .rng_helpers import (
@@ -65,10 +68,13 @@ __all__ = [
     "VERBOSITY_LEVELS",
     "configure_logging",
     "get_logger",
+    "infer_verbosity",
     "log_debug_v",
     "log_info_v",
+    "log_v",
     "log_warning_v",
     "should_show_progress",
+    "suppress_matching_stdout",
     # mutation_weights
     "get_adaptive_mutation_config",
     # rng_helpers

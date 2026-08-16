@@ -40,7 +40,7 @@ from scgo.utils.comparators import (
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 from scgo.utils.logging import (
     get_logger,
-    log_info_v,
+    log_debug_v,
     log_warning_v,
 )
 from scgo.utils.phase_logging import infer_verbosity
@@ -1793,28 +1793,25 @@ def find_transition_state(
                 f"Cannot extract energy from product atoms for pair {pair_id}"
             )
 
-    log_info_v(
+    log_debug_v(
         logger,
         "Finding transition state for pair %s",
         pair_id,
         verbosity=verbosity,
-        min_verbosity=2,
     )
     if reactant_energy is not None:
-        log_info_v(
+        log_debug_v(
             logger,
             "  Reactant energy: %.6f eV",
             reactant_energy,
             verbosity=verbosity,
-            min_verbosity=2,
         )
     if product_energy is not None:
-        log_info_v(
+        log_debug_v(
             logger,
             "  Product energy: %.6f eV",
             product_energy,
             verbosity=verbosity,
-            min_verbosity=2,
         )
 
     result = make_ts_result(
@@ -1843,12 +1840,11 @@ def find_transition_state(
                 f"Endpoints are identical for pair {pair_id}; no interior TS"
             )
 
-        log_info_v(
+        log_debug_v(
             logger,
             "Generating initial path with %s interpolation",
             interpolation_method,
             verbosity=verbosity,
-            min_verbosity=2,
         )
         # Keep interpolation unconstrained; constraints are applied during NEB.
         images = interpolate_path(
@@ -1915,12 +1911,11 @@ def find_transition_state(
             result["reactant_energy"] = float(band_energies[0])
             result["product_energy"] = float(band_energies[-1])
 
-            log_info_v(
+            log_debug_v(
                 logger,
                 "Using TorchSim batched NEB (climb=%s)",
                 climb,
                 verbosity=verbosity,
-                min_verbosity=2,
             )
 
             steps_budget = int(neb_steps)
@@ -1979,12 +1974,11 @@ def find_transition_state(
         # actually used (so early stage-1 convergence does not starve climb).
         stage1_cap = steps_budget // 2 if use_two_stage else steps_budget
 
-        log_info_v(
+        log_debug_v(
             logger,
             "Starting NEB optimization with %s",
             optimizer.__name__,
             verbosity=verbosity,
-            min_verbosity=2,
         )
 
         t_neb0 = perf_counter()
@@ -1994,12 +1988,11 @@ def find_transition_state(
         if use_two_stage:
             neb.climb = True
             stage2_steps = max(1, steps_budget - steps_taken)
-            log_info_v(
+            log_debug_v(
                 logger,
                 "Enabling climbing image for second NEB stage (%d steps)",
                 stage2_steps,
                 verbosity=verbosity,
-                min_verbosity=2,
             )
             dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
             dyn.run(fmax=fmax, steps=stage2_steps)
@@ -2023,14 +2016,13 @@ def find_transition_state(
 
         fmax_str = f"{final_fmax:.6f}" if final_fmax is not None else "unknown"
         if result["neb_converged"]:
-            log_info_v(
+            log_debug_v(
                 logger,
                 "NEB converged in %d steps (final_fmax=%s < %.6f)",
                 result["steps_taken"],
                 fmax_str,
                 fmax,
                 verbosity=verbosity,
-                min_verbosity=2,
             )
         else:
             log_warning_v(
@@ -2059,35 +2051,31 @@ def find_transition_state(
             result["force_calls"] = neb.get_force_calls()
 
         if result["status"] == "success":
-            log_info_v(
+            log_debug_v(
                 logger,
                 "TS found at image %d/%d",
                 result["ts_image_index"],
                 len(neb.images) - 1,
                 verbosity=verbosity,
-                min_verbosity=2,
             )
-            log_info_v(
+            log_debug_v(
                 logger,
                 "  TS energy: %.6f eV",
                 result["ts_energy"],
                 verbosity=verbosity,
-                min_verbosity=2,
             )
-            log_info_v(
+            log_debug_v(
                 logger,
                 "  Barrier height: %.6f eV",
                 result["barrier_height"],
                 verbosity=verbosity,
-                min_verbosity=2,
             )
             if use_torchsim:
-                log_info_v(
+                log_debug_v(
                     logger,
                     "  GPU-batched force calls: %s",
                     result.get("force_calls"),
                     verbosity=verbosity,
-                    min_verbosity=2,
                 )
 
     except KeyboardInterrupt:
@@ -2182,12 +2170,11 @@ def save_neb_result(
         _detach_calc(result["transition_state"])
         ts_path = os.path.join(output_dir, f"ts_{pair_id}.xyz")
         write(ts_path, result["transition_state"])
-        log_info_v(
+        log_debug_v(
             logger,
             "Saved TS structure to %s",
             ts_path,
             verbosity=resolved_verbosity,
-            min_verbosity=2,
         )
 
     for label, key in (
@@ -2200,13 +2187,12 @@ def save_neb_result(
             _detach_calc(ep)
             ep_path = os.path.join(output_dir, f"{label}_{pair_id}.xyz")
             write(ep_path, ep)
-            log_info_v(
+            log_debug_v(
                 logger,
                 "Saved %s endpoint structure to %s",
                 label,
                 ep_path,
                 verbosity=resolved_verbosity,
-                min_verbosity=2,
             )
 
     extra = {key: result[key] for key in _PROVENANCE_KEYS if key in result}
@@ -2239,10 +2225,9 @@ def save_neb_result(
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    log_info_v(
+    log_debug_v(
         logger,
         "Saved NEB metadata to %s",
         metadata_path,
         verbosity=resolved_verbosity,
-        min_verbosity=2,
     )

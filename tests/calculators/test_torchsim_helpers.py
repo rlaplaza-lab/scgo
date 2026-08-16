@@ -1371,3 +1371,91 @@ def test_relax_batch_fixatoms_with_graph_carrying_forces():
     for energy, atoms in results:
         assert isinstance(energy, float)
         assert len(atoms) == 2
+
+
+def test_autobatcher_memory_estimation_prints_suppressed_with_summary(
+    monkeypatch, capfd
+):
+    """Suppress torch-sim memory prints; one INFO summary per kind, re-announce after reset."""
+    import torch
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+    from scgo.utils.logging import configure_logging
+
+    configure_logging(1)
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer._on_cpu = False
+    relaxer.max_memory_scaler = None
+    relaxer.max_atoms_to_try = 256
+    relaxer.expected_max_atoms = 256
+    relaxer._runner_kwargs = {"max_steps": 10}
+    relaxer.max_steps = 10
+    relaxer.device = torch.device("cuda")
+    relaxer.dtype = torch.float64
+    relaxer.model = object()
+    relaxer.optimizer = object()
+    relaxer.model_kind = "mace"
+    relaxer.last_batch_relax_steps = []
+    relaxer._announced_autobatcher_kinds = set()
+
+    class _Batcher:
+        max_memory_scaler = None
+
+    class _FakeState:
+        energy = torch.tensor([1.0])
+
+        @staticmethod
+        def to_atoms():
+            return [Atoms("H", positions=[[0.0, 0.0, 0.0]])]
+
+    class _FakeTS:
+        def optimize(self, **kwargs):
+            print("Model Memory Estimation: Running forward pass on state with 1 atoms.")
+            relaxer._optimize_batcher.max_memory_scaler = 42.5
+            return _FakeState()
+
+        def static(self, **kwargs):
+            print("Model Memory Estimation: Running forward pass on state with 1 atoms.")
+            relaxer._static_batcher.max_memory_scaler = 18.0
+            return [
+                {
+                    "potential_energy": torch.tensor([1.5]),
+                    "forces": torch.zeros((1, 3)),
+                }
+            ]
+
+    relaxer._ts = _FakeTS()
+    relaxer._optimize_batcher = _Batcher()
+    relaxer._static_batcher = _Batcher()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.cleanup_torch_cuda",
+        lambda **_k: None,
+    )
+
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+
+    relaxer.relax_batch([atoms])
+    out = capfd.readouterr().out
+    assert "Model Memory Estimation" not in out
+    assert out.count("TorchSim autobatcher (relax)") == 1
+    assert "max_memory_scaler=42.5" in out
+
+    relaxer.relax_batch([atoms])
+    out = capfd.readouterr().out
+    assert "Model Memory Estimation" not in out
+    assert "TorchSim autobatcher (relax)" not in out
+
+    relaxer._reset_and_reprobe()
+    relaxer.relax_batch([atoms])
+    assert capfd.readouterr().out.count("TorchSim autobatcher (relax)") == 1
+
+    relaxer.relax_batch([atoms], steps=0)
+    out = capfd.readouterr().out
+    assert "Model Memory Estimation" not in out
+    assert out.count("TorchSim autobatcher (single-point)") == 1

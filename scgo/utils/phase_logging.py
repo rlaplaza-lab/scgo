@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import logging
 import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from scgo.utils.logging import infer_verbosity
+
 if TYPE_CHECKING:
     from logging import Logger
-
-
-def infer_verbosity(logger: Logger, explicit: int | None = None) -> int:
-    """Map an explicit verbosity or infer from the configured logger level."""
-    if explicit is not None:
-        return explicit
-    return 2 if logger.isEnabledFor(logging.DEBUG) else 1
 
 
 def log_phase_header(

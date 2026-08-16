@@ -51,15 +51,17 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
    * - 0
      - Warnings and errors only; no progress bars
    * - 1
-     - Normal operation: parameter merge logs, timing summaries, campaign progress, and GA phase summaries (initialization, per-generation crossover/mutation/relaxation)
+     - Normal operation: parameter merge logs, timing summaries, campaign progress, GA phase summaries (initialization, per-generation crossover/mutation/relaxation), and a one-line TorchSim autobatcher memory-scaler summary when GPU probing runs
    * - 2
-     - Per-individual GA and initialization detail (offspring outcomes, placement failures, ineligible structures after relaxation); third-party loggers still suppressed in HPC mode
+     - Per-individual GA and initialization detail (offspring outcomes, placement failures, ineligible structures after relaxation); per-pair NEB detail; third-party loggers still suppressed in HPC mode
    * - 3
      - TRACE-level diagnostics (deepest SCGO logging)
 
 Configure the root logger with :func:`~scgo.configure_logging`. Set
 ``SCGO_LOCAL_DEV=1`` for milder third-party log suppression during local
-development (see :doc:`/installation`).
+development (see :doc:`/installation`). Torch-sim's multi-line
+``Model Memory Estimation`` stdout prints are suppressed; the scaler summary
+above replaces them at default verbosity.
 
 **Workflow**
 

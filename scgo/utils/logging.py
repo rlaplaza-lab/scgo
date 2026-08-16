@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import re
 import sys
+from collections.abc import Iterator
+from typing import TextIO
 
 from scgo.exceptions import SCGOValidationError
 from scgo.utils.runtime_warnings import apply_scgo_runtime_warning_filters
@@ -149,18 +153,57 @@ def should_show_progress(verbosity: int) -> bool:
     return verbosity >= 1
 
 
+def infer_verbosity(
+    logger: logging.Logger, explicit: int | None = None
+) -> int:
+    """Map an explicit verbosity or infer from the configured logger level.
+
+    Returns 0–3: TRACE→3, DEBUG→2, INFO→1, else 0 (WARNING+ quiet).
+    """
+    if explicit is not None:
+        return explicit
+    if logger.isEnabledFor(TRACE):
+        return 3
+    if logger.isEnabledFor(logging.DEBUG):
+        return 2
+    if logger.isEnabledFor(logging.INFO):
+        return 1
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Verbosity-gated logging helpers
 # ---------------------------------------------------------------------------
-# These helpers provide consistent verbosity-gated logging with lazy evaluation.
-# Use these instead of scattering `if verbosity >= X:` checks in code.
-#
-# Style guidelines for SCGO logging:
-# - Prefer %-style formatting: logger.info("Processing %s", item)
-# - Avoid f-strings: logger.info(f"Processing {item}") - eager evaluation wasteful
-# - Use these helpers for verbosity-gated messages
+# Style contract:
+# - After ``configure_logging``, prefer ``logger.info`` / ``logger.debug`` /
+#   ``logger.warning`` with %-style formatting (lazy args).
+# - Use ``log_v`` / ``log_*_v`` only when a function takes integer ``verbosity``
+#   and needs extra gating beyond the root logger level.
+# - v2+ per-item detail is DEBUG (``log_debug_v`` or ``log_v(..., min_verbosity=2)``),
+#   never INFO gated to v2.
+# - Phase rollups and banners live in ``scgo.utils.phase_logging``.
+# - Prefer %-style: logger.info("Processing %s", item)
+# - Avoid f-strings: logger.info(f"Processing {item}")
 # - Use logger.exception() for unexpected errors with automatic traceback
 # - Use exc_info=(verbosity >= 2) for handled errors with conditional traceback
+
+
+def log_v(
+    logger: logging.Logger,
+    message: str,
+    *args: object,
+    verbosity: int = 1,
+    min_verbosity: int = 1,
+) -> None:
+    """Log at the level matching ``min_verbosity`` when ``verbosity`` is high enough.
+
+    Maps ``min_verbosity`` through ``VERBOSITY_LEVELS`` (0→WARNING, 1→INFO,
+    2→DEBUG, 3→TRACE). Uses lazy %-style formatting.
+    """
+    if verbosity < min_verbosity:
+        return
+    level = VERBOSITY_LEVELS.get(min_verbosity, logging.INFO)
+    logger.log(level, message, *args)
 
 
 def log_debug_v(
@@ -227,3 +270,71 @@ def log_warning_v(
     """
     if verbosity >= min_verbosity:
         logger.warning(message, *args)
+
+
+class _MatchingStdoutFilter:
+    """Line-buffered stdout wrapper that drops lines matching a pattern."""
+
+    def __init__(
+        self,
+        underlying: TextIO,
+        pattern: re.Pattern[str],
+        captured: list[str] | None,
+    ) -> None:
+        self._underlying = underlying
+        self._pattern = pattern
+        self._captured = captured
+        self._buf = ""
+
+    def write(self, data: str) -> int:
+        if not isinstance(data, str):
+            data = str(data)
+        self._buf += data
+        written = len(data)
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            full = line + "\n"
+            if self._pattern.search(line):
+                if self._captured is not None:
+                    self._captured.append(full)
+            else:
+                self._underlying.write(full)
+        return written
+
+    def flush(self) -> None:
+        if self._buf:
+            if self._pattern.search(self._buf):
+                if self._captured is not None:
+                    self._captured.append(self._buf)
+            else:
+                self._underlying.write(self._buf)
+            self._buf = ""
+        self._underlying.flush()
+
+    def __getattr__(self, name: str):
+        return getattr(self._underlying, name)
+
+
+@contextlib.contextmanager
+def suppress_matching_stdout(
+    pattern: str,
+    *,
+    captured: list[str] | None = None,
+) -> Iterator[None]:
+    """Temporarily drop stdout lines that contain ``pattern``.
+
+    Logging handlers created by ``configure_logging`` already hold a reference
+    to the original ``sys.stdout``, so SCGO log records still appear. Optional
+    ``captured`` collects suppressed lines for DEBUG re-emission.
+
+    Args:
+        pattern: Literal substring matched against each line.
+        captured: If provided, append each suppressed line (including newline).
+    """
+    compiled = re.compile(re.escape(pattern))
+    filter_stream = _MatchingStdoutFilter(sys.stdout, compiled, captured)
+    with contextlib.redirect_stdout(filter_stream):
+        try:
+            yield
+        finally:
+            filter_stream.flush()

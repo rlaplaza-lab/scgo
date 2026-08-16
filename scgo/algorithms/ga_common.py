@@ -1666,4 +1666,8 @@ def sort_minima_by_fitness(
             key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
             reverse=True,  # Higher fitness first
         )
-        logger.info(f"Sorted {len(all_minima)} minima by {fitness_strategy} fitness")
+        logger.info(
+            "Sorted %d minima by %s fitness",
+            len(all_minima),
+            fitness_strategy,
+        )

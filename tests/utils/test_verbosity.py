@@ -10,10 +10,13 @@ from scgo.utils.logging import (
     VERBOSITY_LEVELS,
     configure_logging,
     get_logger,
+    infer_verbosity,
     log_debug_v,
     log_info_v,
+    log_v,
     log_warning_v,
     should_show_progress,
+    suppress_matching_stdout,
 )
 
 
@@ -283,6 +286,44 @@ class TestVerbosityGatedHelpers:
         )
         captured = capfd.readouterr()
         assert "Processing 5 of 10 items" in captured.out
+
+    def test_log_v_maps_min_verbosity_to_logger_level(self, capfd):
+        """log_v emits at WARNING/INFO/DEBUG/TRACE per min_verbosity."""
+        configure_logging(3, format_string="%(levelname)s %(message)s")
+        logger = get_logger("test.log_v")
+        log_v(logger, "warn-msg", verbosity=0, min_verbosity=0)
+        log_v(logger, "info-msg", verbosity=1, min_verbosity=1)
+        log_v(logger, "debug-msg", verbosity=2, min_verbosity=2)
+        log_v(logger, "trace-msg", verbosity=3, min_verbosity=3)
+        log_v(logger, "hidden", verbosity=1, min_verbosity=2)
+        out = capfd.readouterr().out
+        assert "WARNING warn-msg" in out
+        assert "INFO info-msg" in out
+        assert "DEBUG debug-msg" in out
+        assert "TRACE trace-msg" in out
+        assert "hidden" not in out
+
+
+@pytest.mark.parametrize(("verbosity", "expected"), [(0, 0), (1, 1), (2, 2), (3, 3)])
+def test_infer_verbosity(verbosity, expected):
+    configure_logging(verbosity)
+    logger = get_logger(f"test.infer.{verbosity}")
+    assert infer_verbosity(logger) == expected
+    assert infer_verbosity(logger, 3) == 3
+
+
+def test_suppress_matching_stdout(capfd):
+    captured: list[str] = []
+    with suppress_matching_stdout("Model Memory Estimation:", captured=captured):
+        print("keep me")
+        print("Model Memory Estimation: Running forward pass")
+        print("also keep")
+    out = capfd.readouterr().out
+    assert "keep me" in out
+    assert "also keep" in out
+    assert "Model Memory Estimation" not in out
+    assert len(captured) == 1
+    assert "Running forward pass" in captured[0]
 
 
 class TestIntegration:
