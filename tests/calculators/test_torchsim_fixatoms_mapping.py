@@ -183,3 +183,100 @@ def test_build_torchsim_fixbondlengths_none_when_unconstrained() -> None:
         build_torchsim_fixbondlengths_from_ase_batch([a], device=torch.device("cpu"))
         is None
     )
+
+
+def test_select_constraint_packs_pairs_when_first_system_dropped() -> None:
+    """InFlight pop of system 0 must renumber remaining bonds to local [0, 1]."""
+    torch = pytest.importorskip("torch")
+
+    from scgo.calculators.torchsim_constraints import TorchSimFixBondLengths
+
+    constraint = TorchSimFixBondLengths(
+        [[0, 1], [2, 3]],
+        [0.8, 1.2],
+        [0, 1],
+        device=torch.device("cpu"),
+    )
+    packed = constraint.select_constraint(
+        torch.tensor([False, False, True, True]),
+        torch.tensor([False, True]),
+    )
+    assert packed is not None
+    assert packed.pairs.tolist() == [[0, 1]]
+    assert packed.system_idx.tolist() == [0]
+    assert packed.bond_lengths.tolist() == pytest.approx([1.2], abs=1e-6)
+
+
+def test_fixbondlengths_survives_simstate_pop_of_system_zero() -> None:
+    """torch-sim InFlight pop must leave a valid packed bond constraint."""
+    torch = pytest.importorskip("torch")
+    torch_sim = pytest.importorskip("torch_sim")
+    from ase.constraints import FixBondLengths
+
+    from scgo.calculators.torchsim_constraints import (
+        TorchSimFixBondLengths,
+        build_torchsim_fixbondlengths_from_ase_batch,
+    )
+
+    s0 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.8]], cell=[20, 20, 20])
+    s0.set_constraint(FixBondLengths([(0, 1)]))
+    s1 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 1.2]], cell=[20, 20, 20])
+    s1.set_constraint(FixBondLengths([(0, 1)]))
+
+    device = torch.device("cpu")
+    state = torch_sim.initialize_state([s0, s1], device, torch.float64)
+    built = build_torchsim_fixbondlengths_from_ase_batch([s0, s1], device=device)
+    assert built is not None
+    state.constraints = [built]
+
+    state.pop(0)
+    assert state.n_systems == 1
+    assert state.n_atoms == 2
+    assert len(state.constraints) == 1
+    remaining = state.constraints[0]
+    assert isinstance(remaining, TorchSimFixBondLengths)
+    assert remaining.pairs.tolist() == [[0, 1]]
+    assert remaining.system_idx.tolist() == [0]
+
+    stretched = state.positions.clone()
+    stretched[1, 2] = 5.0
+    state.set_constrained_positions(stretched)
+    dist = torch.linalg.norm(state.positions[1] - state.positions[0]).item()
+    assert abs(dist - 1.2) <= 1e-5
+
+
+def test_fixbondlengths_adjust_positions_uses_minimum_image() -> None:
+    """Periodic wrap: restore the MIC bond length, not the unwrapped 9+ A image."""
+    torch = pytest.importorskip("torch")
+    torch_sim = pytest.importorskip("torch_sim")
+    from ase.constraints import FixBondLengths
+    from torch_sim.transforms import minimum_image_displacement
+
+    from scgo.calculators.torchsim_constraints import (
+        build_torchsim_fixbondlengths_from_ase_batch,
+    )
+
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [9.5, 0.0, 0.0]],
+        cell=[10.0, 10.0, 10.0],
+        pbc=True,
+    )
+    atoms.set_constraint(FixBondLengths([(0, 1)]))
+    assert atoms.get_distance(0, 1, mic=True) == pytest.approx(0.5, abs=1e-6)
+
+    device = torch.device("cpu")
+    state = torch_sim.initialize_state([atoms], device, torch.float64)
+    built = build_torchsim_fixbondlengths_from_ase_batch([atoms], device=device)
+    assert built is not None
+    state.constraints = [built]
+
+    stretched = state.positions.clone()
+    stretched[1, 0] = 9.7
+    state.set_constrained_positions(stretched)
+    delta = minimum_image_displacement(
+        dr=(state.positions[1] - state.positions[0]).unsqueeze(0),
+        cell=state.cell[0],
+        pbc=state.pbc,
+    )
+    assert torch.linalg.norm(delta).item() == pytest.approx(0.5, abs=1e-5)

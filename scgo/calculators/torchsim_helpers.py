@@ -622,11 +622,10 @@ class TorchSimBatchRelaxer:
     autobatcher:
         Whether to use :class:`torch_sim.InFlightAutoBatcher` when calling
         :func:`torch_sim.optimize`. ``None`` (the default) enables it on CUDA and
-        disables it on CPU, matching the torch-sim recommendation that
-        autobatching is "generally not supported on CPUs". ``True``/``False``
-        force the choice. On CPU torch-sim raises for autobatching, so the batcher
-        is always built as ``False`` there. Only the :class:`InFlightAutoBatcher`
-        is accepted by :func:`torch_sim.optimize`; a matching
+        disables it otherwise. ``True``/``False`` force the choice, but non-CUDA
+        devices still pass ``False`` (torch-sim's memory probe uses
+        ``torch.cuda``). Only :class:`InFlightAutoBatcher` is accepted by
+        :func:`torch_sim.optimize`; a matching
         :class:`torch_sim.BinningAutoBatcher` is built for ``ts.static`` (NEB).
     memory_scales_with, max_memory_scaler:
         Advanced knobs forwarded to :class:`torch_sim.InFlightAutoBatcher` when
@@ -640,9 +639,9 @@ class TorchSimBatchRelaxer:
         runs on the real workload batches (no synthetic dummy is needed).
     max_atoms_to_try:
         Explicit override for the autobatcher's probe cap. Defaults to
-        ``expected_max_atoms`` when that is set; otherwise falls back to
-        torch-sim's default (500,000). Always pass a tight value on GPUs
-        with limited memory.
+        ``expected_max_atoms`` when that is set; otherwise SCGO caps the probe
+        at 50,000 atoms (tighter than torch-sim's 500,000 default). Always pass
+        a tight value on GPUs with limited memory.
     cutoff:
         Neighbor cutoff (Å). Only forwarded to the batchers when
         ``memory_scales_with == "n_edges"``; for the default
@@ -674,7 +673,7 @@ class TorchSimBatchRelaxer:
     optimizer_name: str = "fire"
     force_tol: float | None = 0.05
     max_steps: int | None = 100
-    # Autobatching: None -> enabled unless the device is CPU (matches the docs).
+    # Autobatching: None -> enabled on CUDA only (CPU/MPS cannot probe CUDA memory).
     autobatcher: bool | None = None
     memory_scales_with: str = "n_atoms_x_density"
     max_memory_scaler: float | None = None
@@ -683,7 +682,7 @@ class TorchSimBatchRelaxer:
         None  # Probe memory upfront with this atom count (cluster_size * pop_size)
     )
     # Hard cap on the native InFlightAutoBatcher / BinningAutoBatcher GPU probe.
-    # None -> fall back to expected_max_atoms (if set) or torch-sim's 500k default.
+    # None -> fall back to expected_max_atoms (if set) or 50,000.
     max_atoms_to_try: int | None = None
     # Only forwarded to the batchers when memory_scales_with == "n_edges";
     # ignored (and must not be passed) for the default "n_atoms_x_density" metric.
@@ -774,17 +773,13 @@ class TorchSimBatchRelaxer:
         self._sync_device_dtype_from_model()
         self._patch_model_for_cuda()
 
-        self._on_cpu = str(self.device).split(":")[0] == "cpu"
+        device_type = torch.device(self.device).type
+        self._on_cpu = device_type == "cpu"
         self.last_batch_relax_steps: list[int] = []
         self._runner_kwargs = dict(self.runner_kwargs or {})
 
-        # Resolve autobatcher policy: build the native InFlight/Binning batchers
-        # once on GPU; on CPU (or when autobatcher is explicitly False) disable
-        # autobatching. torch-sim's autobatching is "generally not supported on
-        # CPUs" and raises on CPU, so CPU must pass autobatcher=False.
-        use_in_flight = (self.autobatcher is None and not self._on_cpu) or (
-            self.autobatcher is True and not self._on_cpu
-        )
+        # Native batchers probe CUDA memory; CPU raises and MPS is not CUDA.
+        use_in_flight = device_type == "cuda" and self.autobatcher is not False
         if use_in_flight:
             cap = int(self.max_atoms_to_try or self.expected_max_atoms or 50_000)
             kw: dict[str, Any] = {
@@ -839,10 +834,7 @@ class TorchSimBatchRelaxer:
         if not atoms_list:
             return []
 
-        max_atoms_in_batch = max(len(atoms) for atoms in atoms_list)
-        return self._relax_batch_once(
-            atoms_list, steps=steps, max_atoms_in_batch=max_atoms_in_batch
-        )
+        return self._relax_batch_once(atoms_list, steps=steps)
 
     def _prepare_batch_atoms(
         self, atoms_list: Sequence[Atoms]
@@ -933,8 +925,6 @@ class TorchSimBatchRelaxer:
     def _single_point_batch(
         self,
         atoms_list: Sequence[Atoms],
-        *,
-        max_atoms_in_batch: int,
     ) -> list[tuple[float, Atoms]]:
         """True single-point PES eval via ``ts.static`` (no FIRE / no max_steps warn).
 
@@ -944,24 +934,14 @@ class TorchSimBatchRelaxer:
         """
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
         logger.debug("Running TorchSim single-point evaluation via static()")
-        # Use the persistent BinningAutoBatcher built in __post_init__ on GPU; fall
-        # back to a plain ``False`` (no batching) on CPU or when autobatching was
-        # explicitly disabled. ``_static_batcher`` only exists when native
-        # batching was enabled, hence the getattr guard.
+        # Persistent BinningAutoBatcher when native batching was enabled; else False.
         static_batcher = getattr(self, "_static_batcher", None)
-
-        def _static_arg():
-            return (
-                static_batcher
-                if (static_batcher is not None and not self._on_cpu)
-                else False
-            )
-
+        static_arg = static_batcher if static_batcher is not None else False
         try:
             props = self._ts.static(  # type: ignore[call-arg]
                 system=system_in,
                 model=self.model,
-                autobatcher=_static_arg(),
+                autobatcher=static_arg,
             )
         except ValueError as exc:
             if self._is_max_metric_value_error(exc):
@@ -976,7 +956,7 @@ class TorchSimBatchRelaxer:
                     props = self._ts.static(  # type: ignore[call-arg]
                         system=system_in,
                         model=self.model,
-                        autobatcher=_static_arg(),
+                        autobatcher=static_arg,
                     )
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
                     if self._is_cuda_oom_error(retry_exc):
@@ -1037,7 +1017,6 @@ class TorchSimBatchRelaxer:
         atoms_list: Sequence[Atoms],
         *,
         steps: int | None,
-        max_atoms_in_batch: int,
     ) -> list[tuple[float, Atoms]]:
         runner_kwargs = self._runner_kwargs.copy()
         # Resolve ``max_steps`` at call time so a post-construction
@@ -1051,9 +1030,7 @@ class TorchSimBatchRelaxer:
         # atoms, returns forces at the wrong geometry, and emits
         # "All systems have reached the maximum number of steps: 0".
         if max_steps_now == 0:
-            return self._single_point_batch(
-                atoms_list, max_atoms_in_batch=max_atoms_in_batch
-            )
+            return self._single_point_batch(atoms_list)
 
         atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
 
@@ -1223,7 +1200,7 @@ class TorchSimBatchRelaxer:
     def _patch_model_for_cuda(self) -> None:
         """Ensure TorchSim models handle CUDA atomic numbers safely."""
         setup_fn = getattr(self.model, "setup_from_system_idx", None)
-        if setup_fn is None or getattr(type(self.model), "_scgo_setup_patched", False):
+        if setup_fn is None or getattr(self.model, "_scgo_setup_patched", False):
             return
 
         @functools.wraps(setup_fn)
@@ -1240,4 +1217,4 @@ class TorchSimBatchRelaxer:
             return result
 
         self.model.setup_from_system_idx = patched_setup  # type: ignore[assignment]
-        type(self.model)._scgo_setup_patched = True
+        self.model._scgo_setup_patched = True

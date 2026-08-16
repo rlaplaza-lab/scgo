@@ -243,6 +243,22 @@ def test_torchsim_autobatcher_true_on_cpu_is_disabled():
     assert relaxer._runner_kwargs["autobatcher"] is False
 
 
+def test_torchsim_autobatcher_true_on_mps_is_disabled():
+    """MPS is not CUDA: native batchers must not be built (probe uses torch.cuda)."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer(
+        device="mps",
+        model=_StubModel(),
+        autobatcher=True,
+    )
+    assert relaxer._on_cpu is False
+    assert str(relaxer.device).startswith("mps")
+    assert relaxer._runner_kwargs["autobatcher"] is False
+    assert not hasattr(relaxer, "_optimize_batcher")
+    assert not hasattr(relaxer, "_static_batcher")
+
+
 def _make_fake_batcher_factory(captured: dict, key: str):
     """Return a fake batcher class that records its constructor kwargs under ``key``."""
 
@@ -1046,10 +1062,103 @@ def test_relax_batch_retries_on_max_metric_sticky_scaler(monkeypatch):
     )
     monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
 
+    class _Batcher:
+        def __init__(self) -> None:
+            self.max_memory_scaler = 605.0
+
+    relaxer._optimize_batcher = _Batcher()
+    relaxer._static_batcher = _Batcher()
+
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
     results = relaxer.relax_batch([atoms])
     assert calls["count"] == 2
     assert len(results) == 1
+    assert relaxer._optimize_batcher.max_memory_scaler is None
+    assert relaxer._static_batcher.max_memory_scaler is None
+    assert relaxer.max_memory_scaler is None
+
+
+def test_single_point_retries_on_max_metric_sticky_scaler(monkeypatch):
+    """``ts.static`` must re-probe once on a sticky max_metric ValueError."""
+    import torch
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer._on_cpu = True
+    relaxer.max_memory_scaler = None
+    relaxer._runner_kwargs = {}
+    relaxer.max_steps = 100
+    relaxer.device = torch.device("cpu")
+    relaxer.dtype = torch.float64
+    relaxer.model = object()
+    relaxer.model_kind = "mace"
+    relaxer.last_batch_relax_steps = []
+
+    calls = {"count": 0}
+
+    class _Batcher:
+        def __init__(self) -> None:
+            self.max_memory_scaler = 605.0
+
+    class _FakeTS:
+        def static(self, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise ValueError(
+                    "Max metric of system with index 0 in states: 914.0 is greater "
+                    "than max_metric 605.0, please set a larger max_metric"
+                )
+            n = len(kwargs["system"]) if isinstance(kwargs["system"], list) else 1
+            return [
+                {
+                    "potential_energy": torch.tensor([1.5]),
+                    "forces": torch.zeros((1, 3)),
+                }
+                for _ in range(n)
+            ]
+
+        def optimize(self, **kwargs):
+            raise AssertionError("optimize must not be used for steps=0")
+
+    relaxer._ts = _FakeTS()
+    relaxer._static_batcher = _Batcher()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+
+    results = relaxer.relax_batch([Atoms("H", positions=[[0.0, 0.0, 0.0]])], steps=0)
+    assert calls["count"] == 2
+    assert len(results) == 1
+    assert relaxer._static_batcher.max_memory_scaler is None
+
+
+def test_patch_model_for_cuda_wraps_each_instance():
+    """A second model of the same class must still receive the CUDA setup wrap."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    class _Model:
+        def setup_from_system_idx(self, atomic_numbers, system_idx):
+            self.atomic_numbers = atomic_numbers
+            return "ok"
+
+    first = _Model()
+    second = _Model()
+    relaxer_a = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer_a.model = first
+    relaxer_a._patch_model_for_cuda()
+    relaxer_b = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer_b.model = second
+    relaxer_b._patch_model_for_cuda()
+
+    assert first._scgo_setup_patched is True
+    assert second._scgo_setup_patched is True
+    assert first.setup_from_system_idx is not _Model.setup_from_system_idx
+    assert second.setup_from_system_idx is not _Model.setup_from_system_idx
+    assert not getattr(_Model, "_scgo_setup_patched", False)
 
 
 def _make_lj_relaxer(max_steps=10, force_tol=0.05):

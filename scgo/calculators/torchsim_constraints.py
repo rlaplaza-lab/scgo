@@ -17,12 +17,26 @@ import torch
 from ase import Atoms
 from ase.constraints import FixBondLengths as ASEFixBondLengths
 from torch_sim.constraints import Constraint
+from torch_sim.transforms import minimum_image_displacement
 
 __all__ = [
     "TorchSimFixBondLengths",
     "build_torchsim_fixbondlengths_from_ase_batch",
     "collect_ase_fixbondlengths",
 ]
+
+
+def _mask_constraint_indices(idx: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Renumber surviving indices into a dense ``[0, n)`` range after a keep-mask.
+
+    Same algorithm as ``torch_sim.constraints._mask_constraint_indices``. Copied
+    because torch-sim remaps ``atom_idx`` / ``system_idx`` after ``select_constraint``
+    but never a ``pairs`` tensor.
+    """
+    dropped_before = torch.cumsum(~mask, dim=0)
+    remapped = idx - dropped_before[idx]
+    keep = torch.isin(idx, torch.where(mask)[0])
+    return remapped[keep]
 
 
 class TorchSimFixBondLengths(Constraint):
@@ -75,61 +89,73 @@ class TorchSimFixBondLengths(Constraint):
         counts = torch.zeros(state.n_systems, dtype=torch.long, device=state.device)
         if self.pairs.shape[0] == 0:
             return counts
+        idx = self.system_idx.to(device=state.device)
         counts.index_add_(
-            0, self.system_idx.to(device=state.device), torch.ones_like(self.system_idx)
+            0,
+            idx,
+            torch.ones(idx.shape[0], dtype=counts.dtype, device=counts.device),
         )
         return counts
+
+    def _bond_delta(
+        self, positions: torch.Tensor, state: object, k: int
+    ) -> tuple[int, int, torch.Tensor]:
+        """MIC displacement from atom i to j for bond ``k``."""
+        i = int(self.pairs[k, 0])
+        j = int(self.pairs[k, 1])
+        delta = minimum_image_displacement(
+            dr=(positions[j] - positions[i]).unsqueeze(0),
+            cell=state.cell[int(self.system_idx[k])],
+            pbc=state.pbc,
+        ).squeeze(0)
+        return i, j, delta
 
     def adjust_positions(self, state: object, new_positions: torch.Tensor) -> None:
         """Pull each constrained bond back to its target length."""
         for k in range(self.pairs.shape[0]):
-            i = int(self.pairs[k, 0])
-            j = int(self.pairs[k, 1])
-            target = float(self.bond_lengths[k])
-            pi = new_positions[i]
-            pj = new_positions[j]
-            d = pj - pi
+            i, j, d = self._bond_delta(new_positions, state, k)
             dist = torch.linalg.norm(d)
             if dist <= 1e-12:
                 continue
-            direction = d / dist
-            correction = 0.5 * (dist - target) * direction
-            new_positions[i] = pi + correction
-            new_positions[j] = pj - correction
+            correction = 0.5 * (dist - float(self.bond_lengths[k])) * (d / dist)
+            new_positions[i] = new_positions[i] + correction
+            new_positions[j] = new_positions[j] - correction
 
     def adjust_forces(self, state: object, forces: torch.Tensor) -> None:
         """Remove the bond-stretching component of the relative force."""
         for k in range(self.pairs.shape[0]):
-            i = int(self.pairs[k, 0])
-            j = int(self.pairs[k, 1])
-            pi = state.positions[i]
-            pj = state.positions[j]
-            d = pj - pi
+            i, j, d = self._bond_delta(state.positions, state, k)
             dist = torch.linalg.norm(d)
             if dist <= 1e-12:
                 continue
             direction = d / dist
-            rel_force = forces[j] - forces[i]
-            parallel = torch.dot(rel_force, direction) * direction
+            parallel = torch.dot(forces[j] - forces[i], direction) * direction
             forces[i] = forces[i] + 0.5 * parallel
             forces[j] = forces[j] - 0.5 * parallel
 
     def select_constraint(
         self,
         atom_mask: torch.Tensor,
-        system_mask: torch.Tensor,  # noqa: ARG002
+        system_mask: torch.Tensor,
     ) -> Constraint | None:
-        """Keep only bonds whose both atoms survive the atom mask."""
+        """Keep surviving bonds and pack pair/system indices into the filtered state."""
         if self.pairs.shape[0] == 0:
             return None
-        in_mask = atom_mask[self.pairs]
-        keep = in_mask.all(dim=1)
+        if atom_mask.device != self.pairs.device:
+            atom_mask = atom_mask.to(self.pairs.device)
+        if system_mask.device != self.system_idx.device:
+            system_mask = system_mask.to(self.system_idx.device)
+        keep = atom_mask[self.pairs].all(dim=1) & system_mask[self.system_idx]
         if not keep.any():
             return None
+        packed_pairs = _mask_constraint_indices(
+            self.pairs[keep].reshape(-1), atom_mask
+        ).reshape(-1, 2)
+        packed_systems = _mask_constraint_indices(self.system_idx[keep], system_mask)
         return type(self)(
-            self.pairs[keep],
+            packed_pairs,
             self.bond_lengths[keep],
-            self.system_idx[keep],
+            packed_systems,
             device=self.pairs.device,
         )
 
