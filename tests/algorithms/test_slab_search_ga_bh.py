@@ -5,10 +5,14 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
+from scgo.algorithms import geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms.ga_common import (
     SurfaceSlabStartGenerator,
     create_ga_pairing,
     create_mutation_operators,
+)
+from scgo.algorithms.geneticalgorithm_go_torchsim import (
+    _fails_fast_geometric_prefilter,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.partition import (
@@ -125,10 +129,6 @@ def test_prefilter_frozen_prefix_enables_bare_surface_clash() -> None:
     clash prefilter (the original bug); passing the frozen prefix lets the top
     layers be clash-checked against the frozen bottom.
     """
-    from scgo.algorithms.geneticalgorithm_go_torchsim import (
-        _fails_fast_geometric_prefilter,
-    )
-
     # 2 frozen bottom atoms + 1 mobile top atom overlapping the frozen region.
     slab = Atoms(
         "Pt3",
@@ -144,3 +144,13 @@ def test_prefilter_frozen_prefix_enables_bare_surface_clash() -> None:
     assert _fails_fast_geometric_prefilter(slab, blmin, n_slab=n_slab_full) is False
     # Frozen prefix enables mobile-region clash detection.
     assert _fails_fast_geometric_prefilter(slab, blmin, n_slab=n_fixed) is True
+
+    # Same blmin object reuses the per-generation threshold cache.
+    ga_mod._BLMIN_THRESH_CACHE.clear()
+    zs = np.array([78, 78], dtype=int)
+    t1, _ = ga_mod._blmin_threshold_matrix(zs, blmin)
+    t2, _ = ga_mod._blmin_threshold_matrix(zs, blmin)
+    assert t1 is t2
+    assert len(ga_mod._BLMIN_THRESH_CACHE) == 1
+    ga_mod._BLMIN_THRESH_CACHE.clear()
+    assert len(ga_mod._BLMIN_THRESH_CACHE) == 0

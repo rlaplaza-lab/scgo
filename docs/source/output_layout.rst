@@ -5,19 +5,19 @@ This page documents the on-disk directory structure created by SCGO runs.
 For a quick reference, see the summary in the :doc:`/quickstart` guide.
 
 Path Keys
-------------
+---------
 
 The ``path_key`` is a filesystem-safe identifier combining:
 
-- Nanoparticle formula (e.g., ``Pt5``)
-- Each adsorbate fragment in order (e.g., ``OH``, ``OH`` → ``OH_OH``)
+- Nanoparticle formula (for example ``Pt5``)
+- Each adsorbate fragment in order (for example ``OH``, ``OH`` → ``OH_OH``)
 - ``surface_config.name`` when a surface is used (default ``"slab"``;
   ``make_graphite_surface_config`` sets ``name="graphite"``)
 
 Examples: ``Pt5``, ``Pt5_OH_OH``, ``Pt5_OH_OH_graphite``, ``defected_graphite``,
 ``OH_n_doped_graphite``.
 
-Chemical composition matching uses ASE-style formulas (e.g., ``H2O2Pt5``).
+Chemical composition matching uses ASE-style formulas (for example ``H2O2Pt5``).
 
 Output directories
 ------------------
@@ -46,7 +46,7 @@ Output directories
      - Campaign root; each composition → ``{root}/{path_key}_searches/`` + ``{root}/{path_key}_ts_results/`` (sibling shape)
      - ``scgo_runs/go_ts_campaign_{calc}/``
    * - ``run_ts_search``
-     - Campaign root (or an existing ``*_searches/`` path — parent is inferred)
+     - Campaign root (or an existing ``*_searches/`` path; parent is inferred)
      - CWD; minima from ``{path_key}_searches/``, TS to ``{path_key}_ts_results/``
    * - ``run_ts_campaign``
      - Shared campaign root for all compositions
@@ -60,10 +60,10 @@ when ``output_dir`` is omitted, the default root is
 ``searches_dir`` (``run_ts_search`` only): explicit path to a GO searches
 directory; the campaign root becomes ``searches_dir.parent``.
 
-**Example — ``run_go_ts`` with ``output_root`` / ``output_stem``:**
+**Example: ``run_go_ts`` with ``output_root`` / ``output_stem``**
 
 GO and TS use the same campaign layout: ``{path_key}_searches/`` and
-``{path_key}_ts_results/`` are siblings; each holds ``run_*`` directories,
+``{path_key}_ts_results/`` are siblings; each holds ``run_*`` epochs,
 campaign-level summaries, and deduplicated exports. GO databases and TS pair
 artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs).
 
@@ -89,7 +89,7 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
        └── final_unique_ts/
            └── final_unique_ts_summary.json
 
-**Example — surface adsorbate campaign** (``Pt5`` + 2×``OH`` on graphite):
+**Example: surface adsorbate campaign** (``Pt5`` + 2×``OH`` on graphite):
 
 .. code-block:: text
 
@@ -105,7 +105,7 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
        └── final_unique_ts/
            └── Pt5_OH_OH_graphite_ts_01.xyz
 
-**Example — ``run_go_campaign`` with** ``output_dir="benchmark/results"``:
+**Example: ``run_go_campaign`` with** ``output_dir="benchmark/results"``:
 
 .. code-block:: text
 
@@ -114,7 +114,7 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
    ├── Pt5_searches/
    └── Pt6_searches/
 
-**Example — gas-phase MLIP benchmark default** (``benchmark_Pt.py``):
+**Example: gas-phase MLIP benchmark default** (``benchmark_Pt.py``):
 
 .. code-block:: text
 
@@ -124,7 +124,7 @@ artifacts live directly under each ``run_*`` (TS uses ``pair_<i>_<j>/`` subdirs)
            └── run_<timestamp>/
 
 On-disk layout
-------------------
+--------------
 
 GO and TS write sibling ``{path_key}_searches/`` and ``{path_key}_ts_results/``
 trees. Each tree contains datetime-tagged ``run_*`` work directories, campaign
@@ -152,7 +152,7 @@ UTC-based):
        ``run_id`` skips pairs whose ``neb_{pair_id}_metadata.json`` already has
        ``status="success"``.
 
-Repeat ``run_go`` to add sibling ``run_*`` directories; SCGO merges prior minima
+Repeat ``run_go`` to add sibling ``run_*`` epochs; SCGO merges prior minima
 via database discovery and deduplication.
 :func:`~scgo.metadata.run_dir.get_run_directories`
 lists only datetime-pattern ``run_*`` dirs; custom IDs work at runtime but are
@@ -163,28 +163,25 @@ Per-run files
 
 Under each ``run_*`` directory:
 
-- ``metadata.json`` — composition, params snapshot, ``path_key`` (the
-  component-aware directory identity), and output-JSON provenance header
-  (``schema_version`` = 4, ``scgo_version``, ``created_at`` UTC ISO-8601 with
-  ``Z``, ``python_version``). Written via a same-directory temp file then
-  ``os.replace``. This ``schema_version`` is the **output-JSON**
-  header version, not the SQLite DB stamp version. ``created_at`` is the single
-  run timestamp (there is no legacy ``timestamp`` field).
-- ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db`` — optimizer database (GO only)
-- ``timing.json`` — optional wall-time breakdown (``write_timing_json=True``); includes
-  ``run_id`` and the same single provenance header (``schema_version`` = 4). There
-  is no separate ``timing_schema_version`` key.
-- ``pair_<i>_<j>/`` — NEB artifacts, ``neb_{i}_{j}_metadata.json`` (atomic
-  write), and optional ``timing_{i}_{j}.json`` per pair (TS only)
+- ``metadata.json``: composition, params snapshot, ``path_key``, and provenance
+  header (``schema_version`` = 4, ``scgo_version``, ``created_at`` UTC ISO-8601
+  with ``Z``, ``python_version``). Written via a same-directory temp file then
+  ``os.replace``.
+- ``ga_go.db`` / ``bh_go.db`` / ``simple_go.db``: optimizer database (GO only)
+- ``timing.json``: optional wall-time breakdown (``write_timing_json=True``);
+  includes ``run_id`` and the same provenance header (``schema_version`` = 4).
+- ``pair_<i>_<j>/``: NEB artifacts, ``neb_{i}_{j}_metadata.json``, and optional
+  ``timing_{i}_{j}.json`` per pair (TS only)
 
 Campaign-level files:
 
-- ``results_summary.json`` — run statistics and serializable TS pair results
-- ``final_unique_minima/`` or ``final_unique_ts/`` — deduplicated structure exports
-- ``ts_network_metadata.json`` — minima connectivity graph (TS only)
-- ``go_ts_timing.json`` — GO+TS pipeline rollup at the campaign root when timing
-  JSON is enabled in ``go_params`` and/or ``ts_params``; includes ``current_go_run_id``,
-  ``current_ts_run_id``, and relative paths to per-run ``timing.json`` files when present
+- ``results_summary.json``: run statistics and serializable TS pair results
+- ``final_unique_minima/`` or ``final_unique_ts/``: deduplicated structure exports
+- ``ts_network_metadata.json``: minima connectivity graph (TS only)
+- ``go_ts_timing.json``: GO+TS pipeline rollup at the campaign root when timing
+  JSON is enabled in ``go_params`` and/or ``ts_params``; includes
+  ``current_go_run_id``, ``current_ts_run_id``, and relative paths to per-run
+  ``timing.json`` files when present
 
 See :mod:`scgo.utils.timing_report` for timing JSON layout.
 
@@ -203,21 +200,20 @@ TS results record endpoint lineage in ``minima_provenance`` (in
    * - Field
      - Meaning
    * - ``schema_version`` / ``scgo_version`` / ``created_at`` / ``python_version``
-     - Shared **output-JSON** provenance header on summaries, metadata, and timing
-       files (``schema_version`` = 4). Distinct from the SQLite ``scgo_metadata``
-       table stamp (``schema_version`` = 2; see :mod:`scgo.metadata.db_stamp`).
+     - Shared output-JSON provenance header on summaries, metadata, and timing
+       files (``schema_version`` = 4). The SQLite ``scgo_metadata`` table stamp
+       uses ``schema_version`` = 2; see :mod:`scgo.metadata.db_stamp`.
    * - ``path_key``
-     - Always the component-aware directory identity (e.g. ``Pt5``,
+     - Component-aware directory identity (for example ``Pt5``,
        ``Pt5_OH_OH_graphite``, ``defected_graphite``). For slab-target types
-       (``surface`` / ``surface_adsorbate`` with ``composition=[]``) this is the
-       ``formula`` too — never empty, always matching the directory.
+       (``surface`` / ``surface_adsorbate`` with ``composition=[]``) this equals
+       ``formula`` and always matches the directory.
    * - ``formula``
      - Chemical composition formula when non-empty; for slab-target types equals
        ``path_key``.
    * - ``run_id``
      - GO run that produced the endpoint minimum. Databases whose path is not
-       under a recognizable ``run_*`` directory are skipped (no filename-basename
-       fallback).
+       under a recognizable ``run_*`` directory are skipped.
    * - ``source_db`` / ``source_db_relpath``
      - Optimizer database (basename and campaign-relative path)
    * - ``confid`` / ``gaid`` / ``systems_row_id``
@@ -228,7 +224,7 @@ TS results record endpoint lineage in ``minima_provenance`` (in
      - Endpoint energy at pairing time (eV)
 
 Runner reference
-~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
 .. list-table::
    :widths: 28 36 36

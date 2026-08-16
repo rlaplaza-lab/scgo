@@ -186,6 +186,24 @@ def build_timing_payload(
     return payload
 
 
+def emit_timing_data(
+    payload: dict[str, Any],
+    *,
+    write_timing_json: bool,
+    output_dir: str,
+    timing_output_dir: str | None = None,
+    timing_collector: list[dict[str, Any]] | None = None,
+) -> None:
+    """Append to ``timing_collector`` if set; write ``timing.json`` iff requested."""
+    if timing_collector is not None:
+        timing_collector.append(payload)
+    if write_timing_json:
+        write_timing_file(
+            timing_output_dir if timing_output_dir is not None else output_dir,
+            payload,
+        )
+
+
 def neb_seconds_from_pair_timings(timings: dict[str, Any]) -> float:
     """Return a pair's NEB wall time from serial or parallel timing keys.
 

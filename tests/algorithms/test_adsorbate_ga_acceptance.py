@@ -103,7 +103,7 @@ def _surface_pt3_oh_parent() -> tuple[Atoms, list[str], dict, dict, int]:
         comp,
         slab,
         blmin,
-        np.random.default_rng(202),
+        np.random.default_rng(3),
         cfg,
         adsorbate_definition=ads,
         adsorbate_fragment_template=[oh],

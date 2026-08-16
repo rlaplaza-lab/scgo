@@ -4,7 +4,11 @@
 
 ![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
-Global optimization of atomic clusters with ASE: Basin Hopping, Genetic Algorithms, NEB transition-state search, and MLIPs (MACE, UMA, UPET) via TorchSim. Supports six system types: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, `surface_cluster_adsorbate`, `surface`, and `surface_adsorbate`.
+SCGO finds low-energy atomic structures with global optimization. It uses Basin Hopping, Genetic Algorithms, NEB transition-state search, and machine learning potentials (MACE, UMA, UPET) through ASE and TorchSim.
+
+A **cluster** (also called the **core** when molecules are present) is the metal nanoparticle whose shape you are searching. An **adsorbate** is a small molecule or fragment (for example OH or CO) attached to the cluster or the surface. A **slab** is a periodic surface the cluster or adsorbate sits on. You can also search the top layers of the slab itself, with the bottom layers held still.
+
+Six system types combine these pieces: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, `surface_cluster_adsorbate`, `surface`, and `surface_adsorbate`.
 
 **Documentation:** [Read the Docs](https://scgo.readthedocs.io/)
 
@@ -42,7 +46,7 @@ results = run_go(
 **Algorithms:** SCGO auto-selects based on system size:
 - ≤2 mobile atoms: Simple relaxation
 - 3 atoms, no adsorbate: Basin Hopping
-- 3+ atoms with adsorbate: Genetic Algorithm  
+- 3+ atoms with adsorbate: Genetic Algorithm
 - ≥4 atoms: Genetic Algorithm
 
 ## Workflows
@@ -60,11 +64,11 @@ results = run_go(
 `adsorbates=`. Top-level `surface_config` in presets must agree with the run
 argument when both are set.
 
-**Output:** `run_go` writes `{path_key}_searches/` with datetime-tagged `run_*/` subdirectories. GO+TS creates sibling `{path_key}_ts_results/`. The `path_key` combines nanoparticle formula, adsorbate fragments, and surface name (e.g., `Pt5`, `Pt5_OH_OH_graphite`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
+**Output:** `run_go` writes `{path_key}_searches/` with datetime-tagged `run_*/` subdirectories. GO+TS creates sibling `{path_key}_ts_results/`. The `path_key` combines nanoparticle formula, adsorbate fragments, and surface name (for example `Pt5`, `Pt5_OH_OH_graphite`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
 ## Examples
 
-[`examples/`](examples/) — MACE + TorchSim smoke scripts for all six system types. See [`examples/README.md`](examples/README.md) for details.
+[`examples/`](examples/) holds MACE + TorchSim smoke scripts for all six system types. See [`examples/README.md`](examples/README.md) for details.
 
 ## Development
 
@@ -78,4 +82,4 @@ Long MLIP sweeps: [`benchmark/`](benchmark/).
 
 ---
 
-MIT License — see [`LICENSE`](LICENSE).
+MIT License. See [`LICENSE`](LICENSE).

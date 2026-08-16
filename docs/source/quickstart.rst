@@ -1,7 +1,14 @@
 Quick Start
 ===========
 
-SCGO helps you find the lowest-energy atomic structures using global optimization. This guide shows how to use all supported workflows.
+SCGO finds low-energy atomic structures with global optimization. This guide
+shows how to use each supported workflow.
+
+A **cluster** (also called the **core** when molecules are present) is the metal
+nanoparticle whose shape you are searching. An **adsorbate** is a small molecule
+or fragment (for example OH or CO) attached to the cluster or the surface. A
+**slab** is a periodic surface the cluster or adsorbate sits on. You can also
+search the top layers of the slab itself, with the bottom layers held still.
 
 System Types
 ------------
@@ -9,28 +16,28 @@ System Types
 You must specify one of six system types:
 
 .. list-table::
-   :widths: 25 75
+   :widths: 30 70
    :header-rows: 1
 
    * - Type
-     - Use when
+     - What you search
    * - ``gas_cluster``
-     - Optimizing a cluster in vacuum
+     - Cluster in vacuum
    * - ``surface_cluster``
-     - Optimizing a cluster on a surface
+     - Cluster on a slab
    * - ``gas_cluster_adsorbate``
-     - Optimizing a cluster with adsorbates in vacuum
+     - Cluster plus adsorbates in vacuum
    * - ``surface_cluster_adsorbate``
-     - Optimizing a cluster with adsorbates on a surface
+     - Cluster plus adsorbates on a slab
    * - ``surface``
-     - Optimizing top layers of a bare slab (bottom layers fixed)
+     - Top layers of a bare slab
    * - ``surface_adsorbate``
-     - Optimizing top slab layers plus adsorbates (no cluster core)
+     - Top slab layers plus adsorbates, no cluster
 
-For surface types, you need a ``surface_config``. For adsorbate types, you need ``adsorbates``.
-Slab-as-target modes (``surface`` / ``surface_adsorbate``) also require
-``fix_all_slab_atoms=False`` and ``n_relax_top_slab_layers`` (or
-``n_fix_bottom_slab_layers``).
+For surface types, pass a ``surface_config``. For adsorbate types, pass
+``adsorbates``. When the slab itself is the search target
+(``surface`` / ``surface_adsorbate``), also set ``fix_all_slab_atoms=False``
+and choose ``n_relax_top_slab_layers`` or ``n_fix_bottom_slab_layers``.
 
 Gas Cluster
 -----------
@@ -54,10 +61,10 @@ Optimize a simple cluster in vacuum.
    for energy, atoms in results:
        print(f"Energy: {energy:.4f} eV, Formula: {atoms.get_chemical_formula()}")
 
-For multi-element clusters (bimetallics, oxides), atom order follows the
-composition list you pass in so GA crossover can pair structures safely.
-Initialization favours placing heavier elements first while keeping diversity
-across the population. Details: :doc:`/api/initialization`.
+For multi-element clusters, atom order follows the composition list you pass in
+so genetic-algorithm crossover can pair structures safely. Heavier elements are
+favoured during initialization while the population stays diverse. Details:
+:doc:`/api/initialization`.
 
 **Production run with MACE:**
 
@@ -77,7 +84,7 @@ across the population. Details: :doc:`/api/initialization`.
    )
 
 On a Surface
---------------
+------------
 
 Use the built-in graphite surface or create your own slab.
 
@@ -126,10 +133,10 @@ Use ``SurfaceSystemConfig`` or the simpler ``make_surface_config()`` helper.
 
 **Slab motion options:**
 
-- ``fix_all_slab_atoms=True``: Entire slab stays frozen (default)
-- ``n_relax_top_slab_layers=2``: Allow top 2 layers to relax
-- ``n_fix_bottom_slab_layers=1``: Freeze bottom layer only
-- Both layer counts = ``None``: Entire slab can relax
+- ``fix_all_slab_atoms=True``: entire slab stays frozen (default)
+- ``n_relax_top_slab_layers=2``: allow top 2 layers to relax
+- ``n_fix_bottom_slab_layers=1``: freeze bottom layer only
+- Both layer counts = ``None``: entire slab can relax
 
 Do not use ``n_relax_top_slab_layers`` together with ``n_fix_bottom_slab_layers``.
 
@@ -163,7 +170,7 @@ Do not use ``n_relax_top_slab_layers`` together with ``n_fix_bottom_slab_layers`
 With Adsorbates
 ---------------
 
-Add adsorbate molecules (OH, CO, etc.) to your cluster.
+Add adsorbate molecules (OH, CO, and so on) to your cluster.
 
 **Gas phase with adsorbate:**
 
@@ -205,7 +212,8 @@ Add adsorbate molecules (OH, CO, etc.) to your cluster.
 Defining Custom Adsorbates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Any ASE ``Atoms`` object is a valid adsorbate fragment. The GA will:
+Any ASE ``Atoms`` object is a valid adsorbate fragment. The genetic algorithm
+will:
 
 - Place fragments on cluster surface sites
 - Keep fragments rigid (bonds stay intact)
@@ -239,7 +247,7 @@ Any ASE ``Atoms`` object is a valid adsorbate fragment. The GA will:
    )
 
 Use :func:`~scgo.is_true_minimum` or :func:`~scgo.perform_local_relaxation` to
-validate or re-relax candidates outside a full GO run.
+check or re-relax candidates outside a full GO run.
 
 Surface + Adsorbates
 --------------------
@@ -265,15 +273,15 @@ Combine surface and adsorbates.
    )
 
 Slab as search target
------------------------
+---------------------
 
-Use ``surface`` / ``surface_adsorbate`` when GA/BH should move the **top slab
-layers** (bottom layers fixed) rather than a deposited nanoparticle. Pass an
-empty composition ``[]`` for the nanoparticle core. Presets such as
+Use ``surface`` / ``surface_adsorbate`` when the search should move the **top
+slab layers** rather than a deposited nanoparticle. Pass an empty composition
+``[]`` for the nanoparticle core. Presets such as
 :func:`~scgo.make_defected_graphite_surface_config` and
 :func:`~scgo.make_n_doped_graphite_surface_config` set
-``fix_all_slab_atoms=False``, ``n_relax_top_slab_layers=1``, and a
-filesystem ``name`` for path keys.
+``fix_all_slab_atoms=False``, ``n_relax_top_slab_layers=1``, and a filesystem
+``name`` for path keys.
 
 **Bare defected graphite:**
 
@@ -317,7 +325,7 @@ filesystem ``name`` for path keys.
    )
 
 Transition States
-------------------
+-----------------
 
 Find transition states between optimized structures.
 
@@ -409,7 +417,7 @@ Find transition states between optimized structures.
    )
 
 Campaigns
-------------
+---------
 
 Run multiple compositions in one call. Composition builders
 (``build_one_element_compositions``, ``build_two_element_compositions``) live in
@@ -435,10 +443,9 @@ Run multiple compositions in one call. Composition builders
    # results is dict[path_key, list[(energy, Atoms)]]
    # (for gas_cluster, path_key matches the formula, e.g. "Pt5")
 
-Failed compositions (e.g. initialization ``SCGOValidationError`` on extreme
-stoichiometries) are logged, recorded as empty lists under their ``path_key``,
+Failed compositions are logged, recorded as empty lists under their ``path_key``,
 and skipped so the rest of the campaign continues. See :doc:`/api/initialization`
-for multi-element atom ordering and placement behavior.
+for multi-element atom ordering and placement.
 
 **Binary compositions:**
 
@@ -498,15 +505,15 @@ for multi-element atom ordering and placement behavior.
 See :doc:`/api/runner_api` for full signatures.
 
 Output
-----------
+------
 
-See :doc:`/output_layout` for complete details on directory structure, path keys,
-run IDs, and file formats. Key points:
+See :doc:`/output_layout` for directory structure, path keys, run IDs, and file
+formats. Key points:
 
 - ``run_go`` writes ``{path_key}_searches/`` with ``run_*/`` subdirectories
 - GO+TS creates sibling ``{path_key}_ts_results/``
-- ``path_key`` combines nanoparticle formula, adsorbate fragments, and surface name
-  (e.g., ``Pt5``, ``Pt5_OH_OH_graphite``)
+- ``path_key`` combines nanoparticle formula, adsorbate fragments, and surface
+  name (for example ``Pt5``, ``Pt5_OH_OH_graphite``)
 
 Parameters
 ----------
@@ -531,8 +538,9 @@ Quick parameter selection:
 See :doc:`/parameters` for all options and :doc:`/api/param_presets` for details.
 
 Examples
-----------
+--------
 
-Working examples in the repository — see `examples/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md>`_
+Working examples live in the repository. See
+`examples/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md>`_
 for the full list and usage notes. Each example enables ``write_timing_json``
 so per-run ``timing.json`` and campaign ``go_ts_timing.json`` are written.

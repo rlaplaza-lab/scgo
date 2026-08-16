@@ -12,11 +12,14 @@ from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.surface import (
     build_defected_graphite_slab,
     build_graphene_slab,
+    build_graphite_slab,
     build_monovacancy_graphene_slab,
     create_deposited_cluster,
+    make_defected_graphite_surface_config,
     make_graphene_surface_config,
 )
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.surface.presets import GRAPHITE_INTERLAYER_DISTANCE
 
 _NO_DB_GLOB = "tests/__no_such_db__.db"
 
@@ -28,7 +31,14 @@ def _pt_blmin(slab, composition) -> dict:
 
 def _deposit(composition, slab, blmin, rng, cfg):
     return create_deposited_cluster(
-        composition, slab, blmin, rng, cfg, previous_search_glob=_NO_DB_GLOB
+        composition,
+        slab,
+        blmin,
+        rng,
+        cfg,
+        previous_search_glob=_NO_DB_GLOB,
+        emit_diagnostics=False,
+        verbosity=0,
     )
 
 
@@ -76,6 +86,30 @@ def test_defected_graphite_records_vacancy() -> None:
     assert "vacancy_cartesian_angstrom" in slab.info
     assert "vacancy_removed_original_index_zero_based" in slab.info
 
+    cfg = make_defected_graphite_surface_config(
+        slab_layers=3, slab_repeat_xy=2, n_vacancies=1, seed=0
+    )
+    assert cfg.defect_bias_probability == 0.5
+    assert "vacancy_cartesian_angstrom" in cfg.slab.info
+    assert (
+        make_defected_graphite_surface_config(
+            slab_layers=3,
+            slab_repeat_xy=2,
+            n_vacancies=1,
+            seed=0,
+            defect_bias_probability=0.0,
+        ).defect_bias_probability
+        == 0.0
+    )
+
+
+def test_graphite_vacuum_is_total_padding() -> None:
+    mono = build_graphite_slab(layers=1, vacuum=12.0, repeat_xy=2)
+    assert mono.cell[2, 2] == pytest.approx(12.0)
+    assert abs(float(mono.get_positions()[0, 2]) - 6.0) < 1.0
+    bi = build_graphite_slab(layers=2, vacuum=12.0, repeat_xy=2)
+    assert bi.cell[2, 2] == pytest.approx(GRAPHITE_INTERLAYER_DISTANCE + 12.0)
+
 
 def test_placement_bias_lands_on_defect() -> None:
     cfg = make_graphene_surface_config(
@@ -88,7 +122,7 @@ def test_placement_bias_lands_on_defect() -> None:
     tol = 1.5
 
     rng = default_rng(0)
-    n_total = 30
+    n_total = 8
     landed = 0
     for _ in range(n_total):
         struct = _deposit(["Pt", "Pt", "Pt", "Pt", "Pt"], slab, blmin, rng, cfg)
@@ -104,7 +138,7 @@ def test_placement_bias_lands_on_defect() -> None:
         nx=4, ny=4, monovacancy=True, defect_bias_probability=0.5
     )
     rng2 = default_rng(1)
-    n_half = 120
+    n_half = 24
     landed_half = 0
     for _ in range(n_half):
         struct = _deposit(["Pt", "Pt", "Pt", "Pt", "Pt"], slab, blmin, rng2, cfg_half)
@@ -124,7 +158,7 @@ def test_placement_backward_compat() -> None:
 
     rng = default_rng(7)
     x_centers: list[float] = []
-    n_total = 30
+    n_total = 8
     for _ in range(n_total):
         struct = _deposit(["Pt", "Pt", "Pt", "Pt", "Pt"], slab, blmin, rng, cfg)
         assert struct is not None

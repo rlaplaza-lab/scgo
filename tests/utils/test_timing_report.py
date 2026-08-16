@@ -13,6 +13,7 @@ from scgo.utils.logging import get_logger
 from scgo.utils.timing_report import (
     build_timing_payload,
     cpu_non_relax_seconds_from_timings,
+    emit_timing_data,
     flatten_run_timing_payload,
     ga_relax_seconds_from_timings,
     load_run_timing_payload,
@@ -47,6 +48,44 @@ def test_build_timing_payload_includes_schema_and_run_id():
     assert doc["schema_version"] == OUTPUT_JSON_SCHEMA_VERSION
     assert "timing_schema_version" not in doc
     assert doc["created_at"].endswith("Z")
+
+
+def test_emit_timing_data_collector_and_write(tmp_path: Path):
+    out = tmp_path / "out"
+    timing = tmp_path / "timing"
+    out.mkdir()
+    timing.mkdir()
+    payload = {"backend": "test", "timings_s": {"total_wall_s": 1.0}}
+    collector: list[dict] = []
+
+    emit_timing_data(
+        payload,
+        write_timing_json=False,
+        output_dir=str(out),
+        timing_output_dir=str(timing),
+        timing_collector=collector,
+    )
+    assert collector == [payload]
+    assert not (timing / "timing.json").exists()
+
+    emit_timing_data(
+        payload,
+        write_timing_json=True,
+        output_dir=str(out),
+        timing_output_dir=str(timing),
+        timing_collector=None,
+    )
+    assert (timing / "timing.json").is_file()
+    assert not (out / "timing.json").exists()
+
+    emit_timing_data(
+        payload,
+        write_timing_json=True,
+        output_dir=str(out),
+        timing_output_dir=None,
+        timing_collector=None,
+    )
+    assert (out / "timing.json").is_file()
 
 
 def test_load_run_timing_payload(tmp_path: Path):

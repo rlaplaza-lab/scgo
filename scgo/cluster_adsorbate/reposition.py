@@ -119,7 +119,7 @@ class FragmentRepositionMutation(OffspringCreator):
         fragment_tmpl = self._fragment_template_for_tag(mobile, target_tag, frag_index)
         use_mic = bool(self._policy.uses_surface)
         relaxed = ClusterAdsorbateConfig(
-            max_placement_attempts=max(ca.max_placement_attempts * 3, 4000),
+            max_placement_attempts=min(max(ca.max_placement_attempts * 3, 80), 400),
             random_spin_about_normal=True,
             height_min=ca.height_min * 0.75,
             height_max=ca.height_max * 1.5,
@@ -130,38 +130,32 @@ class FragmentRepositionMutation(OffspringCreator):
             structure_check_clashes=ca.structure_check_clashes,
             structure_check_connectivity=ca.structure_check_connectivity,
         )
-        configs = (ca, relaxed)
-        for _ in range(8):
-            for cfg in configs:
-                placed = place_fragment_on_cluster(
-                    metal_core,
-                    fragment_tmpl,
-                    self.rng,
-                    cfg,
-                    anchor_index=anchor,
-                    bond_axis=bond_axis,
-                    site_core=metal_core,
-                    clash_atoms=clash_mobile,
+        for cfg in (ca, relaxed):
+            placed = place_fragment_on_cluster(
+                metal_core,
+                fragment_tmpl,
+                self.rng,
+                cfg,
+                anchor_index=anchor,
+                bond_axis=bond_axis,
+                site_core=metal_core,
+                clash_atoms=clash_mobile,
+            )
+            if placed is None:
+                continue
+            new_mobile = mobile.copy()
+            new_mobile.positions[ads_mask] = placed.get_positions()
+            if len(slab) > 0 and atoms_too_close_two_sets(new_mobile, slab, self.blmin):
+                continue
+            if not _preserves_mobile_connectivity(mobile, new_mobile, use_mic=use_mic):
+                continue
+            if self._policy.uses_surface and len(slab) > 0:
+                new_mobile = _reanchor_mobile_to_slab(
+                    mobile, new_mobile, slab, self.surface_normal_axis
                 )
-                if placed is None:
+                if atoms_too_close_two_sets(new_mobile, slab, self.blmin):
                     continue
-                new_mobile = mobile.copy()
-                new_mobile.positions[ads_mask] = placed.get_positions()
-                if len(slab) > 0 and atoms_too_close_two_sets(
-                    new_mobile, slab, self.blmin
-                ):
-                    continue
-                if not _preserves_mobile_connectivity(
-                    mobile, new_mobile, use_mic=use_mic
-                ):
-                    continue
-                if self._policy.uses_surface and len(slab) > 0:
-                    new_mobile = _reanchor_mobile_to_slab(
-                        mobile, new_mobile, slab, self.surface_normal_axis
-                    )
-                    if atoms_too_close_two_sets(new_mobile, slab, self.blmin):
-                        continue
-                elif not self._policy.uses_surface:
-                    new_mobile.center()
-                return slab + new_mobile
+            elif not self._policy.uses_surface:
+                new_mobile.center()
+            return slab + new_mobile
         return None

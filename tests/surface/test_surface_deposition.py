@@ -11,11 +11,14 @@ from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_ga_pairing
 from scgo.exceptions import SCGOValidationError
+from scgo.initialization.atomic_radii import get_covalent_radius
+from scgo.initialization.geometry_helpers import _generate_rotation_matrix
 from scgo.metadata.atoms import set_tags
 from scgo.surface import deposition as deposition_module
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import attach_slab_constraints
 from scgo.surface.deposition import (
+    _near_surface_rotation_matrix,
     _place_cluster_above_slab,
     create_deposited_cluster,
     create_deposited_cluster_batch,
@@ -81,10 +84,22 @@ def test_create_deposited_cluster_len_and_order(pt_slab: Atoms) -> None:
 
 
 def test_place_cluster_above_slab_samples_the_configured_height_range(
-    pt_slab: Atoms,
+    pt_slab: Atoms, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The deposition gap must vary across the whole [min, max] height window."""
-    cfg = _surface_config(pt_slab, max_placement_attempts=50)
+    """Height is truncated-uniform on [min, connectivity_cap], with no cap spike."""
+    cfg = SurfaceSystemConfig(
+        slab=pt_slab,
+        adsorption_height_min=1.0,
+        adsorption_height_max=3.0,
+        max_placement_attempts=50,
+    )
+    target = 2.0
+    r_pt = get_covalent_radius("Pt")
+    monkeypatch.setattr(
+        deposition_module,
+        "max_connectivity_scale",
+        lambda _cf: target / (2.0 * r_pt),
+    )
     slab_top = slab_surface_extreme(pt_slab, 2, upper=True)
     cluster = Atoms(
         "Pt2", positions=[[0.0, 0.0, -1.2], [0.0, 0.0, 1.2]], cell=[20, 20, 20]
@@ -92,7 +107,7 @@ def test_place_cluster_above_slab_samples_the_configured_height_range(
     centered = cluster.get_positions() - cluster.get_positions().mean(axis=0)
 
     gaps: list[float] = []
-    for seed in range(30):
+    for seed in range(40):
         placed = _place_cluster_above_slab(
             cluster_positions=centered.copy(),
             slab=pt_slab,
@@ -105,10 +120,28 @@ def test_place_cluster_above_slab_samples_the_configured_height_range(
         gaps.append(float(np.min(placed[:, 2])) - slab_top)
 
     assert min(gaps) >= cfg.adsorption_height_min - 1e-9
-    assert max(gaps) <= cfg.adsorption_height_max + 1e-9
-    assert len({round(g, 6) for g in gaps}) >= 3
-    span = cfg.adsorption_height_max - cfg.adsorption_height_min
-    assert max(gaps) - min(gaps) > 0.5 * span
+    assert max(gaps) <= target + 1e-9
+    assert sum(1 for g in gaps if abs(g - target) < 1e-12) <= 1
+    assert len({round(g, 4) for g in gaps}) >= 10
+    assert max(gaps) - min(gaps) > 0.4
+
+
+def test_near_surface_rotation_uses_independent_tilt_azimuth() -> None:
+    spin, tilt, tilt_az = 0.3, 0.2, 1.7
+
+    class _SeqRng:
+        def __init__(self, values: list[float]) -> None:
+            self._it = iter(values)
+
+        def uniform(self, low: float, high: float) -> float:
+            return next(self._it)
+
+    mat = _near_surface_rotation_matrix(_SeqRng([spin, tilt, tilt_az]), axis=2)
+    normal = np.array([0.0, 0.0, 1.0])
+    tied = _generate_rotation_matrix(
+        np.array([np.cos(spin), np.sin(spin), 0.0]), tilt
+    ) @ _generate_rotation_matrix(normal, spin)
+    assert not np.allclose(mat, tied)
 
 
 def test_create_ga_pairing_surface_requires_matching_template(pt_slab: Atoms) -> None:

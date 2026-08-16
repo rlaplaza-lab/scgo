@@ -38,7 +38,7 @@ All functions accept:
 - ``params`` / ``go_params``: GO parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_default_params` at run time)
 - ``ts_params``: TS parameter dictionary (``None`` or partial dict; merged with :func:`~scgo.param_presets.get_ts_search_params` at run time)
 - ``seed``: random seed for reproducibility (must agree across ``seed=``, ``go_params['seed']``, and ``ts_params['seed']`` when more than one is set)
-- ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, ``"surface_cluster_adsorbate"``, ``"surface"``, or ``"surface_adsorbate"`` (run argument only — not inside preset dicts or optimizer slots)
+- ``system_type``: ``"gas_cluster"``, ``"surface_cluster"``, ``"gas_cluster_adsorbate"``, ``"surface_cluster_adsorbate"``, ``"surface"``, or ``"surface_adsorbate"`` (run argument only; not inside preset dicts or optimizer slots)
 - ``surface_config``: required for surface system types (run argument preferred;
   a top-level key in ``go_params`` / ``ts_params`` is enough when the run
   argument is omitted, and must agree when both are set)
@@ -99,15 +99,15 @@ Utility Functions
 Timing and Profiling
 --------------------
 
-**Per-run timing** — set in ``params`` / ``go_params`` under
+**Per-run timing**: set in ``params`` / ``go_params`` under
 ``optimizer_params['ga']`` or ``bh``:
 
-- ``write_timing_json=True`` — write ``{run_dir}/timing.json`` (alongside ``metadata.json``)
-- ``detailed_timing=True`` — add ``per_generation`` rows (requires ``write_timing_json=True``)
+- ``write_timing_json=True``: write ``{run_dir}/timing.json`` (alongside ``metadata.json``)
+- ``detailed_timing=True``: add ``per_generation`` rows (requires ``write_timing_json=True``)
 
-**TS timing** — set ``write_timing_json`` in ``ts_params`` for ``{ts_run_dir}/timing.json``.
+**TS timing**: set ``write_timing_json`` in ``ts_params`` for ``{ts_run_dir}/timing.json``.
 
-**GO+TS pipeline rollup** — when timing JSON is enabled in ``go_params`` and/or
+**GO+TS pipeline rollup**: when timing JSON is enabled in ``go_params`` and/or
 ``ts_params``, ``run_go_ts`` also writes ``go_ts_timing.json`` at the campaign root.
 
 See :doc:`/api/utils` for timing JSON layout and output-path helpers. On-disk layout and

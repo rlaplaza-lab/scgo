@@ -117,9 +117,9 @@ from scgo.utils.rng_helpers import (
 from scgo.utils.timing_report import (
     build_timing_payload,
     cpu_non_relax_seconds_from_timings,
+    emit_timing_data,
     ga_relax_seconds_from_timings,
     log_timing_summary,
-    write_timing_file,
 )
 from scgo.utils.torchsim_policy import (
     is_ml_calculator,
@@ -131,7 +131,8 @@ logger = get_logger(__name__)
 
 _PREFILTER_BLMIN_FACTOR = 0.55
 
-# Cache dense Z-pair clash thresholds by (sorted unique Z, id(blmin)).
+# Cache by (unique Z, id(blmin)). Cleared each GA generation so recycled ids and
+# per-generation empty ``{}`` (prefilter off) cannot accumulate stale entries.
 _BLMIN_THRESH_CACHE: dict[
     tuple[tuple[int, ...], int], tuple[np.ndarray, dict[int, int]]
 ] = {}
@@ -519,7 +520,7 @@ def _write_relaxed_candidate(
     Returns the validation error string when the structure fails GA storage
     validation, or ``None`` when it is eligible for GA evolution.
     """
-    original.set_cell(relaxed.get_cell(), scale_atoms=True)
+    original.set_cell(relaxed.get_cell(), scale_atoms=False)
     original.set_pbc(relaxed.get_pbc())
     original.set_positions(relaxed.get_positions())
 
@@ -1570,6 +1571,7 @@ def ga_go(
                 verbosity=verbosity,
             )
 
+            _BLMIN_THRESH_CACHE.clear()
             offspring_ctx = OffspringBuildContext(
                 atoms_template=_picklable_atoms_copy(atoms_template),
                 n_to_optimize=n_to_optimize,
@@ -1998,13 +2000,13 @@ def ga_go(
             run_id=run_id_for_timing,
             extra=extra_payload,
         )
-        if timing_collector is not None:
-            timing_collector.append(out_payload)
-        if write_timing_json:
-            if timing_output_dir is not None:
-                write_timing_file(timing_output_dir, out_payload)
-            elif timing_collector is None:
-                write_timing_file(output_dir, out_payload)
+        emit_timing_data(
+            out_payload,
+            write_timing_json=write_timing_json,
+            output_dir=output_dir,
+            timing_output_dir=timing_output_dir,
+            timing_collector=timing_collector,
+        )
 
         return all_minima
 

@@ -1,16 +1,20 @@
 All Parameters
-==================
+==============
 
-This page lists all parameters you can use in SCGO. For preset functions and their defaults, see :doc:`/api/param_presets`.
+This page lists all parameters you can use in SCGO. For preset functions and
+their defaults, see :doc:`/api/param_presets`.
 
 Parameter resolution
 --------------------
 
 All high-level ``run_*`` functions share the same contract:
 
-1. **Safe defaults** — pass ``params=None``, ``go_params=None``, or ``ts_params=None`` to use full preset defaults.
-2. **Partial overrides** — pass a dict with only the keys you want to change; runners merge with defaults before execution.
-3. **Presets encouraged** — start from a :doc:`/api/param_presets` builder, inspect/edit, then pass to ``run_*``.
+1. **Safe defaults**: pass ``params=None``, ``go_params=None``, or
+   ``ts_params=None`` to use full preset defaults.
+2. **Partial overrides**: pass a dict with only the keys you want to change;
+   runners merge with defaults before execution.
+3. **Presets**: start from a :doc:`/api/param_presets` builder, edit what you
+   need, then pass to ``run_*``.
 
 **Merge rules**
 
@@ -21,15 +25,25 @@ All high-level ``run_*`` functions share the same contract:
    * - Dict
      - Merge behavior
    * - ``params`` / ``go_params``
-     - Deep-merge onto :func:`~scgo.param_presets.get_default_params` via :func:`~scgo.utils.run_helpers.initialize_params`. Nested dicts (e.g. ``optimizer_params["ga"]``) merge recursively; user keys win. Changing ``calculator`` vs the MACE default replaces ``calculator_kwargs`` wholesale (new-calculator defaults from :func:`~scgo.param_presets.default_calculator_kwargs`, then any user kwargs) so MACE keys do not leak into EMT/UMA/UPET.
+     - Deep-merge onto :func:`~scgo.param_presets.get_default_params` via
+       :func:`~scgo.utils.run_helpers.initialize_params`. Nested dicts (for
+       example ``optimizer_params["ga"]``) merge recursively; user keys win.
+       Changing ``calculator`` from the MACE default replaces
+       ``calculator_kwargs`` wholesale (new-calculator defaults from
+       :func:`~scgo.param_presets.default_calculator_kwargs`, then any user
+       kwargs) so MACE keys do not leak into EMT/UMA/UPET.
    * - ``ts_params``
-     - Deep-merge onto :func:`~scgo.param_presets.get_ts_search_params` via :func:`~scgo.utils.run_helpers.initialize_ts_params`. Not merged with GO defaults. For ``run_go_ts*``, calculator settings align with merged ``go_params`` unless ``ts_params`` sets ``calculator``, in which case ``calculator_kwargs`` are replaced wholesale.
+     - Deep-merge onto :func:`~scgo.param_presets.get_ts_search_params` via
+       :func:`~scgo.utils.run_helpers.initialize_ts_params`. Not merged with GO
+       defaults. For ``run_go_ts*``, calculator settings align with merged
+       ``go_params`` unless ``ts_params`` sets ``calculator``, in which case
+       ``calculator_kwargs`` are replaced wholesale.
    * - Forbidden in dicts
      - Top-level ``system_type`` in ``go_params`` / ``ts_params`` (use the run
        ``system_type=`` argument). Identity keys
        (``system_type``, ``surface_config``, ``adsorbate_definition``,
        ``adsorbate_fragment_template``, ``cluster_adsorbate_config``) are also
-       forbidden inside ``optimizer_params`` slots — those slots hold algorithm
+       forbidden inside ``optimizer_params`` slots. Those slots hold algorithm
        hyperparameters only.
    * - Run kwargs
      - ``system_type``, ``surface_config``, ``adsorbates``, ``seed``,
@@ -38,7 +52,9 @@ All high-level ``run_*`` functions share the same contract:
        ``ts_params`` for ``surface_config``) are enough when the run argument
        is omitted, and must agree when both are set.
 
-**Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list of user overrides, then the resolved GO optimizer settings or TS NEB configuration. See :doc:`/api/utils`.
+**Logging** (``verbosity >= 1``): SCGO logs the defaults source and a flat list
+of user overrides, then the resolved GO optimizer settings or TS NEB
+configuration. See :doc:`/api/utils`.
 
 Verbosity levels (``run_*`` ``verbosity=`` argument):
 
@@ -51,17 +67,18 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
    * - 0
      - Warnings and errors only; no progress bars
    * - 1
-     - Normal operation: parameter merge logs, timing summaries, campaign progress, GA phase summaries (initialization, per-generation crossover/mutation/relaxation), and a one-line TorchSim autobatcher memory-scaler summary when GPU probing runs
+     - Normal operation: parameter merge logs, timing summaries, campaign
+       progress, GA phase summaries, and a one-line TorchSim memory-scaler
+       summary when GPU probing runs
    * - 2
-     - Per-individual GA and initialization detail (offspring outcomes, placement failures, ineligible structures after relaxation); per-pair NEB detail; third-party loggers still suppressed in HPC mode
+     - Per-individual GA and initialization detail; per-pair NEB detail;
+       third-party loggers still suppressed in HPC mode
    * - 3
      - TRACE-level diagnostics (deepest SCGO logging)
 
 Configure the root logger with :func:`~scgo.configure_logging`. Set
 ``SCGO_LOCAL_DEV=1`` for milder third-party log suppression during local
-development (see :doc:`/installation`). Torch-sim's multi-line
-``Model Memory Estimation`` stdout prints are suppressed; the scaler summary
-above replaces them at default verbosity.
+development (see :doc:`/installation`).
 
 **Workflow**
 
@@ -195,10 +212,10 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
 
 The subsections below list **algorithm hyperparameters** only
 (``optimizer_params["simple"|"bh"|"ga"]``). Do not put ``system_type``,
-``surface_config``, or adsorbate identity keys in these slots — see
+``surface_config``, or adsorbate identity keys in these slots. See
 *Parameter resolution* above.
 
-**Simple** (``optimizer_params["simple"]``) — used for 1–2 atom gas clusters only:
+**Simple** (``optimizer_params["simple"]``), used for 1-2 atom gas clusters only:
 
 .. list-table::
    :widths: 25 10 65
@@ -218,16 +235,12 @@ The subsections below list **algorithm hyperparameters** only
 
 **GA** (``optimizer_params["ga"]``):
 
-Parallelism is opt-in and driven by one top-level knob, ``params["n_jobs"]``
-(default ``1``, sequential). Set it to ``-2`` (all but one CPU) or ``-1``
-(every CPU) to parallelize *every* CPU stage at once — GA population
-initialization, GA offspring construction, and post-GO Hessian/force validation.
-SCGO keeps the default sequential so it never oversubscribes the host alongside
-the internal BLAS / MACE / TorchSIM thread pools. The per-stage keys
-(``n_jobs_population_init``, ``n_jobs_offspring``, ``validation_n_jobs``) remain
-available as overrides: ``None`` inherits ``n_jobs``, and an explicit value wins
-for that stage only. The production/torchsim/UMA/UPET benchmark presets already
-default to ``-2``. So in practice:
+Parallelism is driven by the top-level ``params["n_jobs"]`` knob (default ``1``,
+sequential). Set ``-2`` or ``-1`` to parallelize population initialization,
+offspring construction, and post-GO validation together. Per-stage keys
+(``n_jobs_population_init``, ``n_jobs_offspring``, ``validation_n_jobs``)
+override that default when set. See :doc:`/installation` for full semantics.
+Production and TorchSim/UMA/UPET benchmark presets default to ``-2``.
 
 .. code-block:: python
 
@@ -263,10 +276,13 @@ default to ``-2``. So in practice:
      - Stop if no improvement for N generations
    * - ``n_jobs_population_init``
      - ``None`` (inherits ``n_jobs``)
-     - Workers for population initialization. ``None`` inherits the top-level ``params["n_jobs"]``; pass ``-1`` (all CPUs), ``-2`` (all but one), or a positive worker count to enable parallelism.
+     - Workers for population initialization. ``None`` inherits the top-level
+       ``params["n_jobs"]``; pass ``-1``, ``-2``, or a positive worker count to
+       override.
    * - ``n_jobs_offspring``
      - ``None`` (inherits ``n_jobs``)
-     - Workers for offspring construction. Same semantics as ``n_jobs_population_init``; ``None`` inherits the top-level ``n_jobs``.
+     - Workers for offspring construction. Same semantics as
+       ``n_jobs_population_init``.
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
@@ -352,11 +368,11 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Calculator options
    * - ``max_pairs``
      - ``None``
-     - **NEB budget**: maximum endpoint pairs that run NEB (``None`` = all
-       survivors). Soft ``pair_score_*`` ranking only matters when this caps
-       the pool. Adsorbate searches may *select* more candidates first (see
-       **Budget and oversampling** below); the runner always truncates to this
-       value before NEB.
+     - Maximum endpoint pairs that run NEB (``None`` = all survivors). Soft
+       ``pair_score_*`` ranking only matters when this caps the pool. Adsorbate
+       searches may select more candidates first (see **Budget and
+       oversampling** below); the runner always truncates to this value before
+       NEB.
    * - ``energy_gap_threshold``
      - ``2.0`` / ``0.75`` (adsorbate)
      - Hard max energy gap between endpoints (eV); pairs above this are skipped
@@ -400,54 +416,50 @@ defaults from
 select budget from
 :func:`~scgo.ts_search.transition_state_io.resolve_ts_pair_select_cap`):
 
-Flow before any NEB force evaluation:
+Before any NEB force evaluation, SCGO:
 
-1. Load (and optionally dedupe) GO minima.
-2. Enumerate candidate endpoint pairs.
-3. Apply **hard gates** (energy gap, similarity / mismatch / core RMS).
-4. **Soft-rank** survivors with ``pair_score_*``.
-5. Truncate to the select cap from ``resolve_ts_pair_select_cap``.
-6. **Adsorbate only** (when TorchSim + ``max_endpoint_mismatch`` + more
-   survivors than ``max_pairs``): IDPP path screen re-ranks the oversampled
-   pool and keeps the best ``max_pairs``.
-7. Always truncate to ``max_pairs`` again, then run NEB.
+1. Loads (and optionally deduplicates) GO minima.
+2. Enumerates candidate endpoint pairs.
+3. Applies **hard gates** (energy gap, similarity / mismatch / core RMS).
+4. Soft-ranks survivors with ``pair_score_*``.
+5. Truncates to the select cap from ``resolve_ts_pair_select_cap``.
+6. For adsorbate types only (when TorchSim and ``max_endpoint_mismatch`` are set
+   and more survivors remain than ``max_pairs``): re-ranks the oversampled pool
+   by IDPP path quality and keeps the best ``max_pairs``.
+7. Truncates to ``max_pairs`` again, then runs NEB.
 
-Minima are laid out ``[slab | core | adsorbate]``. The comparator fingerprint
-is element-pair distances among **same** elements only, so O–H or O–O site
-hops are invisible in the fingerprint when those atoms are unique or only
-compared to themselves. Pairing therefore uses different hard gates by regime:
+Minima are laid out ``[slab | core | adsorbate]``. Pairing uses different hard
+gates by regime:
 
 - **Bare** (``gas_cluster`` / ``surface_cluster`` / ``surface``): fingerprint
-  the full mobile region; skip ``are_similar`` pairs; optional
-  ``max_endpoint_mismatch`` on fingerprint ``max_diff``.
-- **Adsorbate + metal core**: fingerprint the **core only**; do **not** skip
-  similar cores (site hops look identical); hard-gate core ``max_diff`` with
+  the full mobile region; skip similar pairs; optional
+  ``max_endpoint_mismatch`` on fingerprint difference.
+- **Adsorbate + metal core**: fingerprint the **core only**; do not skip
+  similar cores (site hops look identical); hard-gate core difference with
   ``max_endpoint_mismatch`` and core RMS with ``pair_core_rms_max``. Soft rank
   prefers mid energy gap, similar cores, and some adsorbate site displacement.
 - **Adsorbate-only slab** (no mobile core): do not skip similar; gate on
-  adsorbate Cartesian travel via ``max_endpoint_mismatch``.
+  adsorbate travel via ``max_endpoint_mismatch``.
 
 Hard gates always apply. Soft ``pair_score_*`` terms only order candidates when
-a finite select / ``max_pairs`` cap truncates the list (otherwise every
-surviving pair is kept).
+a finite select / ``max_pairs`` cap truncates the list.
 
 **Budget and oversampling**
 
-``max_pairs`` is the number of NEBs you pay for. It is **not** always the
-argument passed to ``select_structure_pairs``:
+``max_pairs`` is the number of NEBs you pay for:
 
 - **Bare** system types use ``max_pairs`` as the select cap. Soft scores pick
   the top N; those N bands run NEB. Setting ``max_endpoint_mismatch`` on bare
-  surface presets (``1.25`` Å) enables pre-NEB path gates only — it does
-  **not** turn on oversampling.
+  surface presets (``1.25`` Å) enables pre-NEB path gates only. It does not
+  turn on oversampling.
 - **Adsorbate** system types with ``max_endpoint_mismatch`` set oversample the
   select pool to
   ``min(max_pairs * 10, max(max_pairs, 50))``
   (:func:`~scgo.ts_search.transition_state_io.adsorbate_pair_select_cap`), then
-  re-rank by IDPP profile (prefer robust interior maxima) and keep
-  ``max_pairs`` for NEB. Example: ``max_pairs=6`` selects up to 50 ranked
-  pairs, then NEBs at most 6. If TorchSim / IDPP screening is unavailable, the
-  runner still truncates the oversampled list to ``max_pairs`` before NEB.
+  re-rank by IDPP profile and keep ``max_pairs`` for NEB. Example:
+  ``max_pairs=6`` selects up to 50 ranked pairs, then runs at most 6 NEBs. If
+  TorchSim / IDPP screening is unavailable, the runner still truncates the
+  oversampled list to ``max_pairs`` before NEB.
 
 Per-system-type defaults (with a caller-set ``max_pairs=N``):
 
@@ -540,18 +552,18 @@ Default hard / soft knobs:
 
 Meaning of each soft term:
 
-- ``pair_score_gap_*``: Gaussian preference for energy gap near ``gap_center``
-  (not too near-degenerate, not near the hard ``energy_gap_threshold``).
+- ``pair_score_gap_*``: prefer energy gaps near ``gap_center`` (not too near
+  degenerate, not near the hard ``energy_gap_threshold``).
 - ``pair_score_cum_scale`` + ``w_distinct``: bare systems reward fingerprint
   distinctness; adsorbate systems reward max adsorbate atom displacement after
   core alignment (site hop).
 - ``pair_score_mismatch_scale`` + ``w_mismatch``: bare systems tolerate some
-  fingerprint difference; adsorbate systems prefer **small** core ``max_diff``.
+  fingerprint difference; adsorbate systems prefer small core difference.
 - ``pair_score_core_rms_scale`` + ``w_core``: adsorbate+core only; prefer small
-  core RMS after Hungarian matching (Kabsch in gas, MIC on slabs).
+  core RMS after matching.
 
 Override any of these in ``ts_params``. If the adsorbate pair pool is empty,
-logs include skip counts (energy gap, mismatch, core RMS, etc.).
+logs include skip counts (energy gap, mismatch, core RMS, and so on).
 
 **NEB:**
 
@@ -590,14 +602,13 @@ logs include skip counts (energy gap, mismatch, core RMS, etc.).
        chunk that hits CUDA OOM is retried once at half the budget
    * - ``max_endpoint_mismatch``
      - ``None`` / ``1.25`` (gas adsorbate) / ``1.25`` (surface) / ``1.5`` (surface adsorbate)
-     - Å geometric gate on comparator ``max_diff``; when set, also enables the
-       pre-NEB endpoint-displacement check. For adsorbate + metal-core systems
-       (gas or on a slab), pair selection fingerprints the **core** and this
-       gate means “cores too different”; adsorbate site hops with an identical
-       core are kept. For adsorbate-only slabs the same threshold gates
-       adsorbate Cartesian travel. On adsorbate system types it also enables
-       select oversampling (see **Budget and oversampling**); on bare surface
-       it does **not**.
+     - Å geometric gate on comparator difference; when set, also enables the
+       pre-NEB endpoint-displacement check. For adsorbate + metal-core systems,
+       pair selection fingerprints the **core** and this gate means “cores too
+       different”; adsorbate site hops with an identical core are kept. For
+       adsorbate-only slabs the same threshold gates adsorbate travel. On
+       adsorbate system types it also enables select oversampling (see **Budget
+       and oversampling**); on bare surface it does not.
    * - ``neb_prescreen_clash_distance``
      - ``1.0`` (bare gas) / ``0.7`` (surface + adsorbate)
      - Interior NEB image min mobile pairwise distance (Å) below which the initial path is rejected.
@@ -631,20 +642,18 @@ logs include skip counts (energy gap, mismatch, core RMS, etc.).
 
 **NEB pre-screen gates:**
 
-Before any NEB optimization, ``validate_initial_neb_path`` runs for **every**
-system type (bare gas, adsorbate, and surface; TorchSim and serial ASE paths).
-``validate_initial_neb_energy_profile`` runs only when ``max_endpoint_mismatch``
-is set (bare ``gas_cluster`` leaves it ``None`` and skips the energy-profile
-screen):
+Before any NEB optimization, ``validate_initial_neb_path`` runs for every
+system type. ``validate_initial_neb_energy_profile`` runs only when
+``max_endpoint_mismatch`` is set (bare ``gas_cluster`` leaves it ``None`` and
+skips the energy-profile screen):
 
-- Interior-image clash check (min mobile pairwise distance vs
-  ``neb_prescreen_clash_distance``) always runs; the aligned endpoint-displacement
-  gate additionally runs when ``max_endpoint_mismatch`` is set.
+- Interior-image clash check (minimum mobile pairwise distance vs
+  ``neb_prescreen_clash_distance``) always runs; the aligned
+  endpoint-displacement gate also runs when ``max_endpoint_mismatch`` is set.
 - Energy-profile check (barrier cap ``neb_max_spurious_barrier``; endpoint-energy
   drift ``> 0.5`` eV and interior-max prominence below ``min_saddle_prominence``)
-  runs only when ``max_endpoint_mismatch`` is set and canonical endpoint energies
-  are available. Bands with fewer than three images skip the prominence/drift
-  check.
+  runs only when ``max_endpoint_mismatch`` is set and endpoint energies are
+  available. Bands with fewer than three images skip the prominence/drift check.
 
 Per-system-type defaults for the three pre-screen knobs are listed under
 :doc:`/validation_and_constraints` (bare gas is looser:
@@ -657,8 +666,8 @@ surface and adsorbate are tighter: ``0.7`` / ``0.40``).
 - Pair selection / oversampling: see **Budget and oversampling** under
   **Pair selection** above (adsorbate-only; bare surface
   ``max_endpoint_mismatch`` does not oversample)
-- Climbing NEB: two-stage only when the IDPP path has a robust interior maximum
-  (barrier ``≥ 1.0`` eV); endpoint-max and soft interior IDPP climb from step 0
+- Climbing NEB: two-stage only when the IDPP path has a clear interior maximum
+  (barrier ``≥ 1.0`` eV); otherwise climb from step 0
 - Finalize also rejects barriers ``> 8`` eV
 
 **Surface NEB (differences from gas):**
@@ -667,13 +676,12 @@ surface and adsorbate are tighter: ``0.7`` / ``0.40``).
 - ``neb_surface_cell_remap=True``
 - ``neb_surface_lattice_rotation=True`` for bare ``surface_cluster`` /
   ``surface``; ``False`` for ``surface_cluster_adsorbate`` /
-  ``surface_adsorbate`` (registry-safe)
+  ``surface_adsorbate`` (keeps adsorbate-slab registry)
 - ``neb_surface_max_lattice_shift=1``
-- ``parallel_neb_max_bands=4`` (parallel NEB path stays on; bands are
-  chunked four-at-a-time for OOM safety on large slab cells)
+- ``parallel_neb_max_bands=4`` (bands chunked four at a time for large slab
+  cells)
 - ``parallel_neb_max_batch_atoms=4000`` (atom budget used when the band cap is
-  cleared to ``None``; kept at/below the previous 4-band path so the TorchSim
-  memory-scaler disk cache bucket is reused)
+  cleared to ``None``)
 
 Surface Config
 --------------
@@ -708,7 +716,7 @@ Surface Config
      - Bottom layers to freeze
    * - ``defect_bias_probability``
      - ``0.0`` (class) / ``0.5`` if ``monovacancy`` else ``0.0`` (preset)
-     - Fraction (0.0–1.0) of placements biased onto a recorded slab vacancy;
+     - Fraction (0.0 to 1.0) of placements biased onto a recorded slab vacancy;
        ignored when the slab has no vacancy (see :doc:`/surface_slab_guide`).
    * - ``comparator_use_mic``
      - ``True``

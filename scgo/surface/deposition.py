@@ -192,17 +192,18 @@ def _build_adsorbate_fragments_on_slab(
 
 
 def _near_surface_rotation_matrix(rng: Generator, axis: int) -> np.ndarray:
-    """Mostly in-plane rotation with a small tilt off the surface normal."""
+    """Mostly in-plane rotation with a small independent tilt off the normal."""
     in_plane_angle = float(rng.uniform(0.0, 2.0 * np.pi))
     tilt = float(rng.uniform(-0.35, 0.35))
+    tilt_azimuth = float(rng.uniform(0.0, 2.0 * np.pi))
     normal = np.zeros(3, dtype=float)
     normal[axis] = 1.0
     if axis == 0:
-        rot_axis = np.array([0.0, np.cos(in_plane_angle), np.sin(in_plane_angle)])
+        rot_axis = np.array([0.0, np.cos(tilt_azimuth), np.sin(tilt_azimuth)])
     elif axis == 1:
-        rot_axis = np.array([np.cos(in_plane_angle), 0.0, np.sin(in_plane_angle)])
+        rot_axis = np.array([np.cos(tilt_azimuth), 0.0, np.sin(tilt_azimuth)])
     else:
-        rot_axis = np.array([np.cos(in_plane_angle), np.sin(in_plane_angle), 0.0])
+        rot_axis = np.array([np.cos(tilt_azimuth), np.sin(tilt_azimuth), 0.0])
     rot_axis /= max(np.linalg.norm(rot_axis), 1e-12)
     return _generate_rotation_matrix(rot_axis, tilt) @ _generate_rotation_matrix(
         normal, in_plane_angle
@@ -387,18 +388,11 @@ def _place_cluster_above_slab(
 
     cluster_min = float(np.min(rotated_positions[:, axis]))
 
-    target_height_above_slab = min(
-        config.adsorption_height_max,
-        max(config.adsorption_height_min, connectivity_threshold),
-    )
-
-    sampled_height = float(
-        rng.uniform(config.adsorption_height_min, config.adsorption_height_max)
-    )
-
-    effective_height = max(
-        config.adsorption_height_min, min(sampled_height, target_height_above_slab)
-    )
+    # Truncated uniform on [h_min, min(h_max, connectivity_threshold)].
+    h_min = config.adsorption_height_min
+    h_max = config.adsorption_height_max
+    hi = min(h_max, max(h_min, connectivity_threshold))
+    effective_height = float(rng.uniform(h_min, hi)) if hi > h_min else h_min
 
     translated_positions[:, axis] += slab_top + effective_height - cluster_min
     return translated_positions
@@ -552,13 +546,6 @@ def create_deposited_cluster(
             combined, _site_types_from_structure(cluster_seed)
         )
         n_slab = len(slab)
-        skip_supported_cluster_check = bool(
-            adsorbate_definition is not None
-            and len([str(s) for s in adsorbate_definition.core_symbols]) == 0
-        )
-        if skip_supported_cluster_check:
-            return combined
-
         connectivity_factor = resolve_connectivity_factor(
             None,
             cluster_adsorbate_config=cluster_adsorbate_config,

@@ -7,9 +7,42 @@ SCGO Documentation
        <img src="_static/scgo_logo.svg" alt="SCGO" style="width: 200px;">
    </div>
 
-**SCGO: Simple Cluster Global Optimization** — global optimization of atomic
-clusters with ASE: Basin Hopping, Genetic Algorithms, NEB transition-state
-search, and MLIPs (MACE, UMA, UPET).
+**SCGO** finds low-energy atomic structures with global optimization. It uses
+Basin Hopping, Genetic Algorithms, NEB transition-state search, and machine
+learning potentials (MACE, UMA, UPET) through ASE and TorchSim.
+
+What SCGO works with
+--------------------
+
+Three building blocks cover every workflow:
+
+- **Cluster** (also called the **core** when molecules are present): the metal
+  nanoparticle whose shape you are searching.
+- **Adsorbate**: a small molecule or fragment (for example OH or CO) attached
+  to the cluster or the surface.
+- **Slab**: a periodic surface the cluster or adsorbate sits on. You can also
+  search the top layers of the slab itself, with the bottom layers held still.
+
+The six system types combine these pieces:
+
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
+
+   * - Type
+     - What you search
+   * - ``gas_cluster``
+     - Cluster in vacuum
+   * - ``surface_cluster``
+     - Cluster on a slab
+   * - ``gas_cluster_adsorbate``
+     - Cluster plus adsorbates in vacuum
+   * - ``surface_cluster_adsorbate``
+     - Cluster plus adsorbates on a slab
+   * - ``surface``
+     - Top layers of a bare slab
+   * - ``surface_adsorbate``
+     - Top slab layers plus adsorbates, no cluster
 
 See :doc:`/quickstart` to get started.
 

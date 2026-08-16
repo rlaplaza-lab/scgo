@@ -45,17 +45,15 @@ def build_graphite_slab(
     Creates a multi-layer graphite slab with correct interlayer spacing
     (~3.35 Angstroms). Each layer is a graphene sheet, and layers are stacked
     with the graphite interlayer distance.
+
+    ``vacuum`` is total extra padding along the surface normal (not per-side):
+    ``cell_z = (layers - 1) * 3.35 + vacuum``, with the stack centered.
     """
     if layers < 1:
         raise SCGOValidationError(f"layers must be >= 1, got {layers}")
 
     single_layer = graphene(formula="C2", vacuum=0.0)
     single_layer = single_layer.repeat((repeat_xy, repeat_xy, 1))
-
-    if layers == 1:
-        single_layer.center(vacuum=vacuum, axis=2)
-        normalize_slab_pbc(single_layer)
-        return single_layer
 
     all_positions = single_layer.get_positions().copy()
     all_symbols = single_layer.get_chemical_symbols()
@@ -327,8 +325,12 @@ def make_defected_graphite_surface_config(
     seed: int = 0,
     structure_connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
+    defect_bias_probability: float | None = None,
 ) -> SurfaceSystemConfig:
-    """Defected graphite preset for ``system_type='surface'`` slab search."""
+    """Defected graphite preset; default ``defect_bias_probability=0.5``."""
+    if defect_bias_probability is None:
+        defect_bias_probability = 0.5
+
     slab = build_defected_graphite_slab(
         layers=slab_layers,
         vacuum=vacuum,
@@ -346,6 +348,7 @@ def make_defected_graphite_surface_config(
         comparator_use_mic=True,
         max_placement_attempts=1000,
         structure_connectivity_factor=structure_connectivity_factor,
+        defect_bias_probability=defect_bias_probability,
     )
 
 

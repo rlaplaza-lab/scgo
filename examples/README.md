@@ -5,12 +5,12 @@ Most scripts are `run_go_ts` smoke runs for the supported system types
 `get_low_effort_torchsim_ga_params` / `get_low_effort_ts_search_params` for its
 `system_type` and only overrides `max_pairs` plus a few example-specific knobs.
 `max_pairs` is the NEB budget (adsorbate examples may oversample the select
-pool first; bare examples do not — see ``docs/source/parameters.rst``,
-**Budget and oversampling**). Those presets are the reduced-budget (~25% of
+pool first; bare examples do not). See `docs/source/parameters.rst`,
+**Budget and oversampling**. Those presets are the reduced-budget (~25% of
 production) variants of `get_torchsim_ga_params` / `get_ts_search_params`: the
 calculator, TorchSim relaxer and every NEB physics knob are inherited
 unchanged, and only the GA (`niter`, `population_size`,
-`niter_local_relaxation`) and NEB step budgets shrink — floored so bands still
+`niter_local_relaxation`) and NEB step budgets shrink, floored so bands still
 converge. Surface system types clamp `niter_local_relaxation` back up to 400
 at run time, so slab searches keep production-strength local relaxation.
 
@@ -18,7 +18,7 @@ at run time, so slab searches keep production-strength local relaxation.
 ORR intermediate (O, OH, OOH) on monovacancy graphite. It uses the same
 low-effort GA preset and does not call TS search.
 
-See ``docs/source/parameters.rst`` for merge / identity rules.
+See `docs/source/parameters.rst` for merge / identity rules.
 
 Adsorbate examples set `connectivity_factor=1.8` and
 `freeze_adsorbate_internal_geometry=True`; the bare surface example also uses
@@ -63,11 +63,11 @@ python examples/example_pt5_orr_defected_graphite.py
 
 Each run creates a new datetime `run_*` under `examples/results/{stem}_mace/`
 (`{path_key}_searches/` and, for GO+TS, `{path_key}_ts_results/`; timing JSON
-enabled). Path keys are component-aware, e.g. `Pt5`, `Pt5_OH`, `Pt5_graphite`,
-`Pt5_OH_OH_graphite`, `defected_graphite`, `OH_n_doped_graphite`,
-`Pt5_defected_graphite`, `Pt5_O_defected_graphite`,
+enabled). Path keys are component-aware, for example `Pt5`, `Pt5_OH`,
+`Pt5_graphite`, `Pt5_OH_OH_graphite`, `defected_graphite`,
+`OH_n_doped_graphite`, `Pt5_defected_graphite`, `Pt5_O_defected_graphite`,
 `Pt5_OH_defected_graphite`, `Pt5_O2H_defected_graphite`. Reusing the same
-`output_stem` can seed GO from prior DBs in that tree — use a fresh stem (or
+`output_stem` can seed GO from prior DBs in that tree. Use a fresh stem (or
 delete the old tree) for a clean end-to-end check. Override the stem without
 editing the script via `SCGO_EXAMPLE_OUTPUT_STEM=my_fresh_stem`. See the docs
 *On-disk layout* section.

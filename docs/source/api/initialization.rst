@@ -69,8 +69,8 @@ see :mod:`scgo.initialization.initialization_config`.
   first (ASE atomic masses); order within each element group is shuffled. This
   favours metal-first growth for oxides and bimetallics without fixing the same
   sequence for every structure.
-- **Exploratory** (~35%): legacy growth-order strategies (random shuffle,
-  size-based, composition-aware, etc.) preserve batch diversity.
+- **Exploratory** (~35%): mixed growth-order strategies (random shuffle,
+  size-based, composition-aware, and similar) preserve batch diversity.
 
 The bias probability is ``MASS_FIRST_PLACEMENT_PROB`` in
 :mod:`scgo.initialization.initialization_config` (not exposed in GO presets).

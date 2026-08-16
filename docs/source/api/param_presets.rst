@@ -189,7 +189,7 @@ and the Kaggle GPU test matrix uses, so the two cannot drift apart.
     ts_params["max_pairs"] = 6
 
 ``get_low_effort_ts_search_params`` already covers MACE, UMA, and UPET uniformly
-via its ``calculator`` / ``calculator_kwargs`` arguments — there is no separate
+via its ``calculator`` / ``calculator_kwargs`` arguments. There is no separate
 per-calculator TS wrapper.
 
 **Low-effort UPET GO:**

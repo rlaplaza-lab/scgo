@@ -21,7 +21,8 @@
   pool at the number of tasks and floors at one.
 - Graphene/graphite vacancy presets and defect-biased nanoparticle placement
   (`make_defected_graphite_*`, `make_n_doped_*`, `build_monovacancy_graphene_slab`,
-  `defect_bias_probability`).
+  `defect_bias_probability`). `make_defected_graphite_surface_config` wires
+  `defect_bias_probability` (default `0.5` when omitted).
 - Planar slab layers (graphene / graphite top) now expose hollow (`facet`)
   adsorption sites computed from the in-plane Voronoi diagram, in addition to
   the existing on-top (`vertex`) and bridge (`edge`) sites. A
@@ -165,6 +166,15 @@
   pattern as `run_go_campaign`).
 - Seed-sampling “tried positions” tracking uses stable position hashes
   (`_get_positions_hash`) instead of `hash(...tobytes())`.
+- Shared `emit_timing_data`: append to `timing_collector` when set; write
+  `timing.json` when `write_timing_json` is true. BH collectors are populated
+  independent of the write flag; GA writes `output_dir/timing.json` even when a
+  collector is also set.
+- Fragment reposition mutation uses a capped placement budget
+  (`min(max(attempts * 3, 80), 400)`) and one pass over `(ca, relaxed)` instead
+  of up to 16 nested retries.
+- Graphite slab `vacuum` is total normal padding for all layer counts
+  (`cell_z = (layers - 1) * 3.35 + vacuum`, stack centered).
 
 ### Fixed
 
@@ -235,6 +245,15 @@
 - Permutation mutation samples distinct swap pairs without replacement.
 - Chunked DB streaming no longer prefills unused ASE row slots with empty
   JSON/`null` before column remapping.
+- Near-surface deposition tilt azimuth is drawn independently of in-plane spin.
+- Adsorption height sampling is truncated-uniform on
+  `[h_min, min(h_max, connectivity_threshold)]` (no biased nest of min/max).
+- Empty-core deposits run `validate_supported_cluster_deposit` instead of
+  returning early.
+- GA `_BLMIN_THRESH_CACHE` is cleared each generation so recycled `id(blmin)`
+  values and empty prefilter dicts cannot keep stale thresholds.
+- `_write_relaxed_candidate` copies the relaxed cell with `scale_atoms=False`
+  before setting positions (avoids unintended fractional rescaling).
 
 ### Removed
 
@@ -269,8 +288,8 @@
   `1.0`; high-energy preset `2.0`), not a physical Kelvin temperature.
 - Fixed documentation inaccuracies, normalized headings, and cleaned up
   cross-references.
-
-# Changelog
+- Plain-language glossary / mental-model cleanup (cluster/core, adsorbate,
+  slab) across README and guides; surface guide notes defect-bias default.
 
 ## 0.7.0
 

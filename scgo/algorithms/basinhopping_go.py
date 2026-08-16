@@ -65,8 +65,8 @@ from scgo.utils.logging import (
 )
 from scgo.utils.timing_report import (
     build_timing_payload,
+    emit_timing_data,
     log_timing_summary,
-    write_timing_file,
 )
 from scgo.utils.validation import (
     validate_atoms,
@@ -305,7 +305,7 @@ def bh_go(
         timing_output_dir: Directory for ``timing.json`` (defaults to ``output_dir``
             when ``run_trials`` is not used).
         timing_collector: Optional list appended with the timing payload after the
-            run; only populated when ``write_timing_json`` is set.
+            run (always, independent of ``write_timing_json``).
         deduplicate: If True (default), filter to structurally unique minima.
         energy_tolerance: Energy difference (eV) below which structures are considered duplicates.
         comparator_tol: Tolerance for interatomic distance comparator.
@@ -485,26 +485,26 @@ def bh_go(
             log_timing_summary(
                 logger, "basin_hopping", profile_timings, verbosity=verbosity
             )
-            if write_timing_json:
-                timing_dir = (
-                    timing_output_dir if timing_output_dir is not None else output_dir
-                )
-                run_id_for_timing = os.path.basename(str(timing_dir).rstrip(os.sep))
-                extra: dict[str, Any] = {"counters": profile_counters}
-                if per_iteration is not None:
-                    extra["per_iteration"] = per_iteration
-                out = build_timing_payload(
-                    backend="basin_hopping",
-                    timings_s=profile_timings,
-                    run_id=run_id_for_timing,
-                    extra=extra,
-                )
-                if timing_collector is not None:
-                    timing_collector.append(out)
-                elif timing_output_dir is not None:
-                    write_timing_file(timing_output_dir, out)
-                else:
-                    write_timing_file(output_dir, out)
+            timing_dir = (
+                timing_output_dir if timing_output_dir is not None else output_dir
+            )
+            run_id_for_timing = os.path.basename(str(timing_dir).rstrip(os.sep))
+            extra: dict[str, Any] = {"counters": profile_counters}
+            if per_iteration is not None:
+                extra["per_iteration"] = per_iteration
+            out = build_timing_payload(
+                backend="basin_hopping",
+                timings_s=profile_timings,
+                run_id=run_id_for_timing,
+                extra=extra,
+            )
+            emit_timing_data(
+                out,
+                write_timing_json=write_timing_json,
+                output_dir=output_dir,
+                timing_output_dir=timing_output_dir,
+                timing_collector=timing_collector,
+            )
 
         a_current = database_retry(
             da.get_an_unrelaxed_candidate,
