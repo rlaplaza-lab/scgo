@@ -115,6 +115,22 @@ def test_unsupported_constraint_warns_once(caplog, monkeypatch) -> None:
     assert len(warnings_seen) == 1
 
 
+def test_empty_atoms_multiple_fixatoms_warns_once(caplog) -> None:
+    """Empty Atoms with multiple FixAtoms must warn once and return []."""
+    a = Atoms()
+    a.set_constraint([ASEFixAtoms(indices=[0]), ASEFixAtoms(indices=[1])])
+
+    with caplog.at_level(logging.WARNING, logger="scgo.calculators.torchsim_helpers"):
+        assert collect_ase_fixatoms_indices(a) == []
+
+    warnings_seen = [
+        rec
+        for rec in caplog.records
+        if "Ignoring FixAtoms on an empty Atoms object" in rec.getMessage()
+    ]
+    assert len(warnings_seen) == 1
+
+
 def test_fixatoms_still_collected_alongside_dropped_constraints(monkeypatch) -> None:
     """A dropped constraint must not hide the FixAtoms indices."""
     from ase.constraints import FixBondLengths

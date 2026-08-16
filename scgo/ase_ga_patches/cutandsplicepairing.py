@@ -42,13 +42,12 @@ def _assert_offspring_integrity(child: Atoms, parent: Atoms) -> None:
             f"{len(child)} atoms; expected {len(parent)} "
             f"(slab + n_top)."
         )
-    if get_composition_counts(
-        child.get_chemical_symbols()
-    ) != get_composition_counts(parent.get_chemical_symbols()):
+    child_counts = get_composition_counts(child.get_chemical_symbols())
+    parent_counts = get_composition_counts(parent.get_chemical_symbols())
+    if child_counts != parent_counts:
         raise SCGOValidationError(
             f"CutAndSplicePairing changed stoichiometry: "
-            f"{dict(get_composition_counts(child.get_chemical_symbols()))} vs "
-            f"{dict(get_composition_counts(parent.get_chemical_symbols()))}."
+            f"{dict(child_counts)} vs {dict(parent_counts)}."
         )
 
 

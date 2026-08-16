@@ -17,7 +17,7 @@ import dataclasses
 import functools
 import logging
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -84,6 +84,11 @@ def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
     dropped with a once-per-process warning listing the constraint type names.
     """
     n_atoms = len(atoms)
+    if n_atoms == 0:
+        if any(isinstance(c, ASEFixAtoms) for c in atoms.constraints):
+            logger.warning("Ignoring FixAtoms on an empty Atoms object")
+        return []
+
     out: list[int] = []
     dropped: list[str] = []
     for c in atoms.constraints:
@@ -94,9 +99,6 @@ def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
         if not isinstance(c, ASEFixAtoms):
             dropped.append(type(c).__name__)
             continue
-        if n_atoms == 0:
-            logger.warning("Ignoring FixAtoms on an empty Atoms object")
-            continue
         out.extend(int(i) % n_atoms for i in c.index)
     if dropped:
         _warn_dropped_ase_constraints(dropped)
@@ -105,6 +107,54 @@ def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
 
 # This monkey-patch applies to the TorchSim class object in the current process
 # only; subprocesses must call it independently if needed.
+_TORCHSIM_WORKAROUND_WARNED: set[str] = set()
+_TORCHSIM_KNOWN_BROKEN_MAX: tuple[int, int] = (0, 6)
+
+
+def _torchsim_package_version() -> str | None:
+    """Return installed ``torch-sim-atomistic`` version string, or None."""
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("torch-sim-atomistic")
+    except Exception:
+        return None
+
+
+def _torchsim_version_tuple(version: str | None) -> tuple[int, int] | None:
+    """Parse major.minor from a package version string."""
+    if version is None:
+        return None
+    try:
+        major, minor, *_ = version.split(".")
+        return (int(major), int(minor))
+    except Exception:
+        return None
+
+
+def _warn_if_torchsim_newer_than_known_broken(name: str) -> None:
+    """Warn once per workaround when TorchSim is newer than the last re-tested release.
+
+    Patches are still applied: auto-skipping after 0.6 without a 0.7 re-test
+    could regress GPU CI. Remove each workaround once upstream is verified fixed.
+    """
+    if name in _TORCHSIM_WORKAROUND_WARNED:
+        return
+    version = _torchsim_package_version()
+    numeric = _torchsim_version_tuple(version)
+    if numeric is None or numeric <= _TORCHSIM_KNOWN_BROKEN_MAX:
+        return
+    _TORCHSIM_WORKAROUND_WARNED.add(name)
+    logger.warning(
+        "TorchSim %s is newer than the known-broken %s.%s; "
+        "re-test without TorchSim workaround %r",
+        version,
+        _TORCHSIM_KNOWN_BROKEN_MAX[0],
+        _TORCHSIM_KNOWN_BROKEN_MAX[1],
+        name,
+    )
+
+
 def _patch_torchsim_constraint_device_mismatch() -> None:
     """Monkey-patch TorchSim ``AtomConstraint.select_sub_constraint``.
 
@@ -120,26 +170,6 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
 
     if getattr(AtomConstraint, "_scgo_device_patch", False):
         return
-
-    try:
-        from importlib.metadata import version as _pkg_version
-
-        _ts_version = _pkg_version("torch-sim-atomistic")
-    except Exception:
-        _ts_version = None
-
-    if _ts_version is not None:
-        try:
-            _major, _minor, *_ = _ts_version.split(".")
-            _numeric = (int(_major), int(_minor))
-        except Exception:
-            _numeric = None
-        if _numeric is not None and _numeric > (0, 6):
-            logger.warning(
-                "TorchSim %s is newer than the known-broken 0.6.0; "
-                "re-test without _patch_torchsim_constraint_device_mismatch",
-                _ts_version,
-            )
 
     def select_sub_constraint(self, atom_idx, sys_idx):  # noqa: ARG001
         if hasattr(atom_idx, "device") and atom_idx.device != self.atom_idx.device:
@@ -204,6 +234,20 @@ def _register_torchsim_warning_filters() -> None:
     _TORCHSIM_WARNINGS_REGISTERED = True
 
 
+def _apply_torchsim_workarounds(model: object | None = None) -> None:
+    """Apply process-global TorchSim workarounds (idempotent).
+
+    Warning filters are always registered. Version-gated patches still apply on
+    newer TorchSim releases (with a once-per-name warning) until re-tested.
+    """
+    _register_torchsim_warning_filters()
+    _warn_if_torchsim_newer_than_known_broken("constraint_device_mismatch")
+    _patch_torchsim_constraint_device_mismatch()
+    if model is not None:
+        _warn_if_torchsim_newer_than_known_broken("model_detach_outputs")
+        _patch_torchsim_model_detach_outputs(model)
+
+
 def build_torchsim_fixatoms_from_ase_batch(
     atoms_list: Sequence[Atoms],
     device: object,
@@ -226,7 +270,7 @@ def build_torchsim_fixatoms_from_ase_batch(
     # Lazy import: do not require TorchSim until needed.
     from torch_sim.constraints import FixAtoms as TSFixAtoms  # type: ignore
 
-    _patch_torchsim_constraint_device_mismatch()
+    _apply_torchsim_workarounds()
 
     merged: list[int] = []
     offset = 0
@@ -446,6 +490,63 @@ def _load_default_upet_model(
         non_conservative=upet_non_conservative,
         compute_stress=compute_stress,
     )
+
+
+def _load_mace_for_relaxer(relaxer: TorchSimBatchRelaxer) -> object:
+    return _load_default_mace_model(
+        device=relaxer.device,
+        dtype=relaxer.dtype,
+        mace_model_name=relaxer.mace_model_name,
+    )
+
+
+def _load_fairchem_for_relaxer(relaxer: TorchSimBatchRelaxer) -> object:
+    if not relaxer.fairchem_model_name:
+        raise SCGOValidationError(
+            "TorchSimBatchRelaxer(model_kind='fairchem') requires fairchem_model_name"
+        )
+    return _load_default_fairchem_model(
+        device=relaxer.device,
+        dtype=relaxer.dtype,
+        fairchem_model_name=str(relaxer.fairchem_model_name),
+        fairchem_task_name=relaxer.fairchem_task_name,
+    )
+
+
+def _load_upet_for_relaxer(relaxer: TorchSimBatchRelaxer) -> object:
+    if not relaxer.upet_model_name and not relaxer.upet_checkpoint_path:
+        raise SCGOValidationError(
+            "TorchSimBatchRelaxer(model_kind='upet') requires "
+            "upet_model_name or upet_checkpoint_path"
+        )
+    return _load_default_upet_model(
+        device=relaxer.device,
+        upet_model_name=str(relaxer.upet_model_name or ""),
+        upet_version=relaxer.upet_version,
+        upet_checkpoint_path=relaxer.upet_checkpoint_path,
+        upet_non_conservative=relaxer.upet_non_conservative,
+    )
+
+
+_MODEL_KIND_LOADERS: dict[str, Callable[[TorchSimBatchRelaxer], object]] = {
+    "mace": _load_mace_for_relaxer,
+    "fairchem": _load_fairchem_for_relaxer,
+    "uma": _load_fairchem_for_relaxer,
+    "upet": _load_upet_for_relaxer,
+    "metatomic": _load_upet_for_relaxer,
+}
+
+
+def _resolve_default_model(relaxer: TorchSimBatchRelaxer) -> object:
+    """Load a TorchSim model for ``relaxer.model_kind`` aliases."""
+    mk = str(relaxer.model_kind or "mace").strip().lower()
+    loader = _MODEL_KIND_LOADERS.get(mk)
+    if loader is None:
+        raise SCGOValidationError(
+            f"Unknown model_kind {relaxer.model_kind!r}; "
+            "expected 'mace', 'fairchem', or 'upet'"
+        )
+    return loader(relaxer)
 
 
 def _coerce_step_count(val: Any) -> int | None:
@@ -691,6 +792,12 @@ class TorchSimBatchRelaxer:
     runner_kwargs:
         Extra keyword arguments forwarded directly to
         :func:`torch_sim.optimize` (overrides anything set above).
+    seed:
+        Optional integer seed. When set, calls **global** ``torch.manual_seed``
+        during ``__post_init__``. This mutates the shared process RNG and can
+        desync other Torch streams; deterministic algorithms are intentionally
+        not forced (CuBLAS constraints). Callers that also drive Torch should
+        treat this as a process-wide side effect.
 
     """
 
@@ -731,7 +838,6 @@ class TorchSimBatchRelaxer:
         # Lazy import: only require TorchSim when actually instantiating the relaxer.
         import torch_sim as ts  # type: ignore
 
-        _register_torchsim_warning_filters()
         self._ts = ts
         if self.device is None:
             self.device = torch.device(
@@ -747,8 +853,8 @@ class TorchSimBatchRelaxer:
             # Match ASE MACE wrapper default of float64 for parity
             self.dtype = torch.float64
 
-        # Optional seeding (deterministic algorithms are not forced, to avoid
-        # CuBLAS constraints)
+        # Optional seeding: mutates the global torch RNG (see ``seed`` docstring).
+        # Deterministic algorithms are not forced, to avoid CuBLAS constraints.
         if self.seed is not None:
             torch.manual_seed(self.seed)
 
@@ -765,50 +871,14 @@ class TorchSimBatchRelaxer:
             self.optimizer = self.optimizer_name
 
         if self.model is None:
-            mk = str(self.model_kind or "mace").strip().lower()
-            if mk == "mace":
-                self.model = _load_default_mace_model(
-                    device=self.device,
-                    dtype=self.dtype,
-                    mace_model_name=self.mace_model_name,
-                )
-            elif mk in ("fairchem", "uma"):
-                if not self.fairchem_model_name:
-                    raise SCGOValidationError(
-                        "TorchSimBatchRelaxer(model_kind='fairchem') requires fairchem_model_name"
-                    )
-                self.model = _load_default_fairchem_model(
-                    device=self.device,
-                    dtype=self.dtype,
-                    fairchem_model_name=str(self.fairchem_model_name),
-                    fairchem_task_name=self.fairchem_task_name,
-                )
-            elif mk in ("upet", "metatomic"):
-                if not self.upet_model_name and not self.upet_checkpoint_path:
-                    raise SCGOValidationError(
-                        "TorchSimBatchRelaxer(model_kind='upet') requires "
-                        "upet_model_name or upet_checkpoint_path"
-                    )
-                self.model = _load_default_upet_model(
-                    device=self.device,
-                    upet_model_name=str(self.upet_model_name or ""),
-                    upet_version=self.upet_version,
-                    upet_checkpoint_path=self.upet_checkpoint_path,
-                    upet_non_conservative=self.upet_non_conservative,
-                )
-            else:
-                raise SCGOValidationError(
-                    f"Unknown model_kind {self.model_kind!r}; "
-                    "expected 'mace', 'fairchem', or 'upet'"
-                )
+            self.model = _resolve_default_model(self)
         else:
             self.model = _ensure_torchsim_mace_wrapper(
                 self.model, self.device, self.dtype
             )
         self._sync_device_dtype_from_model()
         self._patch_model_for_cuda()
-        _patch_torchsim_constraint_device_mismatch()
-        _patch_torchsim_model_detach_outputs(self.model)
+        _apply_torchsim_workarounds(self.model)
 
         device_type = torch.device(self.device).type
         self._on_cpu = device_type == "cpu"

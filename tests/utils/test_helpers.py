@@ -19,6 +19,7 @@ from scgo.utils.helpers import (
     auto_population_size,
     canonicalize_relaxed_for_storage,
     canonicalize_storage_frame,
+    deep_merge_dicts,
     ensure_float64_forces,
     filter_unique_minima,
     get_cluster_formula,
@@ -27,6 +28,28 @@ from scgo.utils.helpers import (
     perform_local_relaxation,
 )
 from tests.helpers import _make_minima_atoms
+
+
+class TestDeepMergeDicts:
+    def test_empty_override_returns_independent_copy(self):
+        base = {"a": 1, "nested": {"b": 2}}
+        merged = deep_merge_dicts(base, {})
+        assert merged == base
+        assert merged is not base
+        assert merged["nested"] is not base["nested"]
+        merged["nested"]["b"] = 99
+        assert base["nested"]["b"] == 2
+
+    def test_empty_override_copy_base_false_returns_same_object(self):
+        base = {"a": 1}
+        merged = deep_merge_dicts(base, {}, copy_base=False)
+        assert merged is base
+
+    def test_nested_override_wins(self):
+        base = {"a": 1, "nested": {"b": 2, "c": 3}}
+        merged = deep_merge_dicts(base, {"nested": {"b": 20}})
+        assert merged == {"a": 1, "nested": {"b": 20, "c": 3}}
+        assert base["nested"]["b"] == 2
 
 
 def _reference_auto_scale(composition, *, base, scaling, min_val, max_val):

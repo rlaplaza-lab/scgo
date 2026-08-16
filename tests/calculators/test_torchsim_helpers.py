@@ -215,6 +215,15 @@ class _StubModel:
     """Minimal stand-in for a torch-sim model; avoids MACE/UMA downloads in unit tests."""
 
 
+def test_torchsim_unknown_model_kind_raises():
+    """Unknown model_kind must raise a single validation error."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+    from scgo.exceptions import SCGOValidationError
+
+    with pytest.raises(SCGOValidationError, match="Unknown model_kind"):
+        TorchSimBatchRelaxer(device="cpu", model_kind="bogus")
+
+
 def test_torchsim_autobatcher_default_off_on_cpu():
     """On CPU the default ``autobatcher=None`` disables autobatching (docs recommendation)."""
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer

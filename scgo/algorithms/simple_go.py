@@ -124,7 +124,14 @@ def simple_go(
             key is ignored and reported at debug level.
 
     Returns:
-        List of (energy, Atoms) tuples for local minima found. Typically a single structure.
+        List of (energy, Atoms) tuples for local minima found. With
+        ``clean=False``, this is every relaxed row already in the trial
+        database (same ``get_all_relaxed_candidates`` +
+        :func:`~scgo.utils.helpers.extract_minima_from_database` contract as
+        BH/GA), so prior runs in the same ``.db`` can appear alongside the
+        structure just optimized. Downstream ``run_trials`` dedupes via
+        :func:`~scgo.utils.helpers.filter_unique_minima`. Typically a single
+        structure when ``clean=True`` or the DB is empty.
 
     Raises:
         SCGOValidationError: If atoms is not an ASE Atoms object, no calculator

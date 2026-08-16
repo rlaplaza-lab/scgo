@@ -898,7 +898,12 @@ def auto_niter_ts(
     )
 
 
-def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+def deep_merge_dicts(
+    base: dict[str, Any],
+    override: dict[str, Any],
+    *,
+    copy_base: bool = True,
+) -> dict[str, Any]:
     """Deep merge override dict into base dict.
 
     Recursively merges nested dictionaries, allowing override values
@@ -907,15 +912,21 @@ def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str
     Args:
         base: Base dictionary (from get_default_params).
         override: Override dictionary (user-provided minimal params).
+        copy_base: If True (default), deep-copy ``base`` before merging so the
+            caller receives an independent dict. Pass False when ``base`` is
+            already a fresh copy (e.g. from :func:`~scgo.param_presets.get_default_params`).
 
     Returns:
         Merged dictionary with override values taking precedence.
     """
-    merged: dict[str, Any] = deepcopy(base)
+    if not override:
+        return deepcopy(base) if copy_base else base
+
+    merged: dict[str, Any] = deepcopy(base) if copy_base else base
 
     for key, value in override.items():
         if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = deep_merge_dicts(merged[key], value)
+            merged[key] = deep_merge_dicts(merged[key], value, copy_base=False)
         else:
             merged[key] = value
 

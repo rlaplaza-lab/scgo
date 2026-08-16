@@ -156,7 +156,7 @@ def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
     if params is None:
         return default_params
 
-    return deep_merge_dicts(default_params, params)
+    return deep_merge_dicts(default_params, params, copy_base=False)
 
 
 def initialize_ts_params(
@@ -203,7 +203,7 @@ def initialize_ts_params(
     )
     if ts_params is None:
         return base
-    return deep_merge_dicts(base, ts_params)
+    return deep_merge_dicts(base, ts_params, copy_base=False)
 
 
 def diff_param_overrides(

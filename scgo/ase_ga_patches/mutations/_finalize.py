@@ -43,13 +43,12 @@ def _finalize_mutant(creator, parent, mutant, description):
             f"{getattr(creator, 'descriptor', type(creator).__name__)} changed atom "
             f"count: {len(mutant)} vs {len(parent)}."
         )
-    if get_composition_counts(
-        mutant.get_chemical_symbols()
-    ) != get_composition_counts(parent.get_chemical_symbols()):
+    mutant_counts = get_composition_counts(mutant.get_chemical_symbols())
+    parent_counts = get_composition_counts(parent.get_chemical_symbols())
+    if mutant_counts != parent_counts:
         raise SCGOValidationError(
             f"{getattr(creator, 'descriptor', type(creator).__name__)} changed "
-            f"stoichiometry: {dict(get_composition_counts(mutant.get_chemical_symbols()))} "
-            f"vs {dict(get_composition_counts(parent.get_chemical_symbols()))}."
+            f"stoichiometry: {dict(mutant_counts)} vs {dict(parent_counts)}."
         )
     if np.allclose(mutant.get_positions(), parent.get_positions(), atol=_IDENTITY_ATOL):
         return None, description
