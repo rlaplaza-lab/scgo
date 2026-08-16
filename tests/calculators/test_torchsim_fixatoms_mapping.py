@@ -269,7 +269,8 @@ def _run_fixbondlengths_simstate_pop(*, device: object) -> None:
     assert len(state.constraints) == 1
     remaining = state.constraints[0]
     assert isinstance(remaining, TorchSimFixBondLengths)
-    assert remaining.pairs.device == torch.device(device)
+    # ``torch.device("cuda")`` is not equal to ``cuda:0`` even on the default GPU.
+    assert remaining.pairs.device.type == torch.device(device).type
     assert remaining.pairs.tolist() == [[0, 1]]
     assert remaining.system_idx.tolist() == [0]
 
