@@ -385,20 +385,60 @@ def test_fixbondlengths_mic_with_metatomic_zeroed_vacuum_vector() -> None:
     assert restored.get_distance(0, 1, mic=True) == pytest.approx(0.5, abs=1e-5)
 
 
-def test_invertible_cell_for_mic_fills_zero_torchsim_column() -> None:
-    """Metatomic-zeroed vacuum becomes a zero *column* in TorchSim convention."""
+def test_complete_cell_matches_ase_for_missing_lattice_vectors() -> None:
+    """TorchSim-column completion is ASE ``complete_cell`` (``find_mic`` step 1)."""
     torch = pytest.importorskip("torch")
+    from ase.geometry.cell import complete_cell as ase_complete_cell
 
-    from scgo.calculators.torchsim_constraints import _invertible_cell_for_mic
+    from scgo.calculators.torchsim_constraints import _complete_cell
 
-    ase_cell = torch.tensor(
-        [[3.0, 0.0, 0.5], [0.0, 3.0, 0.4], [0.0, 0.0, 0.0]],
+    cases = {
+        "bulk": np.diag([3.0, 4.0, 5.0]),
+        "slab": np.array([[10.0, 0.0, 0.5], [0.0, 10.0, 0.4], [0.0, 0.0, 0.0]]),
+        "vac_x": np.array([[0.0, 0.0, 0.0], [2.772, 4.801, 0.0], [0.0, 0.0, 3.0]]),
+        "wire": np.array([[5.0, 0.1, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        "gas": np.zeros((3, 3)),
+    }
+    for name, ase_rows in cases.items():
+        ts_cell = torch.as_tensor(ase_rows.T, dtype=torch.float64)
+        completed_rows = _complete_cell(ts_cell).T.numpy()
+        expected = ase_complete_cell(ase_rows)
+        assert np.allclose(completed_rows, expected, atol=1e-10), name
+        if name == "slab":
+            # Not a Cartesian dummy: the missing vector is a × b.
+            a, b = ase_rows[0], ase_rows[1]
+            normal = np.cross(a, b)
+            normal = normal / np.linalg.norm(normal)
+            assert np.allclose(completed_rows[2], normal, atol=1e-10)
+            assert not np.allclose(completed_rows[2], [0.0, 0.0, 1.0], atol=1e-3)
+
+
+def test_bond_mic_matches_ase_find_mic_on_metatomic_zeroed_tilted_slab() -> None:
+    """After vesin-style vacuum zeroing, bond MIC still matches ASE ``find_mic``."""
+    torch = pytest.importorskip("torch")
+    from ase.geometry import find_mic
+
+    from scgo.calculators.torchsim_constraints import _minimum_image_displacement
+    from scgo.calculators.torchsim_helpers import _prepare_atoms_for_metatomic_torchsim
+
+    atoms = Atoms(
+        "OH",
+        positions=[[0.1, 0.0, 1.0], [9.6, 0.2, 1.3]],
+        cell=[[10.0, 0.0, 0.5], [0.0, 10.0, 0.4], [0.0, 0.0, 20.0]],
+        pbc=(True, True, False),
+    )
+    expected, _ = find_mic(
+        atoms.positions[1] - atoms.positions[0],
+        cell=atoms.cell,
+        pbc=atoms.pbc,
+    )
+
+    prepared = _prepare_atoms_for_metatomic_torchsim(atoms)
+    ts_cell = torch.as_tensor(prepared.cell.array.T, dtype=torch.float64)
+    pbc = torch.tensor([True, True, False])
+    dr = torch.as_tensor(
+        (prepared.positions[1] - prepared.positions[0]).reshape(1, 3),
         dtype=torch.float64,
     )
-    cell = ase_cell.T
-    assert torch.abs(torch.linalg.det(cell)) <= 1e-8
-    filled = _invertible_cell_for_mic(cell)
-    assert torch.abs(torch.linalg.det(filled)) > 1e-8
-    assert torch.allclose(filled[:, 0], cell[:, 0])
-    assert torch.allclose(filled[:, 1], cell[:, 1])
-    assert torch.linalg.norm(filled[:, 2]) > 1e-8
+    got = _minimum_image_displacement(dr, ts_cell, pbc).squeeze(0).numpy()
+    assert np.allclose(got, expected, atol=1e-8)

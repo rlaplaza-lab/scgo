@@ -366,7 +366,9 @@ def _prepare_atoms_for_metatomic_torchsim(atoms: Atoms) -> Atoms:
     validation introduced in metatomic 0.4.1+ (newer than this code was
     originally written against). The original ``reference`` cell is restored onto
     the relaxed structure by :func:`_restore_ase_cell_from_reference`, so this
-    mutation only affects the intermediate TorchSim state.
+    mutation only affects the intermediate TorchSim state. Inversions of the
+    3x3 (MIC) must complete missing vectors the way ASE ``find_mic`` does
+    (``complete_cell``), not invert the singular tensor.
     """
     prepared = atoms.copy()
     if not any(prepared.pbc):
