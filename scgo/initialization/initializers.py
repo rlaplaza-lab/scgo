@@ -31,7 +31,7 @@ from scgo.utils.helpers import (
     get_cluster_formula,
     get_composition_counts,
 )
-from scgo.utils.logging import get_logger, infer_verbosity
+from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.phase_logging import InitDiagnosticsCollector
 from scgo.utils.validation import validate_composition
@@ -1186,6 +1186,7 @@ def create_initial_cluster(
     allocation: tuple[str, int | None] | None = None,
     emit_diagnostics: bool = True,
     reuse_exact_matches: bool = True,
+    verbosity: int = 1,
 ) -> Atoms:
     """Create an initial cluster using several strategies.
 
@@ -1226,6 +1227,7 @@ def create_initial_cluster(
             without it the plan's first allocation is used.
         emit_diagnostics: When ``False``, suppress the per-call diagnostic
             summary logging (the batch owner emits the aggregate summary).
+        verbosity: Verbosity for initialization diagnostic summaries (0-3).
 
     Returns:
         An :class:`ase.Atoms` instance with the initial cluster. When
@@ -1260,6 +1262,7 @@ def create_initial_cluster(
         allocation=allocation,
         emit_diagnostics=emit_diagnostics,
         reuse_exact_matches=reuse_exact_matches,
+        verbosity=verbosity,
     )
     return results[0]
 
@@ -1488,14 +1491,14 @@ def reset_init_diagnostics() -> None:
 def emit_init_diagnostics(
     n_structures: int,
     *,
-    verbosity: int | None = None,
+    verbosity: int = 1,
     extra: str = "",
 ) -> None:
     """Emit the aggregated initialization summaries collected for one batch."""
     _SeedSamplingLogCollector.emit_summary_if_any()
     InitDiagnosticsCollector.emit_summary(
         logger,
-        verbosity=infer_verbosity(logger, verbosity),
+        verbosity=verbosity,
         n_structures=n_structures,
         extra=extra,
     )
@@ -1649,6 +1652,7 @@ def create_initial_cluster_batch(
     allocation: tuple[str, int | None] | None = None,
     emit_diagnostics: bool = True,
     reuse_exact_matches: bool = True,
+    verbosity: int = 1,
 ) -> list[Atoms]:
     """Create multiple initial clusters with deterministic per-structure RNG.
 
@@ -1679,6 +1683,7 @@ def create_initial_cluster_batch(
             (used to steer a single retry without rebuilding the plan).
         emit_diagnostics: When ``False``, suppress the per-batch diagnostic
             summary (the batch owner emits the aggregate summary instead).
+        verbosity: Verbosity for initialization diagnostic summaries (0-3).
 
     Returns:
         List of ``n_structures`` :class:`ase.Atoms` objects. When
@@ -1789,7 +1794,7 @@ def create_initial_cluster_batch(
         if n_structures > 1:
             InitDiagnosticsCollector.emit_summary(
                 logger,
-                verbosity=infer_verbosity(logger),
+                verbosity=verbosity,
                 n_structures=n_structures,
             )
 

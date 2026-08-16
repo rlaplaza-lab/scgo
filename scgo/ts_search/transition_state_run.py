@@ -121,6 +121,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
     parallel_neb_max_batch_atoms: int | None,
     parallel_neb_max_bands: int | None,
     logger: Any,
+    verbosity: int = 1,
 ) -> list[tuple[int, int]]:
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
 
@@ -157,6 +158,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
                 neb_surface_cell_remap=neb_surface_cell_remap,
                 neb_surface_lattice_rotation=neb_surface_lattice_rotation,
                 neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+                verbosity=verbosity,
             )
             validate_initial_neb_path(
                 images,
@@ -1007,6 +1009,7 @@ def run_transition_state_search(
             parallel_neb_max_batch_atoms=parallel_neb_max_batch_atoms,
             parallel_neb_max_bands=parallel_neb_max_bands,
             logger=logger,
+            verbosity=verbosity,
         )
 
         if not pairs:

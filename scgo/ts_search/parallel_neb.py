@@ -622,6 +622,7 @@ def run_parallel_neb_search(
             neb_surface_cell_remap=neb_cfg.neb_surface_cell_remap,
             neb_surface_lattice_rotation=neb_cfg.neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_cfg.neb_surface_max_lattice_shift,
+            verbosity=verbosity,
         )
         try:
             validate_initial_neb_path(

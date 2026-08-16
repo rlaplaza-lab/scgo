@@ -193,6 +193,7 @@ def build_hierarchical_core_fragment_cluster(
     plan: BatchInitPlan | None = None,
     allocation: tuple[str, int | None] | None = None,
     emit_diagnostics: bool = True,
+    verbosity: int = 1,
 ) -> Atoms | None:
     """Build core cluster, place rigid fragment(s), return gas-phase structure.
 
@@ -207,6 +208,7 @@ def build_hierarchical_core_fragment_cluster(
             this single core (used with ``plan`` to preserve diversity).
         emit_diagnostics: When ``False``, suppress the per-call diagnostic
             summary (the batch owner emits the aggregate summary).
+        verbosity: Verbosity for initialization diagnostic summaries (0-3).
 
     Returns:
         The combined structure, or ``None`` if every attempt fails.
@@ -239,6 +241,7 @@ def build_hierarchical_core_fragment_cluster(
             plan=plan,
             allocation=allocation,
             emit_diagnostics=emit_diagnostics,
+            verbosity=verbosity,
         )
         core = reorder_cluster_to_composition(core, core_list)
         placed = _place_fragments_on_core(
@@ -273,7 +276,7 @@ def build_hierarchical_core_fragment_cluster_batch(
     batch_site_counts: dict[str, int] | None = None,
     n_jobs: int | None = None,
     plan: BatchInitPlan | None = None,
-    verbosity: int | None = None,
+    verbosity: int = 1,
 ) -> list[Atoms]:
     """Build an entire batch of hierarchical (core + fragment) clusters.
 
@@ -293,7 +296,7 @@ def build_hierarchical_core_fragment_cluster_batch(
             default (single worker; opt in with -1/-2 for parallelism).
         plan: Pre-computed :class:`~scgo.initialization.BatchInitPlan`; built here when omitted.
         verbosity: Verbosity for the single aggregate initialization summary
-            this function emits; ``None`` infers it from the logger level.
+            this function emits (0-3).
 
     Raises:
         SCGORuntimeError: If fewer than ``n_structures`` structures can be built.
@@ -350,6 +353,7 @@ def build_hierarchical_core_fragment_cluster_batch(
         n_jobs=n_jobs,
         plan=plan,
         emit_diagnostics=False,
+        verbosity=verbosity,
     )
 
     results: list[Atoms] = []
@@ -374,6 +378,7 @@ def build_hierarchical_core_fragment_cluster_batch(
                 plan=plan,
                 allocation=plan.allocation_for(extra_cores),
                 emit_diagnostics=False,
+                verbosity=verbosity,
             )
             extra_cores += 1
         core = reorder_cluster_to_composition(core, core_list)

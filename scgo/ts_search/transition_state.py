@@ -40,7 +40,6 @@ from scgo.utils.comparators import (
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 from scgo.utils.logging import (
     get_logger,
-    infer_verbosity,
     log_debug_v,
     log_warning_v,
 )
@@ -1094,6 +1093,7 @@ def _warn_if_interpolated_bonds_stretch(
     *,
     tol: float,
     mic: bool,
+    verbosity: int = 1,
 ) -> None:
     """Diagnostic: warn if interior images stretch any ``FixBondLengths`` pair.
 
@@ -1129,6 +1129,7 @@ def _warn_if_interpolated_bonds_stretch(
                         d,
                         ref,
                         tol,
+                        verbosity=verbosity,
                     )
                     break  # one warning per violated pair is enough
 
@@ -1152,6 +1153,7 @@ def interpolate_path(
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
     neb_interpolation_bond_tolerance_a: float | None = None,
+    verbosity: int = 1,
 ) -> list[Atoms]:
     """Interpolate between two structures and return images including endpoints.
 
@@ -1238,6 +1240,7 @@ def interpolate_path(
             images,
             tol=float(neb_interpolation_bond_tolerance_a),
             mic=mic,
+            verbosity=verbosity,
         )
 
     if perturb_sigma > 0.0:
@@ -1865,6 +1868,7 @@ def find_transition_state(
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
+            verbosity=verbosity,
         )
         validate_initial_neb_path(
             images,
@@ -2148,7 +2152,7 @@ def save_neb_result(
     output_dir: str,
     pair_id: str,
     *,
-    verbosity: int | None = None,
+    verbosity: int = 1,
 ) -> None:
     """Save NEB result: TS and endpoint XYZ (when present) plus metadata JSON.
 
@@ -2162,7 +2166,6 @@ def save_neb_result(
     Per-file paths are logged only at verbosity >= 2.
     """
     logger = get_logger(__name__)
-    resolved_verbosity = infer_verbosity(logger, verbosity)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -2174,7 +2177,7 @@ def save_neb_result(
             logger,
             "Saved TS structure to %s",
             ts_path,
-            verbosity=resolved_verbosity,
+            verbosity=verbosity,
         )
 
     for label, key in (
@@ -2192,7 +2195,7 @@ def save_neb_result(
                 "Saved %s endpoint structure to %s",
                 label,
                 ep_path,
-                verbosity=resolved_verbosity,
+                verbosity=verbosity,
             )
 
     extra = {key: result[key] for key in _PROVENANCE_KEYS if key in result}
@@ -2229,5 +2232,5 @@ def save_neb_result(
         logger,
         "Saved NEB metadata to %s",
         metadata_path,
-        verbosity=resolved_verbosity,
+        verbosity=verbosity,
     )

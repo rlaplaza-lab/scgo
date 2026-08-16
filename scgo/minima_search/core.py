@@ -264,6 +264,7 @@ def _create_gas_cluster_adsorbate_initial_atoms(
     init_mode: str = "smart",
     max_hierarchical_attempts: int = 200,
     previous_search_glob: str = "**/*.db",
+    verbosity: int = 1,
 ) -> Atoms:
     """Build hierarchical gas-phase core+fragment seed for adsorbate runs."""
     atoms = build_hierarchical_core_fragment_cluster(
@@ -275,6 +276,7 @@ def _create_gas_cluster_adsorbate_initial_atoms(
         cluster_init_vacuum=vacuum,
         init_mode=init_mode,
         max_placement_attempts=max_hierarchical_attempts,
+        verbosity=verbosity,
     )
     if atoms is None:
         raise SCGORuntimeError(
@@ -770,9 +772,10 @@ def scgo(
                 init_mode=mode,
                 max_hierarchical_attempts=max_h,
                 previous_search_glob=glb,
+                verbosity=verbosity,
             )
         else:
-            atoms = create_initial_cluster(composition, rng=rng)
+            atoms = create_initial_cluster(composition, rng=rng, verbosity=verbosity)
         atoms.calc = calculator_for_global_optimization
         algo_kwargs = _optimizer_kwargs_for_algorithm_call(
             optimizer_kwargs,

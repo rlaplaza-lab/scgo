@@ -432,6 +432,7 @@ def create_deposited_cluster(
     plan: BatchInitPlan | None = None,
     allocation: tuple[str, int | None] | None = None,
     emit_diagnostics: bool = True,
+    verbosity: int = 1,
 ) -> Atoms | None:
     """One adsorbate+slab structure, or None if placement fails.
 
@@ -447,6 +448,7 @@ def create_deposited_cluster(
             this single cluster (used with ``plan`` to preserve diversity).
         emit_diagnostics: When ``False``, suppress the per-call diagnostic
             summary (the batch owner emits the aggregate summary).
+        verbosity: Verbosity for initialization diagnostic summaries (0-3).
 
     Raises:
         SCGOValidationError: If ``adsorbate_definition`` is given without
@@ -477,6 +479,7 @@ def create_deposited_cluster(
                 plan=plan,
                 allocation=allocation,
                 emit_diagnostics=emit_diagnostics,
+                verbosity=verbosity,
             )
         else:
             if adsorbate_fragment_template is None:
@@ -523,6 +526,7 @@ def create_deposited_cluster(
                     plan=plan,
                     allocation=allocation,
                     emit_diagnostics=emit_diagnostics,
+                    verbosity=verbosity,
                 )
             if cluster_seed is None:
                 continue
@@ -653,7 +657,7 @@ def create_deposited_cluster_batch(
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
     batch_site_counts: dict[str, int] | None = None,
-    verbosity: int | None = None,
+    verbosity: int = 1,
 ) -> list[Atoms]:
     """Generate multiple deposited structures (sequential or threaded).
 
@@ -667,8 +671,7 @@ def create_deposited_cluster_batch(
         n_jobs: Parallelism for structure generation; ``None`` uses the project
             default (single worker). ``1`` keeps the deterministic
             sequential path; opt in with -1/-2 for parallelism.
-        verbosity: Verbosity for the aggregate initialization summary; ``None``
-            infers it from the logger level.
+        verbosity: Verbosity for the aggregate initialization summary (0-3).
 
     Raises:
         SCGORuntimeError: If fewer than ``n_structures`` structures can be built.
@@ -723,6 +726,7 @@ def create_deposited_cluster_batch(
                 plan=plan,
                 allocation=allocation,
                 emit_diagnostics=False,
+                verbosity=verbosity,
             )
             if struct is not None:
                 _record_batch_site_type(struct, shared_site_counts)
@@ -764,6 +768,7 @@ def create_deposited_cluster_batch(
                 plan=plan,
                 allocation=allocation,
                 emit_diagnostics=False,
+                verbosity=verbosity,
             )
             if structure is not None:
                 _record_batch_site_type(structure, shared_site_counts, site_counts_lock)

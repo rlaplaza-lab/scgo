@@ -579,6 +579,7 @@ class ClusterStartGenerator(StartGenerator):
         self.cluster_adsorbate_config = cluster_adsorbate_config
         self.max_hierarchical_attempts: int = max_hierarchical_attempts
         self._hierarchical: bool = bool(adsorbate_definition is not None)
+        self.verbosity: int = verbosity
         self._batch_site_type_counts: dict[str, int] = {
             "vertex": 0,
             "edge": 0,
@@ -622,6 +623,7 @@ class ClusterStartGenerator(StartGenerator):
                     previous_search_glob=previous_search_glob,
                     mode=mode,
                     n_jobs=self.n_jobs,
+                    verbosity=verbosity,
                 )
 
     def get_new_candidate(self) -> Atoms:
@@ -649,6 +651,7 @@ class ClusterStartGenerator(StartGenerator):
                     init_mode=self.mode,
                     max_placement_attempts=self.max_hierarchical_attempts,
                     batch_site_counts=self._batch_site_type_counts,
+                    verbosity=self.verbosity,
                 )
                 if atoms is None:
                     raise SCGORuntimeError(
@@ -668,6 +671,7 @@ class ClusterStartGenerator(StartGenerator):
                     rng=ensure_rng_or_create(self.rng),
                     previous_search_glob=self.previous_search_glob,
                     mode=self.mode,
+                    verbosity=self.verbosity,
                 )
 
         if atoms is None:
@@ -714,6 +718,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
             adsorbate_fragment_template
         )
         self.cluster_adsorbate_config = cluster_adsorbate_config
+        self.verbosity: int = verbosity
         self._batch_site_type_counts: dict[str, int] = {
             "vertex": 0,
             "edge": 0,
@@ -764,6 +769,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                 adsorbate_fragment_template=self.adsorbate_fragment_template,
                 cluster_adsorbate_config=self.cluster_adsorbate_config,
                 batch_site_counts=self._batch_site_type_counts,
+                verbosity=self.verbosity,
             )
             if atoms is None:
                 raise SCGORuntimeError(

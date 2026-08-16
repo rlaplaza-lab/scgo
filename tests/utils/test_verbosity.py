@@ -10,7 +10,6 @@ from scgo.utils.logging import (
     VERBOSITY_LEVELS,
     configure_logging,
     get_logger,
-    infer_verbosity,
     log_debug_v,
     log_info_v,
     log_v,
@@ -302,14 +301,6 @@ class TestVerbosityGatedHelpers:
         assert "DEBUG debug-msg" in out
         assert "TRACE trace-msg" in out
         assert "hidden" not in out
-
-
-@pytest.mark.parametrize(("verbosity", "expected"), [(0, 0), (1, 1), (2, 2), (3, 3)])
-def test_infer_verbosity(verbosity, expected):
-    configure_logging(verbosity)
-    logger = get_logger(f"test.infer.{verbosity}")
-    assert infer_verbosity(logger) == expected
-    assert infer_verbosity(logger, 3) == 3
 
 
 def test_suppress_matching_stdout(capfd):
