@@ -39,6 +39,27 @@ def _mask_constraint_indices(idx: torch.Tensor, mask: torch.Tensor) -> torch.Ten
     return remapped[keep]
 
 
+def _as_tensor(
+    value: torch.Tensor | Sequence | np.ndarray,
+    *,
+    dtype: torch.dtype,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """Convert lists/arrays/tensors to ``dtype`` without forcing a host numpy copy.
+
+    ``np.asarray(cuda_tensor)`` calls ``Tensor.numpy()`` and raises on CUDA. torch-sim
+    moves constraints via ``Constraint.to(device)`` during ``initialize_state``, so
+    constructors must accept already-on-device tensors.
+    """
+    if isinstance(value, torch.Tensor):
+        out = value.detach().to(dtype=dtype)
+    else:
+        out = torch.as_tensor(value, dtype=dtype)
+    if device is not None:
+        out = out.to(device=device)
+    return out
+
+
 class TorchSimFixBondLengths(Constraint):
     """TorchSim constraint that keeps selected interatomic distances fixed.
 
@@ -60,29 +81,25 @@ class TorchSimFixBondLengths(Constraint):
         *,
         device: torch.device | None = None,
     ) -> None:
-        pairs_t = torch.as_tensor(np.asarray(pairs, dtype=np.int64))
+        pairs_t = _as_tensor(pairs, dtype=torch.long, device=device)
         if pairs_t.ndim != 2 or pairs_t.shape[1] != 2:
             raise ValueError(
                 "FixBondLengths pairs must have shape (n_bonds, 2), "
                 f"got {tuple(pairs_t.shape)}"
             )
-        # ``index_put``-style integer tensors must be long; float lengths float64.
-        self.pairs = pairs_t.long()
-        self.bond_lengths = torch.as_tensor(np.asarray(bond_lengths, dtype=np.float64))
+        self.pairs = pairs_t
+        self.bond_lengths = _as_tensor(bond_lengths, dtype=torch.float64, device=device)
         if self.bond_lengths.shape[0] != self.pairs.shape[0]:
             raise ValueError(
                 "FixBondLengths bond_lengths must have one entry per pair "
                 f"({self.pairs.shape[0]}), got {self.bond_lengths.shape[0]}"
             )
         if system_idx is None:
-            system_idx = torch.zeros(self.pairs.shape[0], dtype=torch.long)
+            self.system_idx = torch.zeros(
+                self.pairs.shape[0], dtype=torch.long, device=self.pairs.device
+            )
         else:
-            system_idx = torch.as_tensor(np.asarray(system_idx), dtype=torch.long)
-        self.system_idx = system_idx
-        if device is not None:
-            self.pairs = self.pairs.to(device=device)
-            self.bond_lengths = self.bond_lengths.to(device=device)
-            self.system_idx = self.system_idx.to(device=device)
+            self.system_idx = _as_tensor(system_idx, dtype=torch.long, device=device)
 
     def get_removed_dof(self, state: object) -> torch.Tensor:
         """One degree of freedom removed per constrained bond, per system."""

@@ -98,6 +98,10 @@
   `FixBondLengths` (native ASE constraints plus index-list metadata tags).
 - ASE `FixBondLengths` are honored during batched TorchSim relaxation via
   `scgo.calculators.torchsim_constraints.TorchSimFixBondLengths`.
+- `TorchSimFixBondLengths.to(device)` no longer routes CUDA tensors through
+  `np.asarray` (which raised during torch-sim `initialize_state` / state moves
+  for adsorbate runs with frozen bond lengths). Pair indices are also packed on
+  InFlight pop so remaining bonds stay valid after systems leave the batch.
 - Low-level `scgo()` and TS campaign path keys coerce plain-dict
   `adsorbate_definition` values to `AdsorbateDefinition`; empty-core gas
   adsorbate GO again noops (`[]`).

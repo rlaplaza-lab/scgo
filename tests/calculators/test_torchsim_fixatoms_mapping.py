@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pytest
 from ase import Atoms
 from ase.constraints import FixAtoms as ASEFixAtoms
@@ -243,6 +244,71 @@ def test_fixbondlengths_survives_simstate_pop_of_system_zero() -> None:
     state.set_constrained_positions(stretched)
     dist = torch.linalg.norm(state.positions[1] - state.positions[0]).item()
     assert abs(dist - 1.2) <= 1e-5
+
+
+def test_fixbondlengths_to_accepts_device_tensors_without_numpy(
+    monkeypatch,
+) -> None:
+    """Regression: ``Constraint.to(cuda)`` must not route CUDA tensors via numpy.
+
+    torch-sim ``initialize_state(...).to(device)`` calls each constraint's ``to``.
+    The old constructor used ``np.asarray(pairs)``, which fails for CUDA tensors
+    with ``TypeError: can't convert cuda:0 device type tensor to numpy``.
+    """
+    torch = pytest.importorskip("torch")
+
+    from scgo.calculators.torchsim_constraints import TorchSimFixBondLengths
+
+    real_asarray = np.asarray
+
+    def _asarray_no_tensor(a, *args, **kwargs):
+        if isinstance(a, torch.Tensor):
+            raise TypeError(
+                "can't convert cuda:0 device type tensor to numpy. "
+                "Use Tensor.cpu() to copy the tensor to host memory first."
+            )
+        return real_asarray(a, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_constraints.np.asarray",
+        _asarray_no_tensor,
+    )
+
+    base = TorchSimFixBondLengths([[0, 1]], [0.96], [0], device=torch.device("cpu"))
+    moved = base.to(device=torch.device("cpu"), dtype=torch.float64)
+    assert moved.pairs.tolist() == [[0, 1]]
+    assert moved.system_idx.tolist() == [0]
+    assert moved.bond_lengths.tolist() == pytest.approx([0.96])
+
+
+@pytest.mark.requires_cuda
+def test_fixbondlengths_survives_initialize_state_to_cuda() -> None:
+    """End-to-end: ASE FixBondLengths attached then moved to CUDA like TorchSim."""
+    torch = pytest.importorskip("torch")
+    torch_sim = pytest.importorskip("torch_sim")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    from ase.constraints import FixBondLengths
+
+    from scgo.calculators.torchsim_constraints import (
+        build_torchsim_fixbondlengths_from_ase_batch,
+    )
+
+    atoms = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]])
+    atoms.set_constraint(FixBondLengths([(0, 1)]))
+    cpu = torch.device("cpu")
+    cuda = torch.device("cuda")
+    state = torch_sim.initialize_state([atoms], cpu, torch.float64)
+    built = build_torchsim_fixbondlengths_from_ase_batch([atoms], device=cpu)
+    assert built is not None
+    state.constraints = [built]
+    moved = state.to(cuda, torch.float64)
+    assert moved.constraints[0].pairs.device.type == "cuda"
+    stretched = moved.positions.clone()
+    stretched[1, 2] = 2.0
+    moved.set_constrained_positions(stretched)
+    dist = torch.linalg.norm(moved.positions[1] - moved.positions[0]).item()
+    assert abs(dist - 0.96) <= 1e-5
 
 
 def test_fixbondlengths_adjust_positions_uses_minimum_image() -> None:
