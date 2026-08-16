@@ -167,6 +167,9 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert gas["use_parallel_neb"] is True
     assert gas["max_endpoint_mismatch"] == pytest.approx(1.25)
     assert gas["energy_gap_threshold"] == pytest.approx(0.75)
+    assert gas["pair_core_rms_max"] == pytest.approx(1.5)
+    assert gas["pair_score_w_core"] == pytest.approx(0.30)
+    assert gas["pair_score_gap_center"] == pytest.approx(0.50)
 
     bare = get_ts_search_params(system_type="gas_cluster")
     assert bare["neb_climb"] is False
@@ -177,6 +180,8 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert bare["neb_fmax"] == pytest.approx(0.20)
     assert bare["max_endpoint_mismatch"] is None
     assert bare["energy_gap_threshold"] == pytest.approx(2.0)
+    assert bare["pair_core_rms_max"] is None
+    assert bare["pair_score_w_core"] == pytest.approx(0.0)
 
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
     slab.pbc = [True, True, True]
@@ -195,6 +200,8 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert surf["max_endpoint_mismatch"] == pytest.approx(1.5)
     assert surf["neb_n_images"] == 7
     assert surf["energy_gap_threshold"] == pytest.approx(0.75)
+    assert surf["pair_core_rms_max"] == pytest.approx(2.0)
+    assert surf["pair_score_gap_center"] == pytest.approx(0.55)
     assert surf["neb_surface_cell_remap"] is True
     assert surf["neb_surface_lattice_rotation"] is False
 

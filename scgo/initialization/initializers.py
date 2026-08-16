@@ -31,9 +31,9 @@ from scgo.utils.helpers import (
     get_cluster_formula,
     get_composition_counts,
 )
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, infer_verbosity
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
-from scgo.utils.phase_logging import InitDiagnosticsCollector, infer_verbosity
+from scgo.utils.phase_logging import InitDiagnosticsCollector
 from scgo.utils.validation import validate_composition
 
 from .atomic_radii import get_vdw_radius

@@ -153,9 +153,7 @@ def should_show_progress(verbosity: int) -> bool:
     return verbosity >= 1
 
 
-def infer_verbosity(
-    logger: logging.Logger, explicit: int | None = None
-) -> int:
+def infer_verbosity(logger: logging.Logger, explicit: int | None = None) -> int:
     """Map an explicit verbosity or infer from the configured logger level.
 
     Returns 0–3: TRACE→3, DEBUG→2, INFO→1, else 0 (WARNING+ quiet).

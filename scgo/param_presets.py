@@ -15,6 +15,7 @@ from scgo.constants import (
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
+from scgo.pair_selection_defaults import pair_selection_param_defaults
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     GLOptimizerParams,
@@ -847,6 +848,12 @@ def get_ts_search_params(
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }
+    params.update(
+        pair_selection_param_defaults(
+            surface_aware=policy.uses_surface,
+            adsorbate_aware=policy.has_adsorbate,
+        )
+    )
     params.update(get_ts_defaults(system_type))
 
     if policy.uses_surface:
@@ -1058,9 +1065,10 @@ def get_low_effort_ts_search_params(
     Thin wrapper over :func:`get_ts_search_params`. Every physics knob is
     inherited unchanged — ``neb_n_images`` (7 for adsorbate types, 5 otherwise),
     ``neb_climb``, ``neb_fmax``, spring constant, MIC / cell remap / lattice
-    rotation, ``max_endpoint_mismatch``, ``energy_gap_threshold`` and
-    ``parallel_neb_max_bands`` — so a saddle found here is as valid as one from
-    a production run. Only ``neb_steps`` / ``torchsim_max_steps`` shrink, to
+    rotation, ``max_endpoint_mismatch``, ``energy_gap_threshold``,
+    ``pair_core_rms_max`` / ``pair_score_*``, and ``parallel_neb_max_bands`` — so
+    a saddle found here is as valid as one from a production run. Only
+    ``neb_steps`` / ``torchsim_max_steps`` shrink, to
     :func:`low_effort_neb_steps`, and timing JSON export is off.
 
     ``max_pairs`` is deliberately left at the preset default (``None`` = no cap):

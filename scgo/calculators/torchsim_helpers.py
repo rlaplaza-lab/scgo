@@ -1050,17 +1050,13 @@ class TorchSimBatchRelaxer:
         self._maybe_announce_autobatcher(kind, captured)
         return result
 
-    def _maybe_announce_autobatcher(
-        self, kind: str, captured: list[str]
-    ) -> None:
+    def _maybe_announce_autobatcher(self, kind: str, captured: list[str]) -> None:
         """Log a one-line autobatcher summary once per kind/scaler generation."""
         if captured and logger.isEnabledFor(logging.DEBUG):
             for line in captured:
                 logger.debug("%s", line.rstrip("\n"))
 
-        batcher_attr = (
-            "_optimize_batcher" if kind == "relax" else "_static_batcher"
-        )
+        batcher_attr = "_optimize_batcher" if kind == "relax" else "_static_batcher"
         batcher = getattr(self, batcher_attr, None)
         if batcher is None:
             return

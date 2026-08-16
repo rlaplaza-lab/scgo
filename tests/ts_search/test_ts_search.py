@@ -275,7 +275,7 @@ def test_find_ts_endpoint_marked_not_converged(temp_output_dir, h2_reactant):
     )
 
     assert result["neb_converged"] is False
-    assert result["status"] == "failed"
+    assert result["status"] == "skipped"
     error = result.get("error")
     assert error is not None
     assert "endpoint" in error.lower() or "identical" in error.lower()
@@ -864,59 +864,23 @@ def test_select_structure_pairs_physics_ranking_when_capped(monkeypatch):
     assert ranked == [(1, 2), (0, 2)]
 
 
-def test_select_structure_pairs_adsorbate_prefers_activated_hops(monkeypatch):
-    """Adsorbate scoring prefers moderate mismatch / core RMS over near-isomers."""
+def test_select_structure_pairs_adsorbate_prefers_site_hop_over_slide():
+    """Identical cores: prefer a real OH site hop over a near-duplicate slide."""
+    core = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
     atoms0 = Atoms(
-        "Pt2OH", positions=[[0, 0, 0], [2.5, 0, 0], [1.2, 0, 1.5], [1.2, 0, 2.5]]
+        "Pt2OH",
+        positions=[*core, [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
     )
     atoms_slide = Atoms(
-        "Pt2OH", positions=[[0.05, 0, 0], [2.55, 0, 0], [1.25, 0, 1.5], [1.25, 0, 2.5]]
+        "Pt2OH",
+        positions=[*core, [1.25, 0.0, 1.5], [1.25, 0.0, 2.5]],
     )
     atoms_hop = Atoms(
-        "Pt2OH", positions=[[0.3, 0, 0], [2.7, 0, 0], [1.8, 0, 1.6], [1.9, 0, 2.5]]
+        "Pt2OH",
+        positions=[*core, [1.8, 0.0, 1.6], [1.9, 0.0, 2.5]],
     )
     minima = [(-1.0, atoms0), (-0.55, atoms_slide), (-0.50, atoms_hop)]
 
-    def _fake_similarity(
-        a_i: Atoms,
-        a_j: Atoms,
-        tolerance: float = 0.1,
-        pair_cor_max: float = 0.1,
-        use_mic: bool = False,
-        **kwargs: object,
-    ) -> tuple[float, float, bool]:
-        oi = float(a_i.get_positions()[2, 0])
-        oj = float(a_j.get_positions()[2, 0])
-        pair = tuple(sorted((round(oi, 2), round(oj, 2))))
-        table = {
-            (1.2, 1.25): (0.03, 0.25, False),  # near-isomer slide
-            (1.2, 1.8): (0.10, 0.55, False),  # activated hop
-            (1.25, 1.8): (0.09, 0.50, False),
-        }
-        return table[pair]
-
-    def _fake_core_rms(
-        a_i: Atoms,
-        a_j: Atoms,
-        **_kwargs: object,
-    ) -> float:
-        oi = float(a_i.get_positions()[2, 0])
-        oj = float(a_j.get_positions()[2, 0])
-        pair = tuple(sorted((round(oi, 2), round(oj, 2))))
-        return {
-            (1.2, 1.25): 0.20,
-            (1.2, 1.8): 0.55,
-            (1.25, 1.8): 0.50,
-        }[pair]
-
-    monkeypatch.setattr(
-        "scgo.ts_search.transition_state_io.calculate_structure_similarity",
-        _fake_similarity,
-    )
-    monkeypatch.setattr(
-        "scgo.ts_search.transition_state_io._core_rms_displacement",
-        _fake_core_rms,
-    )
     ranked = select_structure_pairs(
         minima,
         max_pairs=1,
@@ -977,7 +941,7 @@ def test_core_rms_displacement_is_permutation_invariant() -> None:
     assert rms < 0.05
 
 
-def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop(monkeypatch) -> None:
+def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop() -> None:
     """Permuted identical cores should pass the core-RMS gate and remain selectable."""
     atoms0 = Atoms(
         "Pt2OH",
@@ -988,21 +952,6 @@ def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop(monkeypatch) -
         positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.8, 0.0, 1.6], [1.9, 0.0, 2.5]],
     )
     minima = [(-1.0, atoms0), (-0.5, atoms1)]
-
-    def _fake_similarity(
-        a_i: Atoms,
-        a_j: Atoms,
-        tolerance: float = 0.1,
-        pair_cor_max: float = 0.1,
-        use_mic: bool = False,
-        **kwargs: object,
-    ) -> tuple[float, float, bool]:
-        return (0.08, 0.55, False)
-
-    monkeypatch.setattr(
-        "scgo.ts_search.transition_state_io.calculate_structure_similarity",
-        _fake_similarity,
-    )
     pairs = select_structure_pairs(
         minima,
         max_pairs=1,
@@ -1012,6 +961,237 @@ def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop(monkeypatch) -
         max_endpoint_mismatch=1.25,
     )
     assert pairs == [(0, 1)]
+
+
+def _pt5_tbp_core() -> Atoms:
+    """Trigonal-bipyramid Pt5 with ~2.7 Å nearest-neighbor spacing."""
+    r = 2.70
+    z = r * np.sqrt(6.0) / 3.0
+    core = Atoms(
+        "Pt5",
+        positions=[
+            [0.0, 0.0, z],
+            [0.0, 0.0, -z],
+            [r, 0.0, 0.0],
+            [-r / 2.0, r * np.sqrt(3.0) / 2.0, 0.0],
+            [-r / 2.0, -r * np.sqrt(3.0) / 2.0, 0.0],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    core.positions -= core.positions.mean(axis=0)
+    return core
+
+
+def _pt5_square_pyramid_core() -> Atoms:
+    """Square-pyramid Pt5 isomer (distinct from the TBP core)."""
+    r = 2.70
+    core = Atoms(
+        "Pt5",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [r, 0.0, 0.0],
+            [r, r, 0.0],
+            [0.0, r, 0.0],
+            [r / 2.0, r / 2.0, r * 0.85],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    core.positions -= core.positions.mean(axis=0)
+    return core
+
+
+def _attach_oh(core: Atoms, o_pos: np.ndarray, oh_bond: float = 0.96) -> Atoms:
+    """Concatenate OH with H along +z from O onto a core copy."""
+    h_pos = np.asarray(o_pos, dtype=float) + np.array([0.0, 0.0, oh_bond])
+    oh = Atoms("OH", positions=[o_pos, h_pos], cell=core.cell, pbc=False)
+    return core + oh
+
+
+def test_select_structure_pairs_keeps_same_core_oh_site_hop() -> None:
+    """Identical Pt5 core with OH on axial vs equatorial sites must remain pairable.
+
+    Whole-structure fingerprinting treated these as identical (O/H add no pairs)
+    and emptied the adsorbate NEB pool; core-only fingerprinting keeps them.
+    """
+    core = _pt5_tbp_core()
+    axial = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    equatorial = _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
+    minima = [(-260.0, axial), (-259.7, equatorial)]
+    pairs = select_structure_pairs(
+        minima,
+        max_pairs=1,
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=5,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_skips_distinct_core_isomers() -> None:
+    """TBP vs square-pyramid cores still fail max_endpoint_mismatch and/or core RMS."""
+    tbp = _attach_oh(
+        _pt5_tbp_core(),
+        _pt5_tbp_core().positions[0] + np.array([0.0, 0.0, 1.8]),
+    )
+    sq = _attach_oh(
+        _pt5_square_pyramid_core(),
+        _pt5_square_pyramid_core().positions[4] + np.array([0.0, 0.0, 1.8]),
+    )
+    minima = [(-260.0, tbp), (-259.8, sq)]
+    pairs = select_structure_pairs(
+        minima,
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=5,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == []
+
+
+def test_select_structure_pairs_core_only_ignores_oo_fingerprint() -> None:
+    """Two OH on the same core must not be rejected via O–O fingerprint max_diff."""
+    core = _pt5_tbp_core()
+    # Same Pt5; two OH fragments at different relative sites (layout: Pt5 + OHOH).
+    oh_a = Atoms(
+        "OHOH",
+        positions=[
+            core.positions[0] + [0.0, 0.0, 1.8],
+            core.positions[0] + [0.0, 0.0, 2.76],
+            core.positions[2] + [1.8, 0.0, 0.0],
+            core.positions[2] + [2.76, 0.0, 0.0],
+        ],
+        cell=core.cell,
+        pbc=False,
+    )
+    oh_b = Atoms(
+        "OHOH",
+        positions=[
+            core.positions[1] + [0.0, 0.0, -1.8],
+            core.positions[1] + [0.0, 0.0, -2.76],
+            core.positions[3] + [-1.8, 0.0, 0.0],
+            core.positions[3] + [-2.76, 0.0, 0.0],
+        ],
+        cell=core.cell,
+        pbc=False,
+    )
+    atoms0 = core.copy() + oh_a
+    atoms1 = core.copy() + oh_b
+    # Whole-structure O–O max_diff would be large; core-only must still keep the pair.
+    cum_full, max_full, _ = calculate_structure_similarity(
+        atoms0, atoms1, use_mic=False
+    )
+    assert max_full > 1.25 or cum_full > 0.015
+    pairs = select_structure_pairs(
+        [(-260.0, atoms0), (-259.6, atoms1)],
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=5,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_adsorbate_empty_core_energy_only() -> None:
+    """n_core_mobile=0: gate/rank on adsorbate Cartesian hop, not vacuous OH FP."""
+    a = Atoms("OH", positions=[[0.0, 0.0, 1.0], [0.0, 0.0, 1.96]])
+    b = Atoms("OH", positions=[[1.0, 0.0, 1.0], [1.0, 0.0, 1.96]])
+    pairs = select_structure_pairs(
+        [(-1.0, a), (-0.5, b)],
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=0,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_surface_adsorbate_keeps_site_isomers() -> None:
+    """surface_adsorbate: local OH site hop on a slab stays pairable."""
+    slab = Atoms(
+        "Pt4",
+        positions=[[0, 0, 0], [2.5, 0, 0], [0, 2.5, 0], [2.5, 2.5, 0]],
+        cell=[10.0, 10.0, 20.0],
+        pbc=[True, True, False],
+    )
+    oh_a = Atoms("OH", positions=[[1.25, 1.25, 2.0], [1.25, 1.25, 2.96]])
+    oh_b = Atoms("OH", positions=[[2.45, 1.25, 2.0], [2.45, 1.25, 2.96]])
+    atoms0 = slab + oh_a
+    atoms1 = slab + oh_b
+    pairs = select_structure_pairs(
+        [(-10.0, atoms0), (-9.6, atoms1)],
+        energy_gap_threshold=0.75,
+        surface_aware=True,
+        use_mic=True,
+        n_slab=4,
+        adsorbate_aware=True,
+        n_core_mobile=0,
+        max_endpoint_mismatch=1.5,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_surface_cluster_adsorbate_same_core_hop() -> None:
+    """surface_cluster_adsorbate: same Pt core on slab, OH site hop is kept."""
+    slab = Atoms(
+        "C4",
+        positions=[[0, 0, 0], [1.4, 0, 0], [0, 1.4, 0], [1.4, 1.4, 0]],
+        cell=[12.0, 12.0, 20.0],
+        pbc=[True, True, False],
+    )
+    core = Atoms(
+        "Pt2",
+        positions=[[3.0, 3.0, 2.0], [5.5, 3.0, 2.0]],
+        cell=slab.cell,
+        pbc=slab.pbc,
+    )
+    oh_a = Atoms("OH", positions=[[4.25, 3.0, 3.5], [4.25, 3.0, 4.46]])
+    oh_b = Atoms("OH", positions=[[5.5, 4.2, 3.5], [5.5, 4.2, 4.46]])
+    atoms0 = slab + core + oh_a
+    atoms1 = slab + core.copy() + oh_b
+    pairs = select_structure_pairs(
+        [(-50.0, atoms0), (-49.6, atoms1)],
+        energy_gap_threshold=0.75,
+        surface_aware=True,
+        use_mic=True,
+        n_slab=4,
+        adsorbate_aware=True,
+        n_core_mobile=2,
+        max_endpoint_mismatch=1.5,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_surface_cluster_adsorbate_skips_core_isomer() -> None:
+    """Different deposited cores on the same slab are gated out."""
+    slab = Atoms(
+        "C4",
+        positions=[[0, 0, 0], [1.4, 0, 0], [0, 1.4, 0], [1.4, 1.4, 0]],
+        cell=[12.0, 12.0, 20.0],
+        pbc=[True, True, False],
+    )
+    core_a = Atoms("Pt2", positions=[[3.0, 3.0, 2.0], [5.5, 3.0, 2.0]])
+    core_b = Atoms("Pt2", positions=[[3.0, 3.0, 2.0], [3.0, 5.8, 2.0]])
+    oh = Atoms("OH", positions=[[4.25, 3.0, 3.5], [4.25, 3.0, 4.46]])
+    atoms0 = slab + core_a + oh
+    atoms1 = slab + core_b + oh.copy()
+    pairs = select_structure_pairs(
+        [(-50.0, atoms0), (-49.6, atoms1)],
+        energy_gap_threshold=0.75,
+        surface_aware=True,
+        use_mic=True,
+        n_slab=4,
+        adsorbate_aware=True,
+        n_core_mobile=2,
+        max_endpoint_mismatch=1.5,
+    )
+    assert pairs == []
 
 
 @pytest.mark.slow

@@ -181,6 +181,16 @@ honors the same connectivity-factor precedence as the algorithm and TS gates
 ``SurfaceSystemConfig`` → ``1.4``), including float or per-element/pair dict
 specs.
 
+Minima pair selection
+---------------------
+
+Before NEB, endpoints are chosen by
+:func:`~scgo.ts_search.transition_state_io.select_structure_pairs`. Hard gates
+(``energy_gap_threshold``, ``max_endpoint_mismatch``, ``pair_core_rms_max``) and
+soft ranking (``pair_score_*``) are documented under **Pair selection** in
+:doc:`/parameters`. Defaults from
+:func:`~scgo.pair_selection_defaults.pair_selection_param_defaults`.
+
 NEB pre-screen gates
 --------------------
 

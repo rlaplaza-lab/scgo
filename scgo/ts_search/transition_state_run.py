@@ -513,6 +513,16 @@ def run_transition_state_search(
     energy_gap_threshold: float | None = None,
     similarity_tolerance: float = DEFAULT_COMPARATOR_TOL,
     similarity_pair_cor_max: float = 0.1,
+    pair_core_rms_max: float | None = None,
+    pair_score_gap_center: float | None = None,
+    pair_score_gap_width: float | None = None,
+    pair_score_cum_scale: float | None = None,
+    pair_score_mismatch_scale: float | None = None,
+    pair_score_core_rms_scale: float | None = None,
+    pair_score_w_gap: float | None = None,
+    pair_score_w_distinct: float | None = None,
+    pair_score_w_mismatch: float | None = None,
+    pair_score_w_core: float | None = None,
     neb_n_images: int | None = None,
     neb_spring_constant: float = 0.1,
     neb_fmax: float = 0.20,
@@ -595,6 +605,16 @@ def run_transition_state_search(
             Pass ``float("inf")`` to disable the gap filter.
         similarity_tolerance: Cumulative difference tolerance for structure comparison.
         similarity_pair_cor_max: Maximum single distance difference tolerance for similarity.
+        pair_core_rms_max: Hard max core RMS (Å) for adsorbate+core pair gating.
+        pair_score_gap_center: Preferred endpoint energy gap (eV) for ranking.
+        pair_score_gap_width: Gaussian width (eV) around the preferred gap.
+        pair_score_cum_scale: Scale (Å) for distinctness / adsorbate-hop ranking.
+        pair_score_mismatch_scale: Scale (Å) for fingerprint ``max_diff`` ranking.
+        pair_score_core_rms_scale: Scale (Å) for soft core-RMS ranking.
+        pair_score_w_gap: Ranking weight for the energy-gap term.
+        pair_score_w_distinct: Ranking weight for distinctness / adsorbate hop.
+        pair_score_w_mismatch: Ranking weight for fingerprint mismatch.
+        pair_score_w_core: Ranking weight for core RMS (adsorbate+core only).
         neb_n_images: Number of intermediate NEB images. ``None`` selects the
             system-aware preset (``5`` bare / ``7`` adsorbate).
         neb_spring_constant: Spring constant for NEB band (eV/Å²). Default 0.1.
@@ -911,6 +931,16 @@ def run_transition_state_search(
         max_endpoint_mismatch=max_endpoint_mismatch,
         adsorbate_aware=bool(system_policy.has_adsorbate),
         n_core_mobile=neb_n_core_m,
+        pair_core_rms_max=pair_core_rms_max,
+        pair_score_gap_center=pair_score_gap_center,
+        pair_score_gap_width=pair_score_gap_width,
+        pair_score_cum_scale=pair_score_cum_scale,
+        pair_score_mismatch_scale=pair_score_mismatch_scale,
+        pair_score_core_rms_scale=pair_score_core_rms_scale,
+        pair_score_w_gap=pair_score_w_gap,
+        pair_score_w_distinct=pair_score_w_distinct,
+        pair_score_w_mismatch=pair_score_w_mismatch,
+        pair_score_w_core=pair_score_w_core,
     )
 
     if not pairs:

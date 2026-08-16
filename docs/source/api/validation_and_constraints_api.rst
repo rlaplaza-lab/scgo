@@ -75,6 +75,18 @@ own modules; cross-references use the fully qualified paths.
    :show-inheritance:
    :exclude-members: _*
 
+.. automodule:: scgo.ts_search.transition_state_io
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
+.. automodule:: scgo.pair_selection_defaults
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
 GA internals
 ------------
 

@@ -23,6 +23,7 @@ from scgo.database import (
 from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
+from scgo.pair_selection_defaults import pair_selection_param_defaults
 from scgo.surface.validation import (
     validate_stored_mobile_partition_metadata,
     validate_stored_slab_adsorbate_metadata,
@@ -33,6 +34,7 @@ from scgo.utils.helpers import copy_atoms, get_cluster_formula, validate_pair_id
 from scgo.utils.logging import get_logger
 
 from .transition_state import (
+    _align_product_kabsch_to_reactant,
     _permute_atoms_block_to_match,
     calculate_structure_similarity,
     minima_provenance_dict,
@@ -57,15 +59,15 @@ def load_minima_by_composition(
 ) -> dict[str, list[tuple[float, Atoms]]]:
     """Load minima from all runs, optionally filtered by composition.
 
-    Scans base_dir for run_*/ subdirectories containing *.db database files.
-    Extracts minima from all databases and groups by chemical formula.
+    Scans ``base_dir`` for ``run_*/`` subdirectories containing ``*.db`` database
+    files. Extracts minima from all databases and groups by chemical formula.
 
     By default only ``final_unique_minimum`` rows are loaded (canonical GO
     output). Structural deduplication across runs is left to callers (e.g.
     :func:`scgo.utils.helpers.filter_unique_minima` in TS search).
 
     Args:
-        base_dir: Root directory containing run_*/ subdirectories.
+        base_dir: Root directory containing ``run_*/`` subdirectories.
         composition: Optional list of atomic symbols to filter results (e.g., ["Pt", "Au"]).
             If provided, only minima matching this composition are returned.
         prefer_final_unique: If True (default), only final-tagged minima; set False
@@ -164,6 +166,114 @@ def load_minima_by_composition(
     return minima_by_formula
 
 
+def _core_slice_atoms(atoms: Atoms, *, n_slab: int, n_core: int) -> Atoms:
+    """Thin Atoms copy of ``[n_slab:n_slab+n_core]`` (layout: slab | core | adsorbate)."""
+    i0 = max(0, int(n_slab))
+    i1 = i0 + int(n_core)
+    return Atoms(
+        numbers=np.asarray(atoms.numbers[i0:i1], dtype=int),
+        positions=np.asarray(atoms.get_positions()[i0:i1], dtype=float),
+        cell=atoms.cell,
+        pbc=atoms.pbc,
+    )
+
+
+def _mobile_slice_atoms(atoms: Atoms, *, n_slab: int) -> Atoms:
+    """Thin Atoms copy of atoms after the frozen slab prefix."""
+    i0 = max(0, int(n_slab))
+    return Atoms(
+        numbers=np.asarray(atoms.numbers[i0:], dtype=int),
+        positions=np.asarray(atoms.get_positions()[i0:], dtype=float),
+        cell=atoms.cell,
+        pbc=atoms.pbc,
+    )
+
+
+def _adsorbate_max_displacement(
+    atoms_i: Atoms,
+    atoms_j: Atoms,
+    *,
+    n_slab: int,
+    n_core: int,
+    use_mic: bool,
+) -> float:
+    """Max adsorbate-atom displacement after matching the metal core.
+
+    Layout is ``[slab | core | adsorbate]``. The core is Hungarian-matched
+    (and Kabsch-aligned in the gas frame) so a pure site hop reports adsorbate
+    travel, not a rigid cluster reorientation. On slabs the lab/slab frame is
+    kept and MIC is applied when ``use_mic`` is set. Minima are not mutated.
+    """
+    n_slab = max(0, int(n_slab))
+    n_core = max(0, int(n_core))
+    n_ads = len(atoms_i) - n_slab - n_core
+    if n_ads <= 0 or len(atoms_j) != len(atoms_i):
+        return 0.0
+
+    pos_i = np.asarray(atoms_i.get_positions(), dtype=float)
+    pos_j = np.asarray(atoms_j.get_positions(), dtype=float).copy()
+    nums_j = np.asarray(atoms_j.numbers, dtype=int).copy()
+    mic_cell = None
+    mic_pbc = None
+    if use_mic and bool(np.any(atoms_i.pbc)):
+        mic_cell = np.asarray(atoms_i.cell.array, dtype=float)
+        mic_pbc = np.asarray(atoms_i.pbc, dtype=bool)
+
+    i0, i1 = n_slab, n_slab + n_core
+    a0, a1 = i1, i1 + n_ads
+
+    if n_core > 0:
+        core_i = _core_slice_atoms(atoms_i, n_slab=n_slab, n_core=n_core)
+        core_j = _core_slice_atoms(atoms_j, n_slab=n_slab, n_core=n_core)
+        matched_core, matched_nums = _permute_atoms_block_to_match(
+            core_i,
+            core_j,
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
+            method="spatial",
+        )
+        pos_j[i0:i1] = matched_core
+        nums_j[i0:i1] = matched_nums
+
+    ads_i = Atoms(
+        numbers=np.asarray(atoms_i.numbers[a0:a1], dtype=int),
+        positions=pos_i[a0:a1],
+        cell=atoms_i.cell,
+        pbc=atoms_i.pbc,
+    )
+    ads_j = Atoms(
+        numbers=nums_j[a0:a1],
+        positions=pos_j[a0:a1],
+        cell=atoms_j.cell,
+        pbc=atoms_j.pbc,
+    )
+    matched_ads, matched_ads_nums = _permute_atoms_block_to_match(
+        ads_i,
+        ads_j,
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+    )
+    pos_j[a0:a1] = matched_ads
+    nums_j[a0:a1] = matched_ads_nums
+
+    # Gas: rigid-align on the core so orientation does not inflate the hop.
+    if n_slab == 0 and n_core > 0:
+        react = Atoms(
+            numbers=np.asarray(atoms_i.numbers, dtype=int),
+            positions=pos_i,
+            cell=atoms_i.cell,
+            pbc=atoms_i.pbc,
+        )
+        pos_j = _align_product_kabsch_to_reactant(
+            react, pos_j, n_slab=0, n_core_mobile=n_core
+        )
+
+    dlt = pos_j[a0:a1] - pos_i[a0:a1]
+    if mic_cell is not None and mic_pbc is not None:
+        dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
+    return float(np.max(np.linalg.norm(dlt, axis=1)))
+
+
 def _core_rms_displacement(
     atoms_i: Atoms,
     atoms_j: Atoms,
@@ -184,13 +294,9 @@ def _core_rms_displacement(
     i1 = i0 + int(n_core)
     if i1 > len(atoms_i) or i1 > len(atoms_j):
         return 0.0
-    # Array views → thin Atoms (avoid full ASE slice copies with constraints/info).
     pos_i = np.asarray(atoms_i.get_positions()[i0:i1], dtype=float)
-    pos_j = np.asarray(atoms_j.get_positions()[i0:i1], dtype=float)
-    nums_i = np.asarray(atoms_i.numbers[i0:i1], dtype=int)
-    nums_j = np.asarray(atoms_j.numbers[i0:i1], dtype=int)
-    core_i = Atoms(numbers=nums_i, positions=pos_i, cell=atoms_i.cell, pbc=atoms_i.pbc)
-    core_j = Atoms(numbers=nums_j, positions=pos_j, cell=atoms_j.cell, pbc=atoms_j.pbc)
+    core_i = _core_slice_atoms(atoms_i, n_slab=n_slab, n_core=n_core)
+    core_j = _core_slice_atoms(atoms_j, n_slab=n_slab, n_core=n_core)
     mic_cell = None
     mic_pbc = None
     if use_mic and bool(np.any(atoms_i.pbc)):
@@ -205,9 +311,7 @@ def _core_rms_displacement(
     )
     dlt = matched_pos - pos_i
     if mic_cell is not None and mic_pbc is not None:
-        # A hand-rolled fractional-round MIC is wrong for skewed cells (the
-        # nearest fractional image is not always the nearest Cartesian image).
-        # ``find_mic`` performs the correct minimum-image search.
+        # ``find_mic`` is required for skewed cells; fractional rounding is wrong.
         dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
     return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
 
@@ -225,37 +329,65 @@ def select_structure_pairs(
     max_endpoint_mismatch: float | None = None,
     adsorbate_aware: bool = False,
     n_core_mobile: int | None = None,
+    pair_core_rms_max: float | None = None,
+    pair_score_gap_center: float | None = None,
+    pair_score_gap_width: float | None = None,
+    pair_score_cum_scale: float | None = None,
+    pair_score_mismatch_scale: float | None = None,
+    pair_score_core_rms_scale: float | None = None,
+    pair_score_w_gap: float | None = None,
+    pair_score_w_distinct: float | None = None,
+    pair_score_w_mismatch: float | None = None,
+    pair_score_w_core: float | None = None,
 ) -> list[tuple[int, int]]:
-    """Select pairs of minima for TS calculations.
+    """Select pairs of minima likely connected by a transition state.
 
-    Pairs nearby minima in energy space, using permutation-invariant structural
-    comparison to avoid pairing very similar structures. When ``max_pairs`` is
-    set, candidates are ranked by a physics-guided score (energy gap and
-    structural dissimilarity) before taking the top N.
+    Endpoints should be close in energy and structurally related, with unequal
+    component weights (layout ``[slab | core | adsorbate]``):
+
+    - Bare cluster / bare surface (``adsorbate_aware=False``): fingerprint
+      mobile atoms; skip near-duplicates; optionally gate large ``max_diff``.
+    - Metal core + adsorbate (gas or on a slab, ``n_core_mobile > 0``):
+      hard-gate on core similarity (``max_endpoint_mismatch``,
+      ``pair_core_rms_max``). Same-core adsorbate site hops are kept even when
+      the adsorbate moves a lot. Ranking uses ``pair_score_*`` knobs.
+    - Adsorbate-only (``n_core_mobile == 0``): fingerprint / displace the
+      mobile adsorbate; do not skip ``are_similar`` (OH fingerprints are often
+      vacuous). ``max_endpoint_mismatch`` gates adsorbate Cartesian travel.
+
+    Scoring / gate defaults come from
+    :func:`scgo.pair_selection_defaults.pair_selection_param_defaults` and are
+    overridable via ``ts_params`` (see docs).
+
+    When ``max_pairs`` is set, survivors are ranked before taking the top N.
 
     Args:
         minima: List of (energy, Atoms) tuples, sorted by energy.
-        max_pairs: Maximum number of pairs to generate. If None, generates all pairs.
-            Default None.
-        energy_gap_threshold: Only pair structures with energy gap below this threshold (eV).
-            If None, pairs all structures. Default None.
-        similarity_tolerance: Cumulative difference tolerance for structure comparison.
-            Structures with cumulative difference below this value are considered too similar
-            to pair. Default `DEFAULT_COMPARATOR_TOL` (tighter than GA duplicate detection).
-        similarity_pair_cor_max: Maximum single distance difference tolerance.
-            Default 0.1 Å (tighter than GA to ensure truly distinct structures).
-        surface_aware: Use slightly looser scoring scales (slab / periodic systems).
-        use_mic: MIC for distance/similarity geometry.
-        n_slab: When set (from ``SurfaceSystemConfig.slab``), structural comparison
-            uses only atoms ``n_slab:`` so pair selection ignores frozen slab motion.
-        max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``.
-            ``None`` disables the gate (bare-cluster default). When set (adsorbate
-            presets), also enables pre-NEB clash and IDPP energy-profile checks.
-        adsorbate_aware: Prefer modest core RMS and weight mismatch more heavily.
-        n_core_mobile: Core atom count for adsorbate-aware core-RMS scoring.
+        max_pairs: Maximum number of pairs to generate. If None, all survivors.
+        energy_gap_threshold: Max endpoint energy gap (eV).
+        similarity_tolerance: Bare-path cumulative duplicate tolerance.
+        similarity_pair_cor_max: Bare-path / core fingerprint pair-cor max.
+        surface_aware: Select surface vs gas default score scales when overrides
+            are omitted.
+        use_mic: MIC for fingerprints and adsorbate displacement.
+        n_slab: Frozen slab prefix; ignored in comparisons.
+        max_endpoint_mismatch: Å gate — core fingerprint when a core exists,
+            else adsorbate Cartesian max displacement.
+        adsorbate_aware: Use adsorbate multi-component pairing rules.
+        n_core_mobile: Metal-core atom count; ``0`` / ``None`` = no core block.
+        pair_core_rms_max: Hard max core RMS (Å) for adsorbate+core pairs.
+        pair_score_gap_center: Preferred energy gap (eV) for ranking.
+        pair_score_gap_width: Gaussian width for the energy-gap score (eV).
+        pair_score_cum_scale: Scale (Å) for distinctness / adsorbate-hop term.
+        pair_score_mismatch_scale: Scale (Å) for fingerprint ``max_diff`` term.
+        pair_score_core_rms_scale: Scale (Å) for core-RMS soft score.
+        pair_score_w_gap: Ranking weight for the energy-gap term.
+        pair_score_w_distinct: Ranking weight for distinctness / adsorbate hop.
+        pair_score_w_mismatch: Ranking weight for fingerprint mismatch.
+        pair_score_w_core: Ranking weight for core RMS (adsorbate+core only).
 
     Returns:
-        List of (index1, index2) tuples where index1 < index2, indicating which minima to pair.
+        List of ``(index1, index2)`` with ``index1 < index2``.
     """
     mic = bool(use_mic)
 
@@ -263,14 +395,40 @@ def select_structure_pairs(
         logger.info("Only %d minima, need at least 2 to pair", len(minima))
         return []
 
+    defaults = pair_selection_param_defaults(
+        surface_aware=bool(surface_aware),
+        adsorbate_aware=bool(adsorbate_aware),
+    )
+
+    def _resolve(name: str, value: float | None) -> float | None:
+        return defaults[name] if value is None else value
+
+    core_rms_limit = _resolve("pair_core_rms_max", pair_core_rms_max)
+    gap_center = float(_resolve("pair_score_gap_center", pair_score_gap_center))
+    gap_width = float(_resolve("pair_score_gap_width", pair_score_gap_width))
+    cum_scale = float(_resolve("pair_score_cum_scale", pair_score_cum_scale))
+    mismatch_scale = float(
+        _resolve("pair_score_mismatch_scale", pair_score_mismatch_scale)
+    )
+    core_rms_scale = float(
+        _resolve("pair_score_core_rms_scale", pair_score_core_rms_scale)
+    )
+    w_gap = float(_resolve("pair_score_w_gap", pair_score_w_gap))
+    w_distinct = float(_resolve("pair_score_w_distinct", pair_score_w_distinct))
+    w_mismatch = float(_resolve("pair_score_w_mismatch", pair_score_w_mismatch))
+    w_core = float(_resolve("pair_score_w_core", pair_score_w_core))
+
     scored_pairs: list[tuple[float, int, int]] = []
     n_skipped_similar = 0
     n_skipped_mismatch = 0
+    n_skipped_energy = 0
+    n_skipped_core_rms = 0
     slab_len = int(n_slab) if n_slab is not None else 0
-    # Reuse one comparator when mobile counts are uniform (typical).
-    shared_n_top = max(0, len(minima[0][1]) - slab_len)
+    n_core = int(n_core_mobile) if n_core_mobile is not None else 0
+    fingerprint_core = bool(adsorbate_aware) and n_core > 0
+    fingerprint_n = n_core if fingerprint_core else max(0, len(minima[0][1]) - slab_len)
     shared_comparator = PureInteratomicDistanceComparator(
-        n_top=shared_n_top,
+        n_top=fingerprint_n,
         tol=similarity_tolerance,
         pair_cor_max=similarity_pair_cor_max,
         mic=mic,
@@ -281,128 +439,85 @@ def select_structure_pairs(
         cum_diff: float,
         max_diff: float,
         core_rms: float | None,
+        ads_hop: float | None,
     ) -> float:
-        """Return higher-is-better physics-guided priority score.
-
-        Uses a compact blend of:
-        - energy-gap proximity to a regime-dependent target window,
-        - moderate structural dissimilarity preference,
-        - endpoint mismatch penalty to avoid overly-discontinuous paths,
-        - optional preference for modest core RMS (adsorbate systems).
-        """
-        # Surface systems often tolerate/require slightly larger endpoint deltas.
-        gap_center = 0.45 if surface_aware else 0.30
-        gap_width = 0.55 if surface_aware else 0.40
+        """Higher-is-better priority for capped ``max_pairs`` ranking."""
         gap_score = math.exp(-(((gap - gap_center) / max(1e-8, gap_width)) ** 2))
-
         if adsorbate_aware:
-            # Prefer activated local hops: mid energy gaps, moderate endpoint
-            # mismatch (~0.35–0.7 Å), and core RMS ~0.5 Å. Tiny-mismatch /
-            # tiny-core pairs are often barrierless endothermic slides whose
-            # IDPP bands are endpoint-max and CI-NEB climbs into junk saddles.
-            mismatch_weight = 0.25
-            distinct_weight = 0.20
-            gap_weight = 0.25
-            core_weight = 0.30
-            cum_scale = 0.10 if surface_aware else 0.08
-            gap_center = 0.55 if surface_aware else 0.50
-            gap_width = 0.50 if surface_aware else 0.45
-            gap_score = math.exp(-(((gap - gap_center) / max(1e-8, gap_width)) ** 2))
-            # Peak distinctness above near-isomer noise.
-            distinct_center = 0.12 if surface_aware else 0.10
-            distinct_score = math.exp(
-                -(((cum_diff - distinct_center) / max(1e-8, cum_scale)) ** 2)
-            )
-            mismatch_center = 0.55 if surface_aware else 0.50
-            mismatch_width = 0.35 if surface_aware else 0.28
-            mismatch_score = math.exp(
-                -(((max_diff - mismatch_center) / max(1e-8, mismatch_width)) ** 2)
-            )
-        else:
-            mismatch_scale = 0.45 if surface_aware else 0.35
-            mismatch_weight = 0.15
-            distinct_weight = 0.35
-            gap_weight = 0.50
-            core_weight = 0.0
-            cum_scale = 0.12 if surface_aware else 0.09
-            distinct_score = 1.0 - math.exp(-max(0.0, cum_diff) / max(1e-8, cum_scale))
+            if ads_hop is not None:
+                distinct_score = 1.0 - math.exp(
+                    -max(0.0, ads_hop) / max(1e-8, cum_scale)
+                )
+            else:
+                distinct_score = math.exp(-max(0.0, cum_diff) / max(1e-8, cum_scale))
             mismatch_score = math.exp(-max(0.0, max_diff) / max(1e-8, mismatch_scale))
-
-        score = (
-            gap_weight * gap_score
-            + distinct_weight * distinct_score
-            + mismatch_weight * mismatch_score
-        )
-        if core_weight > 0.0 and core_rms is not None:
-            # Prefer core rearrangements that accompany real adsorbate hops.
-            core_center = 0.50 if surface_aware else 0.55
-            core_width = 0.45 if surface_aware else 0.35
-            core_score = math.exp(
-                -(((core_rms - core_center) / max(1e-8, core_width)) ** 2)
+            score = (
+                w_gap * gap_score
+                + w_distinct * distinct_score
+                + w_mismatch * mismatch_score
             )
-            score += core_weight * core_score
-        return score
+            if core_rms is not None and w_core > 0.0:
+                core_score = math.exp(-max(0.0, core_rms) / max(1e-8, core_rms_scale))
+                score += w_core * core_score
+            return score
+
+        distinct_score = 1.0 - math.exp(-max(0.0, cum_diff) / max(1e-8, cum_scale))
+        mismatch_score = math.exp(-max(0.0, max_diff) / max(1e-8, mismatch_scale))
+        return (
+            w_gap * gap_score
+            + w_distinct * distinct_score
+            + w_mismatch * mismatch_score
+        )
+
+    def _fingerprint_pair(atoms_i: Atoms, atoms_j: Atoms) -> tuple[float, float, bool]:
+        if fingerprint_core:
+            a_i = _core_slice_atoms(atoms_i, n_slab=slab_len, n_core=n_core)
+            a_j = _core_slice_atoms(atoms_j, n_slab=slab_len, n_core=n_core)
+            return calculate_structure_similarity(
+                a_i,
+                a_j,
+                tolerance=similarity_tolerance,
+                pair_cor_max=similarity_pair_cor_max,
+                use_mic=mic,
+                n_slab=None,
+                ignore_fixed_atoms=False,
+                comparator=shared_comparator,
+            )
+        if adsorbate_aware and slab_len > 0:
+            a_i = _mobile_slice_atoms(atoms_i, n_slab=slab_len)
+            a_j = _mobile_slice_atoms(atoms_j, n_slab=slab_len)
+            return calculate_structure_similarity(
+                a_i,
+                a_j,
+                tolerance=similarity_tolerance,
+                pair_cor_max=similarity_pair_cor_max,
+                use_mic=mic,
+                n_slab=None,
+                ignore_fixed_atoms=False,
+                comparator=shared_comparator,
+            )
+        return calculate_structure_similarity(
+            atoms_i,
+            atoms_j,
+            tolerance=similarity_tolerance,
+            pair_cor_max=similarity_pair_cor_max,
+            use_mic=mic,
+            n_slab=n_slab,
+            comparator=shared_comparator,
+        )
 
     for i in range(len(minima)):
         for j in range(i + 1, len(minima)):
             energy_i, atoms_i = minima[i]
             energy_j, atoms_j = minima[j]
 
-            # Energy gap filter
             gap = abs(energy_j - energy_i)
             if energy_gap_threshold is not None and gap > energy_gap_threshold:
-                # Minima are energy-sorted; once the gap is too large, later j
-                # for this i can only increase it.
+                n_skipped_energy += len(minima) - j
                 break
 
-            # Permutation-invariant similarity filter
             try:
-                cum_diff, max_diff, are_similar = calculate_structure_similarity(
-                    atoms_i,
-                    atoms_j,
-                    tolerance=similarity_tolerance,
-                    pair_cor_max=similarity_pair_cor_max,
-                    use_mic=mic,
-                    n_slab=n_slab,
-                    comparator=shared_comparator,
-                )
-
-                if are_similar:
-                    n_skipped_similar += 1
-                    logger.debug(
-                        "Skipping pair (%s, %s): structures too similar "
-                        "(cum_diff=%.4f, max_diff=%.3f Å)",
-                        i,
-                        j,
-                        cum_diff,
-                        max_diff,
-                    )
-                    continue
-                # Adsorbate near-isomers with tiny max displacement are usually
-                # barrierless endothermic slides; climb cannot salvage them.
-                if adsorbate_aware and float(max_diff) < 0.20:
-                    n_skipped_similar += 1
-                    logger.debug(
-                        "Skipping pair (%s, %s): adsorbate hop too small "
-                        "(max_diff=%.3f Å < 0.20 Å)",
-                        i,
-                        j,
-                        max_diff,
-                    )
-                    continue
-                if max_endpoint_mismatch is not None and float(max_diff) > float(
-                    max_endpoint_mismatch
-                ):
-                    n_skipped_mismatch += 1
-                    logger.debug(
-                        "Skipping pair (%s, %s): endpoint mismatch too large "
-                        "(max_diff=%.3f Å > %.3f Å)",
-                        i,
-                        j,
-                        max_diff,
-                        max_endpoint_mismatch,
-                    )
-                    continue
+                cum_diff, max_diff, are_similar = _fingerprint_pair(atoms_i, atoms_j)
             except (ValueError, RuntimeError) as e:
                 logger.warning(
                     "Failed to calculate similarity for pair (%s, %s): %s: %s",
@@ -414,19 +529,60 @@ def select_structure_pairs(
                 )
                 continue
 
+            # Bare: skip near-duplicates. Adsorbate: keep similar cores / vacuous
+            # OH fingerprints (site hops are the intended pairs).
+            if not adsorbate_aware and are_similar:
+                n_skipped_similar += 1
+                logger.debug(
+                    "Skipping pair (%s, %s): structures too similar "
+                    "(cum_diff=%.4f, max_diff=%.3f Å)",
+                    i,
+                    j,
+                    cum_diff,
+                    max_diff,
+                )
+                continue
+
+            ads_hop: float | None = None
+            if adsorbate_aware:
+                ads_hop = _adsorbate_max_displacement(
+                    atoms_i,
+                    atoms_j,
+                    n_slab=slab_len,
+                    n_core=n_core,
+                    use_mic=mic,
+                )
+
+            # Core present: gate on core fingerprint. Adsorbate-only: gate on
+            # adsorbate Cartesian hop (fingerprint is often vacuous for OH).
+            gate_metric = float(max_diff)
+            if adsorbate_aware and not fingerprint_core and ads_hop is not None:
+                gate_metric = float(ads_hop)
+            if max_endpoint_mismatch is not None and gate_metric > float(
+                max_endpoint_mismatch
+            ):
+                n_skipped_mismatch += 1
+                logger.debug(
+                    "Skipping pair (%s, %s): endpoint mismatch too large "
+                    "(metric=%.3f Å > %.3f Å)",
+                    i,
+                    j,
+                    gate_metric,
+                    max_endpoint_mismatch,
+                )
+                continue
+
             core_rms: float | None = None
-            if adsorbate_aware and n_core_mobile is not None and int(n_core_mobile) > 0:
+            if fingerprint_core:
                 core_rms = _core_rms_displacement(
                     atoms_i,
                     atoms_j,
                     n_slab=slab_len,
-                    n_core=int(n_core_mobile),
+                    n_core=n_core,
                     use_mic=mic,
                 )
-                # Large core rearrangements rarely yield usable adsorbate NEBs.
-                core_rms_limit = 2.0 if surface_aware else 1.5
-                if core_rms > core_rms_limit:
-                    n_skipped_mismatch += 1
+                if core_rms_limit is not None and core_rms > float(core_rms_limit):
+                    n_skipped_core_rms += 1
                     logger.debug(
                         "Skipping pair (%s, %s): core RMS too large "
                         "(core_rms=%.3f Å > %.3f Å)",
@@ -439,7 +595,13 @@ def select_structure_pairs(
 
             scored_pairs.append(
                 (
-                    _score_candidate(gap, float(cum_diff), float(max_diff), core_rms),
+                    _score_candidate(
+                        gap,
+                        float(cum_diff),
+                        float(max_diff),
+                        core_rms,
+                        ads_hop,
+                    ),
                     i,
                     j,
                 )
@@ -455,16 +617,30 @@ def select_structure_pairs(
             "Pair selection: skipped %d high-mismatch candidate pairs",
             n_skipped_mismatch,
         )
+    if n_skipped_core_rms:
+        logger.debug(
+            "Pair selection: skipped %d high core-RMS candidate pairs",
+            n_skipped_core_rms,
+        )
 
     if not scored_pairs:
+        if adsorbate_aware:
+            e0 = float(minima[0][0])
+            e1 = float(minima[-1][0])
+            logger.warning(
+                "Pair selection: no suitable pairs "
+                "(energy=%d, mismatch=%d, core_rms=%d); energy span=%.3f eV",
+                n_skipped_energy,
+                n_skipped_mismatch,
+                n_skipped_core_rms,
+                abs(e1 - e0),
+            )
         return []
 
-    # Deterministic ordering: higher score first, then stable index tie-break.
     scored_pairs.sort(key=lambda item: (-item[0], item[1], item[2]))
     ranked_pairs = [(i, j) for _score, i, j in scored_pairs]
     if max_pairs is None:
         return ranked_pairs
-
     return ranked_pairs[:max_pairs]
 
 

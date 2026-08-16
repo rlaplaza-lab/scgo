@@ -40,10 +40,10 @@ from scgo.utils.comparators import (
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 from scgo.utils.logging import (
     get_logger,
+    infer_verbosity,
     log_debug_v,
     log_warning_v,
 )
-from scgo.utils.phase_logging import infer_verbosity
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
     build_timing_payload,

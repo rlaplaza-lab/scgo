@@ -344,10 +344,11 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Calculator options
    * - ``max_pairs``
      - ``None``
-     - Maximum minima pairs to check (None = all)
+     - Maximum minima pairs to check (None = all). Soft ``pair_score_*``
+       ranking only matters when this caps the pool.
    * - ``energy_gap_threshold``
      - ``2.0`` / ``0.75`` (adsorbate)
-     - Max energy gap to attempt TS (eV)
+     - Hard max energy gap between endpoints (eV); pairs above this are skipped
    * - ``use_torchsim``
      - ``True``
      - Use TorchSim for NEB
@@ -359,17 +360,124 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Same connectivity spec as GO (float or per-element/pair dict); resolved
        with the same precedence for TS structural gates.
    * - ``similarity_tolerance``
-     - (default)
-     - Minima similarity tolerance for pairing
+     - ``0.015``
+     - Comparator tolerance for fingerprint ``are_similar`` (bare systems skip
+       similar pairs; adsorbate systems keep them)
    * - ``similarity_pair_cor_max``
      - ``0.1``
-     - Pair-correlation cap for similarity
+     - Pair-correlation cap for the structure comparator
+   * - ``pair_core_rms_max``
+     - see **Pair selection** below
+     - Hard max core RMS (Å) for adsorbate+core pairing
+   * - ``pair_score_*``
+     - see **Pair selection** below
+     - Soft ranking scales and weights (gap / distinct / mismatch / core)
    * - ``minima_energy_tolerance``
      - ``1e-5``
      - Energy tolerance when deduplicating minima
    * - ``write_timing_json``
      - ``False``
      - Write ``{ts_run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
+
+**Pair selection**
+(:func:`~scgo.ts_search.transition_state_io.select_structure_pairs`;
+defaults from
+:func:`~scgo.pair_selection_defaults.pair_selection_param_defaults`):
+
+Minima are laid out ``[slab | core | adsorbate]``. The comparator fingerprint
+is element-pair distances among **same** elements only, so O–H or O–O site
+hops are invisible in the fingerprint when those atoms are unique or only
+compared to themselves. Pairing therefore uses different hard gates by regime:
+
+- **Bare** (``gas_cluster`` / ``surface_cluster``): fingerprint the full mobile
+  region; skip ``are_similar`` pairs; optional ``max_endpoint_mismatch`` on
+  fingerprint ``max_diff``.
+- **Adsorbate + metal core**: fingerprint the **core only**; do **not** skip
+  similar cores (site hops look identical); hard-gate core ``max_diff`` with
+  ``max_endpoint_mismatch`` and core RMS with ``pair_core_rms_max``. Soft rank
+  prefers mid energy gap, similar cores, and some adsorbate site displacement.
+- **Adsorbate-only slab** (no mobile core): do not skip similar; gate on
+  adsorbate Cartesian travel via ``max_endpoint_mismatch``.
+
+Hard gates always apply. Soft ``pair_score_*`` terms only order candidates when
+``max_pairs`` truncates the list (otherwise every surviving pair is kept).
+
+Default hard / soft knobs:
+
+.. list-table::
+   :widths: 28 18 18 18 18
+   :header-rows: 1
+
+   * - Parameter
+     - Bare gas
+     - Bare surface
+     - Gas adsorbate
+     - Surface adsorbate
+   * - ``pair_core_rms_max`` (Å)
+     - ``None``
+     - ``None``
+     - ``1.5``
+     - ``2.0``
+   * - ``pair_score_gap_center`` (eV)
+     - ``0.30``
+     - ``0.45``
+     - ``0.50``
+     - ``0.55``
+   * - ``pair_score_gap_width`` (eV)
+     - ``0.40``
+     - ``0.55``
+     - ``0.45``
+     - ``0.50``
+   * - ``pair_score_cum_scale`` (Å)
+     - ``0.09``
+     - ``0.12``
+     - ``0.08``
+     - ``0.10``
+   * - ``pair_score_mismatch_scale`` (Å)
+     - ``0.35``
+     - ``0.45``
+     - ``0.35``
+     - ``0.45``
+   * - ``pair_score_core_rms_scale`` (Å)
+     - ``0.35``
+     - ``0.45``
+     - ``0.35``
+     - ``0.45``
+   * - ``pair_score_w_gap``
+     - ``0.50``
+     - ``0.50``
+     - ``0.25``
+     - ``0.25``
+   * - ``pair_score_w_distinct``
+     - ``0.35``
+     - ``0.35``
+     - ``0.20``
+     - ``0.20``
+   * - ``pair_score_w_mismatch``
+     - ``0.15``
+     - ``0.15``
+     - ``0.25``
+     - ``0.25``
+   * - ``pair_score_w_core``
+     - ``0.0``
+     - ``0.0``
+     - ``0.30``
+     - ``0.30``
+
+Meaning of each soft term:
+
+- ``pair_score_gap_*``: Gaussian preference for energy gap near ``gap_center``
+  (not too near-degenerate, not near the hard ``energy_gap_threshold``).
+- ``pair_score_cum_scale`` + ``w_distinct``: bare systems reward fingerprint
+  distinctness; adsorbate systems reward max adsorbate atom displacement after
+  core alignment (site hop).
+- ``pair_score_mismatch_scale`` + ``w_mismatch``: bare systems tolerate some
+  fingerprint difference; adsorbate systems prefer **small** core ``max_diff``.
+- ``pair_score_core_rms_scale`` + ``w_core``: adsorbate+core only; prefer small
+  core RMS after Hungarian matching (Kabsch in gas, MIC on slabs).
+
+Override any of these in ``ts_params``. If the adsorbate pair pool is empty,
+logs include skip counts (energy gap, mismatch, core RMS, etc.).
 
 **NEB:**
 
@@ -408,7 +516,7 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
        chunk that hits CUDA OOM is retried once at half the budget
    * - ``max_endpoint_mismatch``
      - ``None`` / ``1.25`` (gas adsorbate) / ``1.25`` (surface) / ``1.5`` (surface adsorbate)
-     - Å geometric gate on comparator ``max_diff``; when set, also enables the pre-NEB endpoint-displacement check. Surface presets newly gain this (was unset).
+     - Å geometric gate on comparator ``max_diff``; when set, also enables the pre-NEB endpoint-displacement check. For adsorbate + metal-core systems (gas or on a slab), pair selection fingerprints the **core** and this gate means “cores too different”; adsorbate site hops with an identical core are kept. For adsorbate-only slabs the same threshold gates adsorbate Cartesian travel. Surface presets newly gain this (was unset).
    * - ``neb_prescreen_clash_distance``
      - ``1.0`` (bare gas) / ``0.7`` (surface + adsorbate)
      - Interior NEB image min mobile pairwise distance (Å) below which the initial path is rejected.
@@ -465,9 +573,9 @@ surface and adsorbate are tighter: ``0.7`` / ``0.40``).
 **Adsorbate NEB specifics** (beyond the gates above):
 
 - Fragment-wise adsorbate matching and core-anchored alignment
-- Pair selection prefers activated hops (moderate mismatch / core RMS),
-  oversamples candidates (``10× max_pairs``), and re-ranks by IDPP profile so
-  the NEB budget favors robust interior maxima when any exist
+- Pair selection: see **Pair selection** above (core fingerprint, hard gates,
+  soft ``pair_score_*``). Oversamples candidates (``10× max_pairs``) and re-ranks
+  by IDPP profile so the NEB budget favors robust interior maxima when any exist
 - Climbing NEB: two-stage only when the IDPP path has a robust interior maximum
   (barrier ``≥ 1.0`` eV); endpoint-max and soft interior IDPP climb from step 0
 - Finalize also rejects barriers ``> 8`` eV

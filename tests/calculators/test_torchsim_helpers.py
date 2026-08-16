@@ -1411,12 +1411,16 @@ def test_autobatcher_memory_estimation_prints_suppressed_with_summary(
 
     class _FakeTS:
         def optimize(self, **kwargs):
-            print("Model Memory Estimation: Running forward pass on state with 1 atoms.")
+            print(
+                "Model Memory Estimation: Running forward pass on state with 1 atoms."
+            )
             relaxer._optimize_batcher.max_memory_scaler = 42.5
             return _FakeState()
 
         def static(self, **kwargs):
-            print("Model Memory Estimation: Running forward pass on state with 1 atoms.")
+            print(
+                "Model Memory Estimation: Running forward pass on state with 1 atoms."
+            )
             relaxer._static_batcher.max_memory_scaler = 18.0
             return [
                 {
