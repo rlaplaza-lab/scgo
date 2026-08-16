@@ -60,6 +60,31 @@ def _as_tensor(
     return out
 
 
+def _invertible_cell_for_mic(cell: torch.Tensor) -> torch.Tensor:
+    """Return a full-rank copy of ``cell`` so ``torch.linalg.inv`` can run.
+
+    TorchSim stores lattice vectors as *columns*. Metatomic prep zeros
+    non-periodic ASE rows (see ``_prepare_atoms_for_metatomic_torchsim``),
+    which become zero columns here and make the 3×3 singular. Dummy columns
+    are never wrapped: :func:`minimum_image_displacement` respects ``pbc``.
+    """
+    col_norms = torch.linalg.norm(cell, dim=0)
+    if bool((col_norms > 1e-8).all()):
+        return cell
+    out = cell.clone()
+    eye = torch.eye(3, dtype=cell.dtype, device=cell.device)
+    for i in range(3):
+        if col_norms[i] > 1e-8:
+            continue
+        for j in range(3):
+            trial = out.clone()
+            trial[:, i] = eye[:, j]
+            if torch.abs(torch.linalg.det(trial)) > 1e-8:
+                out[:, i] = eye[:, j]
+                break
+    return out
+
+
 class TorchSimFixBondLengths(Constraint):
     """TorchSim constraint that keeps selected interatomic distances fixed.
 
@@ -122,7 +147,7 @@ class TorchSimFixBondLengths(Constraint):
         j = int(self.pairs[k, 1])
         delta = minimum_image_displacement(
             dr=(positions[j] - positions[i]).unsqueeze(0),
-            cell=state.cell[int(self.system_idx[k])],
+            cell=_invertible_cell_for_mic(state.cell[int(self.system_idx[k])]),
             pbc=state.pbc,
         ).squeeze(0)
         return i, j, delta

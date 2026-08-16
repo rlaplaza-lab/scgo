@@ -1206,6 +1206,54 @@ def test_torchsim_fixbondlengths_preserved_during_relaxation():
     assert abs(final_length - init_length) <= 1e-3
 
 
+def test_torchsim_fixbondlengths_survives_upet_zeroed_slab_cell():
+    """UPET cell prep zeros vacuum; FIRE + FixBondLengths must still relax.
+
+    Reproduces the Kaggle full-suite crash: ``model_kind='upet'`` zeros the
+    non-periodic lattice vector, then ``ts.optimize`` inverts that cell in
+    ``TorchSimFixBondLengths.adjust_forces``.
+    """
+    import torch
+    from ase import Atoms
+    from ase.constraints import FixBondLengths
+    from torch_sim.models.lennard_jones import LennardJonesModel
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    model = LennardJonesModel(
+        sigma=3.405,
+        epsilon=0.0104,
+        cutoff=8.5,
+        device=torch.device("cpu"),
+        compute_forces=True,
+        compute_stress=False,
+    )
+    relaxer = TorchSimBatchRelaxer(
+        model=model,
+        model_kind="upet",
+        device=torch.device("cpu"),
+        force_tol=0.05,
+        max_steps=10,
+    )
+
+    init_length = 0.96
+    atoms = Atoms(
+        "OH",
+        positions=[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0 + init_length]],
+        cell=[10.0, 10.0, 20.0],
+        pbc=(True, True, False),
+    )
+    atoms.set_constraint(FixBondLengths([(0, 1)]))
+
+    results = relaxer.relax_batch([atoms])
+    assert len(results) == 1
+    _energy, relaxed = results[0]
+    assert abs(relaxed.get_distance(0, 1, mic=True) - init_length) <= 1e-3
+    # Storage cell/PBC restored after metatomic prep.
+    assert list(relaxed.pbc) == [True, True, False]
+    assert relaxed.cell[2, 2] == pytest.approx(20.0)
+
+
 def test_torchsim_fixbondlengths_preserved_in_batch():
     """P3: both FixAtoms and FixBondLengths survive in a batched relax."""
     import torch

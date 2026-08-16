@@ -337,3 +337,68 @@ def test_fixbondlengths_adjust_positions_uses_minimum_image() -> None:
         pbc=state.pbc,
     )
     assert torch.linalg.norm(delta).item() == pytest.approx(0.5, abs=1e-5)
+
+
+def test_fixbondlengths_mic_with_metatomic_zeroed_vacuum_vector() -> None:
+    """Slab PBC + zeroed c vector must still MIC-wrap and not invert a singular cell.
+
+    UPET metatomic prep zeros the non-periodic lattice vector. Kaggle full UPET
+    crashed in ``adjust_forces`` (FIRE init) with LinAlgError on
+    ``surface_adsorbate`` / ``surface_cluster_adsorbate``.
+    """
+    torch = pytest.importorskip("torch")
+    torch_sim = pytest.importorskip("torch_sim")
+    from ase.constraints import FixBondLengths
+
+    from scgo.calculators.torchsim_constraints import (
+        build_torchsim_fixbondlengths_from_ase_batch,
+    )
+    from scgo.calculators.torchsim_helpers import _prepare_atoms_for_metatomic_torchsim
+
+    atoms = Atoms(
+        "OH",
+        positions=[[0.1, 0.0, 1.0], [9.6, 0.0, 1.0]],
+        cell=[[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]],
+        pbc=(True, True, False),
+    )
+    atoms.set_constraint(FixBondLengths([(0, 1)]))
+    assert atoms.get_distance(0, 1, mic=True) == pytest.approx(0.5, abs=1e-6)
+
+    prepared = _prepare_atoms_for_metatomic_torchsim(atoms)
+    assert float(np.linalg.norm(prepared.cell[2])) == pytest.approx(0.0, abs=1e-12)
+
+    device = torch.device("cpu")
+    state = torch_sim.initialize_state([prepared], device, torch.float64)
+    built = build_torchsim_fixbondlengths_from_ase_batch([prepared], device=device)
+    assert built is not None
+    state.constraints = [built]
+
+    # FIRE init calls adjust_forces first; that was the Kaggle LinAlgError.
+    built.adjust_forces(state, torch.zeros_like(state.positions))
+
+    stretched = state.positions.clone()
+    stretched[1, 0] = 9.8
+    state.set_constrained_positions(stretched)
+
+    restored = atoms.copy()
+    restored.positions = state.positions.detach().cpu().numpy()
+    assert restored.get_distance(0, 1, mic=True) == pytest.approx(0.5, abs=1e-5)
+
+
+def test_invertible_cell_for_mic_fills_zero_torchsim_column() -> None:
+    """Metatomic-zeroed vacuum becomes a zero *column* in TorchSim convention."""
+    torch = pytest.importorskip("torch")
+
+    from scgo.calculators.torchsim_constraints import _invertible_cell_for_mic
+
+    ase_cell = torch.tensor(
+        [[3.0, 0.0, 0.5], [0.0, 3.0, 0.4], [0.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    cell = ase_cell.T
+    assert torch.abs(torch.linalg.det(cell)) <= 1e-8
+    filled = _invertible_cell_for_mic(cell)
+    assert torch.abs(torch.linalg.det(filled)) > 1e-8
+    assert torch.allclose(filled[:, 0], cell[:, 0])
+    assert torch.allclose(filled[:, 1], cell[:, 1])
+    assert torch.linalg.norm(filled[:, 2]) > 1e-8
