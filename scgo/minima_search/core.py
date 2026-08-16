@@ -75,6 +75,7 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.path_keys import resolve_run_path_key
+from scgo.utils.phase_logging import format_count_summary
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.validation import validate_composition
 
@@ -508,6 +509,12 @@ def _validate_common_run_inputs(
         raise SCGOValidationError("verbosity must be one of 0, 1, 2, or 3")
 
 
+def _compact_structural_gate_reason(message: str) -> str:
+    """Short label for grouping final-gate drops (strip wrapper and details)."""
+    text = message.removeprefix("Mobile-region validation failed: ").strip()
+    return text.split(" (", 1)[0].strip().rstrip(".") or "structural gate"
+
+
 def _gate_structurally_valid_candidates(
     candidates: list[tuple[float, Atoms]],
     system_type: str,
@@ -515,13 +522,17 @@ def _gate_structurally_valid_candidates(
     n_slab: int | None,
     global_optimizer_kwargs: dict[str, Any],
     cluster_adsorbate_config: object,
+    *,
+    verbosity: int = 1,
 ) -> list[tuple[float, Atoms]]:
     """Run the final structural gate over dedup'd candidates.
 
     ``n_slab`` is applied uniformly when given; for non-surface systems it is
     ``None`` and resolved per-candidate from the ``n_slab_atoms`` tag.
+    Default verbosity logs one drop summary; per-candidate detail is DEBUG.
     """
     valid: list[tuple[float, Atoms]] = []
+    dropped: list[tuple[float, str]] = []
     for energy, atoms in candidates:
         resolved_n_slab = (
             n_slab if n_slab is not None else (get_tag(atoms, "n_slab_atoms") or 0)
@@ -547,14 +558,27 @@ def _gate_structurally_valid_candidates(
                 ),
             )
         except SCGOValidationError as exc:
-            logger.warning(
-                "Dropping dedup'd candidate (E=%.4f eV) failing final structural "
-                "gate: %s",
-                energy,
-                exc,
-            )
+            dropped.append((energy, str(exc)))
             continue
         valid.append((energy, atoms))
+    if dropped and verbosity >= 1:
+        reason_counts = Counter(
+            _compact_structural_gate_reason(msg) for _, msg in dropped
+        )
+        logger.info(
+            "Final structural gate: kept %d/%d candidates (%s)",
+            len(valid),
+            len(candidates),
+            format_count_summary(reason_counts),
+        )
+        if verbosity >= 2:
+            for energy, msg in dropped:
+                logger.debug(
+                    "Dropping dedup'd candidate (E=%.4f eV) failing final "
+                    "structural gate: %s",
+                    energy,
+                    msg,
+                )
     return valid
 
 
@@ -1000,6 +1024,7 @@ def run_trials(
                 gate_n_slab,
                 global_optimizer_kwargs,
                 gate_cluster_adsorbate_config_raw,
+                verbosity=verbosity,
             )
     else:
         structurally_valid = _gate_structurally_valid_candidates(
@@ -1009,6 +1034,7 @@ def run_trials(
             None,
             global_optimizer_kwargs,
             gate_cluster_adsorbate_config_raw,
+            verbosity=verbosity,
         )
     unique_candidates = structurally_valid
     if not unique_candidates:

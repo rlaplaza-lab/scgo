@@ -351,8 +351,8 @@ def _check_mobile_touches_slab(
         )
         return (
             False,
-            "No adsorbate-slab pair within connectivity distance "
-            f"(min cross-set distance={min_cross:.3f} Å, "
+            "No mobile-slab contact within connectivity distance "
+            f"(min mobile-to-surface-layer distance={min_cross:.3f} Å, "
             f"connectivity_factor={connectivity_factor}{extra})",
         )
     return True, ""
@@ -400,9 +400,9 @@ def validate_supported_cluster_deposit(
     blmin table). Optionally uses MIC for distances when ``use_mic`` is True (match
     :attr:`~scgo.surface.config.SurfaceSystemConfig.comparator_use_mic`).
 
-    ``binding_penetration_tolerance_a`` guards against adsorbate atoms straying below the
+    ``binding_penetration_tolerance_a`` guards against mobile atoms straying below the
     **nominal** slab top along the surface normal (a bookkeeping check on the
-    slab-extreme plane), NOT a contact-distance check between the adsorbate and the
+    slab-extreme plane), NOT a contact-distance check between the mobile region and the
     slab surface.
 
     Args:
@@ -434,7 +434,7 @@ def validate_supported_cluster_deposit(
     if n_slab < 0 or n_slab > n:
         return False, f"Invalid n_slab={n_slab} for len(combined)={n}"
     if n_slab == n:
-        return False, "No adsorbate atoms in combined structure"
+        return False, "No mobile atoms in combined structure"
 
     mobile = combined[n_slab:]
     n_ads = len(mobile)
@@ -451,7 +451,7 @@ def validate_supported_cluster_deposit(
         use_mic=use_mic,
     )
     if not ok:
-        return False, f"Adsorbate validation failed: {err}"
+        return False, f"Mobile-region validation failed: {err}"
 
     slab = combined[:n_slab]
     slab_top = slab_surface_extreme(slab, surface_normal_axis)
@@ -462,7 +462,7 @@ def validate_supported_cluster_deposit(
         min_c = float(np.min(axis_coord))
         return (
             False,
-            "Adsorbate penetrates below nominal slab top along surface normal "
+            "Mobile region penetrates below nominal slab top along surface normal "
             f"(min coord={min_c:.3f} Å, slab_top={slab_top:.3f} Å)",
         )
 
@@ -491,5 +491,5 @@ def validate_supported_cluster_deposit(
         slab_stacking_cutoff_a=slab_stacking_cutoff_a,
     )
     if not ok:
-        return False, f"Adsorbate validation failed: {msg}"
+        return False, f"Mobile-region validation failed: {msg}"
     return True, ""

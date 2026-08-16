@@ -93,14 +93,14 @@ FLAG_MATRIX = [
         lambda s: _build_single(s, [(0.0, 0.0, 12.0)]),
         {},
         False,
-        "No adsorbate-slab pair",
+        "No mobile-slab contact",
     ),
     (
         "rejects_disconnected_adsorbate",
         lambda s: _build_single(s, [(0.0, 0.0, 2.0), (0.0, 0.0, 4.0), (5.0, 5.0, 2.0)]),
         {},
         False,
-        "Adsorbate validation failed",
+        "Mobile-region validation failed",
     ),
     (
         "rejects_penetration",
@@ -225,7 +225,7 @@ def test_validate_structure_for_system_type_respects_connectivity_flags(
     )
     surface_config = make_surface_config(pt_slab, comparator_use_mic=False)
 
-    with pytest.raises(SCGOValidationError, match="Adsorbate validation failed"):
+    with pytest.raises(SCGOValidationError, match="Mobile-region validation failed"):
         validate_structure_for_system_type(
             combined,
             system_type="surface_cluster",
@@ -277,7 +277,7 @@ def test_contact_with_buried_slab_atom_is_rejected_in_both_paths() -> None:
         use_mic=False,
     )
     assert not ok_strict
-    assert "No adsorbate-slab pair" in msg_strict
+    assert "No mobile-slab contact" in msg_strict
 
     ok_split, msg_split = validate_supported_cluster_deposit(
         combined,
@@ -318,7 +318,7 @@ def test_two_and_three_atom_disconnected_mobile_share_one_message() -> None:
         assert not ok
         messages.append(msg)
 
-    assert all(m.startswith("Adsorbate validation failed: ") for m in messages)
+    assert all(m.startswith("Mobile-region validation failed: ") for m in messages)
     assert all("not connected" in m for m in messages)
 
 
