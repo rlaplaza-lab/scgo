@@ -65,6 +65,9 @@
   (`validate_initial_neb_path`) remains universal across all system types.
 - Surface TS presets enable `max_endpoint_mismatch=1.25` (was unset).
 - TorchSim native autobatcher / OOM re-probe behavior hardened for GPU runs.
+- MLIP extras require ``torch-sim-atomistic==0.6.1`` (MACE extra also pins
+  ``nvalchemi-toolkit-ops[torch]==0.4.1``; UMA extra needs
+  ``fairchem-core>=2.20.0``).
 - Timing payloads require a `kind` discriminator
   (`timing_report.relax_seconds_from_timings`).
 - `import scgo` no longer sets `PYTORCH_CUDA_ALLOC_CONF` at import time; call
@@ -118,6 +121,12 @@
 - Slab-search GA stays legal on layered crystals and frozen adsorbates.
 - Silent TorchSim GPU degradation fixed: cached scaler reuse, real OOM retry,
   and stricter CI.
+- Constrained TorchSim GPU GO no longer crashes when FIRE states still carry an
+  autograd graph into the autobatcher split (``FixAtoms`` inplace on
+  ``SplitWithSizes`` views). SCGO now requires ``torch-sim-atomistic==0.6.1``
+  (upstream ``detach_state_graph`` in ``_chunked_apply``, #590) and detaches
+  model outputs per TorchSim's ``ModelInterface`` contract so later InFlight
+  pops stay safe. Constraint classes are unchanged.
 - Parallel NEB no longer evaluates forces twice per step; `force_calls` is no
   longer double-counted; non-finite NEB forces mark the band failed.
 - Empty DB-discovery results are not cached (stale GO→TS reads).
@@ -208,9 +217,13 @@
 
 - Temporary workarounds for upstream bugs (remove once fixed upstream):
   - TorchSim constraint device patch
-    (``_patch_torchsim_constraint_device_mismatch``): pinned
-    ``torch-sim-atomistic==0.6.0`` still does bare ``torch.isin`` with no
-    CPU/CUDA ``atom_idx`` align in ``AtomConstraint.select_sub_constraint``.
+    (``_patch_torchsim_constraint_device_mismatch``): 0.6.1 still does bare
+    ``torch.isin`` with no CPU/CUDA ``atom_idx`` align in
+    ``AtomConstraint.select_sub_constraint``.
+  - TorchSim model-output detach (``_patch_torchsim_model_detach_outputs``):
+    0.6.1 detaches in ``_chunked_apply`` but still ``pop``/splits InFlight
+    states before detaching completed systems. Drop when upstream detaches
+    before ``pop``.
   - ``HAS_NVALCHEMIOPS = False`` (``disable_metatomic_nvalchemiops``):
     metatomic-torchsim nvalchemiops CUDA NL still fails on non-cubic
     gas-phase cells; vesin path is the reliable fallback.

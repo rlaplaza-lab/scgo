@@ -70,6 +70,42 @@ def test_mace_torchsim_relax_batch_gpu():
 
 
 @pytest.mark.gpu_smoke
+@pytest.mark.requires_cuda
+@pytest.mark.requires_mace
+def test_mace_torchsim_relax_batch_fixatoms_gpu():
+    """Constrained batched MACE GO on GPU (FixAtoms + autobatcher split/pop)."""
+    from ase import Atoms
+    from ase.constraints import FixAtoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    assert torch.cuda.is_available()
+    relaxer = TorchSimBatchRelaxer(
+        model_kind="mace",
+        mace_model_name="mace_matpes_0",
+        force_tol=0.2,
+        max_steps=10,
+        expected_max_atoms=20,
+        max_atoms_to_try=20,
+    )
+
+    def _pt4(seed: int) -> Atoms:
+        rng = torch.Generator().manual_seed(seed)
+        pos = (torch.rand(4, 3, generator=rng) * 2.5).numpy()
+        atoms = Atoms("Pt4", positions=pos)
+        atoms.center(vacuum=5.0)
+        atoms.pbc = False
+        atoms.set_constraint(FixAtoms(indices=[0]))
+        return atoms
+
+    results = relaxer.relax_batch([_pt4(0), _pt4(1)], steps=10)
+    assert len(results) == 2
+    for energy, atoms in results:
+        assert isinstance(energy, float)
+        assert len(atoms) == 4
+
+
+@pytest.mark.gpu_smoke
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.requires_cuda
