@@ -60,6 +60,79 @@ def _as_tensor(
     return out
 
 
+# Match ``normalize_slab_pbc`` / ASE degenerate-vector cutoff.
+_LATTICE_ZERO = 1e-8
+
+
+def _pbc_mask(pbc: torch.Tensor | bool, *, device: torch.device) -> torch.Tensor:
+    """Broadcast a scalar or length-3 PBC flag to a ``(3,)`` bool tensor."""
+    if isinstance(pbc, bool):
+        return torch.tensor([pbc, pbc, pbc], dtype=torch.bool, device=device)
+    mask = pbc.to(device=device, dtype=torch.bool).reshape(-1)
+    if mask.numel() == 1:
+        return mask.expand(3)
+    return mask[:3]
+
+
+def _complete_cell_ase_rows(cell: torch.Tensor) -> torch.Tensor:
+    """Torch port of ``ase.geometry.cell.complete_cell`` (rows = lattice vectors).
+
+    ASE ``find_mic`` calls this before wrapping so mixed-PBC cells (zero vacuum
+    vector) are a right-handed 3x3. One missing vector is replaced by the unit
+    cross product of the other two; two missing vectors use an SVD completion;
+    three missing vectors become the identity.
+    """
+    missing = torch.linalg.norm(cell, dim=1) <= _LATTICE_ZERO
+    n_missing = int(missing.sum().item())
+    if n_missing == 0:
+        return cell
+    if n_missing == 3:
+        return torch.eye(3, dtype=cell.dtype, device=cell.device)
+    out = cell.clone()
+    if n_missing == 1:
+        i = int(torch.nonzero(missing, as_tuple=False)[0, 0].item())
+        dummy = torch.linalg.cross(out[i - 2], out[i - 1])
+        out[i] = dummy / torch.linalg.norm(dummy)
+        return out
+    V, s, wt = torch.linalg.svd(out.T, full_matrices=True)
+    scale = torch.diag(torch.stack((s[0], s.new_tensor(1.0), s.new_tensor(1.0))))
+    completed = (V @ scale @ wt).T
+    i0 = int(torch.nonzero(missing, as_tuple=False)[0, 0].item())
+    if torch.linalg.det(completed) < 0:
+        completed[i0] = -completed[i0]
+    return completed
+
+
+def _complete_cell(cell: torch.Tensor) -> torch.Tensor:
+    """ASE ``complete_cell`` in TorchSim convention (columns = lattice vectors).
+
+    Metatomic/vesin zeros non-periodic lattice vectors (see
+    ``_prepare_atoms_for_metatomic_torchsim``). Those become zero *columns*
+    here. Completing a copy for MIC leaves ``state.cell`` singular for the
+    model, which is the metatomic requirement.
+    """
+    return _complete_cell_ase_rows(cell.T).T
+
+
+def _minimum_image_displacement(
+    dr: torch.Tensor,
+    cell: torch.Tensor,
+    pbc: torch.Tensor | bool,
+) -> torch.Tensor:
+    """Minimum-image wrap matching ASE ``find_mic`` on a metatomic-zeroed cell.
+
+    ASE does ``pbc = cell.any(axis=1) & pbc`` then ``complete_cell`` then wrap.
+    Cartesian dummy axes (e.g. ``e_z``) are not equivalent for skewed slabs.
+    """
+    pbc_mask = _pbc_mask(pbc, device=dr.device)
+    present = torch.linalg.norm(cell, dim=0) > _LATTICE_ZERO
+    return minimum_image_displacement(
+        dr=dr,
+        cell=_complete_cell(cell),
+        pbc=pbc_mask & present,
+    )
+
+
 class TorchSimFixBondLengths(Constraint):
     """TorchSim constraint that keeps selected interatomic distances fixed.
 
@@ -120,7 +193,7 @@ class TorchSimFixBondLengths(Constraint):
         """MIC displacement from atom i to j for bond ``k``."""
         i = int(self.pairs[k, 0])
         j = int(self.pairs[k, 1])
-        delta = minimum_image_displacement(
+        delta = _minimum_image_displacement(
             dr=(positions[j] - positions[i]).unsqueeze(0),
             cell=state.cell[int(self.system_idx[k])],
             pbc=state.pbc,
