@@ -122,3 +122,32 @@ def test_requires_cuda_tests_pin_an_mlip_suite() -> None:
         "requires_cuda without an MLIP marker (runs on both Kaggle suites):\n"
         + "\n".join(f"  - {o}" for o in offenders)
     )
+
+
+def _module_level_imported_modules(path: Path) -> set[str]:
+    """Return modules imported at the top of ``path`` (not inside functions)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+    return names
+
+
+def test_mace_helpers_not_imported_at_collection_time() -> None:
+    """``mace_helpers`` imports ``mace`` at module load.
+
+    A top-level test import fails UMA/UPET collection even when tests are
+    marked ``requires_mace`` (``pytest -m`` still imports the module).
+    """
+    offenders: list[str] = []
+    for path in sorted(TESTS_ROOT.rglob("test_*.py")):
+        if "mace_helpers" in _module_level_imported_modules(path):
+            offenders.append(str(path.relative_to(TESTS_ROOT)))
+    assert not offenders, (
+        "module-level import of scgo.calculators.mace_helpers "
+        "(breaks UMA/UPET collection):\n" + "\n".join(f"  - {o}" for o in offenders)
+    )

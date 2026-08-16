@@ -168,6 +168,10 @@
 
 ### Fixed
 
+- UMA/UPET CPU CI no longer errors collecting ``test_mace_torch_load_patch``:
+  ``mace_helpers`` imports ``mace`` at module load, so the test is now marked
+  ``requires_mace`` and imports the helper inside the test (``pytest -m`` still
+  imports unmarked modules during collection).
 - Bare TS system types no longer oversample pair selection when
   ``max_endpoint_mismatch`` is set; ``resolve_ts_pair_select_cap`` oversamples
   only for adsorbates (IDPP re-rank), and the runner always truncates to

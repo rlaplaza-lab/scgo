@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
-from scgo.calculators.mace_helpers import torch_load_weights_only_false
 
-
+@pytest.mark.requires_mace
 def test_torch_load_weights_only_false_restores_original() -> None:
+    from scgo.calculators.mace_helpers import torch_load_weights_only_false
+
     original = torch.load
     seen: list[bool | None] = []
 
