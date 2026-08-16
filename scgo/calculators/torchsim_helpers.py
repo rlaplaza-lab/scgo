@@ -292,24 +292,25 @@ def _load_default_mace_model(
     compute_stress: bool = False,
 ):
     """Create a TorchSim MACE model given a canonical model identifier."""
-    from scgo.calculators.mace_helpers import MaceUrls
+    from scgo.calculators.mace_helpers import (
+        MaceUrls,
+        torch_load_weights_only_false,
+    )
     from scgo.utils.mlip_extras import clear_torch_force_no_weights_only_load_env
 
     clear_torch_force_no_weights_only_load_env()
-    # The import above of ``mace_helpers`` triggers its module-import-time patch
-    # that permanently forces ``torch.load(weights_only=False)``, so the e3nn
-    # ``constants.pt`` and MACE checkpoint loads succeed under PyTorch >=2.6.
     # Lazy imports: only required for the MACE TorchSim path.
     from mace.calculators.foundations_models import mace_mp  # type: ignore
     from torch_sim.models.mace import MaceModel  # type: ignore
 
     model_selector = getattr(MaceUrls, mace_model_name, mace_model_name)
-    raw_model = mace_mp(
-        model=model_selector,
-        return_raw_model=True,
-        default_dtype=str(dtype).removeprefix("torch."),
-        device=device,
-    )
+    with torch_load_weights_only_false():
+        raw_model = mace_mp(
+            model=model_selector,
+            return_raw_model=True,
+            default_dtype=str(dtype).removeprefix("torch."),
+            device=device,
+        )
     return MaceModel(
         model=raw_model,
         device=device,
@@ -1054,45 +1055,55 @@ class TorchSimBatchRelaxer:
                 autobatcher=static_arg,
             )
 
-        try:
-            props = self._call_torchsim_quiet("single-point", _static_once)
-        except ValueError as exc:
-            if self._is_max_metric_value_error(exc):
-                logger.warning(
-                    "Cached/sticky max_memory_scaler too tight for this single-point "
-                    "batch (%s); resetting batchers and re-probing GPU memory",
-                    exc,
-                )
-                self._reset_and_reprobe()
-                # One retry with a fresh, re-estimated Binning batcher.
-                try:
-                    props = self._call_torchsim_quiet("single-point", _static_once)
-                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
-                    if self._is_cuda_oom_error(retry_exc):
-                        cleanup_torch_cuda(logger=logger)
-                        raise SCGORuntimeError(
-                            "TorchSim ran out of GPU memory during a NEB single-point "
-                            "force evaluation after re-probing the autobatcher. Reduce "
-                            "expected_max_atoms / max_atoms_to_try or the batch size."
-                        ) from retry_exc
-                    raise
-            else:
-                raise
-        except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
-            if self._is_cuda_oom_error(exc):
-                # The native Binning batcher should catch OOM itself, but if a batch
-                # still overflows, hand the next call a clean allocator and surface
-                # a clear error.
-                cleanup_torch_cuda(logger=logger)
-                raise SCGORuntimeError(
-                    "TorchSim ran out of GPU memory during a NEB single-point force "
-                    "evaluation (ts.static). Reduce expected_max_atoms / "
-                    "max_atoms_to_try or the batch size."
-                ) from exc
-            raise
+        props = self._run_with_max_metric_retry(
+            "single-point",
+            _static_once,
+            oom_msg=(
+                "TorchSim ran out of GPU memory during a NEB single-point force "
+                "evaluation (ts.static). Reduce expected_max_atoms / "
+                "max_atoms_to_try or the batch size."
+            ),
+            retry_oom_msg=(
+                "TorchSim ran out of GPU memory during a NEB single-point "
+                "force evaluation after re-probing the autobatcher. Reduce "
+                "expected_max_atoms / max_atoms_to_try or the batch size."
+            ),
+            max_metric_warning=(
+                "Cached/sticky max_memory_scaler too tight for this single-point "
+                "batch (%s); resetting batchers and re-probing GPU memory"
+            ),
+        )
         return self._results_from_static_props(
             props, atoms_seq=atoms_seq, reference_atoms=reference_atoms
         )
+
+    def _run_with_max_metric_retry(
+        self,
+        kind: str,
+        fn: Any,
+        *,
+        oom_msg: str,
+        retry_oom_msg: str,
+        max_metric_warning: str,
+    ) -> Any:
+        """Run ``fn``; on sticky max_metric, reprobe once. Map CUDA OOM to SCGORuntimeError."""
+        try:
+            return self._call_torchsim_quiet(kind, fn)
+        except (ValueError, torch.cuda.OutOfMemoryError, RuntimeError) as exc:
+            if isinstance(exc, ValueError) and self._is_max_metric_value_error(exc):
+                logger.warning(max_metric_warning, exc)
+                self._reset_and_reprobe()
+                try:
+                    return self._call_torchsim_quiet(kind, fn)
+                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
+                    if self._is_cuda_oom_error(retry_exc):
+                        cleanup_torch_cuda(logger=logger)
+                        raise SCGORuntimeError(retry_oom_msg) from retry_exc
+                    raise
+            if self._is_cuda_oom_error(exc):
+                cleanup_torch_cuda(logger=logger)
+                raise SCGORuntimeError(oom_msg) from exc
+            raise
 
     @staticmethod
     def _is_max_metric_value_error(exc: BaseException) -> bool:
@@ -1191,42 +1202,26 @@ class TorchSimBatchRelaxer:
                 **runner_kwargs,
             )
 
-        try:
-            state = self._call_torchsim_quiet("relax", _optimize_once)
-        except (ValueError, torch.cuda.OutOfMemoryError, RuntimeError) as exc:
-            if isinstance(exc, ValueError) and self._is_max_metric_value_error(exc):
-                logger.warning(
-                    "Cached/sticky max_memory_scaler too tight for this batch (%s); "
-                    "resetting batchers and re-probing GPU memory",
-                    exc,
-                )
-                self._reset_and_reprobe()
-                # One retry with a fresh, re-estimated autobatcher.
-                try:
-                    state = self._call_torchsim_quiet("relax", _optimize_once)
-                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
-                    if self._is_cuda_oom_error(retry_exc):
-                        cleanup_torch_cuda(logger=logger)
-                        raise SCGORuntimeError(
-                            "TorchSim relaxation ran out of GPU memory during "
-                            "optimization after re-probing the autobatcher. The batch "
-                            "is larger than the GPU can hold: reduce expected_max_atoms / "
-                            "max_atoms_to_try or the batch size."
-                        ) from retry_exc
-                    raise
-            elif self._is_cuda_oom_error(exc):
-                # The native autobatcher should catch OOM itself, but if a batch
-                # still overflows, hand the next call a clean allocator and surface
-                # a clear error.
-                cleanup_torch_cuda(logger=logger)
-                raise SCGORuntimeError(
-                    "TorchSim relaxation ran out of GPU memory during optimization. "
-                    "The sticky max_memory_scaler may be too tight, or the batch is "
-                    "larger than the GPU can hold: reduce expected_max_atoms / "
-                    "max_atoms_to_try or the batch size."
-                ) from exc
-            else:
-                raise
+        state = self._run_with_max_metric_retry(
+            "relax",
+            _optimize_once,
+            oom_msg=(
+                "TorchSim relaxation ran out of GPU memory during optimization. "
+                "The sticky max_memory_scaler may be too tight, or the batch is "
+                "larger than the GPU can hold: reduce expected_max_atoms / "
+                "max_atoms_to_try or the batch size."
+            ),
+            retry_oom_msg=(
+                "TorchSim relaxation ran out of GPU memory during "
+                "optimization after re-probing the autobatcher. The batch "
+                "is larger than the GPU can hold: reduce expected_max_atoms / "
+                "max_atoms_to_try or the batch size."
+            ),
+            max_metric_warning=(
+                "Cached/sticky max_memory_scaler too tight for this batch (%s); "
+                "resetting batchers and re-probing GPU memory"
+            ),
+        )
 
         batch_steps = _steps_taken_from_optimize_state(state)
         self.last_batch_relax_steps = (

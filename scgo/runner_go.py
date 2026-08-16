@@ -22,7 +22,7 @@ from scgo.exceptions import (
 )
 from scgo.metadata.run_dir import ensure_run_id
 from scgo.minima_search import run_trials
-from scgo.param_presets import get_default_params
+from scgo.param_presets import default_params_top_level_keys
 from scgo.runner_params import (
     _merge_adsorbate_context_into_params,
     _reject_slot_identity_keys,
@@ -75,6 +75,11 @@ _EXTRA_ACCEPTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "cluster_adsorbate_config",
         "validation_n_jobs",
     }
+)
+
+# Static allowlist: default template keys ∪ extras (no deepcopy per GO call).
+_EXPECTED_TOP_LEVEL_KEYS: frozenset[str] = (
+    default_params_top_level_keys() | _EXTRA_ACCEPTED_TOP_LEVEL_KEYS
 )
 
 ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
@@ -208,9 +213,7 @@ def _run_go_trials(
     # Validate that no unexpected top-level keys were provided. Keep in sync with
     # defaults; a few accepted inputs (surface/adsorbate config, validation n_jobs)
     # are valid top-level keys that are intentionally absent from defaults.
-    expected_top_level_keys = set(get_default_params().keys()) | (
-        _EXTRA_ACCEPTED_TOP_LEVEL_KEYS
-    )
+    expected_top_level_keys = _EXPECTED_TOP_LEVEL_KEYS
     unexpected_keys = set(params.keys()) - expected_top_level_keys
     if unexpected_keys:
         raise SCGOValidationError(

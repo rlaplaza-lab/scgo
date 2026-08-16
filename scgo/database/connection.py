@@ -171,6 +171,9 @@ def open_data_connection_for_setup(
     Applies SCGO PRAGMAs via :func:`_apply_scgo_sqlite_settings`, which performs
     the first SQLite open. Callers should wrap this in :func:`~scgo.database.sync.database_retry`
     when running on shared or contended filesystems.
+
+    The connection is closed after PRAGMAs are applied so later ``with da.c:``
+    (ASE SQLite) can reopen cleanly; file-level settings such as WAL persist.
     """
     da = DataConnection(str(db_path))
     _apply_scgo_sqlite_settings(

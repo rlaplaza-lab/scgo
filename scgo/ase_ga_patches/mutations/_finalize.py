@@ -10,6 +10,7 @@ from ase import Atoms
 from scgo.ase_ga_patches.mutations._common import (
     _IDENTITY_ATOL,
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.utils.helpers import get_composition_counts
@@ -63,6 +64,7 @@ def _finalize_mutant(creator, parent, mutant, description):
             parent[len(parent) - n_mobile :],
             mobile,
             use_mic=use_mic,
+            connectivity_factor=_resolve_op_connectivity_factor(creator),
         ):
             return None, description
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from numbers import Real
 from typing import Any, Literal
 
 import numpy as np
@@ -20,8 +21,8 @@ import numpy as np
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 
-# User-facing input: float, or mapping with element and/or pair keys.
-ConnectivityFactorInput = float | Mapping[Any, float]
+# User-facing input: real scalar (incl. numpy floats) or element/pair mapping.
+ConnectivityFactorInput = Real | Mapping[Any, float]
 
 # Canonical pair key after normalize: sorted chemical symbols.
 PairKey = tuple[str, str]
@@ -120,7 +121,7 @@ def normalize_connectivity_factor(
             element_items=(),
             pair_items=(),
         )
-    if isinstance(spec, (int, float)) and not isinstance(spec, bool):
+    if isinstance(spec, Real) and not isinstance(spec, bool):
         f = _validate_positive_factor(name, spec)
         return NormalizedConnectivityFactor(
             global_factor=f, element_items=(), pair_items=()

@@ -150,19 +150,6 @@ def _build_adsorbate_fragments_on_slab(
     # per-subgroup slab-contact rule in validate_connectivity_policy owns surface
     # connectivity instead. place_fragment_on_cluster receives uses_surface=True,
     # which makes its connectivity pre-check a no-op for the slab+adsorbate combo.
-    ca = ClusterAdsorbateConfig(
-        height_min=ca.height_min,
-        height_max=ca.height_max,
-        max_placement_attempts=ca.max_placement_attempts,
-        blmin_ratio=ca.blmin_ratio,
-        cell_margin=ca.cell_margin,
-        random_spin_about_normal=ca.random_spin_about_normal,
-        validate_combined_structure=ca.validate_combined_structure,
-        structure_min_distance_factor=ca.structure_min_distance_factor,
-        structure_connectivity_factor=ca.structure_connectivity_factor,
-        structure_check_clashes=ca.structure_check_clashes,
-        structure_check_connectivity=ca.structure_check_connectivity,
-    )
     site_core = _slab_surface_layer(slab, axis)
     precomputed_sites = _outward_slab_site_candidates(site_core, axis)
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
@@ -521,7 +508,7 @@ def create_deposited_cluster(
                     cluster_adsorbate_config,
                     cluster_init_vacuum=config.cluster_init_vacuum,
                     init_mode=config.init_mode,
-                    max_placement_attempts=config.max_placement_attempts,
+                    max_placement_attempts=1,
                     batch_site_counts=batch_site_counts,
                     plan=plan,
                     allocation=allocation,

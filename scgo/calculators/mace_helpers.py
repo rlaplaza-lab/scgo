@@ -7,6 +7,8 @@ seamless integration with global optimization workflows.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any
 
@@ -14,43 +16,37 @@ import torch
 
 from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
 
-_torch_load_patched = False
 
+@contextmanager
+def torch_load_weights_only_false() -> Iterator[None]:
+    """Temporarily force ``torch.load(..., weights_only=False)``.
 
-def _ensure_torch_load_mace_checkpoints() -> None:
-    """Default ``torch.load(..., weights_only=False)`` when omitted (PyTorch 2.6+).
-
-    MACE checkpoints pickle full model graphs with many custom classes; PyTorch
-    2.6+ defaults ``weights_only=True``, which rejects those pickles. SCGO only
-    loads foundation checkpoints from trusted sources (same policy as upstream
-    MACE).
+    MACE checkpoints and e3nn ``constants.pt`` pickle full graphs / custom
+    globals; PyTorch 2.6+ defaults ``weights_only=True`` and rejects them.
+    The patch is restored on exit so the rest of the process keeps the
+    safer default. SCGO only loads foundation checkpoints from trusted
+    sources (same policy as upstream MACE).
     """
-    global _torch_load_patched
-    if _torch_load_patched:
-        return
-    _torch_load_patched = True
-    _orig_load = torch.load
+    orig_load = torch.load
 
     def _load(*args: Any, **kwargs: Any) -> Any:
-        # MACE/torch-sim foundation checkpoints pickle full model graphs with many
-        # custom globals (e.g. ``slice`` in ``constants.pt``). PyTorch 2.6+ defaults
-        # ``weights_only=True``, and some call sites pass it explicitly, so force
-        # it off here: SCGO only loads foundation checkpoints from trusted sources
-        # (same policy as upstream MACE).
         kwargs["weights_only"] = False
-        return _orig_load(*args, **kwargs)
+        return orig_load(*args, **kwargs)
 
     torch.load = _load  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        torch.load = orig_load  # type: ignore[method-assign]
 
 
 # e3nn/o3/_wigner.py unpickles constants.pt via torch.load at import time.
-# PyTorch >=2.6 defaults weights_only=True and rejects the `slice` global; force
-# it off here (trusted MACE foundation checkpoints only) before the mace import.
-_ensure_torch_load_mace_checkpoints()
-
+# Patch only for the duration of the mace import.
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
-from mace.calculators import mace_mp
+
+with torch_load_weights_only_false():
+    from mace.calculators import mace_mp
 
 from scgo.calculators.torch_device import resolve_torch_device
 from scgo.utils.logging import get_logger
@@ -125,16 +121,13 @@ class MACE(Calculator):
             selected_device,
         )
 
-        # The module-import-time patch (see ``_ensure_torch_load_mace_checkpoints``)
-        # permanently forces ``torch.load(weights_only=False)``, so the MACE
-        # checkpoint load below succeeds under PyTorch >=2.6 without a shim.
-        # mace_mp automatically handles downloading and loading the specified
-        # pretrained MACE model, returning a fully functional ASE calculator.
-        self._mace_calc = mace_mp(
-            model=model_selector,
-            device=selected_device,
-            default_dtype=default_dtype,
-        )
+        # Patch torch.load only while loading the checkpoint (PyTorch >=2.6).
+        with torch_load_weights_only_false():
+            self._mace_calc = mace_mp(
+                model=model_selector,
+                device=selected_device,
+                default_dtype=default_dtype,
+            )
 
     def calculate(
         self,

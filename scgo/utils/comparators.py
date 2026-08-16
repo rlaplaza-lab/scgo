@@ -27,14 +27,36 @@ from scgo.metadata.atoms import get_tag
 _SORTED_DIST_FP_INFO_KEY = "_scgo_sorted_dist_fp"
 
 
+def _array_dirty_token(arr: np.ndarray) -> tuple:
+    """Cheap identity/content token for an ndarray (pointer, shape, dtype, sum)."""
+    checksum = float(arr.flat[0] + arr.flat[-1] + float(arr.sum())) if arr.size else 0.0
+    return (arr.__array_interface__["data"][0], arr.shape, arr.dtype.str, checksum)
+
+
+def _atoms_geometry_dirty_token(atoms: Atoms, *, mic: bool) -> tuple:
+    """Fast dirty check for positions/numbers/(cell) without hashing bytes."""
+    pos = atoms.arrays["positions"]
+    numbers = atoms.arrays["numbers"]
+    token: tuple = (
+        _array_dirty_token(pos),
+        _array_dirty_token(numbers),
+        bool(mic),
+    )
+    if mic or np.any(atoms.pbc):
+        cell = np.asarray(atoms.cell.array, dtype=np.float64)
+        pbc = tuple(bool(x) for x in atoms.pbc)
+        token = (*token, _array_dirty_token(cell), pbc)
+    return token
+
+
 def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
     """Build a content key that invalidates when geometry/composition changes."""
-    positions = np.ascontiguousarray(atoms.get_positions(), dtype=np.float64)
-    numbers = np.ascontiguousarray(atoms.get_atomic_numbers(), dtype=np.int32)
+    positions = np.ascontiguousarray(atoms.arrays["positions"], dtype=np.float64)
+    numbers = np.ascontiguousarray(atoms.arrays["numbers"], dtype=np.int32)
     key: tuple = (hash(positions.tobytes()), hash(numbers.tobytes()), bool(mic))
-    if mic or np.any(atoms.get_pbc()):
-        cell = np.ascontiguousarray(atoms.get_cell().array, dtype=np.float64)
-        pbc = tuple(bool(x) for x in atoms.get_pbc())
+    if mic or np.any(atoms.pbc):
+        cell = np.ascontiguousarray(atoms.cell.array, dtype=np.float64)
+        pbc = tuple(bool(x) for x in atoms.pbc)
         key = (*key, hash(cell.tobytes()), pbc)
     return key
 
@@ -58,7 +80,7 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
             continue
 
         if not use_mic_path:
-            positions = atoms.get_positions()[i_un]
+            positions = atoms.arrays["positions"][i_un]
             d = pdist(positions).tolist()
         else:
             if all_d is None:
@@ -81,7 +103,8 @@ def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarra
     by calculating all interatomic distances for each element type and sorting them.
 
     Results are cached on ``atoms.info`` under ``_scgo_sorted_dist_fp`` and
-    invalidated when positions, numbers, or (for MIC) cell/PBC change.
+    invalidated when positions, numbers, or (for MIC) cell/PBC change. Cache hits
+    use a cheap dirty token (array pointer/shape/sum) and skip byte hashing.
 
     Args:
         atoms: The Atoms object for which to calculate the distances.
@@ -92,20 +115,28 @@ def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarra
         A dictionary where keys are atomic numbers (integers) and values are
         sorted 1D numpy arrays of interatomic distances for that element type.
     """
-    content_key = _sorted_dist_content_key(atoms, mic=mic)
+    mic_b = bool(mic)
     cached = atoms.info.get(_SORTED_DIST_FP_INFO_KEY)
     if (
         isinstance(cached, dict)
-        and cached.get("content_key") == content_key
-        and cached.get("mic") == bool(mic)
+        and cached.get("mic") == mic_b
         and isinstance(cached.get("pair_cor"), dict)
     ):
-        return cached["pair_cor"]
+        dirty = _atoms_geometry_dirty_token(atoms, mic=mic_b)
+        if cached.get("dirty_token") == dirty:
+            return cached["pair_cor"]
+        content_key = _sorted_dist_content_key(atoms, mic=mic_b)
+        if cached.get("content_key") == content_key:
+            cached["dirty_token"] = dirty
+            return cached["pair_cor"]
+    else:
+        content_key = _sorted_dist_content_key(atoms, mic=mic_b)
 
-    pair_cor = _compute_sorted_dist_list(atoms, mic=mic)
+    pair_cor = _compute_sorted_dist_list(atoms, mic=mic_b)
     atoms.info[_SORTED_DIST_FP_INFO_KEY] = {
         "content_key": content_key,
-        "mic": bool(mic),
+        "dirty_token": _atoms_geometry_dirty_token(atoms, mic=mic_b),
+        "mic": mic_b,
         "pair_cor": pair_cor,
     }
     return pair_cor

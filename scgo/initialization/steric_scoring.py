@@ -41,13 +41,10 @@ def steric_deficit(positions, atomic_numbers, blmin: dict) -> float:
 
     distances = squareform(pdist(positions))
     numbers = np.asarray(atomic_numbers, dtype=int)
-    deficit = 0.0
-    for i in range(n_atoms):
-        for j in range(i + 1, n_atoms):
-            gap = get_blmin_distance(blmin, numbers[i], numbers[j]) - distances[i, j]
-            if gap > 0.0:
-                deficit += gap
-    return deficit
+    required = _blmin_matrix(numbers, blmin)
+    # squareform is symmetric with zeros on the diagonal; divide by 2 to count
+    # each unordered pair once (matches the historical i < j loop).
+    return float(np.maximum(required - distances, 0.0).sum() * 0.5)
 
 
 def steric_deficit_two_sets(

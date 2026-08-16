@@ -14,6 +14,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _IDENTITY_ATOL,
     _ensure_rng,
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
     _random_unit_vector,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
@@ -162,7 +163,12 @@ class OverlapReliefMutation(OffspringCreator):
                 and atoms_too_close_two_sets(slab, candidate, self.blmin)
             ):
                 return None
-            if not _preserves_mobile_connectivity(top, candidate, use_mic=use_mic):
+            if not _preserves_mobile_connectivity(
+                top,
+                candidate,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
+            ):
                 return None
             return slab + candidate
 

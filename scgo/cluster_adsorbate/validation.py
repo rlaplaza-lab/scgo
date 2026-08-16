@@ -39,7 +39,11 @@ def validate_combined_cluster_structure(
     check_connectivity: bool = True,
     use_mic: bool = False,
 ) -> tuple[bool, str]:
-    """Validate core + adsorbate structure (clashes and connectivity). Delegates to cluster init rules."""
+    """Validate core + adsorbate structure (clashes and connectivity).
+
+    Public alias of ``validate_cluster_structure`` in
+    ``scgo.initialization.geometry_helpers``.
+    """
     return validate_cluster_structure(
         atoms,
         min_distance_factor,

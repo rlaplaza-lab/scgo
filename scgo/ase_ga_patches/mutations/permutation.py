@@ -126,9 +126,14 @@ class PermutationMutation(OffspringCreator):
         while too_close and count < maxcount:
             count += 1
             pos = pos_ref.copy()
-            for _ in range(swaps):
-                pi_idx = self.rng.integers(0, len(valid_pairs))
-                i, j = valid_pairs[pi_idx]
+            n_swaps = min(swaps, len(valid_pairs))
+            if n_swaps < 1:
+                return None
+            pair_indices = self.rng.choice(
+                len(valid_pairs), size=n_swaps, replace=False
+            )
+            for pi_idx in np.atleast_1d(pair_indices):
+                i, j = valid_pairs[int(pi_idx)]
                 ind1 = np.where(tags == unique_tags[i])
                 ind2 = np.where(tags == unique_tags[j])
                 cop1 = np.mean(pos[ind1], axis=0)

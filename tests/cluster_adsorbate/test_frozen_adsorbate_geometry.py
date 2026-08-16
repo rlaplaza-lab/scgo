@@ -12,7 +12,10 @@ from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_mutation_operators
 from scgo.ase_ga_patches.mutations import MirrorMutation, OverlapReliefMutation
-from scgo.cluster_adsorbate.constraints import attach_fix_bond_lengths
+from scgo.cluster_adsorbate.constraints import (
+    attach_fix_bond_lengths,
+    prepare_atoms_for_local_relax,
+)
 from scgo.cluster_adsorbate.rigid import (
     enforce_frozen_adsorbate_geometry,
     restore_rigid_adsorbate_fragments,
@@ -30,17 +33,24 @@ def _oh_on_pt2() -> tuple[Atoms, Atoms]:
     return combined, oh
 
 
-def test_restore_rigid_adsorbate_fragments_resets_bond_length() -> None:
-    combined, oh_template = _oh_on_pt2()
-    ads_def = AdsorbateDefinition(
+def _oh_ads_def() -> AdsorbateDefinition:
+    return AdsorbateDefinition(
         core_symbols=["Pt", "Pt"],
         adsorbate_symbols=["O", "H"],
         adsorbate_fragment_lengths=[2],
     )
+
+
+def test_restore_rigid_adsorbate_fragments_resets_bond_length() -> None:
+    """Snap restores template bond length even with FixBondLengths attached."""
+    combined, oh_template = _oh_on_pt2()
+    ads_def = _oh_ads_def()
     pos = combined.get_positions()
     pos[3] += np.array([0.4, 0.0, 0.0])
     combined.set_positions(pos)
     distorted = float(np.linalg.norm(pos[3] - pos[2]))
+    # Stale SHAKE targets would undo the snap if apply_constraint stayed True.
+    attach_fix_bond_lengths(combined, [(2, 3)])
 
     restore_rigid_adsorbate_fragments(
         combined,
@@ -48,13 +58,32 @@ def test_restore_rigid_adsorbate_fragments_resets_bond_length() -> None:
         adsorbate_definition=ads_def,
         fragment_templates=[oh_template],
     )
-    restored = combined.get_positions()
-    bond = float(np.linalg.norm(restored[3] - restored[2]))
+    bond = float(
+        np.linalg.norm(combined.get_positions()[3] - combined.get_positions()[2])
+    )
     template_bond = float(
         np.linalg.norm(oh_template.get_positions()[1] - oh_template.get_positions()[0])
     )
     assert abs(bond - template_bond) < 1e-6
     assert abs(distorted - template_bond) > 0.05
+
+
+def test_prepare_atoms_for_local_relax_does_not_accumulate_fix_bond_lengths() -> None:
+    combined, oh_template = _oh_on_pt2()
+    ads_def = _oh_ads_def()
+    current = combined
+    for _ in range(4):
+        prepared = prepare_atoms_for_local_relax(
+            current,
+            surface_mode=False,
+            surface_config=None,
+            n_slab=0,
+            freeze_adsorbate_internal_geometry=True,
+            adsorbate_definition=ads_def,
+            adsorbate_fragment_templates=[oh_template],
+        )
+        assert sum(isinstance(c, FixBondLengths) for c in prepared.constraints) == 1
+        current = prepared.copy()
 
 
 def test_overlap_relief_use_tags_preserves_intra_fragment_geometry() -> None:

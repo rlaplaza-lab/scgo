@@ -64,7 +64,10 @@ from scgo.exceptions import (
 )
 from scgo.initialization import create_initial_cluster, create_initial_cluster_batch
 from scgo.initialization.atomic_radii import build_blmin_from_zs
-from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
+from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_DEFAULT,
+    CONNECTIVITY_FACTOR,
+)
 from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import (
@@ -1067,6 +1070,9 @@ def create_mutation_operators(
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
 ) -> tuple[list, dict[str, int]]:
     """Create mutation operators once at start of GA.
 
@@ -1097,6 +1103,7 @@ def create_mutation_operators(
             in-plane direction for in-plane slide mutation.
         breathing_scale_min: Lower bound for radial scale factors (about the fragment CoM).
         breathing_scale_max: Upper bound for radial scale factors.
+        connectivity_factor: Stamped onto each operator for mutation connectivity gates.
 
     Returns:
         Tuple of (operators_list, operator_name_to_index_map).
@@ -1352,6 +1359,13 @@ def create_mutation_operators(
         )
         operators.append(reposition)
         name_map["fragment_reposition"] = len(operators) - 1
+
+    resolved_cf: ConnectivityFactorInput | NormalizedConnectivityFactor = (
+        CONNECTIVITY_FACTOR if connectivity_factor is None else connectivity_factor
+    )
+    for op in operators:
+        op.connectivity_factor = resolved_cf
+
     return operators, name_map
 
 

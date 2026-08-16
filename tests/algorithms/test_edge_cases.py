@@ -112,7 +112,7 @@ def test_bh_extreme_temperature_zero(tmp_path, rng):
     assert isinstance(minima, list)
     assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
     energies = [float(e) for e, _a in minima]
-    assert min(energies) <= energies[0] + 1e-6
+    assert energies == sorted(energies)
 
 
 @pytest.mark.slow

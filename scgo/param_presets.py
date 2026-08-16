@@ -7,7 +7,6 @@ from functools import cache
 from typing import Any
 
 from scgo.constants import (
-    BOLTZMANN_K_EV_PER_K,
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_NEB_TANGENT_METHOD,
@@ -56,6 +55,7 @@ __all__ = [
     "TS_DEFAULTS_BY_SYSTEM_TYPE",
     "default_calculator_kwargs",
     "get_default_params",
+    "default_params_top_level_keys",
     "get_minimal_ga_params",
     "get_testing_params",
     "get_torchsim_ga_params",
@@ -269,7 +269,7 @@ def _get_default_params_template() -> GLOptimizerParams:
             },
             "bh": {
                 "optimizer": "FIRE",
-                "temperature": 500 * BOLTZMANN_K_EV_PER_K,  # 500K in eV
+                "temperature": 1.0,  # Metropolis energy scale (eV), ASE-style
                 "fmax": 0.05,
                 "niter": "auto",
                 "dr": 0.2,
@@ -358,6 +358,12 @@ def get_default_params() -> GLOptimizerParams:
     CPU) or ``-1`` (all CPUs) to parallelize every CPU stage at once.
     """
     return copy.deepcopy(_get_default_params_template())
+
+
+@cache
+def default_params_top_level_keys() -> frozenset[str]:
+    """Top-level keys of :func:`get_default_params` without a full deepcopy."""
+    return frozenset(_get_default_params_template().keys())
 
 
 def get_minimal_ga_params(
@@ -789,11 +795,8 @@ def get_high_energy_params() -> GLOptimizerParams:
     params = get_default_params()
     params["fitness_strategy"] = "high_energy"
 
-    # Increase temperature for BH to accept high-energy moves
-    # Default is 500K, increase to 1000K for better high-energy exploration
-    params["optimizer_params"]["bh"]["temperature"] = (
-        1000 * BOLTZMANN_K_EV_PER_K
-    )  # 1000K
+    # Higher Metropolis scale than the default 1.0 eV for more uphill acceptance.
+    params["optimizer_params"]["bh"]["temperature"] = 2.0
 
     return params
 

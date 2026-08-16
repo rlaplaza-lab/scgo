@@ -88,7 +88,7 @@ Preset effects (vs defaults)
    * - ``get_diversity_params()``
      - ``fitness_strategy="diversity"`` + reference DB glob and update interval (top-level and BH/GA slots)
    * - ``get_high_energy_params()``
-     - ``fitness_strategy="high_energy"``; BH temperature raised to 1000 K
+     - ``fitness_strategy="high_energy"``; BH Metropolis scale raised to ``2.0`` eV
    * - ``get_ts_search_params()``
      - Full flat TS dict for one ``system_type`` (NEB knobs from :func:`~scgo.param_presets.get_ts_defaults`); baseline for TS merge
    * - ``get_low_effort_ts_search_params()``

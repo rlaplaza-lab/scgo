@@ -32,7 +32,10 @@ def attach_fix_bond_lengths(
     """
     n = len(atoms)
     seen: set[tuple[int, int]] = set()
-    new_constraints: list = list(atoms.constraints) if atoms.constraints else []
+    # Replace any prior FixBondLengths; keep FixAtoms and other constraint types.
+    new_constraints: list = [
+        c for c in (atoms.constraints or []) if not isinstance(c, FixBondLengths)
+    ]
     pairs: list[tuple[int, int]] = []
     for a, b in bond_pairs:
         if not (0 <= a < n and 0 <= b < n):
@@ -50,8 +53,7 @@ def attach_fix_bond_lengths(
         pairs.append((int(a), int(b)))
     if pairs:
         new_constraints.append(FixBondLengths(pairs))
-    if new_constraints:
-        atoms.set_constraint(new_constraints)
+    atoms.set_constraint(new_constraints)
 
 
 def attach_adsorbate_internal_geometry_constraints(

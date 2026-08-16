@@ -15,7 +15,7 @@ import numpy as np
 from ase.calculators.emt import EMT
 
 from scgo.cluster_adsorbate.config import resolve_cluster_adsorbate_config
-from scgo.constants import BOLTZMANN_K_EV_PER_K, SURFACE_GA_MIN_LOCAL_RELAX_STEPS
+from scgo.constants import SURFACE_GA_MIN_LOCAL_RELAX_STEPS
 from scgo.exceptions import (
     SCGOValidationError,
 )
@@ -741,8 +741,8 @@ def log_configuration(
         value = _format_optimizer_log_value(key, value)
 
         if key == "temperature" and isinstance(value, float):
-            temp_k = value / BOLTZMANN_K_EV_PER_K
-            logger.info("SCGO optimizer: %s=%0.6f eV (%0.1f K)", key, value, temp_k)
+            # BH Metropolis energy scale (eV), not a physical temperature.
+            logger.info("SCGO optimizer: %s=%0.6f eV", key, value)
         elif isinstance(value, float) and abs(value) < 0.001:
             logger.info("SCGO optimizer: %s=%0.6f", key, value)
         elif isinstance(value, int | float):

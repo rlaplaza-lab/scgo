@@ -26,7 +26,6 @@ from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import prepare_atoms_for_local_relax
 from scgo.constants import (
-    BOLTZMANN_K_EV_PER_K,
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_PAIR_COR_MAX,
@@ -250,7 +249,7 @@ def bh_go(
     dr: float = 0.5,
     move_fraction: float = 0.3,
     move_strategy: str = "random",
-    temperature: float = 500 * BOLTZMANN_K_EV_PER_K,
+    temperature: float = 1.0,
     deduplicate: bool = True,
     energy_tolerance: float = DEFAULT_ENERGY_TOLERANCE,
     comparator_tol: float = DEFAULT_COMPARATOR_TOL,
@@ -297,8 +296,8 @@ def bh_go(
         dr: Maximum displacement distance for each atom during random move step (Å).
         move_fraction: Fraction of atoms to move during each perturbation step.
         move_strategy: Strategy for selecting atoms to move ('random', 'highest_force', 'lowest_force').
-        temperature: Temperature for Metropolis criterion (eV), governing acceptance
-            of structures based on fitness differences.
+        temperature: Metropolis energy scale (eV) for accepting uphill fitness
+            moves. Default ``1.0`` matches ASE BasinHopping.
         write_timing_json: Optional ``timing.json`` (see ``timing_output_dir``).
             Set in ``optimizer_params['bh']`` inside ``params``/``go_params``.
         detailed_timing: Per-iteration split rows in JSON when ``write_timing_json``

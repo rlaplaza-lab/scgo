@@ -34,9 +34,9 @@ def clear_torch_force_no_weights_only_load_env() -> None:
 
     The real PyTorch variable is ``TORCH_FORCE_WEIGHTS_ONLY_LOAD`` (set ``"0"``
     to disable the >=2.6 default). We also clear the old, misnamed
-    ``TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD`` for back-compat. SCGO applies its own
-    ``weights_only=False`` shim at MACE import time, so clearing these prevents
-    an external override from re-breaking the e3nn constants.pt load.
+    ``TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD`` for back-compat. SCGO scopes
+    ``weights_only=False`` via ``torch_load_weights_only_false`` in
+    ``scgo.calculators.mace_helpers``.
     """
     os.environ.pop("TORCH_FORCE_WEIGHTS_ONLY_LOAD", None)
     os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)

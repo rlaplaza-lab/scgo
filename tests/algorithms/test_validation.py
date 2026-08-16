@@ -573,73 +573,73 @@ class TestGlobalOptimizerValidationIntegration:
 class TestCampaignFunctionValidationIntegration:
     """Tests for campaign function parameter validation - consolidated."""
 
-    def test_run_trials_invalid_composition(self, rng):
+    def test_run_trials_invalid_composition(self, rng, tmp_path):
         """Test run_trials with invalid composition."""
         with pytest.raises(SCGOValidationError, match="composition"):
             run_trials(
                 composition="invalid",
                 global_optimizer="bh",
                 global_optimizer_kwargs={"system_type": "gas_cluster"},
-                output_dir="out",
+                output_dir=str(tmp_path),
                 rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_run_trials_invalid_optimizer(self, rng):
+    def test_run_trials_invalid_optimizer(self, rng, tmp_path):
         """Test run_trials with invalid global_optimizer."""
         with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
             run_trials(
                 composition=["Pt", "Pt"],
                 global_optimizer="invalid",
                 global_optimizer_kwargs={"system_type": "gas_cluster"},
-                output_dir="out",
+                output_dir=str(tmp_path),
                 rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_run_trials_missing_system_type(self, rng):
+    def test_run_trials_missing_system_type(self, rng, tmp_path):
         """Test run_trials requires system_type in global_optimizer_kwargs."""
         with pytest.raises(SCGOValidationError, match="system_type must be set"):
             run_trials(
                 composition=["Pt", "Pt"],
                 global_optimizer="bh",
                 global_optimizer_kwargs={},
-                output_dir="out",
+                output_dir=str(tmp_path),
                 rng=rng,
             )
 
-    def test_scgo_invalid_composition(self, rng):
+    def test_scgo_invalid_composition(self, rng, tmp_path):
         """Test scgo with invalid composition."""
         with pytest.raises(SCGOValidationError, match="composition"):
             scgo(
                 composition="invalid",
                 global_optimizer="bh",
                 global_optimizer_kwargs={"system_type": "gas_cluster"},
-                output_dir="out",
+                output_dir=str(tmp_path),
                 rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_scgo_invalid_optimizer(self, rng):
+    def test_scgo_invalid_optimizer(self, rng, tmp_path):
         """Test scgo with invalid global_optimizer."""
         with pytest.raises(SCGOValidationError, match="Unknown global_optimizer"):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="invalid",
                 global_optimizer_kwargs={"system_type": "gas_cluster"},
-                output_dir="out",
+                output_dir=str(tmp_path),
                 rng=rng,
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_scgo_missing_system_type(self, rng):
+    def test_scgo_missing_system_type(self, rng, tmp_path):
         """Test scgo requires system_type in global_optimizer_kwargs."""
         with pytest.raises(SCGOValidationError, match="system_type must be set"):
             scgo(
                 composition=["Pt", "Pt"],
                 global_optimizer="bh",
                 global_optimizer_kwargs={},
-                output_dir="out",
+                output_dir=str(tmp_path),
                 rng=rng,
                 calculator_for_global_optimization=EMT(),
             )

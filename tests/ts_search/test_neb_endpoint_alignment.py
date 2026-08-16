@@ -25,6 +25,7 @@ from scgo.ts_search.transition_state import (
     interpolate_path,
     validate_initial_neb_path,
 )
+from scgo.ts_search.transition_state_io import adsorbate_pair_select_cap
 from scgo.utils.helpers import get_cluster_formula
 
 # ---------------------------------------------------------------------
@@ -234,6 +235,8 @@ def test_run_transition_state_search_forwards_alignment_kwargs(monkeypatch, tmp_
     prod = slab.copy() + Atoms("Pt", positions=[[slab.cell[0, 0] - 0.1, 0.1, z0]])
     cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
     captured: dict[str, object] = {}
+    pair_kwargs: dict[str, object] = {}
+    max_pairs = 6
 
     def _fake_find_transition_state(reactant, product, calculator, **kwargs):
         captured.update(kwargs)
@@ -243,6 +246,11 @@ def test_run_transition_state_search_forwards_alignment_kwargs(monkeypatch, tmp_
             "error": "stub",
             "neb_converged": False,
         }
+
+    def _fake_select_pairs(minima, **kwargs):
+        pair_kwargs.update(kwargs)
+        # Excess survivors: bare surface must still truncate to max_pairs.
+        return [(0, 1)] * adsorbate_pair_select_cap(max_pairs)
 
     monkeypatch.setattr(
         ts_run_mod, "find_transition_state", _fake_find_transition_state
@@ -263,15 +271,11 @@ def test_run_transition_state_search_forwards_alignment_kwargs(monkeypatch, tmp_
             ]
         },
     )
-    monkeypatch.setattr(
-        ts_run_mod,
-        "select_structure_pairs",
-        lambda *_a, **_k: [(0, 1)],
-    )
+    monkeypatch.setattr(ts_run_mod, "select_structure_pairs", _fake_select_pairs)
     monkeypatch.setattr(ts_run_mod, "get_calculator_class", lambda _n: object)
     monkeypatch.setattr(ts_run_mod, "auto_niter_ts", lambda _c: 10)
 
-    ts_run_mod.run_transition_state_search(
+    results = ts_run_mod.run_transition_state_search(
         composition=["Pt"],
         system_type="surface_cluster",
         output_dir=str(tmp_path),
@@ -279,9 +283,15 @@ def test_run_transition_state_search_forwards_alignment_kwargs(monkeypatch, tmp_
         surface_config=cfg,
         verbosity=0,
         neb_surface_max_lattice_shift=3,
+        max_pairs=max_pairs,
+        max_endpoint_mismatch=1.25,
+        use_torchsim=False,
+        use_parallel_neb=False,
     )
     assert captured["neb_cfg"].n_slab == n_slab
     assert captured["neb_cfg"].neb_surface_max_lattice_shift == 3
+    assert pair_kwargs["max_pairs"] == max_pairs
+    assert len(results) == max_pairs
 
 
 def test_run_transition_state_search_empty_core_sets_block_dims(
@@ -307,6 +317,7 @@ def test_run_transition_state_search_empty_core_sets_block_dims(
     )
     captured: dict[str, object] = {}
     pair_kwargs: dict[str, object] = {}
+    max_pairs = 6
 
     def _fake_find_transition_state(reactant, product, calculator, **kwargs):
         captured.update(kwargs)
@@ -347,11 +358,16 @@ def test_run_transition_state_search_empty_core_sets_block_dims(
         surface_config=cfg,
         adsorbate_definition=ads_def,
         verbosity=0,
+        max_pairs=max_pairs,
+        max_endpoint_mismatch=1.25,
+        use_torchsim=False,
+        use_parallel_neb=False,
     )
     assert pair_kwargs["surface_aware"] is True
     assert pair_kwargs["use_mic"] is True
     assert pair_kwargs["adsorbate_aware"] is True
     assert pair_kwargs["n_core_mobile"] == 0
+    assert pair_kwargs["max_pairs"] == adsorbate_pair_select_cap(max_pairs)
     assert captured["neb_cfg"].n_slab == n_slab
     assert captured["neb_cfg"].n_core_mobile == 0
     assert captured["neb_cfg"].n_adsorbate_mobile == 2

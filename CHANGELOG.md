@@ -59,6 +59,11 @@
   `neb_{pair_id}_metadata.json` already has `status="success"`
   (`load_completed_neb_result`). Run-dir `metadata.json` and NEB metadata are
   written via temp + `os.replace`.
+- `torch_load_weights_only_false()` context manager scopes the MACE/e3nn
+  `torch.load(..., weights_only=False)` shim (import + checkpoint load only).
+- `default_params_top_level_keys()` returns a cached frozenset of default
+  top-level GO keys so allowlist checks avoid a full `get_default_params()`
+  deepcopy per run.
 
 ### Changed
 
@@ -134,9 +139,40 @@
 - Parallel NEB persists each finished chunk immediately; energy-screen forces
   are reused at step 0 instead of a second `relax_batch`. Serial NEB runs the
   full-band single-point only when the energy-profile gate is enabled.
+- Basin-hopping default `temperature` is now `1.0` eV (ASE-style Metropolis
+  energy scale), not `500 * k_B`. `get_high_energy_params()` uses `2.0` eV.
+  Optimizer startup logs print the eV scale only (no misleading Kelvin).
+- GA mutation operators are stamped with the run-resolved `connectivity_factor`
+  and mobile-connectivity gates honor it (was hard-coded module default).
+- MACE `torch.load` patch is no longer process-wide; TorchSim MACE model load
+  uses the same scoped context manager.
+- TorchSim sticky-max_metric / CUDA-OOM retry paths share
+  `_run_with_max_metric_retry` for single-point and relax.
+- Sorted-distance fingerprint cache uses a cheap geometry dirty token before
+  falling back to byte hashing; `filter_unique_minima` annotates `raw_score`
+  only on unique survivors.
+- `InitDiagnosticsCollector.emit_summary` clears accumulated records after
+  copying; batch init always resets the collector when diagnostics are on.
+- `attach_fix_bond_lengths` replaces any prior `FixBondLengths` instead of
+  stacking duplicates; rigid adsorbate restore sets positions with
+  `apply_constraint=False`.
+- Seed clash checks and `steric_deficit` are vectorized (`cdist` /
+  BLMIN matrix); slab-search config rebuild uses `dataclasses.replace`.
+- Hierarchical surface deposition uses one inner placement attempt per outer
+  retry (avoids nested attempt explosion).
+- `ConnectivityFactorInput` accepts `numbers.Real` (including NumPy scalars).
+- `run_go_ts_campaign` derives a reproducible per-composition sub-seed (same
+  pattern as `run_go_campaign`).
+- Seed-sampling “tried positions” tracking uses stable position hashes
+  (`_get_positions_hash`) instead of `hash(...tobytes())`.
 
 ### Fixed
 
+- Bare TS system types no longer oversample pair selection when
+  ``max_endpoint_mismatch`` is set; ``resolve_ts_pair_select_cap`` oversamples
+  only for adsorbates (IDPP re-rank), and the runner always truncates to
+  ``max_pairs`` before NEB (fixes Pt5/graphite selecting 50 pairs at
+  ``max_pairs=6``).
 - `run_go` honors the single `n_jobs` knob for GA population init, offspring, and
   validation.
 - GA TorchSim relaxed DB rows and TS result JSON now persist `FixAtoms` /
@@ -189,6 +225,12 @@
   (falls back to per-id `get_atoms` if ASE's private row decoder is missing).
 - GO/TS param copies no longer `deepcopy` TorchSim relaxers when injecting
   `surface_config`.
+- TorchSim GA `_read_candidate_batch` uses indexed `relaxed` / `queued`
+  filters instead of a full-table `select()` scan; dense BLMIN prefilter
+  thresholds are cached by atomic-number set.
+- Permutation mutation samples distinct swap pairs without replacement.
+- Chunked DB streaming no longer prefills unused ASE row slots with empty
+  JSON/`null` before column remapping.
 
 ### Removed
 
@@ -205,14 +247,22 @@
   initialization refactor. No other public API was affected.
 - Removed the redundant final `unique_minima.sort(...)` in `filter_unique_minima`.
 - Deleted `build_connectivity_graph` and related helpers from `ts_network`.
+- Removed the convex-hull site-capacity heuristic (and `_proxy_core_from_symbols`)
+  from `validate_adsorbate_placement_feasibility`.
+- Dropped the no-op `ClusterAdsorbateConfig` rebuild in slab-fragment deposition.
 
 ### Docs
 
+- Documented TS pair-selection budget / adsorbate oversampling
+  (``max_pairs`` vs ``resolve_ts_pair_select_cap``) under **Pair selection** in
+  ``parameters.rst`` and ``validation_and_constraints.rst``.
 - Documentation builds with zero Sphinx warnings under `nitpicky=True`.
 - Documented `n_jobs`, vacancy / hollow sites, NEB energy-profile gating,
   `calculator_for_global_optimization`, and mirror-mutation omissions.
 - Documented calculator-change kwargs replacement, TS vs GO pair-correlation
   caps, params-only `surface_config`, NEB pair resume, and database reuse.
+- Documented BH `temperature` as a Metropolis energy scale in eV (default
+  `1.0`; high-energy preset `2.0`), not a physical Kelvin temperature.
 - Fixed documentation inaccuracies, normalized headings, and cleaned up
   cross-references.
 

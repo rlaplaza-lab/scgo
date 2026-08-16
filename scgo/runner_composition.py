@@ -88,7 +88,7 @@ def parse_composition_arg(comp_str: str) -> list[str]:
 
     if "," in comp_str:
         parts = [p.strip() for p in comp_str.split(",") if p.strip()]
-        normalized = [p[0].upper() + p[1:].lower() if len(p) > 0 else p for p in parts]
+        normalized = [p[0].upper() + p[1:].lower() for p in parts]
         unknown = [p for p in normalized if p not in atomic_numbers]
         if unknown:
             raise _compact_formula_error(

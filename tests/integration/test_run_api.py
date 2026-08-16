@@ -335,8 +335,10 @@ def test_run_go_partial_params_without_calculator_key_is_not_a_key_error(
         )
     except KeyError as exc:  # pragma: no cover - regression guard
         pytest.fail(f"run_go leaked a bare KeyError for partial params: {exc!r}")
-    except SCGOValidationError:
-        return  # acceptable: the resolved default calculator may be unavailable
+    except SCGOValidationError as exc:
+        # Acceptable only when the resolved default calculator is unavailable.
+        assert "calculator" in str(exc).lower() or "mace" in str(exc).lower()
+        return
 
     assert minima == []
     assert captured["fmax_threshold"] == 0.01
@@ -683,29 +685,40 @@ def test_run_ts_campaign_requires_system_type():
 
 
 def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
-    calls: list[tuple[list[str], object]] = []
+    calls: list[dict] = []
 
     def _fake_pipeline(composition, system_type, **kwargs):
-        calls.append((list(composition), kwargs.get("output_dir")))
-        return {"formula": "x", "ts_total_count": 0}
+        calls.append(
+            {
+                "composition": list(composition),
+                "output_dir": kwargs.get("output_dir"),
+                "seed": kwargs["seed"],
+            }
+        )
+        return {"formula": "x", "ts_total_count": 0, "ts_success_count": 0}
 
     monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
     root = tmp_path / "camp"
-    run_go_ts_campaign(
-        ["Pt2", ["Au", "Au"]],
-        go_params={},
-        ts_params=_emt_ts_gasc(),
-        verbosity=0,
-        output_dir=root,
-        system_type="gas_cluster",
-    )
+    kwargs = {
+        "go_params": {},
+        "ts_params": _emt_ts_gasc(),
+        "seed": 12345,
+        "verbosity": 0,
+        "system_type": "gas_cluster",
+        "log_summary": False,
+    }
+    run_go_ts_campaign(["Pt2", ["Au", "Au"]], output_dir=root, **kwargs)
     assert len(calls) == 2
-    # Unified sibling layout: each composition runs against the shared campaign
-    # root (no ``{path_key}_campaign/`` wrapper).
-    assert calls[0][0] == ["Pt", "Pt"]
-    assert calls[0][1] == root
-    assert calls[1][0] == ["Au", "Au"]
-    assert calls[1][1] == root
+    assert calls[0]["composition"] == ["Pt", "Pt"]
+    assert calls[0]["output_dir"] == root
+    assert calls[1]["composition"] == ["Au", "Au"]
+    assert calls[1]["output_dir"] == root
+    seeds = [c["seed"] for c in calls]
+    assert len(set(seeds)) == 2
+
+    calls.clear()
+    run_go_ts_campaign(["Pt2", ["Au", "Au"]], output_dir=tmp_path / "camp2", **kwargs)
+    assert [c["seed"] for c in calls] == seeds
 
 
 def test_run_go_ts_campaign_requires_system_type():

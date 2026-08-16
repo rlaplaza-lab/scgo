@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
+from scipy.spatial.distance import cdist
 
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
@@ -70,17 +71,15 @@ def _is_valid_placement(
     existing_symbols = combined_atoms.get_chemical_symbols()
     seed_symbols = seed_to_add.get_chemical_symbols()
 
-    for seed_pos, seed_sym in zip(seed_positions, seed_symbols, strict=False):
-        for exist_pos, exist_sym in zip(
-            existing_positions, existing_symbols, strict=False
-        ):
-            distance = np.linalg.norm(seed_pos - exist_pos)
-            r_seed = get_covalent_radius(seed_sym)
-            r_exist = get_covalent_radius(exist_sym)
-            min_allowed = (r_seed + r_exist) * min_distance_factor
-
-            if distance < min_allowed - CLASH_TOLERANCE:
-                return False
+    if len(seed_positions) and len(existing_positions):
+        distances = cdist(seed_positions, existing_positions)
+        r_seed = np.array([get_covalent_radius(s) for s in seed_symbols], dtype=float)
+        r_exist = np.array(
+            [get_covalent_radius(s) for s in existing_symbols], dtype=float
+        )
+        min_allowed = (r_seed[:, None] + r_exist[None, :]) * min_distance_factor
+        if np.any(distances < min_allowed - CLASH_TOLERANCE):
+            return False
 
     temp_combined = combined_atoms.copy()
     temp_combined.extend(seed_to_add)

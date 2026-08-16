@@ -94,8 +94,6 @@ def _load_atoms_chunk(row_ids: list[int], da) -> list[tuple[int, Atoms]]:
     for shortvalues in value_rows:
         try:
             values: list[object | None] = [None] * _ASE_ROW_VALUE_COUNT
-            values[_ASE_SYSTEMS_COLUMN_COUNT - 1] = "{}"
-            values[_ASE_SYSTEMS_COLUMN_COUNT] = "null"
             for idx, col_i in enumerate(columnindex):
                 values[col_i] = shortvalues[idx]
             row = convert(tuple(values))

@@ -127,6 +127,15 @@ def test_init_diagnostics_collector_emit_summary(caplog):
     assert "Init fallback: template→random_spherical" in caplog.text
     assert "Placement failure: Could not place atom Pt" in caplog.text
 
+    # emit_summary clears; a later window must not inherit prior records.
+    caplog.clear()
+    InitDiagnosticsCollector.record_fallback("random_spherical", "seed+growth")
+    InitDiagnosticsCollector.emit_summary(
+        logger, verbosity=1, n_structures=2, prefix="Window2"
+    )
+    assert "seed→randomx1" in caplog.text
+    assert "placement failures" not in caplog.text
+
 
 def test_log_phase_header_respects_verbosity(caplog):
     caplog.set_level(logging.INFO)

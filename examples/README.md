@@ -4,13 +4,15 @@ Most scripts are `run_go_ts` smoke runs for the supported system types
 (MACE + TorchSim). Each of those builds params from
 `get_low_effort_torchsim_ga_params` / `get_low_effort_ts_search_params` for its
 `system_type` and only overrides `max_pairs` plus a few example-specific knobs.
-Those presets are the reduced-budget (~25% of production) variants of
-`get_torchsim_ga_params` / `get_ts_search_params`: the calculator, TorchSim
-relaxer and every NEB physics knob are inherited unchanged, and only the GA
-(`niter`, `population_size`, `niter_local_relaxation`) and NEB step budgets
-shrink — floored so bands still converge. Surface system types clamp
-`niter_local_relaxation` back up to 400 at run time, so slab searches keep
-production-strength local relaxation.
+`max_pairs` is the NEB budget (adsorbate examples may oversample the select
+pool first; bare examples do not — see ``docs/source/parameters.rst``,
+**Budget and oversampling**). Those presets are the reduced-budget (~25% of
+production) variants of `get_torchsim_ga_params` / `get_ts_search_params`: the
+calculator, TorchSim relaxer and every NEB physics knob are inherited
+unchanged, and only the GA (`niter`, `population_size`,
+`niter_local_relaxation`) and NEB step budgets shrink — floored so bands still
+converge. Surface system types clamp `niter_local_relaxation` back up to 400
+at run time, so slab searches keep production-strength local relaxation.
 
 `example_pt5_orr_defected_graphite.py` is GO-only (`run_go`): bare Pt5 and each
 ORR intermediate (O, OH, OOH) on monovacancy graphite. It uses the same
@@ -20,9 +22,9 @@ See ``docs/source/parameters.rst`` for merge / identity rules.
 
 Adsorbate examples set `connectivity_factor=1.8` and
 `freeze_adsorbate_internal_geometry=True`; the bare surface example also uses
-`connectivity_factor=1.8` for slab validation. Adsorbate examples use fewer
-`max_pairs` because IDPP screening is heavier and their bands run two-stage
-climb over 7 images. Full NEB defaults: `docs/source/parameters.rst`.
+`connectivity_factor=1.8` for slab validation. Adsorbate examples often use
+fewer `max_pairs` because IDPP screening is heavier and their bands run
+two-stage climb over 7 images. Full NEB defaults: `docs/source/parameters.rst`.
 
 The Kaggle GPU matrix in `tests/integration/test_gpu_examples_integration.py`
 builds its params from the same two presets, so the CI cannot drift from the

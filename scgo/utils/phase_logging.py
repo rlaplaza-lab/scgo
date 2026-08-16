@@ -190,13 +190,18 @@ class InitDiagnosticsCollector:
         prefix: str = "Population initialization",
         extra: str = "",
     ) -> None:
-        """Emit one INFO summary at v1+ and per-record DEBUG detail at v2+."""
-        if verbosity < 1:
-            return
+        """Emit one INFO summary at v1+ and per-record DEBUG detail at v2+.
 
+        Clears accumulated records after copying.
+        """
         with cls._lock:
             fallbacks = list(cls._fallback_records)
             placement_failures = list(cls._placement_failures)
+            cls._fallback_records.clear()
+            cls._placement_failures.clear()
+
+        if verbosity < 1:
+            return
 
         template_to_random = sum(
             1

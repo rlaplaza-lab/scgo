@@ -18,6 +18,10 @@ from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+)
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
 
 __all__ = [
@@ -29,9 +33,18 @@ __all__ = [
     "_preserves_mobile_connectivity",
     "_random_unit_vector",
     "_reanchor_mobile_to_slab",
+    "_resolve_op_connectivity_factor",
 ]
 
+
 _IDENTITY_ATOL = 1e-8
+
+
+def _resolve_op_connectivity_factor(
+    creator,
+) -> ConnectivityFactorInput | NormalizedConnectivityFactor:
+    """Connectivity factor stamped on a mutation operator, else the module default."""
+    return getattr(creator, "connectivity_factor", CONNECTIVITY_FACTOR)
 
 
 def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):
@@ -124,14 +137,20 @@ def _reanchor_mobile_to_slab(
     )
 
 
-def _mobile_is_connected(mobile: Atoms, *, use_mic: bool) -> bool:
+def _mobile_is_connected(
+    mobile: Atoms,
+    *,
+    use_mic: bool,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
+) -> bool:
     """Return True when ``mobile`` is a single connected component (or has <2 atoms)."""
     if len(mobile) < 2:
         return True
     ok, _msg = validate_cluster_structure(
         mobile,
         MIN_DISTANCE_FACTOR_DEFAULT,
-        CONNECTIVITY_FACTOR,
+        connectivity_factor,
         check_clashes=False,
         check_connectivity=True,
         use_mic=use_mic,
@@ -140,12 +159,21 @@ def _mobile_is_connected(mobile: Atoms, *, use_mic: bool) -> bool:
 
 
 def _preserves_mobile_connectivity(
-    parent_mobile: Atoms, mutant_mobile: Atoms, *, use_mic: bool
+    parent_mobile: Atoms,
+    mutant_mobile: Atoms,
+    *,
+    use_mic: bool,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> bool:
     """True when the mutant is connected, or the parent was already disconnected."""
-    if _mobile_is_connected(mutant_mobile, use_mic=use_mic):
+    if _mobile_is_connected(
+        mutant_mobile, use_mic=use_mic, connectivity_factor=connectivity_factor
+    ):
         return True
-    return not _mobile_is_connected(parent_mobile, use_mic=use_mic)
+    return not _mobile_is_connected(
+        parent_mobile, use_mic=use_mic, connectivity_factor=connectivity_factor
+    )
 
 
 # fmt: on

@@ -56,6 +56,27 @@ def adsorbate_pair_select_cap(max_pairs: int) -> int:
     return min(mp * 10, max(mp, _ADSORBATE_PAIR_OVERSAMPLE_CAP))
 
 
+def resolve_ts_pair_select_cap(
+    max_pairs: int | None,
+    *,
+    has_adsorbate: bool,
+    max_endpoint_mismatch: float | None,
+) -> int | None:
+    """Return the ``select_structure_pairs`` cap before NEB.
+
+    ``max_pairs`` is always the final NEB budget. Adsorbate searches with an
+    endpoint-mismatch gate oversample the select pool
+    (:func:`adsorbate_pair_select_cap`) so an IDPP screen can re-rank
+    candidates; bare systems (including surface presets that set
+    ``max_endpoint_mismatch``) pass ``max_pairs`` through unchanged.
+    """
+    if max_pairs is None or int(max_pairs) <= 0:
+        return max_pairs
+    if has_adsorbate and max_endpoint_mismatch is not None:
+        return adsorbate_pair_select_cap(int(max_pairs))
+    return int(max_pairs)
+
+
 def load_minima_by_composition(
     base_dir: str,
     composition: list[str] | None = None,
@@ -362,6 +383,9 @@ def select_structure_pairs(
     overridable via ``ts_params`` (see docs).
 
     When ``max_pairs`` is set, survivors are ranked before taking the top N.
+    Callers may pass an adsorbate oversample cap here; the TS runner still
+    truncates to the user ``max_pairs`` NEB budget afterward (see
+    :func:`resolve_ts_pair_select_cap`).
 
     Args:
         minima: List of (energy, Atoms) tuples, sorted by energy.

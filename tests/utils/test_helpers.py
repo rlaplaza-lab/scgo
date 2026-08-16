@@ -10,7 +10,7 @@ from ase.constraints import FixAtoms
 
 from scgo.constants import PENALTY_ENERGY
 from scgo.exceptions import SCGORuntimeError
-from scgo.metadata.atoms import compute_final_id, ensure_final_id, get_tags
+from scgo.metadata.atoms import compute_final_id, ensure_final_id, get_tag, get_tags
 from scgo.utils.helpers import (
     _assign_penalty_energy,
     auto_niter,
@@ -96,6 +96,14 @@ class TestFilterUniqueMinima:
         # Should return both since they have different positions
         result = filter_unique_minima([(1.0, atoms1), (2.0, atoms2)], n_top=1)
         assert len(result) == 2
+
+    def test_filter_unique_minima_tags_only_returned_uniques(self):
+        kept = Atoms("Pt", positions=[[0.0, 0.0, 0.0]])
+        discarded = Atoms("Pt", positions=[[1e-4, 0.0, 0.0]])
+        result = filter_unique_minima([(1.0, kept), (1.001, discarded)], n_top=1)
+        assert result == [(1.0, kept)]
+        assert get_tag(kept, "raw_score") == pytest.approx(-1.0)
+        assert get_tag(discarded, "raw_score") is None
 
     def test_filter_unique_minima_ignores_fixed_slab_atom_differences(self):
         """Minima dedup should ignore changes confined to fixed slab atoms."""

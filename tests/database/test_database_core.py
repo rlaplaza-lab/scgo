@@ -829,6 +829,47 @@ class TestRobustness:
 
         assert mode.lower() == "wal"
 
+    def test_open_data_connection_for_setup_applies_pragmas_then_closes(
+        self, tmp_path, pt2_atoms
+    ):
+        from ase.db import connect as ase_db_connect
+        from ase_ga.data import DataConnection
+
+        from scgo.database.connection import (
+            _apply_scgo_sqlite_settings,
+            open_data_connection_for_setup,
+        )
+
+        db_path = tmp_path / "setup_pragmas.db"
+        with ase_db_connect(str(db_path)) as prep_db:
+            prep_db.write(pt2_atoms, simulation_cell=True)
+
+        # Direct helper path: PRAGMAs are visible on a live connection.
+        da_live = DataConnection(str(db_path))
+        _apply_scgo_sqlite_settings(
+            da_live,
+            busy_timeout=99999,
+            cache_size_mb=128,
+            wal_mode=False,
+            close_after=False,
+        )
+        try:
+            conn = da_live.c.connection
+            assert conn is not None
+            assert conn.execute("PRAGMA busy_timeout;").fetchone()[0] == 99999
+            assert conn.execute("PRAGMA cache_size;").fetchone()[0] == -(128 * 1024)
+        finally:
+            close_data_connection(da_live)
+
+        # Setup opener must leave the ASE backend closed for later ``with da.c:``.
+        da = open_data_connection_for_setup(
+            db_path, busy_timeout=99999, cache_size_mb=128, wal_mode=False
+        )
+        try:
+            assert da.c.connection is None
+        finally:
+            close_data_connection(da)
+
     def test_setup_database_reuse_keeps_single_simulation_cell(
         self, tmp_path, pt2_atoms
     ):

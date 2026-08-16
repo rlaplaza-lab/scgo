@@ -141,24 +141,15 @@ class TestBasicInitialization:
     def test_single_atom_all_modes(self, mode, rng):
         """Test that single atom composition works and satisfies invariants for all modes."""
         comp = ["Pt"]
-        try:
-            atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-            assert isinstance(atoms, Atoms)
-            assert len(atoms) == 1
-            assert atoms.get_chemical_symbols() == comp
-            # Verify composition
-            assert get_composition_counts(
-                atoms.get_chemical_symbols()
-            ) == get_composition_counts(comp)
-            # Single atom doesn't need connectivity check, but should have valid cell
-            assert atoms.get_cell() is not None
-        except (ValueError, SCGOValidationError):
-            # Template mode may fail for single atom (not a magic number), which is acceptable
-            if mode == "template":
-                pytest.skip(
-                    "Template mode may fail for single atom (not a magic number)"
-                )
-            raise
+        atoms = create_initial_cluster(comp, mode=mode, rng=rng)
+        assert isinstance(atoms, Atoms)
+        assert len(atoms) == 1
+        assert atoms.get_chemical_symbols() == comp
+        assert get_composition_counts(
+            atoms.get_chemical_symbols()
+        ) == get_composition_counts(comp)
+        cell = atoms.get_cell()
+        assert cell.volume > 0.0
 
 
 class TestCellSideComputation:

@@ -98,35 +98,3 @@ def validate_adsorbate_placement_feasibility(
                 f"is large compared to the {n_core}-atom core; multiple fragments "
                 "are unlikely to fit without overlap."
             )
-
-        min_site_spacing = 2.0 * largest_frag
-        hull_capacity = count_adsorption_site_candidates(
-            _proxy_core_from_symbols(core_symbols)
-        )
-        if hull_capacity > 0 and n_frags > hull_capacity:
-            raise SCGOValidationError(
-                f"{prefix}cannot place {n_frags} fragments: convex-hull site "
-                f"estimate for a {n_core}-atom core is about {hull_capacity} "
-                f"(minimum spacing ~{min_site_spacing:.1f} Å per fragment)."
-            )
-
-
-def _proxy_core_from_symbols(core_symbols: Sequence[str]) -> Atoms:
-    """Build a coarse FCC-like proxy cluster for site counting heuristics."""
-    symbols = [str(s) for s in core_symbols]
-    n = len(symbols)
-    if n == 0:
-        return Atoms()
-    spacing = 2.5 * _estimate_symbol_sphere_radius(symbols)
-    positions: list[list[float]] = []
-    for i in range(n):
-        layer = i // max(1, int(np.ceil(np.sqrt(n))))
-        idx = i % max(1, int(np.ceil(np.sqrt(n))))
-        positions.append(
-            [
-                float(idx * spacing),
-                float(layer * spacing),
-                float((i % 3) * spacing * 0.35),
-            ]
-        )
-    return Atoms(symbols=symbols, positions=positions, pbc=False)

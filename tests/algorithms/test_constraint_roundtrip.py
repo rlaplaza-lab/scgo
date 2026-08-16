@@ -15,7 +15,7 @@ from scgo.algorithms.geneticalgorithm_go_torchsim import (
     GAWriteContext,
     _write_relaxed_candidate,
 )
-from scgo.database import setup_database
+from scgo.database import close_data_connection, setup_database
 from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.ts_search.transition_state_io import (
@@ -122,6 +122,7 @@ def test_ga_relaxed_row_preserves_constraints(tmp_path) -> None:
         generation=0,
         run_id="0",
     )
+    close_data_connection(da)
 
     minima = load_minima_by_composition(str(tmp_path), prefer_final_unique=False)
     assert minima

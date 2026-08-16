@@ -45,6 +45,7 @@ from .candidate_discovery import (
 )
 from .geometry_helpers import (
     _classify_seed_geometry,
+    _get_positions_hash,
     _set_cubic_cell_and_center,
     _validate_cluster_defaults,
     reorder_cluster_to_composition,
@@ -822,7 +823,7 @@ def _find_valid_seed_combinations(
 def _sample_suitable_seed(
     candidates: list[tuple[float, Atoms]],
     strategy: int,
-    tried_positions: set[int],
+    tried_positions: set[str],
     existing_geometries: list[str],
     rng: np.random.Generator,
     max_attempts: int = 10,
@@ -841,8 +842,8 @@ def _sample_suitable_seed(
         Tuple of (suitable seed Atoms object or None, failure reason if None)
     """
     # Precompute position hashes once; seeds are not mutated during sampling.
-    precomputed: list[tuple[float, Atoms, int]] = [
-        (e, a, hash(a.get_positions().tobytes())) for e, a in candidates
+    precomputed: list[tuple[float, Atoms, str]] = [
+        (e, a, _get_positions_hash(a.get_positions())) for e, a in candidates
     ]
     available_candidates = [
         (e, a, pos_hash)
@@ -869,7 +870,7 @@ def _sample_suitable_seed(
         geometry = _classify_seed_geometry(sampled_seed)
 
         # Same positions as the precomputed entry even if the sampler returned a copy.
-        pos_hash = hash(sampled_seed.get_positions().tobytes())
+        pos_hash = _get_positions_hash(sampled_seed.get_positions())
         tried_positions.add(pos_hash)
 
         available_candidates = [
@@ -952,7 +953,7 @@ def _try_seed_growth(
         )
         return _grow_from_random_seed(**random_seed_kwargs)
 
-    tried_positions: set[int] = set()
+    tried_positions: set[str] = set()
 
     # Try multiple strategies
     for strategy_idx in range(SEED_COMBINATION_STRATEGY_COUNT):
@@ -1748,8 +1749,7 @@ def create_initial_cluster_batch(
 
     if emit_diagnostics:
         _SeedSamplingLogCollector.reset()
-        if n_structures > 1:
-            InitDiagnosticsCollector.reset()
+        InitDiagnosticsCollector.reset()
 
     def _worker_wrapper(assignment):
         return _generate_structure_batch_item(

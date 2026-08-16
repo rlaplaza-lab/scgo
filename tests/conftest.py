@@ -333,3 +333,4 @@ def clear_initialization_caches(request: pytest.FixtureRequest):
 
     get_global_cache().clear_namespace(_TEMPLATE_ROTATIONS_CACHE_NS)
     get_global_cache().clear_namespace(_COMPOSITION_CACHE_NS)
+    geometry_helpers.clear_convex_hull_cache()

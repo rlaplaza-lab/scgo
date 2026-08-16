@@ -32,6 +32,11 @@ def test_normalize_float() -> None:
     assert format_connectivity_factor(n) == "1.80"
 
 
+def test_normalize_numpy_float64() -> None:
+    n = normalize_connectivity_factor(np.float64(1.4))
+    assert n.global_factor == pytest.approx(1.4)
+
+
 def test_normalize_element_dict() -> None:
     n = normalize_connectivity_factor({"Pt": 1.8, "C": 1.4})
     assert n.global_factor is None

@@ -63,6 +63,7 @@ from scgo.utils.output_paths import (
     resolve_campaign_root_from_args,
     resolve_go_ts_pipeline_paths,
 )
+from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
@@ -345,7 +346,11 @@ def run_go_ts_campaign(
     adsorbates: AdsorbatesInput | None = None,
     log_summary: bool = True,
 ) -> dict[str, dict[str, Any]]:
-    """Run GO+TS for multiple compositions."""
+    """Run GO+TS for multiple compositions.
+
+    Each composition gets a reproducible sub-seed derived from ``seed`` /
+    resolved workflow seed (same pattern as ``run_go_campaign``).
+    """
     from scgo import configure
 
     configure()
@@ -366,6 +371,7 @@ def run_go_ts_campaign(
         ts_params=ts_params,
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
+    rng = ensure_rng(eff_seed)
     go_prep = _with_surface_on_params(go_mat, surface_config=surface_config)
     _validate_go_ts_param_coherence(
         go_prepared=go_prep,
@@ -437,12 +443,13 @@ def run_go_ts_campaign(
             surface_config=surface_config,
             params=go_local,
         )
+        comp_seed = int(rng.integers(0, 2**63 - 1))
         context = RunGOTSContext(
             composition=comp,
             system_type=st,
             go_params=go_local,
             ts_kwargs=ts_kwargs,
-            seed=eff_seed,
+            seed=comp_seed,
             verbosity=verbosity,
             # Sibling layout, same as ``run_go_ts``: the campaign root is shared
             # and each composition gets ``{root}/{path_key}_searches`` +

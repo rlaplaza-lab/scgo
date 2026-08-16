@@ -68,7 +68,7 @@ def restore_rigid_adsorbate_fragments(
         current = np.asarray(positions[start:end], dtype=float)
         positions[start:end] = _kabsch_place_template(template_pos, current)
         offset += frag_len
-    atoms.set_positions(positions)
+    atoms.set_positions(positions, apply_constraint=False)
 
 
 def enforce_frozen_adsorbate_geometry(

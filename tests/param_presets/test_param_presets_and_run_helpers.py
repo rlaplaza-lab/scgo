@@ -48,6 +48,7 @@ def test_get_default_params_structure():
     ]:
         assert key in params
     assert set(params["optimizer_params"].keys()) == {"simple", "bh", "ga"}
+    assert params["optimizer_params"]["bh"]["temperature"] == pytest.approx(1.0)
     identity_keys = {
         "system_type",
         "surface_config",
@@ -321,6 +322,7 @@ def test_get_high_energy_params_sets_fitness_strategy():
     params = get_high_energy_params()
     assert params["fitness_strategy"] == "high_energy"
     assert params["optimizer_params"]["ga"]["population_size"] == "auto"
+    assert params["optimizer_params"]["bh"]["temperature"] == pytest.approx(2.0)
 
 
 def test_get_diversity_params_sets_reference_db():

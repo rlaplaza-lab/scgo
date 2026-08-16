@@ -14,6 +14,8 @@ from ase.constraints import FixAtoms, FixBondLengths
 
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
+from scgo.param_presets import get_ts_defaults
+from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
 from scgo.ts_search import transition_state_run as ts_run_mod
 from scgo.ts_search.transition_state import (
     calculate_structure_similarity,
@@ -25,6 +27,7 @@ from scgo.ts_search.transition_state import (
 )
 from scgo.ts_search.transition_state_io import (
     adsorbate_pair_select_cap,
+    resolve_ts_pair_select_cap,
     select_structure_pairs,
 )
 from scgo.utils.ts_runner_kwargs import NebRunConfig
@@ -875,6 +878,23 @@ def test_adsorbate_pair_select_cap_bounds_oversample() -> None:
     assert adsorbate_pair_select_cap(3) == 30
     assert adsorbate_pair_select_cap(10) == 50
     assert adsorbate_pair_select_cap(60) == 60
+
+
+@pytest.mark.parametrize("system_type", sorted(SYSTEM_TYPE_POLICIES))
+def test_resolve_ts_pair_select_cap_for_all_system_types(system_type) -> None:
+    """Preset mismatch must not inflate the NEB budget on bare system types."""
+    policy = get_system_policy(system_type)
+    mismatch = get_ts_defaults(system_type)["max_endpoint_mismatch"]
+    max_pairs = 6
+    cap = resolve_ts_pair_select_cap(
+        max_pairs,
+        has_adsorbate=policy.has_adsorbate,
+        max_endpoint_mismatch=mismatch,
+    )
+    if policy.has_adsorbate and mismatch is not None:
+        assert cap == adsorbate_pair_select_cap(max_pairs)
+    else:
+        assert cap == max_pairs
 
 
 def test_select_structure_pairs_basic():

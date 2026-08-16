@@ -13,6 +13,7 @@ from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 from scgo.ase_ga_patches.mutations._common import (
     _ensure_rng,
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
     _reanchor_mobile_to_slab,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
@@ -158,7 +159,10 @@ class RattleMutation(OffspringCreator):
             if too_close:
                 continue
             if not _preserves_mobile_connectivity(
-                parent_mobile, top, use_mic=use_mic
+                parent_mobile,
+                top,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
             ):
                 continue
             mutant = slab + top
@@ -289,7 +293,10 @@ class AnisotropicRattleMutation(OffspringCreator):
             if too_close:
                 continue
             if not _preserves_mobile_connectivity(
-                parent_mobile, top, use_mic=use_mic
+                parent_mobile,
+                top,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
             ):
                 continue
             result = slab + top

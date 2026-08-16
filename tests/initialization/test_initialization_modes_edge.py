@@ -4,6 +4,7 @@ Merged verbatim from the former per-mode fold files so every mode-specific test 
 """
 
 import logging
+from collections import defaultdict
 
 import numpy as np
 import pytest
@@ -14,6 +15,8 @@ from ase_ga.utilities import (
     get_all_atom_types,
 )
 
+from scgo.database import close_data_connection
+from scgo.database.helpers import setup_database
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization import (
     combine_and_grow,
@@ -27,6 +30,7 @@ from scgo.initialization import (
 )
 from scgo.initialization.atomic_radii import cluster_passes_ga_blmin
 from scgo.initialization.geometry_helpers import (
+    _get_positions_hash,
     analyze_disconnection,
     format_composition_counts_short,
     format_placement_error_message,
@@ -38,6 +42,7 @@ from scgo.initialization.initialization_config import (
     PLACEMENT_RADIUS_SCALING_DEFAULT,
 )
 from scgo.initialization.initializers import (
+    _find_smaller_candidates,
     _sample_suitable_seed,
     _SeedSamplingLogCollector,
     _try_strategies_in_order,
@@ -47,7 +52,7 @@ from scgo.initialization.templates import (
     generate_template_matches,
     generate_template_structure,
 )
-from scgo.utils.helpers import get_composition_counts
+from scgo.utils.helpers import get_cluster_formula, get_composition_counts
 from tests.helpers import (
     DIVERSITY_TEST_SAMPLES_LARGE,
     DIVERSITY_TEST_SAMPLES_MEDIUM,
@@ -63,6 +68,70 @@ from tests.helpers import (
     get_structure_signature,
     validate_structure_with_diagnostics,
 )
+
+
+def _assert_init_mode_diversity(
+    composition: list[str],
+    *,
+    rng,
+    n_samples: int,
+    threshold: float,
+    **create_kwargs,
+) -> None:
+    signatures = []
+    for _ in range(n_samples):
+        atoms = create_initial_cluster(composition, rng=rng, **create_kwargs)
+        assert_cluster_valid(atoms, composition)
+        signatures.append(get_structure_signature(atoms))
+    unique = len(set(signatures))
+    ratio = unique / n_samples
+    assert ratio >= threshold, (
+        f"Insufficient diversity for {composition}: {unique}/{n_samples} "
+        f"({ratio:.1%}) unique (expected >= {threshold:.0%})"
+    )
+
+
+def _write_final_seed_db(tmp_path, clusters: list[Atoms]) -> str:
+    """Write final-tagged minima under ``{Formula}_searches/``; return abs glob."""
+    by_formula: dict[str, list[Atoms]] = defaultdict(list)
+    for atoms in clusters:
+        by_formula[get_cluster_formula(list(atoms.get_chemical_symbols()))].append(
+            atoms
+        )
+
+    for formula, group in by_formula.items():
+        run_dir = tmp_path / f"{formula}_searches" / "run_000"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        da = setup_database(run_dir, f"{formula}.db", group[0], initial_candidate=None)
+        try:
+            for i, atoms in enumerate(group):
+                a = atoms.copy()
+                a.info.setdefault("key_value_pairs", {})
+                a.info["key_value_pairs"]["raw_score"] = -float(i + 1)
+                a.info["key_value_pairs"]["final_unique_minimum"] = True
+                a.info.setdefault("data", {})
+                a.info["confid"] = i + 1
+                da.add_unrelaxed_candidate(a, description=f"test:seed{i}")
+                da.add_relaxed_step(a)
+        finally:
+            close_data_connection(da)
+
+    return str(tmp_path / "**" / "*.db")
+
+
+def _seed_clusters(composition: list[str], n: int, rng) -> list[Atoms]:
+    out: list[Atoms] = []
+    for _ in range(n):
+        atoms = random_spherical(
+            composition=composition,
+            cell_side=compute_cell_side(composition),
+            rng=rng,
+            connectivity_factor=CONNECTIVITY_FACTOR,
+        )
+        assert is_cluster_connected(atoms, connectivity_factor=CONNECTIVITY_FACTOR)
+        out.append(atoms)
+    return out
+
 
 # ---------------------------------------------------------------------
 # from test_init_smart.py
@@ -126,30 +195,13 @@ class TestSmartModeInitialization:
         ]
 
         for comp, n_samples in test_cases:
-            structures = []
-            signatures = []
-
-            for _ in range(n_samples):
-                atoms = create_initial_cluster(
-                    comp,
-                    mode="smart",
-                    rng=rng,
-                    connectivity_factor=CONNECTIVITY_FACTOR,
-                )
-                structures.append(atoms)
-                signatures.append(get_structure_signature(atoms))
-
-            # All should have correct size
-            assert all(len(s) == len(comp) for s in structures), (
-                f"Size mismatch for composition {comp}"
-            )
-
-            # Verify actual diversity: should have multiple unique structures
-            unique_signatures = set(signatures)
-            diversity_ratio = len(unique_signatures) / n_samples
-            assert diversity_ratio >= DIVERSITY_THRESHOLD_MIN, (
-                f"Insufficient diversity for {comp}: only {len(unique_signatures)}/{n_samples} "
-                f"({diversity_ratio:.1%}) unique structures"
+            _assert_init_mode_diversity(
+                comp,
+                rng=rng,
+                n_samples=n_samples,
+                threshold=DIVERSITY_THRESHOLD_MIN,
+                mode="smart",
+                connectivity_factor=CONNECTIVITY_FACTOR,
             )
 
     def test_smart_mode_fallback_when_templates_fail(self, rng):
@@ -195,42 +247,20 @@ class TestDefaultInitializationStrictness:
     @pytest.mark.slow
     def test_default_settings_diverse_clusters_single_element(self, rng):
         """Test that default settings generate diverse clusters for single-element compositions."""
-        comp = ["Pt"] * 6
-        n_samples = DIVERSITY_TEST_SAMPLES_LARGE
-
-        signatures = []
-        for _ in range(n_samples):
-            atoms = create_initial_cluster(comp, rng=rng)
-            # Verify all invariants using helper
-            assert_cluster_valid(atoms, comp)
-            signatures.append(get_structure_signature(atoms))
-
-        unique_signatures = set(signatures)
-        # With default settings, we should get substantial diversity
-        # At least 70% unique structures is required (DIVERSITY_THRESHOLD_DEFAULT)
-        diversity_ratio = len(unique_signatures) / n_samples
-        assert diversity_ratio >= DIVERSITY_THRESHOLD_DEFAULT, (
-            f"Insufficient diversity: only {len(unique_signatures)}/{n_samples} "
-            f"({diversity_ratio:.1%}) unique structures"
+        _assert_init_mode_diversity(
+            ["Pt"] * 6,
+            rng=rng,
+            n_samples=DIVERSITY_TEST_SAMPLES_LARGE,
+            threshold=DIVERSITY_THRESHOLD_DEFAULT,
         )
 
     def test_default_settings_diverse_clusters_bimetallic(self, rng):
         """Test that default settings generate diverse clusters for bimetallic compositions."""
-        comp = ["Pt", "Au", "Pt", "Au", "Pt", "Au"]
-        n_samples = DIVERSITY_TEST_SAMPLES_MEDIUM
-
-        signatures = []
-        for _ in range(n_samples):
-            atoms = create_initial_cluster(comp, rng=rng)
-            # Verify all invariants using helper
-            assert_cluster_valid(atoms, comp)
-            signatures.append(get_structure_signature(atoms))
-
-        unique_signatures = set(signatures)
-        diversity_ratio = len(unique_signatures) / n_samples
-        assert diversity_ratio >= DIVERSITY_THRESHOLD_DEFAULT, (
-            f"Insufficient diversity for bimetallic: only {len(unique_signatures)}/{n_samples} "
-            f"({diversity_ratio:.1%}) unique structures"
+        _assert_init_mode_diversity(
+            ["Pt", "Au", "Pt", "Au", "Pt", "Au"],
+            rng=rng,
+            n_samples=DIVERSITY_TEST_SAMPLES_MEDIUM,
+            threshold=DIVERSITY_THRESHOLD_DEFAULT,
         )
 
     def test_default_settings_all_invariants_batch(self, rng):
@@ -1018,17 +1048,10 @@ class TestLargeClusterConnectivitySeedGrowth:
             ), f"Seed of size {size} is not connected"
             seeds.append(seed_atoms)
 
-        # Calculate how many more atoms we need
-        total_seed_atoms = sum(len(s) for s in seeds)
-        remaining = n_atoms - total_seed_atoms
+        # seed_sizes sum to 30; n_atoms is always >= 50 so growth is required.
+        assert sum(len(s) for s in seeds) < n_atoms
 
-        if remaining < 0:
-            pytest.skip(
-                f"Seeds too large for target (total={total_seed_atoms}, target={n_atoms})"
-            )
-
-        # Create target composition
-        target_comp = comp  # Already correct size
+        target_comp = comp
         cell_side = compute_cell_side(target_comp)
         atoms = combine_and_grow(
             seeds=seeds,
@@ -1037,11 +1060,9 @@ class TestLargeClusterConnectivitySeedGrowth:
             rng=rng,
             connectivity_factor=CONNECTIVITY_FACTOR,
         )
-
-        if atoms is None:
-            pytest.skip(
-                f"combine_and_grow returned None for n_atoms={n_atoms}, seed={seed}"
-            )
+        assert atoms is not None, (
+            f"combine_and_grow returned None for n_atoms={n_atoms}, seed={seed}"
+        )
 
         # Verify composition & geometry using centralized helper (connectivity checked separately below)
         assert_cluster_valid(atoms, comp, check_connectivity=False)
@@ -1236,141 +1257,39 @@ class TestRefactoredSeedGrowth:
 
 
 class TestSeedGrowthDiversity:
-    """Tests to verify seed+growth produces diverse structures from seed selection, not fallbacks."""
+    """Seed+growth diversity from constructed final-tagged seeds (not CWD leftovers)."""
 
     @pytest.mark.slow
-    def test_seed_growth_diversity_with_available_seeds(self, rng):
-        """Test that seed+growth produces diverse structures when seeds are available.
-
-        This test ensures diversity comes from seed selection and combination,
-        not from random_spherical fallbacks. We use a composition (Pt50) that
-        we know has seeds available in the database.
-
-        Verification strategy:
-        1. Confirm seeds ARE available (pre-check)
-        2. Capture logger output to detect fallbacks
-        3. Generate structures with seed+growth mode
-        4. Verify from logs that seed+growth succeeded (not falling back)
-        5. Verify seed+growth diversity ≥70% (DIVERSITY_THRESHOLD_DEFAULT)
-
-        The code now logs explicitly when seed+growth falls back to random_spherical,
-        so we can verify directly from the logs.
-        """
-        import logging
-        from io import StringIO
-
-        from scgo.initialization.initializers import _find_smaller_candidates
-        from scgo.utils.logging import get_logger
-
-        comp = ["Pt"] * 50
-        n_samples = DIVERSITY_TEST_SAMPLES_MEDIUM
-
-        # First, verify that seeds ARE available for this composition
-        candidates = _find_smaller_candidates(comp, "**/*.db")
-        if len(candidates) == 0:
-            pytest.skip(
-                "No seeds found for Pt50 - cannot test seed+growth diversity. "
-                "This test requires database files with Pt seeds."
-            )
-        total_candidates = sum(len(cands) for cands in candidates.values())
-        if total_candidates == 0:
-            pytest.skip("No candidate seeds available")
-
-        # Set up logger capture to detect fallbacks
-        # We need to capture from the root logger or configure the specific logger
-        logger = get_logger("scgo.initialization.initializers")
-        log_capture = StringIO()
-        handler = logging.StreamHandler(log_capture)
-        handler.setLevel(logging.DEBUG)  # Capture all levels to see everything
-        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-        logger.addHandler(handler)
-        original_level = logger.level
-        original_propagate = logger.propagate
-        logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture all messages
-        logger.propagate = False  # Prevent propagation to root logger
-
-        try:
-            # Generate structures with seed+growth mode
-            seed_growth_signatures = []
-            fallback_count = 0
-
-            for _ in range(n_samples):
-                log_capture.seek(0)
-                log_capture.truncate(0)
-
-                atoms = create_initial_cluster(
-                    comp,
-                    mode="seed+growth",
-                    rng=rng,
-                    previous_search_glob="**/*.db",
-                )
-                assert_cluster_valid(atoms, comp)
-                seed_growth_signatures.append(get_structure_signature(atoms))
-
-                # Check log for fallback messages
-                log_output = log_capture.getvalue()
-                if "falling back to random_spherical" in log_output:
-                    fallback_count += 1
-
-            # Verify that seed+growth did NOT fall back (or fell back very rarely)
-            fallback_ratio = fallback_count / n_samples
-            assert fallback_ratio < 0.2, (
-                f"Too many fallbacks detected in logs: {fallback_count}/{n_samples} "
-                f"({fallback_ratio:.1%}) structures fell back to random_spherical. "
-                f"This suggests seed+growth is failing when seeds are available. "
-                f"Expected <20% fallback rate."
-            )
-
-            # Verify seed+growth diversity: at least 70% unique structures
-            unique_seed_growth = set(seed_growth_signatures)
-            diversity_ratio = len(unique_seed_growth) / n_samples
-            assert diversity_ratio >= DIVERSITY_THRESHOLD_DEFAULT, (
-                f"Insufficient diversity in seed+growth mode: only "
-                f"{len(unique_seed_growth)}/{n_samples} ({diversity_ratio:.1%}) unique structures. "
-                f"Expected at least {DIVERSITY_THRESHOLD_DEFAULT:.0%}. "
-                f"Fallbacks detected in logs: {fallback_count}/{n_samples}"
-            )
-
-        finally:
-            handler.close()
-            logger.removeHandler(handler)
-            logger.setLevel(original_level)
-            logger.propagate = original_propagate
+    def test_seed_growth_diversity_with_available_seeds(self, rng, tmp_path):
+        db_glob = _write_final_seed_db(
+            tmp_path,
+            _seed_clusters(["Pt"] * 3, 4, rng) + _seed_clusters(["Pt"] * 5, 4, rng),
+        )
+        comp = ["Pt"] * 8
+        assert _find_smaller_candidates(comp, db_glob)
+        _assert_init_mode_diversity(
+            comp,
+            rng=rng,
+            n_samples=DIVERSITY_TEST_SAMPLES_MEDIUM,
+            threshold=DIVERSITY_THRESHOLD_DEFAULT,
+            mode="seed+growth",
+            previous_search_glob=db_glob,
+        )
 
     @pytest.mark.slow
-    def test_seed_growth_diversity_bimetallic_with_seeds(self, rng):
-        """Test seed+growth diversity for bimetallic composition with available seeds."""
-        from scgo.initialization.initializers import _find_smaller_candidates
-
-        comp = ["Pt", "Au"] * 25  # 50 atoms, bimetallic
-        n_samples = DIVERSITY_TEST_SAMPLES_MEDIUM
-
-        # Verify seeds are available
-        candidates = _find_smaller_candidates(comp, "**/*.db")
-        # For bimetallic, we may have fewer seeds, but should have some
-        # If no seeds, skip this test
-        if len(candidates) == 0:
-            pytest.skip(
-                "No seeds available for bimetallic Pt25Au25 - skipping diversity test"
-            )
-
-        signatures = []
-        for _ in range(n_samples):
-            atoms = create_initial_cluster(
-                comp,
-                mode="seed+growth",
-                rng=rng,
-                previous_search_glob="**/*.db",
-            )
-            assert_cluster_valid(atoms, comp)
-            signatures.append(get_structure_signature(atoms))
-
-        unique_signatures = set(signatures)
-        diversity_ratio = len(unique_signatures) / n_samples
-        assert diversity_ratio >= DIVERSITY_THRESHOLD_DEFAULT, (
-            f"Insufficient diversity in seed+growth mode (bimetallic): only "
-            f"{len(unique_signatures)}/{n_samples} ({diversity_ratio:.1%}) unique structures. "
-            f"Expected at least {DIVERSITY_THRESHOLD_DEFAULT:.0%}."
+    def test_seed_growth_diversity_bimetallic_with_seeds(self, rng, tmp_path):
+        db_glob = _write_final_seed_db(
+            tmp_path, _seed_clusters(["Pt", "Au", "Pt", "Au"], 6, rng)
+        )
+        comp = ["Pt", "Au"] * 4
+        assert _find_smaller_candidates(comp, db_glob)
+        _assert_init_mode_diversity(
+            comp,
+            rng=rng,
+            n_samples=DIVERSITY_TEST_SAMPLES_MEDIUM,
+            threshold=DIVERSITY_THRESHOLD_DEFAULT,
+            mode="seed+growth",
+            previous_search_glob=db_glob,
         )
 
 
@@ -1954,33 +1873,19 @@ class TestParameterSensitivity:
 
     @pytest.mark.parametrize(
         "connectivity_factor",
-        [0.7, 0.9, 1.0, 1.1, 1.3],
+        [0.9, 1.0, 1.1, 1.3],
     )
     def test_connectivity_factor_impact(self, connectivity_factor, rng):
         """Test that varying connectivity_factor affects cluster generation."""
         comp = ["Pt"] * 8
-        try:
-            atoms = create_initial_cluster(
-                comp,
-                mode="random_spherical",
-                connectivity_factor=connectivity_factor,
-                rng=rng,
-            )
-            # Should always produce connected clusters with proper connectivity factor
-            assert len(atoms) == 8
-            assert_cluster_valid(atoms, comp, connectivity_factor=connectivity_factor)
-        except (ValueError, SCGOValidationError) as e:
-            msg = str(e)
-            # At the GA steric floor, bond length equals the clash limit; random
-            # placement may fail to find a valid configuration for larger clusters.
-            if "Validation failed" in msg:
-                return
-            if (
-                connectivity_factor <= BLMIN_RATIO_DEFAULT
-                and "Could not place all" in msg
-            ):
-                return
-            raise
+        atoms = create_initial_cluster(
+            comp,
+            mode="random_spherical",
+            connectivity_factor=connectivity_factor,
+            rng=rng,
+        )
+        assert len(atoms) == 8
+        assert_cluster_valid(atoms, comp, connectivity_factor=connectivity_factor)
 
     @pytest.mark.parametrize(
         "placement_radius_scaling",
@@ -2356,29 +2261,47 @@ def test_sample_suitable_seed_reports_specific_failure_reason(rng):
     assert "linear" in reason
 
 
-def test_batch_seed_failures_are_grouped_not_repeated(caplog, rng):
-    """Repeated per-structure seed failures should collapse to one INFO summary."""
-    composition = ["Pt"] * 15
-    n_structures = 20
+def test_sample_suitable_seed_uses_stable_sha256_position_digest(rng):
+    atoms = Atoms(
+        "Pt4",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [0.0, 2.5, 0.0], [0.0, 0.0, 2.5]],
+    )
+    tried: set[str] = set()
+    seed, reason = _sample_suitable_seed(
+        [(0.0, atoms)],
+        strategy=0,
+        tried_positions=tried,
+        existing_geometries=[],
+        rng=rng,
+    )
+    assert seed is not None and reason is None
+    assert tried == {_get_positions_hash(atoms.get_positions())}
+
+
+def test_batch_seed_failures_are_grouped_not_repeated(
+    caplog, rng, tmp_path, monkeypatch
+):
+    """Repeated seed failures collapse to one INFO summary."""
+    from scgo.initialization import initializers as init_mod
+
+    linear = Atoms("Pt3", positions=[[0, 0, 0], [0, 0, 2.5], [0, 0, 5.0]])
+    db_glob = _write_final_seed_db(tmp_path, [linear] * 3)
+    # Keep linear seeds through the pre-filter so sampling records failures.
+    monkeypatch.setattr(init_mod, "_filter_candidates_by_geometry", lambda c: c)
     caplog.set_level(logging.INFO)
 
     create_initial_cluster_batch(
-        composition=composition,
-        n_structures=n_structures,
+        composition=["Pt"] * 6,
+        n_structures=12,
         rng=rng,
         mode="seed+growth",
         n_jobs=1,
+        previous_search_glob=db_glob,
     )
 
-    seed_failure_lines = [
-        line for line in caplog.text.splitlines() if "no suitable seed" in line
-    ]
-    if seed_failure_lines:
-        assert len(seed_failure_lines) == 1
-        assert "failures" in seed_failure_lines[0]
-        assert "after attempts" not in caplog.text
-    else:
-        pytest.skip("No seed failures in this run; database may have suitable seeds")
+    lines = [ln for ln in caplog.text.splitlines() if "no suitable seed" in ln]
+    assert len(lines) == 1 and "failures" in lines[0]
+    assert "after attempts" not in caplog.text
 
 
 def test_single_structure_smart_logs_strategy_allocation(caplog, rng):

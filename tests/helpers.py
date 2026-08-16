@@ -757,7 +757,7 @@ def assert_e2e_output_db(
 ) -> list[Path]:
     """Assert GO/TS wrote at least one ASE database under ``output_dir``."""
     root = Path(output_dir)
-    db_files = list(root.glob("**/*.db"))
+    db_files = sorted(root.glob("**/*.db"))
     assert db_files, f"No database files found under {root}"
     if expect_final_tag:
         assert_db_final_row(str(db_files[0]), None, expect_final_id=True)
@@ -975,7 +975,8 @@ def assert_e2e_go_ts_summary(
         assert ts_results == []
         return best
 
-    assert summary["ts_total_count"] >= 0
+    assert "ts_total_count" in summary
+    assert isinstance(summary["ts_total_count"], int)
     if require_ts_candidates:
         # The degradation guard is *always* strict: a pair count alone cannot
         # distinguish "searched and found a saddle" from "every band OOM'd and

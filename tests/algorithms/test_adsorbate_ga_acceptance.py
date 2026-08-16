@@ -68,7 +68,7 @@ def _gas_pt3_oh_parent() -> tuple[Atoms, list[str], dict, dict]:
     built = build_hierarchical_core_fragment_cluster(
         ads,
         np.random.default_rng(101),
-        previous_search_glob="**/*.db",
+        previous_search_glob=".__scgo_no_prior_runs__/**/*.db",
         fragment_templates=[oh],
         cluster_adsorbate_config=None,
         max_placement_attempts=200,

@@ -114,8 +114,6 @@ def add_ts_to_database(
         with get_connection(db_file) as da:
             ts_atoms = ts_structure.copy()
             ts_atoms.calc = None
-            if "tags" in ts_atoms.arrays:
-                del ts_atoms.arrays["tags"]
 
             _stamp_ts_metadata(
                 ts_atoms,

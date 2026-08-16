@@ -131,23 +131,32 @@ logger = get_logger(__name__)
 
 _PREFILTER_BLMIN_FACTOR = 0.55
 
+# Cache dense Z-pair clash thresholds by (sorted unique Z, id(blmin)).
+_BLMIN_THRESH_CACHE: dict[
+    tuple[tuple[int, ...], int], tuple[np.ndarray, dict[int, int]]
+] = {}
+
 
 def _blmin_threshold_matrix(
     atomic_numbers: np.ndarray, blmin: dict
 ) -> tuple[np.ndarray, np.ndarray]:
     """Map atomic numbers to a dense Z-pair clash-threshold matrix."""
-    unique_z = np.unique(atomic_numbers.astype(int, copy=False))
-    z_to_i = {int(z): i for i, z in enumerate(unique_z)}
-    n_u = len(unique_z)
-    z_int = unique_z.astype(int)
-
-    min_allowed = np.zeros((n_u, n_u), dtype=float)
-    for i, zi in enumerate(z_int):
-        for j, zj in enumerate(z_int):
-            min_allowed[i, j] = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
-    mask = min_allowed > 0.0
-    thresh = np.zeros((n_u, n_u), dtype=float)
-    thresh[mask] = _PREFILTER_BLMIN_FACTOR * min_allowed[mask]
+    unique_z = tuple(sorted(int(z) for z in np.unique(atomic_numbers)))
+    cache_key = (unique_z, id(blmin))
+    cached = _BLMIN_THRESH_CACHE.get(cache_key)
+    if cached is None:
+        z_to_i = {z: i for i, z in enumerate(unique_z)}
+        n_u = len(unique_z)
+        min_allowed = np.zeros((n_u, n_u), dtype=float)
+        for i, zi in enumerate(unique_z):
+            for j, zj in enumerate(unique_z):
+                min_allowed[i, j] = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
+        mask = min_allowed > 0.0
+        thresh = np.zeros((n_u, n_u), dtype=float)
+        thresh[mask] = _PREFILTER_BLMIN_FACTOR * min_allowed[mask]
+        _BLMIN_THRESH_CACHE[cache_key] = (thresh, z_to_i)
+    else:
+        thresh, z_to_i = cached
 
     index = np.array([z_to_i[int(z)] for z in atomic_numbers], dtype=int)
     return thresh, index
@@ -625,10 +634,9 @@ def _write_relaxed_candidate(
 def _read_candidate_batch(da: DataConnection, to_take: int) -> list[Atoms]:
     """Read a batch of unrelaxed candidates under a single DB connection.
 
-    A single ``select()`` scan builds the per-gaid row list; for each requested
-    gaid the latest trajectory (max mtime, tie-broken by max id) is loaded. This
-    replaces the previous per-gaid ``select(gaid=...)`` loop, which was an O(N²)
-    scan over a JSON key_value column with no index.
+    Uses indexed ``relaxed`` / ``queued`` filters instead of a full-table
+    ``select()``. For each requested gaid the latest trajectory (max mtime,
+    tie-broken by max id) is loaded.
 
     Rows without a ``gaid`` (e.g. the stoichiometry template row written at
     database setup) are skipped. A gaid is excluded when *any* of its rows is
@@ -637,17 +645,27 @@ def _read_candidate_batch(da: DataConnection, to_take: int) -> list[Atoms]:
     gaids, sorted by gaid, are returned as ``Atoms`` with ``confid`` set.
     """
     with da.c:
-        rows_by_gaid: dict[int, list] = {}
         excluded_gaids: set[int] = set()
-        for r in da.c.select():
+        for r in da.c.select(relaxed=1):
+            gaid = getattr(r, "gaid", None)
+            if gaid is not None:
+                excluded_gaids.add(int(gaid))
+        for r in da.c.select(queued=1):
+            gaid = getattr(r, "gaid", None)
+            if gaid is not None:
+                excluded_gaids.add(int(gaid))
+
+        rows_by_gaid: dict[int, list] = {}
+        for r in da.c.select(relaxed=0):
             gaid = getattr(r, "gaid", None)
             if gaid is None:
                 continue
-            if getattr(r, "relaxed", 0) or getattr(r, "queued", 0):
-                excluded_gaids.add(gaid)
+            gaid_i = int(gaid)
+            if gaid_i in excluded_gaids:
                 continue
-            rows_by_gaid.setdefault(gaid, []).append(r)
-        gaids = sorted(rows_by_gaid.keys() - excluded_gaids)[:to_take]
+            rows_by_gaid.setdefault(gaid_i, []).append(r)
+
+        gaids = sorted(rows_by_gaid.keys())[:to_take]
         out: list[Atoms] = []
         for gaid in gaids:
             latest = max(rows_by_gaid[gaid], key=lambda row: (row.mtime, row.id))
@@ -1142,6 +1160,7 @@ def ga_go(
         freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
         adsorbate_fragment_template=adsorbate_fragment_template,
         cluster_adsorbate_config=cluster_adsorbate_config,
+        connectivity_factor=connectivity_factor,
     )
 
     _ = update_mutation_weights(

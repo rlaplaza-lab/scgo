@@ -71,6 +71,18 @@ def test_prepare_slab_search_surface_config_contiguous_prefix() -> None:
     assert z[: part.n_fixed].max() < z[part.n_fixed :].min()
 
 
+def test_prepare_slab_search_preserves_defect_bias_probability() -> None:
+    cfg = SurfaceSystemConfig(
+        slab=_three_layer_c_slab(),
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+        defect_bias_probability=0.7,
+    )
+    new_cfg, _ = prepare_slab_search_surface_config(cfg)
+    assert new_cfg.defect_bias_probability == 0.7
+    assert new_cfg.fix_all_slab_atoms is False
+
+
 def test_system_policies_for_new_types() -> None:
     bare = get_system_policy("surface")
     ads = get_system_policy("surface_adsorbate")

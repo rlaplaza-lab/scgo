@@ -14,6 +14,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _IDENTITY_ATOL,
     _ensure_rng,
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
     _reanchor_mobile_to_slab,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
@@ -203,7 +204,12 @@ class BreathingMutation(OffspringCreator):
                 and atoms_too_close_two_sets(slab, cand, self.blmin)
             ):
                 continue
-            if not _preserves_mobile_connectivity(top, cand, use_mic=use_mic):
+            if not _preserves_mobile_connectivity(
+                top,
+                cand,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
+            ):
                 continue
             return slab + cand
         return None

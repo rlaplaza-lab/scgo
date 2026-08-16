@@ -8,7 +8,11 @@ import pytest
 
 from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import get_default_params, get_testing_params
-from scgo.runner_go import _EXTRA_ACCEPTED_TOP_LEVEL_KEYS, _run_go_trials
+from scgo.runner_go import (
+    _EXPECTED_TOP_LEVEL_KEYS,
+    _EXTRA_ACCEPTED_TOP_LEVEL_KEYS,
+    _run_go_trials,
+)
 from scgo.utils.run_helpers import _VALID_ALGO_PARAMS, validate_algorithm_params
 
 
@@ -57,6 +61,7 @@ def test_accepted_top_level_keys_match_defaults_union():
         "seed",
     }
     assert set(get_default_params().keys()) | _EXTRA_ACCEPTED_TOP_LEVEL_KEYS == expected
+    assert frozenset(expected) == _EXPECTED_TOP_LEVEL_KEYS
 
 
 def test_validation_n_jobs_accepted_by_param_gate(tmp_path: Path, monkeypatch) -> None:

@@ -20,6 +20,7 @@ from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
 from scgo.utils.run_helpers import initialize_ts_params, prepare_algorithm_kwargs
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
+from tests.constants import TS_FMAX_CONVERGED
 
 
 def _surface_config_for_test() -> SurfaceSystemConfig:
@@ -59,6 +60,10 @@ def test_ts_defaults_fmax_matches_shared_constant(system_type):
     """Force-convergence thresholds are shared, not per system type."""
     defaults = get_ts_defaults(system_type)
     shared = float(param_presets_module._TS_NEB_FMAX)
+    assert shared == TS_FMAX_CONVERGED, (
+        f"Production _TS_NEB_FMAX={shared} drifted from pinned "
+        f"TS_FMAX_CONVERGED={TS_FMAX_CONVERGED}"
+    )
     assert float(defaults["neb_fmax"]) == shared
     assert float(defaults["torchsim_fmax"]) == shared
     assert float(defaults["neb_fmax"]) == float(defaults["torchsim_fmax"])

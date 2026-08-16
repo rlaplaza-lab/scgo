@@ -22,6 +22,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _append_unique_unit_vector,
     _ensure_rng,
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
     _random_unit_vector,
     _reanchor_mobile_to_slab,
 )
@@ -293,7 +294,10 @@ class RotationalMutation(OffspringCreator):
                 too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
 
             if not too_close and _preserves_mobile_connectivity(
-                atoms, mutant, use_mic=use_mic
+                atoms,
+                mutant,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
             ):
                 return slab + mutant
 
@@ -317,7 +321,10 @@ class RotationalMutation(OffspringCreator):
                         if (
                             not too_close
                             and _preserves_mobile_connectivity(
-                                atoms, mutant, use_mic=use_mic
+                                atoms,
+                                mutant,
+                                use_mic=use_mic,
+                                connectivity_factor=_resolve_op_connectivity_factor(self),
                             )
                         ):
                             return slab + mutant

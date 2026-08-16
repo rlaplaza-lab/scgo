@@ -301,8 +301,8 @@ default to ``-2``. So in practice:
    :widths: 25 10 65
 
    * - ``temperature``
-     - 500K
-     - Temperature for accepting moves
+     - ``1.0`` eV
+     - Metropolis energy scale for accepting uphill moves (eV; not a physical temperature)
    * - ``dr``
      - ``0.2``
      - Maximum step size (\ :math:`\AA`)
@@ -352,8 +352,11 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Calculator options
    * - ``max_pairs``
      - ``None``
-     - Maximum minima pairs to check (None = all). Soft ``pair_score_*``
-       ranking only matters when this caps the pool.
+     - **NEB budget**: maximum endpoint pairs that run NEB (``None`` = all
+       survivors). Soft ``pair_score_*`` ranking only matters when this caps
+       the pool. Adsorbate searches may *select* more candidates first (see
+       **Budget and oversampling** below); the runner always truncates to this
+       value before NEB.
    * - ``energy_gap_threshold``
      - ``2.0`` / ``0.75`` (adsorbate)
      - Hard max energy gap between endpoints (eV); pairs above this are skipped
@@ -393,16 +396,30 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
 **Pair selection**
 (:func:`~scgo.ts_search.transition_state_io.select_structure_pairs`;
 defaults from
-:func:`~scgo.pair_selection_defaults.pair_selection_param_defaults`):
+:func:`~scgo.pair_selection_defaults.pair_selection_param_defaults`;
+select budget from
+:func:`~scgo.ts_search.transition_state_io.resolve_ts_pair_select_cap`):
+
+Flow before any NEB force evaluation:
+
+1. Load (and optionally dedupe) GO minima.
+2. Enumerate candidate endpoint pairs.
+3. Apply **hard gates** (energy gap, similarity / mismatch / core RMS).
+4. **Soft-rank** survivors with ``pair_score_*``.
+5. Truncate to the select cap from ``resolve_ts_pair_select_cap``.
+6. **Adsorbate only** (when TorchSim + ``max_endpoint_mismatch`` + more
+   survivors than ``max_pairs``): IDPP path screen re-ranks the oversampled
+   pool and keeps the best ``max_pairs``.
+7. Always truncate to ``max_pairs`` again, then run NEB.
 
 Minima are laid out ``[slab | core | adsorbate]``. The comparator fingerprint
 is element-pair distances among **same** elements only, so O–H or O–O site
 hops are invisible in the fingerprint when those atoms are unique or only
 compared to themselves. Pairing therefore uses different hard gates by regime:
 
-- **Bare** (``gas_cluster`` / ``surface_cluster``): fingerprint the full mobile
-  region; skip ``are_similar`` pairs; optional ``max_endpoint_mismatch`` on
-  fingerprint ``max_diff``.
+- **Bare** (``gas_cluster`` / ``surface_cluster`` / ``surface``): fingerprint
+  the full mobile region; skip ``are_similar`` pairs; optional
+  ``max_endpoint_mismatch`` on fingerprint ``max_diff``.
 - **Adsorbate + metal core**: fingerprint the **core only**; do **not** skip
   similar cores (site hops look identical); hard-gate core ``max_diff`` with
   ``max_endpoint_mismatch`` and core RMS with ``pair_core_rms_max``. Soft rank
@@ -411,7 +428,53 @@ compared to themselves. Pairing therefore uses different hard gates by regime:
   adsorbate Cartesian travel via ``max_endpoint_mismatch``.
 
 Hard gates always apply. Soft ``pair_score_*`` terms only order candidates when
-``max_pairs`` truncates the list (otherwise every surviving pair is kept).
+a finite select / ``max_pairs`` cap truncates the list (otherwise every
+surviving pair is kept).
+
+**Budget and oversampling**
+
+``max_pairs`` is the number of NEBs you pay for. It is **not** always the
+argument passed to ``select_structure_pairs``:
+
+- **Bare** system types use ``max_pairs`` as the select cap. Soft scores pick
+  the top N; those N bands run NEB. Setting ``max_endpoint_mismatch`` on bare
+  surface presets (``1.25`` Å) enables pre-NEB path gates only — it does
+  **not** turn on oversampling.
+- **Adsorbate** system types with ``max_endpoint_mismatch`` set oversample the
+  select pool to
+  ``min(max_pairs * 10, max(max_pairs, 50))``
+  (:func:`~scgo.ts_search.transition_state_io.adsorbate_pair_select_cap`), then
+  re-rank by IDPP profile (prefer robust interior maxima) and keep
+  ``max_pairs`` for NEB. Example: ``max_pairs=6`` selects up to 50 ranked
+  pairs, then NEBs at most 6. If TorchSim / IDPP screening is unavailable, the
+  runner still truncates the oversampled list to ``max_pairs`` before NEB.
+
+Per-system-type defaults (with a caller-set ``max_pairs=N``):
+
+.. list-table::
+   :widths: 28 18 18 36
+   :header-rows: 1
+
+   * - System type
+     - Default ``max_endpoint_mismatch``
+     - Oversample select?
+     - Select cap → NEB count
+   * - ``gas_cluster``
+     - ``None``
+     - No
+     - ``N`` → ``N``
+   * - ``surface_cluster`` / ``surface``
+     - ``1.25``
+     - No
+     - ``N`` → ``N``
+   * - ``gas_cluster_adsorbate``
+     - ``1.25``
+     - Yes
+     - up to ``adsorbate_pair_select_cap(N)`` → ``N``
+   * - ``surface_cluster_adsorbate`` / ``surface_adsorbate``
+     - ``1.5``
+     - Yes
+     - up to ``adsorbate_pair_select_cap(N)`` → ``N``
 
 Default hard / soft knobs:
 
@@ -527,7 +590,14 @@ logs include skip counts (energy gap, mismatch, core RMS, etc.).
        chunk that hits CUDA OOM is retried once at half the budget
    * - ``max_endpoint_mismatch``
      - ``None`` / ``1.25`` (gas adsorbate) / ``1.25`` (surface) / ``1.5`` (surface adsorbate)
-     - Å geometric gate on comparator ``max_diff``; when set, also enables the pre-NEB endpoint-displacement check. For adsorbate + metal-core systems (gas or on a slab), pair selection fingerprints the **core** and this gate means “cores too different”; adsorbate site hops with an identical core are kept. For adsorbate-only slabs the same threshold gates adsorbate Cartesian travel. Surface presets newly gain this (was unset).
+     - Å geometric gate on comparator ``max_diff``; when set, also enables the
+       pre-NEB endpoint-displacement check. For adsorbate + metal-core systems
+       (gas or on a slab), pair selection fingerprints the **core** and this
+       gate means “cores too different”; adsorbate site hops with an identical
+       core are kept. For adsorbate-only slabs the same threshold gates
+       adsorbate Cartesian travel. On adsorbate system types it also enables
+       select oversampling (see **Budget and oversampling**); on bare surface
+       it does **not**.
    * - ``neb_prescreen_clash_distance``
      - ``1.0`` (bare gas) / ``0.7`` (surface + adsorbate)
      - Interior NEB image min mobile pairwise distance (Å) below which the initial path is rejected.
@@ -584,9 +654,9 @@ surface and adsorbate are tighter: ``0.7`` / ``0.40``).
 **Adsorbate NEB specifics** (beyond the gates above):
 
 - Fragment-wise adsorbate matching and core-anchored alignment
-- Pair selection: see **Pair selection** above (core fingerprint, hard gates,
-  soft ``pair_score_*``). Oversamples candidates (``10× max_pairs``) and re-ranks
-  by IDPP profile so the NEB budget favors robust interior maxima when any exist
+- Pair selection / oversampling: see **Budget and oversampling** under
+  **Pair selection** above (adsorbate-only; bare surface
+  ``max_endpoint_mismatch`` does not oversample)
 - Climbing NEB: two-stage only when the IDPP path has a robust interior maximum
   (barrier ``≥ 1.0`` eV); endpoint-max and soft interior IDPP climb from step 0
 - Finalize also rejects barriers ``> 8`` eV

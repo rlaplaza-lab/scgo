@@ -58,16 +58,11 @@ EMT_H2_BARRIER_EV = (2.0, 5.0)
 # (0.95, 1.15) was rejected -- it breaks the sacred Pt3 NN check (1.20 > 1.15).
 NN_DISTANCE_BAND = (0.9, 1.25)
 
-# Per-atom force tolerance a converged TS must satisfy. This MUST track the
-# production NEB convergence floor (_TS_NEB_FMAX in scgo.param_presets): the NEB
-# only ever reports ``neb_converged`` when final_fmax is already below that
-# floor, so a stricter bar here would reject every physically-valid saddle the
-# MACE CI-NEB can attain (0.20 eV/A is the soft-MEP floor; tighter values
-# collapse interior saddles to endpoints). Derive it from the source of truth so
-# the two can never drift apart.
-from scgo.param_presets import _TS_NEB_FMAX  # noqa: E402
-
-TS_FMAX_CONVERGED = _TS_NEB_FMAX
+# Per-atom force tolerance a converged TS must satisfy. Pin the literal so a
+# production loosen of ``_TS_NEB_FMAX`` fails loudly (see drift test in
+# tests/param_presets/test_param_presets.py). 0.20 eV/A is the soft-MEP floor;
+# tighter values collapse interior saddles to endpoints.
+TS_FMAX_CONVERGED = 0.20
 ADSORPTION_HEIGHT_TOLERANCE_ANG = 0.1
 PT_O_DISTANCE_ANG = (1.8, 2.4)
 # NOTE: the plan proposed tightening hi to 2.2, but Pre-flight shows relaxed

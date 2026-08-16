@@ -212,6 +212,29 @@ class TestPermutationBoundedPairSelection:
         result = mut.mutate(atoms)
         assert result is not None
 
+    def test_pair_swaps_sampled_without_replacement(self, au2pt2_atoms):
+        atoms = au2pt2_atoms.copy()
+        mut = PermutationMutation(
+            len(atoms),
+            system_type="gas_cluster",
+            probability=1.0,
+            rng=np.random.default_rng(0),
+        )
+        base_rng = mut.rng
+        kwargs_seen: list[dict] = []
+
+        class _Rng:
+            def __getattr__(self, name):
+                return getattr(base_rng, name)
+
+            def choice(self, *args, **kwargs):
+                kwargs_seen.append(kwargs)
+                return base_rng.choice(*args, **kwargs)
+
+        mut.rng = _Rng()  # type: ignore[assignment]
+        mut.mutate(atoms)
+        assert kwargs_seen and kwargs_seen[0].get("replace") is False
+
 
 # ---------------------------------------------------------------------------
 # 6. OverlapReliefMutation repairs clashes in one bounded call

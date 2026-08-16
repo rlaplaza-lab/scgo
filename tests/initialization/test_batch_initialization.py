@@ -34,8 +34,9 @@ from tests.helpers import (
 
 def _precompute_seeds(
     composition: list[str],
+    previous_search_glob: str = ".__scgo_no_prior_runs__/**/*.db",
 ) -> tuple[dict[str, list[tuple[float, object]]], list[tuple[str, ...]]]:
-    candidates_by_formula = _find_smaller_candidates(composition, "**/*.db")
+    candidates_by_formula = _find_smaller_candidates(composition, previous_search_glob)
     candidates_by_formula = _filter_candidates_by_geometry(candidates_by_formula)
     if not candidates_by_formula:
         return {}, []
@@ -283,7 +284,7 @@ def test_smart_mode_template_index_alignment():
     )
     templates = discovery["templates"]
     if not templates:
-        pytest.skip("No templates discovered for Pt13; cannot assert template coverage")
+        pytest.fail("No templates discovered for Pt13; template coverage requires them")
 
     template_sigs = [get_structure_signature(t) for t in templates]
     n_seed_combinations = discovery["n_seed_combinations"]

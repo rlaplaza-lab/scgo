@@ -11,7 +11,7 @@ Search mobility matches the same layer policy used by
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from ase import Atoms
@@ -141,21 +141,7 @@ def prepare_slab_search_surface_config(
     partition = resolve_slab_search_partition(config)
     reordered = reorder_slab_fixed_then_mobile(config.slab, partition)
     # Rebuild partition on the reordered slab (fixed are a contiguous prefix).
-    new_config = SurfaceSystemConfig(
-        slab=reordered,
-        name=config.name,
-        adsorption_height_min=config.adsorption_height_min,
-        adsorption_height_max=config.adsorption_height_max,
-        surface_normal_axis=config.surface_normal_axis,
-        fix_all_slab_atoms=False,
-        n_fix_bottom_slab_layers=config.n_fix_bottom_slab_layers,
-        n_relax_top_slab_layers=config.n_relax_top_slab_layers,
-        comparator_use_mic=config.comparator_use_mic,
-        cluster_init_vacuum=config.cluster_init_vacuum,
-        init_mode=config.init_mode,
-        max_placement_attempts=config.max_placement_attempts,
-        structure_connectivity_factor=config.structure_connectivity_factor,
-    )
+    new_config = replace(config, slab=reordered, fix_all_slab_atoms=False)
     new_partition = resolve_slab_search_partition(new_config)
     # After reorder, fixed indices must be 0..n_fixed-1.
     if list(new_partition.fixed_indices) != list(range(new_partition.n_fixed)):

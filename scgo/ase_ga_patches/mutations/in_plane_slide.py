@@ -14,6 +14,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _append_unique_unit_vector,
     _ensure_rng,
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
@@ -182,7 +183,12 @@ class InPlaneSlideMutation(OffspringCreator):
                 continue
             if self.test_dist_to_slab and len(slab) > 0 and atoms_too_close_two_sets(slab, cand, self.blmin):
                 continue
-            if not _preserves_mobile_connectivity(top, cand, use_mic=use_mic):
+            if not _preserves_mobile_connectivity(
+                top,
+                cand,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
+            ):
                 continue
             return slab + cand
         return None

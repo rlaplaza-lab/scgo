@@ -236,6 +236,46 @@ def test_surface_deposition_empty_core_on_graphite(rng):
     assert out.get_chemical_symbols()[-2:] == ["O", "H"]
 
 
+def test_create_deposited_cluster_core_bearing_one_build_per_outer_attempt(
+    monkeypatch, rng
+):
+    cfg = SurfaceSystemConfig(
+        slab=_small_slab().slab,
+        fix_all_slab_atoms=True,
+        max_placement_attempts=5,
+    )
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    tmpl = build_default_fragment_template(["O", "H"])
+    assert tmpl is not None
+    blmin = closest_distances_generator(
+        list({int(z) for z in cfg.slab.numbers} | {78, 8, 1}),
+        ratio_of_covalent_radii=0.7,
+    )
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "scgo.surface.deposition.build_hierarchical_core_fragment_cluster",
+        lambda *a, **kw: calls.append(int(kw.get("max_placement_attempts", -1)))
+        or None,
+    )
+    assert (
+        create_deposited_cluster(
+            ["Pt", "Pt", "O", "H"],
+            cfg.slab,
+            blmin,
+            rng,
+            cfg,
+            adsorbate_definition=ads_def,
+            adsorbate_fragment_template=[tmpl],
+        )
+        is None
+    )
+    assert calls == [1] * cfg.max_placement_attempts
+
+
 def test_gas_hierarchical_core_fragment_smoke(rng):
     """Gas-phase hierarchical build matches core then fragment symbol order."""
     ads_def = AdsorbateDefinition(

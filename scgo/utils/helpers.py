@@ -756,6 +756,11 @@ def filter_unique_minima(
     Returns:
         A new list of (energy, Atoms) tuples containing only the unique
         structures, sorted by energy from lowest to highest.
+
+    Note:
+        Returned ``Atoms`` objects that lack a ``raw_score`` structure tag are
+        annotated in-place with ``raw_score=-energy`` (ASE GA convention).
+        Discarded duplicates are left unchanged.
     """
     if not minima_list:
         return []
@@ -766,10 +771,6 @@ def filter_unique_minima(
 
     if not valid_minima:
         return []
-
-    for energy, atoms in valid_minima:
-        if get_tag(atoms, "raw_score") is None:
-            set_tags(atoms, raw_score=-float(energy))
 
     comparer = PureInteratomicDistanceComparator(
         n_top=n_top,
@@ -792,7 +793,9 @@ def filter_unique_minima(
         sorted_minima, comparer, energy_tolerance, get_bin_index, energy_bins
     )
 
-    # Result is already energy-ascending (input was sorted; binning appends in order).
+    for energy, atoms in unique_minima:
+        if get_tag(atoms, "raw_score") is None:
+            set_tags(atoms, raw_score=-float(energy))
 
     return unique_minima
 

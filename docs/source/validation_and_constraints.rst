@@ -191,6 +191,12 @@ soft ranking (``pair_score_*``) are documented under **Pair selection** in
 :doc:`/parameters`. Defaults from
 :func:`~scgo.pair_selection_defaults.pair_selection_param_defaults`.
 
+``max_pairs`` is the NEB budget. Adsorbate searches may oversample the select
+pool (then IDPP-re-rank) via
+:func:`~scgo.ts_search.transition_state_io.resolve_ts_pair_select_cap`; bare
+types — including surface presets that set ``max_endpoint_mismatch`` — do not.
+See **Budget and oversampling** in :doc:`/parameters`.
+
 NEB pre-screen gates
 --------------------
 

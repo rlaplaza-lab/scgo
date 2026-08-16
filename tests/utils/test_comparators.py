@@ -219,6 +219,7 @@ def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
     refreshed = get_sorted_dist_list(atoms1)
     assert refreshed is not first
     assert atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"] is refreshed
+    assert get_sorted_dist_list(atoms1) is refreshed
 
 
 def test_sorted_dist_list_mic_matches_nested_get_distance():

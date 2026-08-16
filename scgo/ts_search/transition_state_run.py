@@ -81,8 +81,8 @@ from .transition_state import (
     validate_initial_neb_path,
 )
 from .transition_state_io import (
-    adsorbate_pair_select_cap,
     load_minima_by_composition,
+    resolve_ts_pair_select_cap,
     save_transition_state_results,
     select_structure_pairs,
     write_final_unique_ts,
@@ -934,16 +934,12 @@ def run_transition_state_search(
         )
     _warn_on_surface_mobile_indices(minima, system_type=system_type, n_slab=neb_n_slab)
 
-    # Adsorbate pre-NEB gates drop many candidates; oversample then re-rank by
-    # IDPP profile so ``max_pairs`` favors robust interior maxima. Cap the pool
-    # absolutely (``adsorbate_pair_select_cap``) so cost stays bounded.
-    pair_select_cap = max_pairs
-    if (
-        max_endpoint_mismatch is not None
-        and max_pairs is not None
-        and int(max_pairs) > 0
-    ):
-        pair_select_cap = adsorbate_pair_select_cap(int(max_pairs))
+    # Adsorbate: oversample for IDPP re-rank. Bare: select cap is the NEB budget.
+    pair_select_cap = resolve_ts_pair_select_cap(
+        max_pairs,
+        has_adsorbate=bool(system_policy.has_adsorbate),
+        max_endpoint_mismatch=max_endpoint_mismatch,
+    )
     pairs = select_structure_pairs(
         minima,
         max_pairs=pair_select_cap,
@@ -1040,6 +1036,8 @@ def run_transition_state_search(
                 "No adsorbate pairs survived IDPP priority screening for TS search"
             )
             return []
+    if max_pairs is not None and int(max_pairs) > 0:
+        pairs = pairs[: int(max_pairs)]
 
     log_info_v(
         logger,

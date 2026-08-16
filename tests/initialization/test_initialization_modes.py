@@ -71,7 +71,8 @@ class TestInitializationModesBasics:
             assert isinstance(atoms, Atoms)
             assert len(atoms) == 2
             assert_cluster_valid(atoms, comp)
-            assert atoms.get_cell() is not None
+            cell = atoms.get_cell()
+            assert cell.volume > 0.0
             assert not np.all(atoms.get_pbc())
 
     @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
