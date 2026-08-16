@@ -293,6 +293,7 @@ def test_fixbondlengths_survives_simstate_pop_of_system_zero(monkeypatch) -> Non
 
 
 @pytest.mark.requires_cuda
+@pytest.mark.requires_mace
 def test_fixbondlengths_survives_simstate_to_cuda_and_pop() -> None:
     """Same SimState path on a real CUDA device (user's ORR traceback)."""
     torch = pytest.importorskip("torch")
