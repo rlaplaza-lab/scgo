@@ -241,6 +241,13 @@ class MirrorMutation(OffspringCreator):
                 for step in range(1, 12):
                     shift = step * 0.5 * min(self.blmin.values()) * plane
                     rescue.positions = best.get_positions() + shift
+                    if self._policy.uses_surface:
+                        rescue = _reanchor_mobile_to_slab(
+                            top,
+                            rescue,
+                            slab,
+                            self.surface_normal_axis,
+                        )
                     if atoms_too_close(rescue, self.blmin):
                         continue
                     if len(slab) > 0 and atoms_too_close_two_sets(

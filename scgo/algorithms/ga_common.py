@@ -1440,10 +1440,7 @@ def update_mutation_weights(
     weights: list[float] = []
     for i in range(len(operators_list)):
         name = index_to_name.get(i)
-        if name and name in operator_weights:
-            weights.append(operator_weights[name])
-        else:
-            weights.append(_effective_operator_weight(name, operator_weights, name_map))
+        weights.append(_effective_operator_weight(name, operator_weights, name_map))
 
     s = float(sum(weights))
     if s > 0.0:

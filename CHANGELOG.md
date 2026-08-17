@@ -202,6 +202,15 @@
 
 ### Fixed
 
+- ``update_mutation_weights`` always maps operator names through
+  ``_effective_operator_weight``, so partitioned ``in_plane_slide`` /
+  ``_core`` / ``_ads`` variants share the table budget 70/15/15 instead of
+  giving the unscoped slide the full mass on top of the scoped variants.
+- ``FragmentRepositionMutation`` forwards the run-stamped ``connectivity_factor``
+  into its mobile connectivity gate (e.g. ``Pt-C: 1.8`` on graphite).
+- ``MirrorMutation`` steric-best rescue reanchors the mobile region to the slab
+  before clash/connectivity checks, matching the main ranked-candidate loop.
+
 - GA default mutation weights are keyed by ``system_type`` (not whole-composition
   element counts), so adsorbate runs no longer inflate rattle/overlap with unused
   ``permutation``/``shell_swap`` mass. ``fragment_reposition``, ``in_plane_slide``,

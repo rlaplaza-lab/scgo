@@ -11,6 +11,7 @@ from numpy.random import Generator
 from scgo.ase_ga_patches.mutations import _ensure_rng
 from scgo.ase_ga_patches.mutations._common import (
     _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.cluster_adsorbate.config import (
@@ -146,7 +147,12 @@ class FragmentRepositionMutation(OffspringCreator):
             new_mobile.positions[ads_mask] = placed.get_positions()
             if len(slab) > 0 and atoms_too_close_two_sets(new_mobile, slab, self.blmin):
                 continue
-            if not _preserves_mobile_connectivity(mobile, new_mobile, use_mic=use_mic):
+            if not _preserves_mobile_connectivity(
+                mobile,
+                new_mobile,
+                use_mic=use_mic,
+                connectivity_factor=_resolve_op_connectivity_factor(self),
+            ):
                 continue
             # Core atoms are not moved; do not reanchor the whole mobile region
             # (that would lift the core off the slab if the fragment becomes lowest).

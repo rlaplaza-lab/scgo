@@ -11,6 +11,7 @@ from ase_ga.utilities import (
     get_all_atom_types,
 )
 
+import scgo.ase_ga_patches.mutations.mirror as mirror_mod
 from scgo.ase_ga_patches.mutations._common import _pin_subset_contact_atom
 from scgo.ase_ga_patches.mutations.flattening import FlatteningMutation
 from scgo.ase_ga_patches.mutations.mirror import MirrorMutation
@@ -177,6 +178,51 @@ def test_flattening_ads_keeps_barely_connected_core_contact(rng) -> None:
         full.get_positions()[n_slab + 3 :],
         atol=1e-8,
     )
+
+
+def test_mirror_rescue_reanchors_to_slab(monkeypatch, rng) -> None:
+    full, blmin, n_slab = _tight_pt3_oh_on_slab()
+    parent_low = float(np.min(full[n_slab:].get_positions()[:, 2]))
+    mut_kwargs = {
+        "blmin": blmin,
+        "n_top": 5,
+        "system_type": "surface_cluster_adsorbate",
+        "target_tags": [0],
+        "rng": rng,
+        "max_tries": 12,
+    }
+
+    monkeypatch.setattr(
+        mirror_mod,
+        "_preserves_mobile_connectivity",
+        lambda *args, **kwargs: False,
+    )
+    probe = MirrorMutation(**mut_kwargs)
+    assert probe.mutate(full.copy()) is None
+    main_limit = probe.last_attempt_count
+
+    attempt = {"n": 0}
+
+    def _preserves_in_rescue(parent, mutant, **kwargs):
+        attempt["n"] += 1
+        return attempt["n"] > main_limit
+
+    monkeypatch.setattr(
+        mirror_mod,
+        "_preserves_mobile_connectivity",
+        _preserves_in_rescue,
+    )
+    monkeypatch.setattr(mirror_mod, "atoms_too_close", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        mirror_mod,
+        "atoms_too_close_two_sets",
+        lambda *args, **kwargs: False,
+    )
+
+    out = MirrorMutation(**mut_kwargs).mutate(full.copy())
+    assert out is not None
+    out_low = float(np.min(out[n_slab:].get_positions()[:, 2]))
+    assert abs(out_low - parent_low) < 1e-6
 
 
 def test_mirror_core_keeps_adsorbate_contact(rng) -> None:

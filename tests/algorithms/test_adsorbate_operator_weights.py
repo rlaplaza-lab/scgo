@@ -85,6 +85,47 @@ def test_adsorbate_operator_selector_assigns_weight_to_partitioned_ops() -> None
     assert reposition_weight > rotational_weight
 
 
+def test_surface_cluster_adsorbate_selector_splits_in_plane_slide_budget() -> None:
+    comp = ["Pt", "Pt", "Pt", "O", "H"]
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    slab = fcc111("Pt", size=(2, 2, 3), vacuum=8.0)
+    slab.center(vacuum=4.0, axis=2)
+    tmpl = Atoms(symbols=comp, positions=np.zeros((5, 3)), pbc=True)
+    tmpl.set_cell(slab.get_cell())
+    blmin = build_blmin_from_zs(tmpl.numbers, ratio=0.7)
+    ops, name_map = create_mutation_operators(
+        composition=comp,
+        n_to_optimize=5,
+        blmin=blmin,
+        rng=default_rng(0),
+        use_adaptive=True,
+        system_type="surface_cluster_adsorbate",
+        n_slab=len(slab),
+        adsorbate_definition=ads,
+        adsorbate_fragment_template=[tmpl[-2:]],
+    )
+    adaptive = get_adaptive_mutation_config(
+        comp,
+        use_adaptive=True,
+        system_type="surface_cluster_adsorbate",
+        adsorbate_definition=ads,
+    )
+    selector = update_mutation_weights(ops, name_map, adaptive, rng=default_rng(0))
+    increments = np.diff(np.asarray(selector.rho, dtype=float), prepend=0.0)
+    slide_names = ("in_plane_slide", "in_plane_slide_core", "in_plane_slide_ads")
+    slide_weights = np.array([increments[name_map[n]] for n in slide_names])
+    np.testing.assert_allclose(
+        slide_weights / slide_weights.sum(),
+        np.array([0.70, 0.15, 0.15]),
+        rtol=1e-6,
+        atol=1e-9,
+    )
+
+
 def test_surface_cluster_adsorbate_registers_whole_mobile_slide_and_rotate() -> None:
     comp = ["Pt", "Pt", "Pt", "O", "H"]
     ads = AdsorbateDefinition(
