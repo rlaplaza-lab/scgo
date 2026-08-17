@@ -190,6 +190,15 @@
 
 ### Fixed
 
+- GA default mutation weights are keyed by ``system_type`` (not whole-composition
+  element counts), so adsorbate runs no longer inflate rattle/overlap with unused
+  ``permutation``/``shell_swap`` mass. ``fragment_reposition``, ``in_plane_slide``,
+  and ``in_plane_rotate`` have first-class weights; surface adsorbate runs register
+  ``fragment_reposition`` and whole-mobile orientation operators.
+- Adsorbate crossover mixes tag-rigid fragments from either parent for
+  ``*_cluster_adsorbate`` types; ``surface_adsorbate`` keeps the mobile slab on
+  parent 0 while adsorbate fragments mix.
+
 - Tagged ``flattening_ads`` / ``flattening_core`` keep the subset atom that
   contacts the leftover mobile atoms fixed, so flattening around the subset COM
   cannot pull a barely-connected adsorbate off the core.

@@ -1148,6 +1148,8 @@ def ga_go(
         recovery_window=recovery_window,
         aggressive_burst_multiplier=aggressive_burst_multiplier,
         max_mutation_probability=max_mutation_probability,
+        system_type=system_type,
+        adsorbate_definition=adsorbate_definition,
     )
 
     idx_top = (
@@ -1553,6 +1555,8 @@ def ga_go(
                     recovery_window=recovery_window,
                     aggressive_burst_multiplier=aggressive_burst_multiplier,
                     max_mutation_probability=max_mutation_probability,
+                    system_type=system_type,
+                    adsorbate_definition=adsorbate_definition,
                 )
                 _ = update_mutation_weights(
                     operators_list=operators_list,

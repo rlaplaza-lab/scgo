@@ -35,6 +35,7 @@ from scgo.ase_ga_patches.mutations import (
     BreathingMutation,
     CustomPermutationMutation,
     FlatteningMutation,
+    InPlaneRotateMutation,
     InPlaneSlideMutation,
     MirrorMutation,
     OverlapReliefMutation,
@@ -921,6 +922,7 @@ def create_ga_pairing(
     child_rng_primary = get_child_rng_or_none(rng)
 
     use_partition_tags = False
+    pairing_target_tags: list[int] | None = None
     if composition is not None:
         use_partition_tags = (
             core_adsorbate_partition_counts(
@@ -931,6 +933,20 @@ def create_ga_pairing(
             )
             is not None
         )
+        if use_partition_tags:
+            if system_type == "surface_adsorbate":
+                part = core_adsorbate_partition_details(
+                    system_type,
+                    composition,
+                    adsorbate_definition,
+                    allow_empty_core=True,
+                )
+                if part is not None:
+                    _n_core, ads_fragment_lengths = part
+                    ads_tags = list(range(1, len(ads_fragment_lengths) + 1))
+                    pairing_target_tags = ads_tags if ads_tags else None
+            else:
+                pairing_target_tags = None
 
     def _cut_and_splice(
         minfrac: float, *, pairing_rng: Generator | None
@@ -943,7 +959,7 @@ def create_ga_pairing(
             rng=pairing_rng,
             system_type=system_type,
             use_tags=use_partition_tags,
-            target_tags=[0] if use_partition_tags else None,
+            target_tags=pairing_target_tags,
         )
 
     expl_minfrac = (
@@ -974,43 +990,45 @@ def _effective_operator_weight(
     """Map base adaptive weights onto partitioned adsorbate operator names."""
     if not name:
         return 0.0
+
+    slide_peers = [n for n in name_map if n.startswith("in_plane_slide_")]
+    slide_root = "in_plane_slide"
+    if name == slide_root and name in operator_weights and slide_peers:
+        allocated = float(operator_weights[slide_root])
+        unscoped_fraction = 0.70
+        peer_fraction = 0.15
+        active_fraction = unscoped_fraction + peer_fraction * len(slide_peers)
+        return allocated * (unscoped_fraction / active_fraction)
+
     if name in operator_weights:
         return float(operator_weights[name])
-
-    if name in ("fragment_reposition", "rotational"):
-        rotational_weight = float(operator_weights.get("rotational", 0.0))
-        if rotational_weight <= 0.0:
-            return 0.0
-        if name == "fragment_reposition":
-            if "fragment_reposition" in name_map:
-                return rotational_weight * 0.45
-            return 0.0
-        if "fragment_reposition" in name_map:
-            return rotational_weight * 0.55
-        return 0.0
 
     partition_specs: dict[str, tuple[str, float]] = {
         "flattening_core": ("flattening", 0.65),
         "flattening_ads": ("flattening", 0.35),
         "breathing_core": ("breathing", 0.65),
         "breathing_ads": ("breathing", 0.35),
-        "in_plane_slide_core": ("in_plane_slide", 0.55),
-        "in_plane_slide_ads": ("in_plane_slide", 0.45),
+        "in_plane_slide_core": ("in_plane_slide", 0.15),
+        "in_plane_slide_ads": ("in_plane_slide", 0.15),
     }
     if name not in partition_specs:
         return 0.0
 
     root, fraction = partition_specs[name]
-    if root not in operator_weights or root in name_map:
+    if root not in operator_weights:
         return 0.0
 
     peer_names = [n for n in name_map if n.startswith(f"{root}_")]
-    if not peer_names:
-        return 0.0
-    if name not in peer_names:
+    if not peer_names or name not in peer_names:
         return 0.0
 
     allocated = float(operator_weights[root])
+    if root in name_map:
+        unscoped_fraction = 0.70
+        peer_fraction = 0.15
+        active_fraction = unscoped_fraction + peer_fraction * len(peer_names)
+        return allocated * (peer_fraction / active_fraction)
+
     active_fraction = sum(
         partition_specs[n][1] for n in peer_names if n in partition_specs
     )
@@ -1331,21 +1349,40 @@ def create_mutation_operators(
                 kw["target_tags"] = ads_tags
             return kw
 
-        _append_partitioned_mutation(
-            operators,
-            name_map,
-            base_name="in_plane_slide",
-            mutation_cls=InPlaneSlideMutation,
-            use_partition_tags=use_partition_tags,
-            ads_tags=ads_tags,
-            include_ads_variant=True,
-            kwargs_for=_slide_kwargs,
+        if use_partition_tags:
+            operators.append(InPlaneSlideMutation(**_slide_kwargs("plain")))
+            name_map["in_plane_slide"] = len(operators) - 1
+            operators.append(InPlaneSlideMutation(**_slide_kwargs("core")))
+            name_map["in_plane_slide_core"] = len(operators) - 1
+            if ads_tags:
+                operators.append(InPlaneSlideMutation(**_slide_kwargs("ads")))
+                name_map["in_plane_slide_ads"] = len(operators) - 1
+        else:
+            _append_partitioned_mutation(
+                operators,
+                name_map,
+                base_name="in_plane_slide",
+                mutation_cls=InPlaneSlideMutation,
+                use_partition_tags=False,
+                ads_tags=ads_tags,
+                include_ads_variant=True,
+                kwargs_for=_slide_kwargs,
+            )
+
+        in_plane_rotate = InPlaneRotateMutation(
+            blmin,
+            n_to_optimize,
+            system_type=system_type,
+            surface_normal_axis=surface_normal_axis,
+            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
         )
+        operators.append(in_plane_rotate)
+        name_map["in_plane_rotate"] = len(operators) - 1
 
     if (
-        include_cluster_shape_ops
-        and use_partition_tags
+        use_partition_tags
         and adsorbate_definition is not None
+        and (include_cluster_shape_ops or policy.slab_is_search_target)
     ):
         reposition = FragmentRepositionMutation(
             blmin,

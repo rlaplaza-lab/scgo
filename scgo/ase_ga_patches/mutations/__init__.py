@@ -11,6 +11,7 @@ from __future__ import annotations
 from scgo.ase_ga_patches.mutations._common import _ensure_rng
 from scgo.ase_ga_patches.mutations.breathing import BreathingMutation
 from scgo.ase_ga_patches.mutations.flattening import FlatteningMutation
+from scgo.ase_ga_patches.mutations.in_plane_rotate import InPlaneRotateMutation
 from scgo.ase_ga_patches.mutations.in_plane_slide import InPlaneSlideMutation
 from scgo.ase_ga_patches.mutations.mirror import MirrorMutation
 from scgo.ase_ga_patches.mutations.overlap_relief import OverlapReliefMutation
@@ -30,6 +31,7 @@ __all__ = [
     "BreathingMutation",
     "CustomPermutationMutation",
     "FlatteningMutation",
+    "InPlaneRotateMutation",
     "InPlaneSlideMutation",
     "MirrorMutation",
     "OverlapReliefMutation",

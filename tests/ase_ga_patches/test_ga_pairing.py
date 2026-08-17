@@ -246,6 +246,67 @@ def test_cut_and_splice_non_target_groups_always_come_from_first_parent():
         )
 
 
+def _assert_preserves_atom_identity(child: Atoms, parent: Atoms) -> None:
+    assert len(child) == len(parent)
+    assert np.array_equal(child.get_atomic_numbers(), parent.get_atomic_numbers())
+    if len(parent) > 0:
+        assert np.array_equal(child.get_tags(), parent.get_tags())
+
+
+def test_cut_and_splice_all_moieties_can_mix_adsorbate_from_second_parent():
+    """When target_tags is None, adsorbate fragments may inherit parent-1 geometry."""
+    p1, p2 = _tagged_parents_with_distinct_adsorbates()
+    co, o, h = 27, 8, 1
+    blmin = {(z1, z2): 0.01 for z1 in (co, o, h) for z2 in (co, o, h)}
+    parent2_vector = p2.get_positions()[4] - p2.get_positions()[3]
+
+    saw_parent2_ads = False
+    for seed in range(40):
+        pairing = CutAndSplicePairing(
+            slab=Atoms(cell=p1.get_cell(), pbc=p1.get_pbc()),
+            n_top=len(p1),
+            blmin=blmin,
+            minfrac=0.3,
+            use_tags=True,
+            target_tags=None,
+            system_type="gas_cluster_adsorbate",
+            rng=np.random.default_rng(seed),
+        )
+        child = pairing.cross(p1, p2)
+        if child is None:
+            continue
+        _assert_preserves_atom_identity(child, p1)
+        child_vector = child.get_positions()[4] - child.get_positions()[3]
+        if np.allclose(child_vector, parent2_vector, atol=1e-8):
+            saw_parent2_ads = True
+            break
+    assert saw_parent2_ads
+
+
+def test_create_ga_pairing_cluster_adsorbate_mixes_all_moieties():
+    from scgo.algorithms.ga_common import create_ga_pairing
+    from scgo.system_types import AdsorbateDefinition
+
+    p1, _p2 = _tagged_parents_with_distinct_adsorbates()
+    comp = p1.get_chemical_symbols()
+    ads = AdsorbateDefinition(
+        core_symbols=["Co", "Co", "Co"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    pairing = create_ga_pairing(
+        p1,
+        len(p1),
+        rng=np.random.default_rng(0),
+        system_type="gas_cluster_adsorbate",
+        composition=comp,
+        adsorbate_definition=ads,
+        exploratory_crossover_probability=0.0,
+    )
+    assert pairing.use_tags is True
+    assert pairing.target_tags is None
+
+
 class _StubCreator:
     descriptor = "StubMutation"
 

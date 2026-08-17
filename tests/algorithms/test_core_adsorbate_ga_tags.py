@@ -91,6 +91,7 @@ def test_create_ga_pairing_use_tags_for_two_block() -> None:
     )
     assert isinstance(p, CutAndSplicePairing)
     assert p.use_tags is True
+    assert p.target_tags is None
 
 
 def test_create_mutation_operators_two_block_tags_omit_distort() -> None:

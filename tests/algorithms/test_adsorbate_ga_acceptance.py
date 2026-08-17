@@ -37,6 +37,8 @@ _SURFACE_ADSORBATE_OPS = (
     "overlap_relief",
     "rotational",
     "mirror",
+    "in_plane_slide",
+    "in_plane_rotate",
     "in_plane_slide_core",
     "fragment_reposition",
 )
@@ -163,6 +165,9 @@ def _mutation_succeeds(
         cand, _desc = op.get_new_individual([parent])
         if cand is None:
             continue
+        assert np.array_equal(cand.get_atomic_numbers(), parent.get_atomic_numbers())
+        if len(parent.get_tags()) == len(parent):
+            assert np.array_equal(cand.get_tags(), parent.get_tags())
         mobile = cand if n_slab == 0 else cand[n_slab:]
         use_tags = system_type.endswith("_adsorbate")
         if n_slab == 0:

@@ -19,7 +19,7 @@ from scgo.surface.partition import (
     prepare_slab_search_surface_config,
     resolve_slab_search_partition,
 )
-from scgo.system_types import get_system_policy
+from scgo.system_types import AdsorbateDefinition, get_system_policy
 
 
 def _layered_slab(n_per_layer: int = 2, n_layers: int = 3) -> Atoms:
@@ -59,7 +59,34 @@ def test_slab_search_operators_exclude_cluster_shape_ops() -> None:
     assert "rotational" not in names
     assert "breathing" not in names
     assert "fragment_reposition" not in names
+    assert "in_plane_rotate" in names
     assert len(ops) == len(names)
+
+
+def test_surface_adsorbate_registers_fragment_reposition() -> None:
+    slab = _layered_slab()
+    cfg = SurfaceSystemConfig(
+        slab=slab, fix_all_slab_atoms=False, n_relax_top_slab_layers=1
+    )
+    cfg, part = prepare_slab_search_surface_config(cfg)
+    ads = AdsorbateDefinition(
+        core_symbols=[],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    comp = list(part.mobile_slab_symbols) + ["O", "H"]
+    ops, names = create_mutation_operators(
+        composition=comp,
+        n_to_optimize=part.n_mobile_slab + 2,
+        blmin={(6, 6): 1.2, (6, 7): 1.1, (7, 7): 1.0, (6, 8): 1.0, (8, 8): 0.9},
+        system_type="surface_adsorbate",
+        n_slab=part.n_fixed,
+        use_adaptive=True,
+        adsorbate_definition=ads,
+    )
+    assert "fragment_reposition" in names
+    assert "flattening" not in names
+    assert "in_plane_rotate" in names
 
 
 def test_create_ga_pairing_uses_fixed_prefix_only() -> None:

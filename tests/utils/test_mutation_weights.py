@@ -2,10 +2,12 @@
 
 import pytest
 
+from scgo.system_types import AdsorbateDefinition
 from scgo.utils.mutation_weights import (
     calculate_composition_weights,
     calculate_generation_adjustment,
     calculate_size_adjustment,
+    calculate_system_type_weights,
     get_adaptive_mutation_config,
 )
 
@@ -22,7 +24,6 @@ def test_calculate_composition_weights_pure():
     assert "rotational" in weights
     assert "anisotropic_rattle" in weights
     assert "breathing" in weights
-    assert "in_plane_slide" in weights
     assert "permutation" not in weights
     assert abs(sum(weights.values()) - 1.0) < 1e-6
 
@@ -231,3 +232,52 @@ def test_stagnation_boost_respects_max_probability_cap():
         max_mutation_probability=0.55,
     )
     assert config["mutation_probability"] <= 0.55 + 1e-12
+
+
+def test_gas_cluster_adaptive_omits_in_plane_slide() -> None:
+    weights, use_perm = calculate_system_type_weights(
+        "gas_cluster",
+        ["Pt", "Pt", "Pt"],
+    )
+    assert not use_perm
+    assert "in_plane_slide" not in weights
+    assert "fragment_reposition" not in weights
+
+
+def test_adsorbate_weights_use_core_composition_not_adsorbate_elements() -> None:
+    comp = ["Pt", "Pt", "Pt", "O", "H"]
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    weights, use_perm = calculate_system_type_weights(
+        "gas_cluster_adsorbate",
+        comp,
+        adsorbate_definition=ads,
+    )
+    assert not use_perm
+    assert "permutation" not in weights
+    assert weights["fragment_reposition"] > weights.get("rotational", 0.0)
+
+
+def test_surface_cluster_adaptive_includes_orientation_ops() -> None:
+    weights, _ = calculate_system_type_weights("surface_cluster", ["Pt", "Pt", "Pt"])
+    assert weights["in_plane_slide"] > 0.05
+    assert weights["in_plane_rotate"] > 0.05
+
+
+def test_surface_cluster_adsorbate_prioritizes_fragment_reposition() -> None:
+    comp = ["Pt", "Pt", "Pt", "O", "H"]
+    ads = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    weights, _ = calculate_system_type_weights(
+        "surface_cluster_adsorbate",
+        comp,
+        adsorbate_definition=ads,
+    )
+    assert weights["fragment_reposition"] >= 0.18
+    assert weights["in_plane_rotate"] > 0.0

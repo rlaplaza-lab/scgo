@@ -104,11 +104,16 @@ NEB path defaults come from each system type's
 When a system has adsorbates, the GA partitions the mobile region with ASE tags
 (core = ``0``, each fragment = ``1..N``):
 
-- Crossover splices the core only; adsorbate fragments inherit from parent 0.
+- Crossover uses tag-rigid cut-and-splice. For ``*_cluster_adsorbate`` types the
+  core and each adsorbate fragment may inherit from either parent. For
+  ``surface_adsorbate`` the mobile slab sheet (tag ``0``) stays on parent 0 while
+  adsorbate fragments mix.
 - Mutations keep intra-fragment geometry unchanged.
-- Rotational, mirror, flattening, breathing, and in-plane slide use core-only
-  or adsorbate-scoped variants. Untagged gas-phase clusters omit ``mirror``.
-- ``fragment_reposition`` re-places one adsorbate on fresh surface sites.
+- Rotational, mirror, flattening, and breathing use core-only or adsorbate-scoped
+  variants where noted; ``in_plane_slide`` and ``in_plane_rotate`` also register
+  whole-mobile variants on surfaces. Untagged gas-phase clusters omit ``mirror``.
+- ``fragment_reposition`` re-places one adsorbate on fresh surface sites (including
+  ``surface_adsorbate`` slab-search runs).
 
 Operator clash checks use
 :func:`~scgo.initialization.atomic_radii.build_blmin`

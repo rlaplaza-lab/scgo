@@ -131,9 +131,12 @@ def _assert_accepted_geometry(
     parent: Atoms,
     *,
     adsorbate_use_tags: bool = False,
+    preserve_tags: bool = False,
 ) -> None:
     assert len(atoms) == len(parent)
     assert np.array_equal(atoms.get_atomic_numbers(), parent.get_atomic_numbers())
+    if preserve_tags and len(parent.get_tags()) == len(parent):
+        assert np.array_equal(atoms.get_tags(), parent.get_tags())
     assert np.allclose(atoms.get_cell(), parent.get_cell())
     assert np.all(atoms.get_pbc() == parent.get_pbc())
     if n_slab == 0:
@@ -276,7 +279,12 @@ def _mutation_operator_succeeds(
         if cand is None:
             continue
         _assert_accepted_geometry(
-            cand, n_slab, blmin, parent, adsorbate_use_tags=adsorbate_use_tags
+            cand,
+            n_slab,
+            blmin,
+            parent,
+            adsorbate_use_tags=adsorbate_use_tags,
+            preserve_tags=adsorbate_use_tags,
         )
         _assert_mutant_is_new(cand, parent, n_slab)
         return True
@@ -539,6 +547,8 @@ _SURFACE_CLUSTER_ADSORBATE_COMMON = (
     "overlap_relief",
     "rotational",
     "mirror",
+    "in_plane_slide",
+    "in_plane_rotate",
     "in_plane_slide_core",
     "in_plane_slide_ads",
     "fragment_reposition",
