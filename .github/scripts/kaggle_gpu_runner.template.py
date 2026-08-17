@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -364,9 +365,9 @@ def _is_unexpected_oom_line(line: str) -> bool:
         return True
     # torch-sim's InFlight/BinningAutoBatcher raises a ``ValueError`` whose message
     # contains "max_metric" when a later batch's metric exceeds the sticky cached
-    # scaler. That is a memory-degradation failure that can masquerade behind a
-    # "band unusable" / example-failure line, so treat it as unexpected.
-    if "max_metric" in lowered:
+    # scaler. Match as a word so pytest frames naming
+    # ``_run_with_max_metric_retry`` do not trip the guard.
+    if re.search(r"\bmax_metric\b", lowered):
         return True
     # Synthetic degradation markers (kept for backwards-compat log scanning).
     if "hit cuda oom" in lowered or "retry still oom" in lowered:
@@ -438,6 +439,7 @@ def main() -> int:
         # cu124 index resolves. Harmless on the UPET suite.
         env.setdefault("TORCH_FORCE_WEIGHTS_ONLY_LOAD", "0")
 
+        pytest_timeout = "1800" if "gpu_smoke" in PYTEST_MARKER else "3600"
         pytest_cmd = [
             *py,
             "-m",
@@ -447,7 +449,7 @@ def main() -> int:
             PYTEST_MARKER,
             "-v",
             "--tb=short",
-            "--timeout=1800",
+            f"--timeout={pytest_timeout}",
             "--capture=tee-sys",
             "--log-cli-level=INFO",
             "--log-cli-format=%(asctime)s %(levelname)s %(name)s: %(message)s",

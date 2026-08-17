@@ -9,9 +9,12 @@ import torch
 
 from tests.helpers import assert_e2e_minima_list
 
-pytest.importorskip("upet")
-pytest.importorskip("metatomic_torchsim")
-pytest.importorskip("torch_sim")
+
+@pytest.fixture(autouse=True)
+def _require_upet_stack() -> None:
+    pytest.importorskip("upet")
+    pytest.importorskip("metatomic_torchsim")
+    pytest.importorskip("torch_sim")
 
 
 @pytest.mark.gpu_smoke

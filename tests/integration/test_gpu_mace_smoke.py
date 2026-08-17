@@ -9,8 +9,11 @@ import torch
 
 from tests.helpers import assert_e2e_minima_list
 
-pytest.importorskip("mace")
-pytest.importorskip("torch_sim")
+
+@pytest.fixture(autouse=True)
+def _require_mace_stack() -> None:
+    pytest.importorskip("mace")
+    pytest.importorskip("torch_sim")
 
 
 @pytest.mark.gpu_smoke
