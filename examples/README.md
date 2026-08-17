@@ -47,8 +47,12 @@ GO-only:
 |--------|-------------|-------|
 | `example_pt5_orr_defected_graphite.py` | `surface_cluster` then `surface_cluster_adsorbate` | Four `run_go` searches: bare Pt5, then Pt5+O, Pt5+OH, Pt5+OOH on monovacancy graphite |
 
-All graphite scripts use `slab_layers=3`, `slab_repeat_xy=3` (7.38 Å cell,
-53–54 atoms). The ORR script uses `n_vacancies=1`.
+All graphite scripts build slabs via the HOPG 5×5 × 3-layer preset helpers
+(``make_hopg_5x5_graphite_surface_config``,
+``make_hopg_5x5_defected_graphite_surface_config``, or
+``make_n_doped_graphite_surface_config`` for N-doping). Slab geometry is not
+hard-coded in the examples; only defect/dopant counts differ where noted
+(``n_dopants=2`` in the N-doped example).
 
 ```bash
 pip install -e ".[mace]"

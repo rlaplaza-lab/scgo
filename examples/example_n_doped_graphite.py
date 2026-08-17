@@ -37,8 +37,6 @@ OUTPUT_STEM = "n_doped_graphite_oh"
 # GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
 # per-example knob (it is the dominant TS cost lever).
 MAX_PAIRS = 4
-SLAB_LAYERS = 3
-SLAB_REPEAT_XY = 3
 N_DOPANTS = 2
 
 
@@ -84,10 +82,7 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
 
 def main() -> None:
     surface_config = make_n_doped_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-        n_dopants=N_DOPANTS,
-        seed=SEED,
+        n_dopants=N_DOPANTS, seed=SEED
     )
     run_go_ts(
         COMPOSITION,

@@ -30,7 +30,7 @@ from scgo import (
     SurfaceSystemConfig,
     get_low_effort_torchsim_ga_params,
     get_low_effort_ts_search_params,
-    make_graphite_surface_config,
+    make_hopg_5x5_graphite_surface_config,
     run_go_ts,
 )
 
@@ -51,8 +51,6 @@ def _resolve_output_stem() -> str:
 # GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
 # per-example knob (it is the dominant TS cost lever).
 MAX_PAIRS = 6
-SLAB_LAYERS = 3
-SLAB_REPEAT_XY = 3
 
 
 def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
@@ -85,10 +83,7 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
 
 
 def main() -> None:
-    surface_config = make_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-    )
+    surface_config = make_hopg_5x5_graphite_surface_config()
     run_go_ts(
         COMPOSITION,
         go_params=_build_go_params(surface_config),

@@ -35,7 +35,7 @@ from scgo import (
     SurfaceSystemConfig,
     get_low_effort_torchsim_ga_params,
     get_low_effort_ts_search_params,
-    make_graphite_surface_config,
+    make_hopg_5x5_graphite_surface_config,
     run_go_ts,
 )
 
@@ -56,8 +56,6 @@ def _resolve_output_stem() -> str:
 # GA/NEB budgets come from the low-effort presets. Fewer close pairs here:
 # adsorbate bands are the most expensive (7 images, two-stage climb).
 MAX_PAIRS = 4
-SLAB_LAYERS = 3
-SLAB_REPEAT_XY = 3
 ADSORBATES = [
     Atoms(symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]),
     Atoms(symbols=["O", "H"], positions=[[2.2, 0.0, 0.0], [2.2, 0.0, 0.96]]),
@@ -95,10 +93,7 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
 
 
 def main() -> None:
-    surface_config = make_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-    )
+    surface_config = make_hopg_5x5_graphite_surface_config()
     run_go_ts(
         COMPOSITION,
         go_params=_build_go_params(surface_config),

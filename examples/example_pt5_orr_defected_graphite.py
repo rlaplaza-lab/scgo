@@ -2,7 +2,7 @@
 """Pt5 and ORR intermediates (O, OH, OOH) on vacancy graphite: GO via ``run_go``.
 
 Four separate searches on a monovacancy graphite slab
-(:func:`~scgo.make_defected_graphite_surface_config` with ``n_vacancies=1``):
+(:func:`~scgo.make_hopg_5x5_defected_graphite_surface_config`):
 
 - bare Pt5 (``system_type="surface_cluster"``, no ``adsorbates``)
 - Pt5+O, Pt5+OH, Pt5+OOH (``system_type="surface_cluster_adsorbate"``)
@@ -37,7 +37,7 @@ from scgo import (
     SurfaceSystemConfig,
     get_low_effort_torchsim_ga_params,
     get_system_path_key,
-    make_defected_graphite_surface_config,
+    make_hopg_5x5_defected_graphite_surface_config,
     parse_composition_arg,
     run_go,
 )
@@ -48,10 +48,6 @@ BARE_SYSTEM_TYPE = "surface_cluster"
 ADSORBATE_SYSTEM_TYPE = "surface_cluster_adsorbate"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
 OUTPUT_STEM = "pt5_orr_defected_graphite"
-
-SLAB_LAYERS = 3
-SLAB_REPEAT_XY = 3
-N_VACANCIES = 1
 
 
 def _resolve_output_stem() -> str:
@@ -142,12 +138,7 @@ def _searches_dir(
 
 
 def main() -> None:
-    surface_config = make_defected_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-        n_vacancies=N_VACANCIES,
-        seed=SEED,
-    )
+    surface_config = make_hopg_5x5_defected_graphite_surface_config(seed=SEED)
     campaign_root = DEFAULT_OUTPUT_ROOT / f"{_resolve_output_stem()}_mace"
     cases: list[tuple[str, Atoms | None]] = [(BARE_SYSTEM_TYPE, None)]
     cases.extend((ADSORBATE_SYSTEM_TYPE, frag) for frag in ORR_ADSORBATES)

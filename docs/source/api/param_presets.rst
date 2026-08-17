@@ -169,10 +169,10 @@ and the Kaggle GPU test matrix uses, so the two cannot drift apart.
    from scgo import (
        get_low_effort_torchsim_ga_params,
        get_low_effort_ts_search_params,
-       make_graphite_surface_config,
+       make_hopg_5x5_graphite_surface_config,
    )
 
-   surface_config = make_graphite_surface_config(slab_layers=3, slab_repeat_xy=3)
+   surface_config = make_hopg_5x5_graphite_surface_config()
 
    go_params = get_low_effort_torchsim_ga_params(
        system_type="surface_cluster",
@@ -199,10 +199,10 @@ per-calculator TS wrapper.
    from scgo import (
        get_low_effort_upet_ga_params,
        get_low_effort_ts_search_params,
-       make_graphite_surface_config,
+       make_hopg_5x5_graphite_surface_config,
    )
 
-   surface_config = make_graphite_surface_config(slab_layers=3, slab_repeat_xy=3)
+   surface_config = make_hopg_5x5_graphite_surface_config()
 
    go_params = get_low_effort_upet_ga_params(
        system_type="surface_cluster",

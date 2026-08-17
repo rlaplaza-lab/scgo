@@ -14,9 +14,8 @@ from ``examples/example_*.py``; the UPET mirror stays in lockstep via the dual
 matrix here. Per-case deltas are limited to ``max_pairs`` (the dominant TS cost
 lever) and ``connectivity_factor``.
 
-Slabs match the examples exactly (``slab_layers=3``, ``slab_repeat_xy=3``), so
-the defected / N-doped cells are physically meaningful rather than
-self-interacting at ~4.9 Å.
+Slabs use the shared HOPG 5×5 × 3-layer preset defaults (~12.3 × 10.7 Å in-plane,
+~36.7 Å cell height) so large clusters do not self-interact across the cell.
 
 Every case passes a ``barrier_range`` and ``require_ts_candidates=True`` (the
 "trial of fire"): ``assert_e2e_go_ts_summary`` switches onto
@@ -47,8 +46,8 @@ from scgo import (
     get_low_effort_torchsim_ga_params,
     get_low_effort_ts_search_params,
     get_low_effort_upet_ga_params,
-    make_defected_graphite_surface_config,
-    make_graphite_surface_config,
+    make_hopg_5x5_defected_graphite_surface_config,
+    make_hopg_5x5_graphite_surface_config,
     make_n_doped_graphite_surface_config,
     parse_composition_arg,
     run_go_ts,
@@ -65,11 +64,6 @@ from tests.helpers import assert_e2e_go_ts_summary
 SEED = 42
 
 CONNECTIVITY = 1.8
-# Slab geometry mirrors examples/example_*.py exactly. Smaller cells (repeat 2)
-# put a vacancy / two N dopants in a ~8-atom top layer at ~4.9 Å, which
-# self-interacts across the periodic image and is not a meaningful system.
-SLAB_LAYERS = 3
-SLAB_REPEAT_XY = 3
 
 # Generic MLIP barrier band: any interior saddle must land inside it. This is a
 # physically-plausible guard (rejects negative / absurd barriers), NOT an EMT
@@ -131,28 +125,15 @@ class GpuExampleCase:
 
 
 def _graphite_config() -> SurfaceSystemConfig:
-    return make_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-    )
+    return make_hopg_5x5_graphite_surface_config()
 
 
 def _defected_graphite_config() -> SurfaceSystemConfig:
-    return make_defected_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-        n_vacancies=1,
-        seed=SEED,
-    )
+    return make_hopg_5x5_defected_graphite_surface_config(seed=SEED)
 
 
 def _n_doped_graphite_config() -> SurfaceSystemConfig:
-    return make_n_doped_graphite_surface_config(
-        slab_layers=SLAB_LAYERS,
-        slab_repeat_xy=SLAB_REPEAT_XY,
-        n_dopants=2,
-        seed=SEED,
-    )
+    return make_n_doped_graphite_surface_config(n_dopants=2, seed=SEED)
 
 
 GPU_EXAMPLE_CASES = [

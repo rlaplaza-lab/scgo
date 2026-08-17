@@ -89,7 +89,9 @@ def _fake_surface_config(**_kwargs):
 def _patch_surface_makers(module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     for maker in (
         "make_graphite_surface_config",
+        "make_hopg_5x5_graphite_surface_config",
         "make_defected_graphite_surface_config",
+        "make_hopg_5x5_defected_graphite_surface_config",
         "make_n_doped_graphite_surface_config",
     ):
         if hasattr(module, maker):

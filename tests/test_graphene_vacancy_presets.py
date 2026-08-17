@@ -17,9 +17,19 @@ from scgo.surface import (
     create_deposited_cluster,
     make_defected_graphite_surface_config,
     make_graphene_surface_config,
+    make_graphite_surface_config,
+    make_hopg_5x5_defected_graphite_surface_config,
+    make_hopg_5x5_graphite_surface_config,
 )
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.presets import GRAPHITE_INTERLAYER_DISTANCE
+from scgo.surface.presets import (
+    GRAPHITE_INTERLAYER_DISTANCE,
+    HOPG_5X5_CELL_HEIGHT_ANGSTROM,
+    HOPG_5X5_MIN_Z_CLEARANCE_ANGSTROM,
+    HOPG_5X5_REPEAT_XY,
+    HOPG_5X5_VACUUM,
+    build_hopg_5x5_graphite_slab,
+)
 
 _NO_DB_GLOB = "tests/__no_such_db__.db"
 
@@ -109,6 +119,45 @@ def test_graphite_vacuum_is_total_padding() -> None:
     assert abs(float(mono.get_positions()[0, 2]) - 6.0) < 1.0
     bi = build_graphite_slab(layers=2, vacuum=12.0, repeat_xy=2)
     assert bi.cell[2, 2] == pytest.approx(GRAPHITE_INTERLAYER_DISTANCE + 12.0)
+
+
+def test_hopg_5x5_benchmark_slab_size() -> None:
+    slab = build_hopg_5x5_graphite_slab()
+    assert len(slab) == 150
+    assert slab.cell[2, 2] == pytest.approx(HOPG_5X5_CELL_HEIGHT_ANGSTROM)
+    assert slab.cell[2, 2] == pytest.approx(
+        HOPG_5X5_VACUUM + 2 * GRAPHITE_INTERLAYER_DISTANCE
+    )
+    in_plane = np.linalg.norm(np.asarray(slab.cell)[:2], axis=1)
+    assert in_plane[0] == pytest.approx(in_plane[1], abs=0.05)
+    assert in_plane[0] == pytest.approx(HOPG_5X5_REPEAT_XY * 2.46, abs=0.15)
+    positions = slab.get_positions()
+    z_min = float(positions[:, 2].min())
+    z_top_clearance = float(slab.cell[2, 2] - positions[:, 2].max())
+    # ASE graphene(formula="C2", vacuum=0) can leave a ~0.5 Å z offset;
+    # the stack is still centered to ~vacuum/2 on each side.
+    assert z_min == pytest.approx(HOPG_5X5_MIN_Z_CLEARANCE_ANGSTROM, abs=1.0)
+    assert z_top_clearance == pytest.approx(HOPG_5X5_MIN_Z_CLEARANCE_ANGSTROM, abs=1.0)
+
+    hopg_cfg = make_hopg_5x5_graphite_surface_config()
+    default_graphite = make_graphite_surface_config()
+    assert len(hopg_cfg.slab) == len(slab)
+    assert len(default_graphite.slab) == len(slab)
+    assert hopg_cfg.slab.cell[2, 2] == pytest.approx(slab.cell[2, 2])
+    assert default_graphite.slab.cell[2, 2] == pytest.approx(slab.cell[2, 2])
+
+    default_graphene = make_graphene_surface_config()
+    assert default_graphene.slab.cell[2, 2] == pytest.approx(
+        HOPG_5X5_CELL_HEIGHT_ANGSTROM
+    )
+
+    cfg = make_hopg_5x5_defected_graphite_surface_config(n_vacancies=1, seed=0)
+    assert len(cfg.slab) == 149
+    assert cfg.slab.info["vacancy_cartesian_angstrom"] is not None
+
+    default_defected = make_defected_graphite_surface_config(n_vacancies=1, seed=0)
+    assert len(default_defected.slab) == len(cfg.slab)
+    assert default_defected.slab.cell[2, 2] == pytest.approx(cfg.slab.cell[2, 2])
 
 
 def test_placement_bias_lands_on_defect() -> None:

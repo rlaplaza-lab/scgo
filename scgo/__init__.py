@@ -94,6 +94,8 @@ from scgo.surface.presets import (
     make_defected_graphite_surface_config,
     make_graphene_surface_config,
     make_graphite_surface_config,
+    make_hopg_5x5_defected_graphite_surface_config,
+    make_hopg_5x5_graphite_surface_config,
     make_n_doped_graphite_surface_config,
 )
 
@@ -149,6 +151,8 @@ __all__ = [
     "adsorption_energy",
     "make_graphene_surface_config",
     "make_graphite_surface_config",
+    "make_hopg_5x5_graphite_surface_config",
+    "make_hopg_5x5_defected_graphite_surface_config",
     "make_defected_graphite_surface_config",
     "make_n_doped_graphite_surface_config",
     "make_surface_config",

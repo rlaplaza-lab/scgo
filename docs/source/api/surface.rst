@@ -36,7 +36,9 @@ searches top layers plus adsorbates. Planar graphite/graphene top layers use
 
 .. autofunction:: scgo.surface.make_surface_config
 .. autofunction:: scgo.surface.make_graphite_surface_config
+.. autofunction:: scgo.surface.make_hopg_5x5_graphite_surface_config
 .. autofunction:: scgo.surface.make_defected_graphite_surface_config
+.. autofunction:: scgo.surface.make_hopg_5x5_defected_graphite_surface_config
 .. autofunction:: scgo.surface.make_n_doped_graphite_surface_config
 .. autofunction:: scgo.surface.build_graphene_slab
 .. autofunction:: scgo.surface.build_monovacancy_graphene_slab

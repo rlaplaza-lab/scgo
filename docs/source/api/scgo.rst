@@ -23,8 +23,10 @@ Surface configuration builders
 
 .. autofunction:: scgo.make_surface_config
 .. autofunction:: scgo.make_graphite_surface_config
+.. autofunction:: scgo.make_hopg_5x5_graphite_surface_config
 .. autofunction:: scgo.make_graphene_surface_config
 .. autofunction:: scgo.make_defected_graphite_surface_config
+.. autofunction:: scgo.make_hopg_5x5_defected_graphite_surface_config
 .. autofunction:: scgo.make_n_doped_graphite_surface_config
 
 Parameter resolution

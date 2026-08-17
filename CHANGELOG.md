@@ -23,6 +23,12 @@
   (`make_defected_graphite_*`, `make_n_doped_*`, `build_monovacancy_graphene_slab`,
   `defect_bias_probability`). `make_defected_graphite_surface_config` wires
   `defect_bias_probability` (default `0.5` when omitted).
+- Named HOPG 5×5 × 3-layer graphite helpers:
+  `make_hopg_5x5_graphite_surface_config`,
+  `make_hopg_5x5_defected_graphite_surface_config`,
+  `build_hopg_5x5_graphite_slab`, and `build_hopg_5x5_defected_graphite_slab`.
+  Examples and the Kaggle GPU example matrix use these so slab geometry stays
+  pinned to the 150-atom HOPG_5-5_3-layers footprint.
 - Planar slab layers (graphene / graphite top) now expose hollow (`facet`)
   adsorption sites computed from the in-plane Voronoi diagram, in addition to
   the existing on-top (`vertex`) and bridge (`edge`) sites. A
@@ -187,6 +193,12 @@
   of up to 16 nested retries.
 - Graphite slab `vacuum` is total normal padding for all layer counts
   (`cell_z = (layers - 1) * 3.35 + vacuum`, stack centered).
+- Graphite and graphene preset defaults now match the HOPG 5×5 × 3-layer slab
+  (150 C atoms, ~12.3 Å hexagonal in-plane vectors, 30 Å total vacuum /
+  ~36.7 Å cell height). Previous defaults were graphite 5 layers × 4×4 with
+  12 Å vacuum and graphene 6×6 with an 18 Å cell. Call the generic
+  `make_*_surface_config` builders with explicit `slab_layers` /
+  `slab_repeat_xy` / `nx` / `ny` to recover a smaller cell.
 
 ### Fixed
 

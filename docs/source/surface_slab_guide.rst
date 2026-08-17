@@ -31,13 +31,16 @@ Choosing a substrate
      - Use when
    * - Graphite (pristine)
      - Multi-layer support; the deposited cluster sits on the top graphene
-       sheet. Built with :func:`~scgo.make_graphite_surface_config`.
+       sheet. Built with :func:`~scgo.make_graphite_surface_config`
+       (default: HOPG 5×5 × 3 layers) or
+       :func:`~scgo.make_hopg_5x5_graphite_surface_config`.
    * - Graphene (pristine, monolayer)
      - Single free-standing sheet. Built with
        :func:`~scgo.make_graphene_surface_config`.
    * - Defected graphite
      - Graphite with one or more top-layer carbon vacancies. Built with
-       :func:`~scgo.make_defected_graphite_surface_config`.
+       :func:`~scgo.make_defected_graphite_surface_config` or
+       :func:`~scgo.make_hopg_5x5_defected_graphite_surface_config`.
    * - Monovacancy graphene
      - Single-layer graphene with one removed carbon atom; placement can target
        the vacancy. Built with :func:`~scgo.make_graphene_surface_config`
@@ -57,10 +60,10 @@ The presets build the slab, configure deposition heights, and return a ready
    from scgo import run_go, make_graphite_surface_config, make_graphene_surface_config
    from scgo.param_presets import get_default_params
 
-   # Graphite: 3 layers, 4x4 in-plane repetition
-   graphite_cfg = make_graphite_surface_config(slab_layers=3, slab_repeat_xy=4)
+   # Graphite: default is HOPG 5x5 x 3 layers (150 C, 30 Angstrom vacuum)
+   graphite_cfg = make_graphite_surface_config()
 
-   # Graphene monolayer: 4x4 repetition, 18 Angstrom cell height
+   # Smaller graphene monolayer: 4x4 repetition, 18 Angstrom cell height
    graphene_cfg = make_graphene_surface_config(nx=4, ny=4, cell_height=18.0)
 
    results = run_go(
@@ -98,7 +101,7 @@ Graphite with vacancies
    from scgo import make_defected_graphite_surface_config
 
    cfg = make_defected_graphite_surface_config(
-       slab_layers=3, slab_repeat_xy=3, n_vacancies=1, seed=42
+       n_vacancies=1, seed=42
    )
    assert "vacancy_cartesian_angstrom" in cfg.slab.info
 
@@ -137,7 +140,7 @@ N-doped graphite
    from scgo import make_n_doped_graphite_surface_config
 
    cfg = make_n_doped_graphite_surface_config(
-       slab_layers=3, slab_repeat_xy=3, n_dopants=2, seed=42
+       n_dopants=2, seed=42
    )
 
 Defect-biased nanoparticle placement
@@ -163,7 +166,7 @@ losing diversity.
    cfg = make_graphene_surface_config(nx=4, ny=4, monovacancy=True)  # 0.5
 
    cfg = make_defected_graphite_surface_config(
-       slab_layers=3, slab_repeat_xy=3, n_vacancies=1, seed=42
+       n_vacancies=1, seed=42
    )  # defect_bias_probability=0.5 by default
 
 The bias only changes the in-plane center of the cluster. The height above the
@@ -187,7 +190,7 @@ relax its surface region:
    from scgo.param_presets import get_default_params
 
    surface_config = make_defected_graphite_surface_config(
-       slab_layers=3, slab_repeat_xy=3, n_vacancies=1, seed=42
+       n_vacancies=1, seed=42
    )
 
    results = run_go(
@@ -243,7 +246,9 @@ For full control, build the ``Atoms`` directly and wrap them in a config:
    )
 
 Available builders in :mod:`scgo.surface.presets`:
-``build_graphite_slab``, ``build_defected_graphite_slab``,
+``build_graphite_slab``, ``build_hopg_5x5_graphite_slab``,
+``build_defected_graphite_slab``, ``build_hopg_5x5_defected_graphite_slab``,
 ``build_n_doped_graphite_slab``, ``build_graphene_slab``,
 ``build_monovacancy_graphene_slab``. The config wrappers
-(``make_*_surface_config``) are the recommended entry point for GO runs.
+(``make_*_surface_config``, including the HOPG 5×5 helpers) are the
+recommended entry point for GO runs.

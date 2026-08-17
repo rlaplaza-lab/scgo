@@ -27,11 +27,28 @@ from scgo.system_types.connectivity_factor import (
     NormalizedConnectivityFactor,
 )
 
-DEFAULT_GRAPHITE_SLAB_LAYERS = 5
-DEFAULT_GRAPHITE_SLAB_REPEAT_XY = 4
-DEFAULT_GRAPHITE_SLAB_VACUUM = 12.0
 # Graphite interlayer distance (AB stacking ~3.35 Å)
 GRAPHITE_INTERLAYER_DISTANCE = 3.35
+
+# HOPG 5×5 × 3-layer slab (150 C atoms; in-plane footprint matches HOPG_5-5_3-layers).
+HOPG_5X5_LAYERS = 3
+HOPG_5X5_REPEAT_XY = 5
+# Total vacuum padding along the surface normal (split equally above/below the
+# slab stack). 30 Å gives ~15 Å clearance per side so Pt12-scale clusters with
+# adsorbates do not approach the bottom slab layer through the finite cell.
+HOPG_5X5_VACUUM = 30.0
+HOPG_5X5_CELL_HEIGHT_ANGSTROM = (
+    HOPG_5X5_LAYERS - 1
+) * GRAPHITE_INTERLAYER_DISTANCE + HOPG_5X5_VACUUM
+HOPG_5X5_MIN_Z_CLEARANCE_ANGSTROM = HOPG_5X5_VACUUM / 2.0
+
+# Shared defaults for all graphite / graphene surface presets (same supercell).
+DEFAULT_GRAPHITE_SLAB_LAYERS = HOPG_5X5_LAYERS
+DEFAULT_GRAPHITE_SLAB_REPEAT_XY = HOPG_5X5_REPEAT_XY
+DEFAULT_GRAPHITE_SLAB_VACUUM = HOPG_5X5_VACUUM
+DEFAULT_GRAPHENE_NX = HOPG_5X5_REPEAT_XY
+DEFAULT_GRAPHENE_NY = HOPG_5X5_REPEAT_XY
+DEFAULT_GRAPHENE_CELL_HEIGHT = HOPG_5X5_CELL_HEIGHT_ANGSTROM
 
 
 def build_graphite_slab(
@@ -98,10 +115,10 @@ def _central_atom_index(atoms: Atoms, *, surface_normal_axis: int = 2) -> int:
 
 def build_graphene_slab(
     *,
-    nx: int = 6,
-    ny: int = 6,
+    nx: int = DEFAULT_GRAPHENE_NX,
+    ny: int = DEFAULT_GRAPHENE_NY,
     a: float = 2.46,
-    cell_height: float = 18.0,
+    cell_height: float = DEFAULT_GRAPHENE_CELL_HEIGHT,
 ) -> Atoms:
     """Build a single-layer (monolayer) graphene slab.
 
@@ -136,10 +153,10 @@ def build_graphene_slab(
 
 def build_monovacancy_graphene_slab(
     *,
-    nx: int = 6,
-    ny: int = 6,
+    nx: int = DEFAULT_GRAPHENE_NX,
+    ny: int = DEFAULT_GRAPHENE_NY,
     a: float = 2.46,
-    cell_height: float = 18.0,
+    cell_height: float = DEFAULT_GRAPHENE_CELL_HEIGHT,
     reconstruct: bool = False,
     reconstruction_shift: float = 0.10,
 ) -> Atoms:
@@ -179,10 +196,10 @@ def build_monovacancy_graphene_slab(
 
 def make_graphene_surface_config(
     *,
-    nx: int = 6,
-    ny: int = 6,
+    nx: int = DEFAULT_GRAPHENE_NX,
+    ny: int = DEFAULT_GRAPHENE_NY,
     a: float = 2.46,
-    cell_height: float = 18.0,
+    cell_height: float = DEFAULT_GRAPHENE_CELL_HEIGHT,
     monovacancy: bool = False,
     reconstruct: bool = False,
     reconstruction_shift: float = 0.10,
@@ -352,6 +369,77 @@ def make_defected_graphite_surface_config(
     )
 
 
+def build_hopg_5x5_graphite_slab(
+    *,
+    vacuum: float = HOPG_5X5_VACUUM,
+) -> Atoms:
+    """Build a 5×5 HOPG slab with three Bernal layers (150 C atoms).
+
+    In-plane footprint and atom count match the common ``HOPG_5-5_3-layers``
+    benchmark (~12.3 Å hexagonal in-plane vectors). ``vacuum`` defaults to
+    ``HOPG_5X5_VACUUM`` (~15 Å clearance above and below the slab stack)
+    so large deposited clusters do not interact with the bottom layer through
+    the finite cell.
+    """
+    return build_graphite_slab(
+        layers=HOPG_5X5_LAYERS,
+        vacuum=vacuum,
+        repeat_xy=HOPG_5X5_REPEAT_XY,
+    )
+
+
+def build_hopg_5x5_defected_graphite_slab(
+    *,
+    n_vacancies: int = 1,
+    seed: int = 0,
+    vacuum: float = HOPG_5X5_VACUUM,
+) -> Atoms:
+    """HOPG 5×5 graphite with top-layer vacancies removed."""
+    return build_defected_graphite_slab(
+        layers=HOPG_5X5_LAYERS,
+        vacuum=vacuum,
+        repeat_xy=HOPG_5X5_REPEAT_XY,
+        n_vacancies=n_vacancies,
+        seed=seed,
+    )
+
+
+def make_hopg_5x5_graphite_surface_config(
+    *,
+    vacuum: float = HOPG_5X5_VACUUM,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
+) -> SurfaceSystemConfig:
+    """Graphite preset using the HOPG 5×5 × 3-layer benchmark slab."""
+    return make_graphite_surface_config(
+        slab_layers=HOPG_5X5_LAYERS,
+        slab_repeat_xy=HOPG_5X5_REPEAT_XY,
+        vacuum=vacuum,
+        structure_connectivity_factor=structure_connectivity_factor,
+    )
+
+
+def make_hopg_5x5_defected_graphite_surface_config(
+    *,
+    n_vacancies: int = 1,
+    seed: int = 0,
+    vacuum: float = HOPG_5X5_VACUUM,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
+    defect_bias_probability: float | None = None,
+) -> SurfaceSystemConfig:
+    """Defected-graphite preset on the HOPG 5×5 × 3-layer benchmark slab."""
+    return make_defected_graphite_surface_config(
+        slab_layers=HOPG_5X5_LAYERS,
+        slab_repeat_xy=HOPG_5X5_REPEAT_XY,
+        vacuum=vacuum,
+        n_vacancies=n_vacancies,
+        seed=seed,
+        structure_connectivity_factor=structure_connectivity_factor,
+        defect_bias_probability=defect_bias_probability,
+    )
+
+
 def make_n_doped_graphite_surface_config(
     *,
     slab_layers: int = DEFAULT_GRAPHITE_SLAB_LAYERS,
@@ -387,13 +475,26 @@ __all__ = [
     "DEFAULT_GRAPHITE_SLAB_LAYERS",
     "DEFAULT_GRAPHITE_SLAB_REPEAT_XY",
     "DEFAULT_GRAPHITE_SLAB_VACUUM",
+    "DEFAULT_GRAPHENE_NX",
+    "DEFAULT_GRAPHENE_NY",
+    "DEFAULT_GRAPHENE_CELL_HEIGHT",
+    "GRAPHITE_INTERLAYER_DISTANCE",
+    "HOPG_5X5_LAYERS",
+    "HOPG_5X5_REPEAT_XY",
+    "HOPG_5X5_CELL_HEIGHT_ANGSTROM",
+    "HOPG_5X5_VACUUM",
+    "HOPG_5X5_MIN_Z_CLEARANCE_ANGSTROM",
     "build_graphite_slab",
+    "build_hopg_5x5_graphite_slab",
+    "build_hopg_5x5_defected_graphite_slab",
     "build_defected_graphite_slab",
     "build_n_doped_graphite_slab",
     "build_graphene_slab",
     "build_monovacancy_graphene_slab",
     "make_graphene_surface_config",
     "make_graphite_surface_config",
+    "make_hopg_5x5_graphite_surface_config",
+    "make_hopg_5x5_defected_graphite_surface_config",
     "make_defected_graphite_surface_config",
     "make_n_doped_graphite_surface_config",
 ]
