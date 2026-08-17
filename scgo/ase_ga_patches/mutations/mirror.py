@@ -11,11 +11,14 @@ from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
+    _IDENTITY_ATOL,
     _append_unique_unit_vector,
     _ensure_rng,
     _geometry_candidate_directions,
+    _preserves_mobile_connectivity,
     _random_unit_vector,
     _reanchor_mobile_to_slab,
+    _resolve_op_connectivity_factor,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.initialization.steric_scoring import steric_deficit as _steric_deficit
@@ -164,7 +167,6 @@ class MirrorMutation(OffspringCreator):
         else:
             reflect_options.append(False)
 
-        max_candidates = max(1, min(int(self.max_tries), 12))
         radii = float(np.max(np.linalg.norm(pos - center_of_mass, axis=1))) or 1.0
         ranked_candidates = []
         # Center-plane reflection of a compact, roughly spherical cluster overlaps
@@ -201,18 +203,30 @@ class MirrorMutation(OffspringCreator):
                     ranked_candidates.append((score, mutant))
 
         ranked_candidates.sort(key=lambda item: item[0])
-        ranked_candidates = ranked_candidates[:max_candidates]
+        # Steric ranking prefers core-adsorbate-separated mirrors; keep those
+        # candidates and skip them in the validity loop instead of truncating.
 
         self.last_attempt_count = 0
+        use_mic = bool(self._policy.uses_surface)
+        connectivity_factor = _resolve_op_connectivity_factor(self)
         for _score, mutant in ranked_candidates:
             self.last_attempt_count += 1
             if self._policy.uses_surface:
                 mutant = _reanchor_mobile_to_slab(
                     top, mutant, slab, self.surface_normal_axis
                 )
+            if np.allclose(mutant.get_positions(), pos, atol=_IDENTITY_ATOL):
+                continue
             if atoms_too_close(mutant, self.blmin):
                 continue
             if atoms_too_close_two_sets(slab, mutant, self.blmin):
+                continue
+            if not _preserves_mobile_connectivity(
+                top,
+                mutant,
+                use_mic=use_mic,
+                connectivity_factor=connectivity_factor,
+            ):
                 continue
             return slab + mutant
 
@@ -227,12 +241,21 @@ class MirrorMutation(OffspringCreator):
                 for step in range(1, 12):
                     shift = step * 0.5 * min(self.blmin.values()) * plane
                     rescue.positions = best.get_positions() + shift
-                    if not atoms_too_close(rescue, self.blmin) and not (
-                        len(slab) > 0
-                        and atoms_too_close_two_sets(slab, rescue, self.blmin)
+                    if atoms_too_close(rescue, self.blmin):
+                        continue
+                    if len(slab) > 0 and atoms_too_close_two_sets(
+                        slab, rescue, self.blmin
                     ):
-                        self.last_attempt_count += 1
-                        return slab + rescue
+                        continue
+                    if not _preserves_mobile_connectivity(
+                        top,
+                        rescue,
+                        use_mic=use_mic,
+                        connectivity_factor=connectivity_factor,
+                    ):
+                        continue
+                    self.last_attempt_count += 1
+                    return slab + rescue
 
         return None
 

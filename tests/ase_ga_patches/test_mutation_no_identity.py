@@ -11,7 +11,9 @@ from ase_ga.utilities import (
     get_all_atom_types,
 )
 
+from scgo.ase_ga_patches.mutations._common import _pin_subset_contact_atom
 from scgo.ase_ga_patches.mutations.flattening import FlatteningMutation
+from scgo.ase_ga_patches.mutations.mirror import MirrorMutation
 from scgo.ase_ga_patches.mutations.overlap_relief import OverlapReliefMutation
 from scgo.ase_ga_patches.mutations.rattle import RattleMutation
 from scgo.initialization.geometry_helpers import validate_cluster_structure
@@ -36,6 +38,31 @@ def _pt4_valid(rng: np.random.Generator) -> tuple[Atoms, dict]:
     assert not atoms_too_close(atoms, blmin)
     _ = rng
     return atoms, blmin
+
+
+def _tight_pt3_oh_on_slab() -> tuple[Atoms, dict, int]:
+    """Pt3-OH with Pt-O just inside the default connectivity cutoff."""
+    slab = fcc111("Pt", size=(4, 4, 2), vacuum=6.0, orthogonal=True)
+    n_slab = len(slab)
+    z_top = float(np.max(slab.positions[:, 2]))
+    xy = np.mean(slab.positions[:, :2], axis=0)
+    r_pt_o = 2.82
+    cluster = Atoms(
+        symbols=["Pt", "Pt", "Pt", "O", "H"],
+        positions=[
+            [xy[0], xy[1], z_top + 2.2],
+            [xy[0] + 2.6, xy[1], z_top + 2.2],
+            [xy[0] + 1.3, xy[1] + 2.25, z_top + 2.2],
+            [xy[0] + 1.3, xy[1] + 2.25, z_top + 2.2 + r_pt_o],
+            [xy[0] + 1.3, xy[1] + 2.25, z_top + 2.2 + r_pt_o + 0.96],
+        ],
+        cell=slab.get_cell(),
+        pbc=slab.get_pbc(),
+    )
+    cluster.set_tags([0, 0, 0, 1, 1])
+    full = slab + cluster
+    blmin = closest_distances_generator(get_all_atom_types(full, range(5)), 0.7)
+    return full, blmin, n_slab
 
 
 def test_overlap_relief_does_not_return_unchanged_valid_parent(rng) -> None:
@@ -112,3 +139,69 @@ def test_surface_rattle_returns_connected_mobile(rng) -> None:
         use_mic=True,
     )
     assert ok, msg
+
+
+def test_pin_subset_contact_atom_holds_binding_atom() -> None:
+    parent = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float)
+    new = np.array([[0.0, 0.0, 0.0], [1.2, 0.0, 0.0], [2.4, 0.0, 0.0]], dtype=float)
+    out = _pin_subset_contact_atom(parent, new, np.array([False, True, True]))
+    np.testing.assert_allclose(out[0], parent[0])
+    np.testing.assert_allclose(out[1], parent[1])
+    np.testing.assert_allclose(out[2], [2.2, 0.0, 0.0])
+
+
+def test_flattening_ads_keeps_barely_connected_core_contact(rng) -> None:
+    full, blmin, n_slab = _tight_pt3_oh_on_slab()
+    mut = FlatteningMutation(
+        blmin,
+        n_top=5,
+        system_type="surface_cluster_adsorbate",
+        thickness_factor=0.5,
+        target_tags=[1],
+        rng=rng,
+        max_inner_attempts=12,
+    )
+    out = mut.mutate(full.copy())
+    assert out is not None
+    ok, msg = validate_cluster_structure(
+        out[n_slab:],
+        MIN_DISTANCE_FACTOR_DEFAULT,
+        CONNECTIVITY_FACTOR,
+        check_clashes=False,
+        check_connectivity=True,
+        use_mic=True,
+    )
+    assert ok, msg
+    assert not np.allclose(
+        out.get_positions()[n_slab + 3 :],
+        full.get_positions()[n_slab + 3 :],
+        atol=1e-8,
+    )
+
+
+def test_mirror_core_keeps_adsorbate_contact(rng) -> None:
+    full, blmin, n_slab = _tight_pt3_oh_on_slab()
+    mut = MirrorMutation(
+        blmin,
+        n_top=5,
+        system_type="surface_cluster_adsorbate",
+        target_tags=[0],
+        rng=rng,
+        max_tries=12,
+    )
+    out = mut.mutate(full.copy())
+    assert out is not None
+    ok, msg = validate_cluster_structure(
+        out[n_slab:],
+        MIN_DISTANCE_FACTOR_DEFAULT,
+        CONNECTIVITY_FACTOR,
+        check_clashes=False,
+        check_connectivity=True,
+        use_mic=True,
+    )
+    assert ok, msg
+    assert not np.allclose(
+        out.get_positions()[n_slab : n_slab + 3],
+        full.get_positions()[n_slab : n_slab + 3],
+        atol=1e-8,
+    )

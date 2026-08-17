@@ -190,6 +190,15 @@
 
 ### Fixed
 
+- Tagged ``flattening_ads`` / ``flattening_core`` keep the subset atom that
+  contacts the leftover mobile atoms fixed, so flattening around the subset COM
+  cannot pull a barely-connected adsorbate off the core.
+- ``MirrorMutation`` no longer returns the steric-best core reflection when that
+  geometry disconnects the adsorbate; clash, identity, and connectivity are
+  checked across the ranked plane set before accepting a candidate.
+- ``FragmentRepositionMutation`` no longer reanchors the whole mobile region to
+  the slab: the core is not moved, and that reanchor lifted the core off the
+  surface whenever the fragment became the lowest atom.
 - GA batch writers reset eligible/ineligible counters at the start of each
   ``database_retry`` attempt so a mid-batch SQLite lock rollback cannot
   double-count outcomes relative to ``ga_eligible`` tags in the database.

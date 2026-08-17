@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
+from ase.build import fcc111
 from numpy.random import default_rng
 
 import scgo.cluster_adsorbate.reposition as reposition_mod
@@ -106,3 +107,52 @@ def test_fragment_reposition_changes_relative_pose(monkeypatch) -> None:
     )
     assert fail_op.mutate(combined) is None
     assert calls == [80, 240]
+
+
+def test_fragment_reposition_does_not_move_core_on_surface() -> None:
+    slab = fcc111("Pt", size=(4, 4, 2), vacuum=6.0, orthogonal=True)
+    n_slab = len(slab)
+    z_top = float(np.max(slab.positions[:, 2]))
+    xy = np.mean(slab.positions[:, :2], axis=0)
+    cluster = Atoms(
+        symbols=["Pt", "Pt", "Pt", "O", "H"],
+        positions=[
+            [xy[0], xy[1], z_top + 2.2],
+            [xy[0] + 2.6, xy[1], z_top + 2.2],
+            [xy[0] + 1.3, xy[1] + 2.25, z_top + 2.2],
+            [xy[0] + 1.3, xy[1] + 2.25, z_top + 4.2],
+            [xy[0] + 1.3, xy[1] + 2.25, z_top + 5.16],
+        ],
+        cell=slab.get_cell(),
+        pbc=slab.get_pbc(),
+    )
+    apply_mobile_core_ads_tags(cluster, n_slab=0, n_core=3, ads_fragment_lengths=[2])
+    full = slab + cluster
+    ads_def = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt", "Pt"],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    oh = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
+    op = FragmentRepositionMutation(
+        build_blmin_from_zs(full.numbers, ratio=0.7),
+        n_top=5,
+        system_type="surface_cluster_adsorbate",
+        adsorbate_definition=ads_def,
+        fragment_templates=[oh],
+        rng=default_rng(3),
+    )
+    core_parent = full.positions[n_slab : n_slab + 3].copy()
+    for seed in range(40):
+        op.rng = default_rng(seed)
+        out = op.mutate(full)
+        if out is None:
+            continue
+        np.testing.assert_allclose(
+            out.positions[n_slab : n_slab + 3], core_parent, atol=1e-12
+        )
+        assert not np.allclose(
+            out.positions[n_slab + 3 :], full.positions[n_slab + 3 :]
+        )
+        return
+    raise AssertionError("fragment_reposition did not succeed within 40 seeds")

@@ -14,9 +14,10 @@ from scgo.ase_ga_patches.mutations._common import (
     _IDENTITY_ATOL,
     _ensure_rng,
     _geometry_candidate_directions,
+    _pin_subset_contact_atom,
     _preserves_mobile_connectivity,
-    _resolve_op_connectivity_factor,
     _reanchor_mobile_to_slab,
+    _resolve_op_connectivity_factor,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.initialization.steric_scoring import _blmin_matrix
@@ -220,8 +221,11 @@ class FlatteningMutation(OffspringCreator):
         candidate_positions.sort(key=lambda item: item[0])
         self.last_attempt_count = 0
         use_mic = bool(self._policy.uses_surface)
+        pin_subset = not bool(np.all(mask))
         for _score, new_positions in candidate_positions:
             self.last_attempt_count += 1
+            if pin_subset:
+                new_positions = _pin_subset_contact_atom(pos, new_positions, mask)
             rms = (
                 np.linalg.norm(new_positions - pos)
                 / max(1, len(new_positions)) ** 0.5

@@ -30,6 +30,7 @@ __all__ = [
     "_geometry_candidate_directions",
     "_IDENTITY_ATOL",
     "_mobile_is_connected",
+    "_pin_subset_contact_atom",
     "_preserves_mobile_connectivity",
     "_random_unit_vector",
     "_reanchor_mobile_to_slab",
@@ -99,6 +100,29 @@ def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_can
         attempts += 1
 
     return candidates[:max_candidates]
+
+
+def _pin_subset_contact_atom(parent_positions, new_positions, subset_mask):
+    """Translate the mutated subset so its parent contact atom stays put.
+
+    The contact atom is the subset atom closest to any leftover atom. Tagged
+    flattening around the subset COM otherwise pulls that binding atom off the
+    remainder (core or adsorbate). No leftover atoms → returned unchanged.
+    """
+    subset_mask = np.asarray(subset_mask, dtype=bool)
+    leftover_mask = ~subset_mask
+    if not np.any(subset_mask) or not np.any(leftover_mask):
+        return new_positions
+    parent_positions = np.asarray(parent_positions, dtype=float)
+    new_positions = np.asarray(new_positions, dtype=float).copy()
+    parent_sub = parent_positions[subset_mask]
+    leftover = parent_positions[leftover_mask]
+    delta = parent_sub[:, None, :] - leftover[None, :, :]
+    dist2 = np.einsum("ijk,ijk->ij", delta, delta)
+    bind_local = int(np.argmin(np.min(dist2, axis=1)))
+    bind_idx = int(np.flatnonzero(subset_mask)[bind_local])
+    new_positions[subset_mask] += parent_positions[bind_idx] - new_positions[bind_idx]
+    return new_positions
 
 
 def _reanchor_mobile_to_slab(
