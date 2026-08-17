@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from ase import Atoms
@@ -50,6 +52,8 @@ from .initialization_config import (
     ROTATION_AXIS_TOLERANCE,
     SMART_FILTERING_PERTURBATION_SCALE,
 )
+
+ExtentKind = Literal["insufficient", "linear", "planar", "3d"]
 
 # Core utilities
 
@@ -143,44 +147,45 @@ def format_placement_error_message(
 
 # Convex hull and caching
 
-# Cache namespace for convex hull computations
 _CONVEX_HULL_CACHE_NS = "convex_hull"
 
 
+@dataclass(frozen=True)
+class ClusterExtent:
+    """PCA / hull extent: ``kind`` is insufficient|linear|planar|3d."""
+
+    kind: ExtentKind
+    vertices: np.ndarray
+    normal: np.ndarray
+    axis: np.ndarray | None
+    hull: ConvexHull | None = None
+
+
+def _unit_vector(v: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(v))
+    if norm < ROTATION_AXIS_TOLERANCE:
+        return np.array([1.0, 0.0, 0.0], dtype=float)
+    return np.asarray(v, dtype=float) / norm
+
+
+def _perpendicular_unit(axis: np.ndarray) -> np.ndarray:
+    axis = _unit_vector(axis)
+    ref = np.array([0.0, 0.0, 1.0], dtype=float)
+    if abs(float(np.dot(axis, ref))) > 0.9:
+        ref = np.array([1.0, 0.0, 0.0], dtype=float)
+    return _unit_vector(np.cross(axis, ref))
+
+
 def _get_positions_hash(positions: np.ndarray) -> str:
-    """Generate a collision-resistant hash for positions array.
-
-    Uses SHA256 to make hash collisions negligible. Callers additionally pair
-    the digest with the raw position bytes in the cache key, so a collision
-    cannot return a wrong cached result.
-
-    Args:
-        positions: Array of atomic positions
-
-    Returns:
-        SHA256 hash string
-    """
-    positions_bytes = positions.tobytes()
-    return hashlib.sha256(positions_bytes).hexdigest()
+    """SHA256 digest of position bytes (paired with raw bytes in cache keys)."""
+    return hashlib.sha256(positions.tobytes()).hexdigest()
 
 
 def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
-    """Get convex hull from cache or compute and cache it.
-
-    Backed by the global cache, which uses LRU eviction to bound its size.
-    The cache key combines the SHA256 digest of the positions with their raw
-    bytes, so a digest collision cannot return a hull for other positions.
-
-    Args:
-        positions: Array of atomic positions
-
-    Returns:
-        ConvexHull object for the given positions
+    """Get 3D convex hull from cache or compute it.
 
     Raises:
-        SCGOValidationError: If the positions array has fewer than 4 points
-            (insufficient for a 3D hull) or if the hull computation fails on
-            degenerate geometry
+        SCGOValidationError: Fewer than 4 points or degenerate Qhull failure.
     """
     if len(positions) < 4:
         raise SCGOValidationError(
@@ -194,50 +199,131 @@ def _get_cached_hull(positions: np.ndarray) -> ConvexHull:
         try:
             return ConvexHull(positions)
         except (QhullError, ValueError) as e:
-            # Handle degenerate cases (collinear/coplanar points)
             raise SCGOValidationError(
                 f"Convex hull computation failed for {len(positions)} points: {e}"
             ) from e
 
-    # Use cache key with validation bytes to detect collisions
-    cache_key = (positions_hash, positions_bytes)
     return get_global_cache().get_or_compute(
-        _CONVEX_HULL_CACHE_NS, cache_key, compute_hull
+        _CONVEX_HULL_CACHE_NS,
+        (positions_hash, positions_bytes),
+        compute_hull,
+    )
+
+
+def _compute_cluster_extent(positions: np.ndarray) -> ClusterExtent:
+    """Classify positions; call 3D Qhull only when PCA looks full-dimensional."""
+    positions = np.asarray(positions, dtype=float)
+    n = len(positions)
+
+    if n < 2:
+        return ClusterExtent(
+            kind="insufficient",
+            vertices=np.arange(n, dtype=np.intp),
+            normal=np.array([1.0, 0.0, 0.0], dtype=float),
+            axis=None,
+        )
+
+    if n == 2:
+        axis = _unit_vector(positions[1] - positions[0])
+        return ClusterExtent(
+            kind="linear",
+            vertices=np.array([0, 1], dtype=np.intp),
+            normal=_perpendicular_unit(axis),
+            axis=axis,
+        )
+
+    centered = positions - np.mean(positions, axis=0)
+    eigenvalues, eigenvectors = np.linalg.eigh(np.cov(centered.T))
+    lam0, lam1, lam2 = (float(eigenvalues[i]) for i in range(3))
+    scale = max(lam2, 1e-30)
+    tol = LINEAR_GEOMETRY_TOLERANCE * scale
+
+    if lam0 < tol and lam1 < tol:
+        axis = _unit_vector(eigenvectors[:, 2])
+        proj = centered @ axis
+        return ClusterExtent(
+            kind="linear",
+            vertices=np.array(
+                [int(np.argmin(proj)), int(np.argmax(proj))], dtype=np.intp
+            ),
+            normal=_perpendicular_unit(axis),
+            axis=axis,
+        )
+
+    normal = _unit_vector(eigenvectors[:, 0])
+
+    def _planar_vertices() -> np.ndarray:
+        e1, e2 = _unit_vector(eigenvectors[:, 1]), _unit_vector(eigenvectors[:, 2])
+        coords_2d = np.column_stack([centered @ e1, centered @ e2])
+        try:
+            return np.asarray(ConvexHull(coords_2d).vertices, dtype=np.intp)
+        except (QhullError, ValueError):
+            return np.arange(n, dtype=np.intp)
+
+    if n == 3 or lam0 < tol:
+        return ClusterExtent(
+            kind="planar",
+            vertices=_planar_vertices(),
+            normal=normal,
+            axis=None,
+        )
+
+    try:
+        hull = _get_cached_hull(positions)
+        if hull.volume < CONVEX_HULL_VOLUME_TOLERANCE:
+            return ClusterExtent(
+                kind="planar",
+                vertices=_planar_vertices(),
+                normal=normal,
+                axis=None,
+            )
+        return ClusterExtent(
+            kind="3d",
+            vertices=np.asarray(hull.vertices, dtype=np.intp),
+            normal=normal,
+            axis=None,
+            hull=hull,
+        )
+    except (SCGOValidationError, ValueError, QhullError):
+        return ClusterExtent(
+            kind="planar",
+            vertices=_planar_vertices(),
+            normal=normal,
+            axis=None,
+        )
+
+
+def resolve_cluster_extent(positions: np.ndarray) -> ClusterExtent:
+    """Cached PCA + optional 3D hull; avoids Qhull dumps on linear/planar sets."""
+    positions = np.ascontiguousarray(positions, dtype=np.float64)
+    key = ("extent", _get_positions_hash(positions), positions.tobytes())
+    return get_global_cache().get_or_compute(
+        _CONVEX_HULL_CACHE_NS, key, lambda: _compute_cluster_extent(positions)
     )
 
 
 def try_convex_hull(positions: np.ndarray) -> ConvexHull | None:
-    """Return convex hull for *positions*, or ``None`` for degenerate geometry."""
+    """Return 3D hull, or ``None`` for degenerate / undersized geometry."""
     if len(positions) < 4:
         return None
-    try:
-        return _get_cached_hull(positions)
-    except (SCGOValidationError, ValueError, QhullError) as exc:
-        get_logger(__name__).debug(
-            "Convex hull unavailable for %d points: %s", len(positions), exc
+    extent = resolve_cluster_extent(positions)
+    if extent.kind != "3d" or extent.hull is None:
+        template_debug_logger.debug(
+            "3D convex hull unavailable for %d points (%s)",
+            len(positions),
+            extent.kind,
         )
         return None
+    return extent.hull
 
 
 def get_convex_hull_vertex_indices(atoms: Atoms) -> np.ndarray:
-    """Return atom indices that are vertices of the cluster's convex hull.
-
-    Uses scipy's ConvexHull; vertices are the extreme points on the hull.
-
-    Args:
-        atoms: The Atoms object representing the cluster.
-
-    Returns:
-        1D array of atom indices (vertex indices). Empty array if hull cannot
-        be computed (e.g. fewer than 4 atoms, degenerate geometry).
-    """
-    if len(atoms) < 4:
+    """Extreme-point indices: 3D hull, 2D hull, or linear endpoints."""
+    if len(atoms) < 2:
         return np.array([], dtype=np.intp)
-    positions = atoms.get_positions()
-    hull = try_convex_hull(positions)
-    if hull is None:
-        return np.array([], dtype=np.intp)
-    return np.asarray(hull.vertices, dtype=np.intp)
+    return np.asarray(
+        resolve_cluster_extent(atoms.get_positions()).vertices, dtype=np.intp
+    )
 
 
 def _adjust_bond_distance_for_facet_geometry(
@@ -475,61 +561,56 @@ def _generate_batch_positions_on_convex_hull(
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> list[np.ndarray]:
-    """Generate multiple candidate atom positions on convex hull facets.
+    """Generate candidate atom positions on convex-hull facets (or PCA normal).
 
-    This function computes the convex hull once and generates candidate positions
-    for multiple atoms (one per facet, up to n_candidates). This is more efficient
-    than computing the hull multiple times.
-
-    Args:
-        atoms: The Atoms object representing the current cluster structure.
-        n_candidates: Maximum number of candidate positions to generate. Ignored if
-            use_all_facets is True.
-        bond_distance: Distance (in Angstroms) from the surface at which to place
-                      the new atoms. This represents the bond separation distance.
-        rng: Numpy random number generator for reproducible randomness.
-        min_connectivity_dist: Optional minimum distance constraint. If provided along
-                              with max_connectivity_dist, bond_distance will be adjusted
-                              to ensure connectivity with at least one facet vertex.
-        max_connectivity_dist: Optional maximum distance constraint for connectivity.
-                               If provided along with min_connectivity_dist, bond_distance
-                               will be adjusted based on facet geometry.
-        use_all_facets: If True, generate one position per facet (all facets) in
-            deterministic order (area descending); n_candidates is ignored.
-        min_distance_factor: Optional factor for minimum distance checks. If provided
-                             along with new_atom_symbol, candidates will be validated
-                             for clashes before being returned.
-        new_atom_symbol: Optional symbol of the atom to be placed. Used with
-                        min_distance_factor for clash validation.
-        smart_facet_filtering: If True, pre-filter facets based on geometry analysis
-                               to avoid trial-and-error. Only generates candidates
-                               for facets that are known to be safe.
-        connectivity_factor: Connectivity multiplier (float or dict). Defaults to
-            CONNECTIVITY_FACTOR.
-
-    Returns:
-        List of 3D numpy arrays representing candidate positions for new atoms.
-        The list may have fewer than n_candidates if there are fewer facets available
-        or if some candidates fail validation. When use_all_facets is True, returns
-        one position per facet (after validation).
-
-    Note:
-        For clusters with <4 atoms, returns empty list (caller should handle fallback).
+    For clusters with <4 atoms, returns empty list (caller handles fallback).
+    Linear/planar clusters with ≥4 atoms place along ±PCA normal from the COM
+    and extent vertices.
     """
     if len(atoms) < 4:
-        # Cannot compute convex hull for <4 atoms
         return []
 
     cf = normalize_connectivity_factor(connectivity_factor)
     cf_scale = max_connectivity_scale(cf)
-
-    # Get convex hull from cache or compute it
     positions = atoms.get_positions()
-    try:
-        hull = _get_cached_hull(positions)
-    except (ValueError, SCGOValidationError):
-        # Convex hull computation failed (degenerate geometry)
-        return []
+    extent = resolve_cluster_extent(positions)
+
+    if new_atom_symbol is not None:
+        symbols_list = atoms.get_chemical_symbols()
+        new_atom_radius = get_covalent_radius(new_atom_symbol)
+        radii = new_atom_radius + np.array(
+            [get_covalent_radius(s) for s in symbols_list]
+        )
+    else:
+        new_atom_radius = None
+        radii = None
+
+    def _validate_candidate(candidate_pos: np.ndarray) -> bool:
+        if min_distance_factor is None or new_atom_radius is None or radii is None:
+            return True
+        dists = np.linalg.norm(positions - candidate_pos, axis=1)
+        if np.any(dists < radii * min_distance_factor):
+            return False
+        if max_connectivity_dist is None:
+            return True
+        return bool(np.any(dists <= radii * cf_scale))
+
+    if extent.kind != "3d" or extent.hull is None:
+        normal = _unit_vector(extent.normal)
+        center = np.mean(positions, axis=0)
+        bases = [center, *[positions[int(v)] for v in extent.vertices]]
+        limit = n_candidates if n_candidates > 0 else 4
+        out: list[np.ndarray] = []
+        for base in bases:
+            for sign in (1.0, -1.0):
+                cand = base + sign * normal * bond_distance
+                if _validate_candidate(cand):
+                    out.append(np.asarray(cand, dtype=float))
+                    if len(out) >= limit:
+                        return out
+        return out
+
+    hull = extent.hull
 
     # Compute facet properties once (a single list of
     # (centroid, normal, area, (min_dist, max_dist)) tuples).
@@ -565,19 +646,6 @@ def _generate_batch_positions_on_convex_hull(
         sorted_facet_properties = [sorted_facet_properties[i] for i in kept]
         facet_order = [facet_order[i] for i in kept]
         sorted_areas = sorted_areas[kept]
-
-    # Precompute the per-existing-atom radius sum (new + existing) once; it is
-    # reused by the safety filter and the per-candidate validation below.
-    radii = None
-    if new_atom_symbol is not None:
-        symbols_list = atoms.get_chemical_symbols()
-        new_atom_radius = get_covalent_radius(new_atom_symbol)
-        radii = new_atom_radius + np.array(
-            [get_covalent_radius(s) for s in symbols_list]
-        )
-    else:
-        new_atom_radius = None
-        radii = None
 
     n_facets = len(sorted_facet_properties)
 
@@ -716,21 +784,7 @@ def _generate_batch_positions_on_convex_hull(
             placement_base + chosen_normal * adjusted_bond_distance + perturbation
         )
 
-        # Always validate if constraints are provided, even with smart filtering,
-        # because perturbation or interpolation might shift the point into a clash.
-        is_valid = True
-        if min_distance_factor is not None and new_atom_radius is not None:
-            dists = np.linalg.norm(positions - candidate_pos, axis=1)
-            if np.any(dists < radii * min_distance_factor):
-                is_valid = False
-            elif max_connectivity_dist is not None:
-                conn_threshold = radii * cf_scale
-                if not np.any(dists <= conn_threshold):
-                    is_valid = False
-
-        if not is_valid:
-            # Skip this candidate if validation failed
-            # Debug logging for large facets
+        if not _validate_candidate(candidate_pos):
             if (
                 max_connectivity_dist is not None
                 and min_centroid_dist > max_connectivity_dist * 0.7
@@ -747,7 +801,6 @@ def _generate_batch_positions_on_convex_hull(
                 )
             continue
 
-        # Add candidate (either pre-validated or passed validation)
         candidates.append(candidate_pos)
 
     return candidates
@@ -773,28 +826,12 @@ def get_largest_facets(
         center = atoms.get_center_of_mass()
         return [(center, np.array([1.0, 0.0, 0.0]), 1.0)]
 
-    try:
-        hull = _get_cached_hull(atoms.get_positions())
-    except (SCGOValidationError, ValueError, RuntimeError, QhullError):
-        # Convex hull computation failed (degenerate geometry, collinear points, etc.)
+    extent = resolve_cluster_extent(atoms.get_positions())
+    if extent.kind != "3d" or extent.hull is None:
         center = atoms.get_center_of_mass()
-        geometry = _classify_seed_geometry(atoms)
+        return [(center, np.asarray(extent.normal, dtype=float), 1.0)]
 
-        if geometry in ["linear", "planar"]:
-            positions = atoms.get_positions()
-            centered_positions = positions - center
-            if len(positions) > 1:
-                cov_matrix = np.cov(centered_positions.T)
-                _eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
-                # np.linalg.eigh returns eigenvalues in ascending order, so the
-                # plane normal is the eigenvector of the *smallest* eigenvalue
-                # (the direction of least positional variance).
-                normal = eigenvectors[:, 0] / np.linalg.norm(eigenvectors[:, 0])
-            else:
-                normal = np.array([1.0, 0.0, 0.0])
-        else:
-            normal = np.array([1.0, 0.0, 0.0])
-        return [(center, normal, 1.0)]
+    hull = extent.hull
 
     # Compute facet properties using shared helper
     facet_properties = _compute_facet_properties(hull, atoms)
@@ -806,54 +843,11 @@ def get_largest_facets(
 
 
 def _classify_seed_geometry(atoms: Atoms) -> str:
-    """Classify the geometric structure of a seed cluster.
-
-    Args:
-        atoms: The Atoms object to classify
-
-    Returns:
-        Geometry classification: "single", "linear", "planar", or "3d"
-    """
-    n_atoms = len(atoms)
-
-    if n_atoms == 1:
+    """Return ``single``, ``linear``, ``planar``, or ``3d``."""
+    if len(atoms) <= 1:
         return "single"
-
-    if n_atoms == 2:
-        return "linear"
-
-    if n_atoms >= 3:
-        positions = atoms.get_positions()
-        center = np.mean(positions, axis=0)
-        centered_positions = positions - center
-
-        cov_matrix = np.cov(centered_positions.T)
-        eigenvalues, _eigenvectors = np.linalg.eigh(cov_matrix)
-
-        # Check if structure is linear (1D) vs planar (2D)
-        # Linear: λ1 ≈ 0 AND λ2 ≈ 0 (only one dimension has variation)
-        # Planar: λ1 ≈ 0 BUT λ2 > 0 (two dimensions have variation)
-        # Use tolerance to allow for structures that are almost linear but not perfectly linear
-        linear_tolerance = LINEAR_GEOMETRY_TOLERANCE
-        if (
-            eigenvalues[0] < linear_tolerance * eigenvalues[2]
-            and eigenvalues[1] < linear_tolerance * eigenvalues[2]
-        ):
-            return "linear"  # Both λ1 ≈ 0 and λ2 ≈ 0 → 1D linear (or almost linear)
-        # λ1 ≈ 0 but λ2 > tolerance → 2D planar (fall through to convex hull check)
-
-    try:
-        if len(positions) >= 4:
-            hull = _get_cached_hull(positions)
-            if hull.volume < CONVEX_HULL_VOLUME_TOLERANCE:
-                return "planar"
-            return "3d"
-        else:
-            return "planar"
-
-    except (QhullError, ValueError, RuntimeError, SCGOValidationError):
-        # Convex hull computation failed (degenerate geometry, collinear points, etc.)
-        return "planar"
+    kind = resolve_cluster_extent(atoms.get_positions()).kind
+    return "single" if kind == "insufficient" else kind
 
 
 def _generate_rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
@@ -1956,8 +1950,5 @@ def _check_composition_feasibility(
 
 
 def clear_convex_hull_cache() -> None:
-    """Clear the convex hull computation cache.
-
-    This is useful for testing or when memory usage becomes a concern.
-    """
+    """Clear the convex hull / cluster-extent computation cache."""
     get_global_cache().clear_namespace(_CONVEX_HULL_CACHE_NS)

@@ -10,10 +10,7 @@ from ase import Atoms
 from scipy.spatial import Delaunay, QhullError, Voronoi, cKDTree
 
 from scgo.exceptions import SCGOValidationError
-from scgo.initialization.geometry_helpers import try_convex_hull
-from scgo.utils.logging import get_logger
-
-logger = get_logger(__name__)
+from scgo.initialization.geometry_helpers import resolve_cluster_extent
 
 SiteType = Literal["vertex", "edge", "facet"]
 
@@ -42,6 +39,10 @@ def _safe_normalize(v: np.ndarray) -> np.ndarray:
     if vn < 1e-12:
         return np.array([0.0, 0.0, 1.0], dtype=float)
     return v / vn
+
+
+def _empty_sites() -> dict[SiteType, list[SurfaceSiteCandidate]]:
+    return {"vertex": [], "edge": [], "facet": []}
 
 
 def _site_core_positions_key(core: Atoms) -> int:
@@ -85,33 +86,96 @@ def get_or_compute_surface_site_candidates(
 def compute_surface_site_candidates(
     core: Atoms,
 ) -> dict[SiteType, list[SurfaceSiteCandidate]]:
-    """Build explicit vertex/edge/facet adsorption sites from a convex hull.
+    """Build vertex/edge/facet sites from 3D hull or PCA extent.
 
-    All three lists stay empty when ``core`` has fewer than four atoms or when
-    the hull is degenerate and cannot be computed.
+    Empty for ``n < 4``. Periodic planar slabs stay empty here so callers use
+    :func:`planar_layer_site_candidates` (Voronoi hollows).
     """
-    out: dict[SiteType, list[SurfaceSiteCandidate]] = {
-        "vertex": [],
-        "edge": [],
-        "facet": [],
-    }
+    out = _empty_sites()
     if len(core) < 4:
         return out
+
     pos = core.get_positions()
     com = np.mean(pos, axis=0)
-    hull = try_convex_hull(pos)
-    if hull is None:
-        logger.debug(
-            "Convex hull site discovery unavailable for %d core atoms", len(core)
-        )
+    extent = resolve_cluster_extent(pos)
+
+    if extent.kind == "linear" and extent.axis is not None:
+        axis_u = _safe_normalize(extent.axis)
+        for vidx in extent.vertices:
+            anchor = pos[int(vidx)]
+            outward = _safe_normalize(anchor - com)
+            normal = -axis_u if float(np.dot(outward, axis_u)) < 0.0 else axis_u
+            out["vertex"].append(
+                SurfaceSiteCandidate(site_type="vertex", anchor=anchor, normal=normal)
+            )
+        if len(extent.vertices) >= 2:
+            i0, i1 = int(extent.vertices[0]), int(extent.vertices[1])
+            mid = 0.5 * (pos[i0] + pos[i1])
+            out["edge"].append(
+                SurfaceSiteCandidate(
+                    site_type="edge",
+                    anchor=mid,
+                    normal=_safe_normalize(mid - com),
+                )
+            )
         return out
 
-    vertices = np.asarray(hull.vertices, dtype=np.intp)
-    for vidx in vertices:
+    if extent.kind == "planar":
+        if any(bool(p) for p in core.get_pbc()):
+            return out
+        verts = [int(v) for v in extent.vertices]
+        plane_n = _safe_normalize(extent.normal)
+        if float(np.dot(plane_n, np.mean(pos[verts], axis=0) - com)) < 0.0:
+            plane_n = -plane_n
+        for vidx in verts:
+            anchor = pos[vidx]
+            out["vertex"].append(
+                SurfaceSiteCandidate(
+                    site_type="vertex",
+                    anchor=anchor,
+                    normal=_safe_normalize(anchor - com),
+                )
+            )
+        if len(verts) >= 2:
+            ref = np.array([1.0, 0.0, 0.0])
+            if abs(float(np.dot(ref, plane_n))) > 0.9:
+                ref = np.array([0.0, 1.0, 0.0])
+            e1 = _safe_normalize(np.cross(plane_n, ref))
+            e2 = _safe_normalize(np.cross(plane_n, e1))
+            centered = pos[verts] - com
+            order = [
+                verts[i] for i in np.argsort(np.arctan2(centered @ e2, centered @ e1))
+            ]
+            for a, b in zip(order, order[1:] + order[:1], strict=True):
+                mid = 0.5 * (pos[a] + pos[b])
+                out["edge"].append(
+                    SurfaceSiteCandidate(
+                        site_type="edge",
+                        anchor=mid,
+                        normal=_safe_normalize(mid - com),
+                    )
+                )
+            out["facet"].append(
+                SurfaceSiteCandidate(
+                    site_type="facet",
+                    anchor=np.mean(pos[order], axis=0),
+                    normal=plane_n,
+                )
+            )
+        return out
+
+    hull = extent.hull
+    if hull is None:
+        return out
+
+    for vidx in np.asarray(hull.vertices, dtype=np.intp):
         anchor = pos[int(vidx)]
-        normal = _safe_normalize(anchor - com)
         out["vertex"].append(
-            SurfaceSiteCandidate(site_type="vertex", anchor=anchor, normal=normal)
+            SurfaceSiteCandidate(
+                site_type="vertex",
+                anchor=anchor,
+                normal=_safe_normalize(anchor - com),
+            )
         )
 
     edge_pairs: set[tuple[int, int]] = set()
@@ -121,18 +185,17 @@ def compute_surface_site_candidates(
         edge_pairs.add(tuple(sorted((j, k))))
         edge_pairs.add(tuple(sorted((i, k))))
     for i, j in sorted(edge_pairs):
-        midpoint = 0.5 * (pos[i] + pos[j])
-        normal = _safe_normalize(midpoint - com)
+        mid = 0.5 * (pos[i] + pos[j])
         out["edge"].append(
-            SurfaceSiteCandidate(site_type="edge", anchor=midpoint, normal=normal)
+            SurfaceSiteCandidate(
+                site_type="edge", anchor=mid, normal=_safe_normalize(mid - com)
+            )
         )
 
     for simplex in hull.simplices:
         tri = pos[np.asarray(simplex, dtype=np.intp)]
-        v1 = tri[1] - tri[0]
-        v2 = tri[2] - tri[0]
         centroid = np.mean(tri, axis=0)
-        normal = _safe_normalize(np.cross(v1, v2))
+        normal = _safe_normalize(np.cross(tri[1] - tri[0], tri[2] - tri[0]))
         if float(np.dot(normal, centroid - com)) < 0.0:
             normal = -normal
         out["facet"].append(

@@ -68,8 +68,8 @@ Verbosity levels (``run_*`` ``verbosity=`` argument):
      - Warnings and errors only; no progress bars
    * - 1
      - Normal operation: parameter merge logs, timing summaries, campaign
-       progress, GA phase summaries, and a one-line TorchSim memory-scaler
-       summary when GPU probing runs
+       progress, GA phase summaries, and one-line TorchSim / TorchInductor
+       summaries when GPU probing or compile-cache locking ran
    * - 2
      - Per-individual GA and initialization detail; per-pair NEB detail;
        third-party loggers still suppressed in HPC mode

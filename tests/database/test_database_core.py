@@ -599,6 +599,73 @@ class TestFilesystemSync:
         assert result == "ok"
         assert attempts["n"] == 3
 
+    def test_database_retry_logs_attempts_and_recovery(self, monkeypatch, caplog):
+        """Mid-retry and recovery lines share one message shape at DEBUG."""
+        import logging
+
+        attempts = {"n": 0}
+
+        def flaky():
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return "ok"
+
+        monkeypatch.setattr("scgo.database.sync.time.sleep", lambda _: None)
+        with caplog.at_level(logging.DEBUG, logger="scgo.database.sync"):
+            assert (
+                database_retry(
+                    flaky,
+                    config=RetryConfig(max_retries=3, initial_delay=0.01),
+                    operation_name="unit_op",
+                )
+                == "ok"
+            )
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(
+            "unit_op: attempt 1/3 failed" in m and "retrying in" in m for m in messages
+        )
+        assert any("unit_op: recovered after 1 retries" in m for m in messages)
+
+    def test_retry_transaction_uses_database_retry_logging(
+        self, tmp_path, pt2_atoms, monkeypatch, caplog
+    ):
+        """retry_transaction delegates logging to database_retry (DEBUG, not WARNING)."""
+        import logging
+
+        with _setup_test_db(tmp_path, "test.db", pt2_atoms, initial_candidate=None):
+            pass
+
+        from scgo.database.sync import RetryConfig, retry_transaction
+
+        attempts = {"n": 0}
+
+        def _flaky(conn):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return "ok"
+
+        monkeypatch.setattr("scgo.database.sync.time.sleep", lambda _: None)
+        with (
+            get_connection(tmp_path / "test.db") as db,
+            caplog.at_level(logging.DEBUG, logger="scgo.database.sync"),
+        ):
+            assert (
+                retry_transaction(
+                    db,
+                    _flaky,
+                    config=RetryConfig(max_retries=3, initial_delay=0.01),
+                    operation_name="flaky body",
+                )
+                == "ok"
+            )
+        assert attempts["n"] == 2
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("flaky body: attempt 1/3 failed" in m for m in messages)
+        assert any("flaky body: recovered after 1 retries" in m for m in messages)
+        assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
     def test_database_retry_oserror_exception_types(self):
         attempts = []
 

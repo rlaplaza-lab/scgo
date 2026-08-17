@@ -5,6 +5,7 @@ import logging
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import (
     InitDiagnosticsCollector,
+    compact_ga_ineligible_reason,
     compact_neb_pair_reason,
     format_count_summary,
     format_offspring_outcome_line,
@@ -45,6 +46,16 @@ def test_compact_neb_pair_reason():
         )
         == "NEB barrier too high"
     )
+
+
+def test_compact_ga_ineligible_reason():
+    assert (
+        compact_ga_ineligible_reason(
+            "Structure is not connected (found 2 connected components)"
+        )
+        == "disconnected"
+    )
+    assert compact_ga_ineligible_reason("Atoms too close (clash)") == "clash"
 
 
 def test_log_neb_search_summaries_verbosity(caplog, tmp_path):

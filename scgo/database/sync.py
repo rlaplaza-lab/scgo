@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from scgo.database.transactions import database_transaction
 from scgo.exceptions import SCGODatabaseError
 from scgo.utils.logging import get_logger
 
@@ -43,6 +44,13 @@ PRESET_DEFAULT = RetryConfig(max_retries=3, initial_delay=0.2, backoff_factor=2.
 PRESET_HPC = RetryConfig(max_retries=5, initial_delay=0.2, backoff_factor=2.0)
 PRESET_TS_NETWORK = RetryConfig(max_retries=5, initial_delay=0.05, backoff_factor=2.0)
 
+_LOG_METHODS = {
+    "debug": logger.debug,
+    "info": logger.info,
+    "warning": logger.warning,
+    "error": logger.error,
+}
+
 
 def database_retry(
     operation: Callable[[], Any],
@@ -62,22 +70,20 @@ def database_retry(
     exception types are retried without the SQLite message filter — matching the
     historical behavior when callers pass ``exception_types`` explicitly (e.g.
     the basin-hopping and simple global-optimization drivers).
+
+    Logging (shared by ``retry_on_lock`` and ``retry_transaction``):
+    failed attempts and successful recovery use ``log_level`` (default DEBUG);
+    final failure is always ERROR.
     """
     effective_config = config or PRESET_DEFAULT
     n_retries = effective_config.max_retries
-
-    log_methods = {
-        "debug": logger.debug,
-        "info": logger.info,
-        "warning": logger.warning,
-        "error": logger.error,
-    }
-    log_func = log_methods.get(log_level.lower(), logger.debug)
+    log_func = _LOG_METHODS.get(log_level.lower(), logger.debug)
+    last_error: BaseException | None = None
 
     for attempt in range(n_retries):
         try:
-            return operation()
-        except Exception as e:  # broad by design: only re-raises non-retryable errors; retryables are retried then re-raised at the end
+            result = operation()
+        except Exception as e:  # broad by design: only re-raises non-retryable errors
             if exception_types is None:
                 if isinstance(e, sqlite3.OperationalError):
                     if not is_retryable_error(e):
@@ -87,18 +93,37 @@ def database_retry(
             elif not isinstance(e, exception_types):
                 raise
 
+            last_error = e
             if attempt < n_retries - 1:
                 delay = effective_config.get_delay(attempt)
                 log_func(
-                    f"{operation_name}: failed (attempt {attempt + 1}/{n_retries}): {e}. "
-                    f"Retrying in {delay:.2f}s..."
+                    "%s: attempt %d/%d failed (%s); retrying in %.2fs",
+                    operation_name,
+                    attempt + 1,
+                    n_retries,
+                    e,
+                    delay,
                 )
                 time.sleep(delay)
-            else:
-                logger.error(
-                    f"{operation_name}: failed after {n_retries} attempts: {e}"
-                )
-                raise
+                continue
+            logger.error(
+                "%s: failed after %d attempts (%s)",
+                operation_name,
+                n_retries,
+                e,
+            )
+            raise
+
+        if attempt > 0 and last_error is not None:
+            log_func(
+                "%s: recovered after %d retries (last error: %s)",
+                operation_name,
+                attempt,
+                last_error,
+            )
+        return result
+
+    raise SCGODatabaseError(f"{operation_name} failed unexpectedly")
 
 
 def is_retryable_error(error: Exception) -> bool:
@@ -128,7 +153,9 @@ def retry_on_lock(
     """Decorator to retry callable on transient SQLite / I/O errors.
 
     Thin wrapper around :func:`database_retry` preserving the decorator API used
-    by connection open. Defaults to :data:`PRESET_AGGRESSIVE`.
+    by connection open. Defaults to :data:`PRESET_AGGRESSIVE`. Connection-open
+    uses WARNING for retries (``log_retries=True``); other callers typically
+    leave the default DEBUG via :func:`database_retry` directly.
     """
     effective_config = config or PRESET_AGGRESSIVE
     log_level = "warning" if log_retries else "debug"
@@ -162,47 +189,20 @@ def retry_transaction(
     Unlike a yielded context manager, this correctly retries when the body or
     commit raises a retryable :exc:`~sqlite3.OperationalError`.
 
-    Args:
-        db_connection: ASE ``DataConnection`` (or compatible) for the DB.
-        operation: Callable that receives the SQLite connection and returns a
-            result (may be ``None``).
-        config: Retry/backoff settings (defaults to ``PRESET_AGGRESSIVE``).
-        operation_name: Label used in retry log messages.
-        isolation_level: SQLite isolation level for each attempt.
-
-    Returns:
-        The return value of ``operation`` on success.
-
-    Raises:
-        sqlite3.OperationalError: If the error is not retryable, or if the last
-            attempt still fails.
-        SCGODatabaseError: If the retry loop ends without a result (should not
-            happen for a positive ``max_retries``).
+    Logging matches :func:`database_retry` (DEBUG attempts / recovery; ERROR on
+    final failure).
     """
-    from scgo.database.transactions import database_transaction
 
-    effective_config = config or PRESET_AGGRESSIVE
-    for attempt in range(effective_config.max_retries):
-        try:
-            with database_transaction(
-                db_connection,
-                isolation_level=isolation_level,
-            ) as conn:
-                return operation(conn)
-        except sqlite3.OperationalError as e:
-            if not is_retryable_error(e):
-                raise
-            if attempt < effective_config.max_retries - 1:
-                delay = effective_config.get_delay(attempt)
-                logger.warning(
-                    f"{operation_name}: database locked, retrying in {delay:.2f}s "
-                    f"(attempt {attempt + 1}/{effective_config.max_retries})"
-                )
-                time.sleep(delay)
-            else:
-                logger.error(
-                    f"{operation_name}: database locked after "
-                    f"{effective_config.max_retries} attempts"
-                )
-                raise
-    raise SCGODatabaseError(f"{operation_name} failed unexpectedly")
+    def _run_once() -> Any:
+        with database_transaction(
+            db_connection,
+            isolation_level=isolation_level,
+        ) as conn:
+            return operation(conn)
+
+    return database_retry(
+        _run_once,
+        config=config or PRESET_AGGRESSIVE,
+        operation_name=operation_name,
+        log_level="debug",
+    )

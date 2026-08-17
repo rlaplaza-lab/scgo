@@ -408,7 +408,7 @@ def test_relax_unrelaxed_relaxes_when_available_below_max_batch(tmp_path):
 
     relaxer = _StrippedRelaxer()
 
-    eligible, ineligible = ga_mod._relax_unrelaxed_candidates(
+    eligible, ineligible, _reasons = ga_mod._relax_unrelaxed_candidates(
         da,
         relaxer,
         max_batch=10,  # larger than available (3)
@@ -420,6 +420,77 @@ def test_relax_unrelaxed_relaxes_when_available_below_max_batch(tmp_path):
     # All 3 unrelaxed candidates must be relaxed despite available < max_batch.
     assert eligible + ineligible == 3
     assert eligible == 3
+
+
+def test_relax_unrelaxed_ineligible_count_stable_across_write_retry(
+    tmp_path, monkeypatch
+):
+    """SQLite write retries must not double-count ineligible outcomes."""
+    import sqlite3
+
+    from ase_ga.data import DataConnection
+
+    from tests.helpers import create_preparedb
+
+    db_path = tmp_path / "ga_ineligible_retry.db"
+    atoms = Atoms(
+        "Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]], cell=[10] * 3
+    )
+    create_preparedb(atoms, db_path, population_size=10)
+    da = DataConnection(str(db_path))
+    for k in range(2):
+        a = atoms.copy()
+        a.positions = a.positions + k * 0.1
+        with da.c:
+            gaid = da.c.write(
+                a,
+                origin="StartingCandidateUnrelaxed",
+                relaxed=0,
+                generation=0,
+                extinct=0,
+                description=f"pt3_{k}",
+            )
+            da.c.update(gaid, gaid=gaid)
+            a.info["confid"] = gaid
+
+    class _DisconnectedRelaxer:
+        def relax_batch(self, batch):
+            out = []
+            for i, a in enumerate(batch):
+                ra = Atoms(
+                    symbols=a.get_chemical_symbols(),
+                    positions=[[0, 0, 0], [8, 0, 0], [0, 8, 0]],
+                    cell=a.get_cell(),
+                    pbc=a.get_pbc(),
+                )
+                out.append((float(i), ra))
+            return out
+
+    real_add = DataConnection.add_relaxed_step
+    calls = {"n": 0}
+
+    def flaky_add(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_add(self, *args, **kwargs)
+
+    monkeypatch.setattr(DataConnection, "add_relaxed_step", flaky_add)
+
+    eligible, ineligible, reasons = ga_mod._relax_unrelaxed_candidates(
+        da,
+        _DisconnectedRelaxer(),
+        max_batch=10,
+        composition=["Pt", "Pt", "Pt"],
+        system_type="gas_cluster",
+    )
+    assert eligible == 0
+    assert ineligible == 2
+    assert reasons == {"disconnected": 2}
+    assert calls["n"] == 3
+    rows = da.get_all_relaxed_candidates()
+    assert len(rows) == 2
+    assert all(not bool(get_tag(row, "ga_eligible", default=True)) for row in rows)
 
 
 def test_per_gen_max_targets_population_when_batch_size_none():

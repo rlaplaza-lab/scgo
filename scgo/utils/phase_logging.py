@@ -85,6 +85,17 @@ def compact_neb_pair_reason(message: str) -> str:
     return text or "unknown"
 
 
+def compact_ga_ineligible_reason(message: str) -> str:
+    """Short label for grouping GA post-relax ineligibility reasons."""
+    text = str(message).strip()
+    lower = text.lower()
+    if "not connected" in lower or "connected components" in lower:
+        return "disconnected"
+    if "clash" in lower or "too close" in lower:
+        return "clash"
+    return text.split(" (", 1)[0].strip().rstrip(".") or "unknown"
+
+
 def log_neb_search_summaries(
     logger: Logger,
     ts_results: list[Mapping[str, Any]],

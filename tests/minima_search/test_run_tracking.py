@@ -427,16 +427,17 @@ def test_clean_mode(tmp_path, rng):
 
 def test_composition_isolation(tmp_path, rng):
     """Test that results from different compositions don't interfere."""
-    # Run Pt3
+    # H2/H3 with EMT so the connectivity gate passes; this exercises
+    # composition-isolated output dirs, not a specific metal.
     run_trials(
-        composition=["Pt", "Pt", "Pt"],
+        composition=["H", "H"],
         global_optimizer="bh",
         global_optimizer_kwargs={
             "niter": 2,
             "niter_local_relaxation": 5,
             "system_type": "gas_cluster",
         },
-        output_dir=str(tmp_path / "Pt3_searches"),
+        output_dir=str(tmp_path / "H2_searches"),
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
@@ -445,9 +446,8 @@ def test_composition_isolation(tmp_path, rng):
         clean=False,
     )
 
-    # Run Pt4 (different composition)
     run_trials(
-        composition=["Pt", "Pt", "Pt", "Pt"],
+        composition=["H", "H", "H"],
         global_optimizer="ga",
         global_optimizer_kwargs={
             "niter": 1,
@@ -455,7 +455,7 @@ def test_composition_isolation(tmp_path, rng):
             "population_size": 4,
             "system_type": "gas_cluster",
         },
-        output_dir=str(tmp_path / "Pt4_searches"),
+        output_dir=str(tmp_path / "H3_searches"),
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
@@ -464,24 +464,21 @@ def test_composition_isolation(tmp_path, rng):
         clean=False,
     )
 
-    # Results should be in separate directories
-    pt3_dir = tmp_path / "Pt3_searches"
-    pt4_dir = tmp_path / "Pt4_searches"
-    assert pt3_dir.exists()
-    assert pt4_dir.exists()
+    h2_dir = tmp_path / "H2_searches"
+    h3_dir = tmp_path / "H3_searches"
+    assert h2_dir.exists()
+    assert h3_dir.exists()
 
-    # Verify databases are separate
-    pt3_db = pt3_dir / "run_20250124_143022" / "bh_go.db"
-    pt4_db = pt4_dir / "run_20250124_143022" / "ga_go.db"
-    assert pt3_db.exists() and pt4_db.exists(), (
-        "Expected both Pt3 and Pt4 DB files to exist"
+    h2_db = h2_dir / "run_20250124_143022" / "bh_go.db"
+    h3_db = h3_dir / "run_20250124_143022" / "ga_go.db"
+    assert h2_db.exists() and h3_db.exists(), (
+        "Expected both H2 and H3 DB files to exist"
     )
-    # They should have different structures
-    minima3 = extract_minima_from_database_file(str(pt3_db), "run_20250124_143022")
-    minima4 = extract_minima_from_database_file(str(pt4_db), "run_20250124_143022")
-    assert minima3 and minima4, "Expected minima entries in both databases"
-    assert len(minima3[0][1]) == 3  # Pt3 has 3 atoms
-    assert len(minima4[0][1]) == 4  # Pt4 has 4 atoms
+    minima2 = extract_minima_from_database_file(str(h2_db), "run_20250124_143022")
+    minima3 = extract_minima_from_database_file(str(h3_db), "run_20250124_143022")
+    assert minima2 and minima3, "Expected minima entries in both databases"
+    assert len(minima2[0][1]) == 2
+    assert len(minima3[0][1]) == 3
 
 
 # `test_xyz_file_naming_with_run_id` removed — filename/run-id assertions
@@ -494,8 +491,10 @@ def test_no_duplicates_across_runs(tmp_path):
     """Test that duplicate structures from different runs are filtered out."""
     from tests.helpers import create_paired_rngs
 
-    composition = ["Pt", "Pt", "Pt"]
-    output_dir = str(tmp_path / "Pt3_searches")
+    # H2 (EMT keeps the diatomic bonded) so the connectivity gate passes; the
+    # test exercises cross-run dedup, not a specific metal.
+    composition = ["H", "H"]
+    output_dir = str(tmp_path / "H2_searches")
 
     # Create first run with known structure
     seed = 42
@@ -555,7 +554,7 @@ def test_no_duplicates_across_runs(tmp_path):
         from scgo.utils.comparators import PureInteratomicDistanceComparator
 
         structural_comparator = PureInteratomicDistanceComparator(
-            n_top=3,
+            n_top=2,
             tol=DEFAULT_COMPARATOR_TOL,
             pair_cor_max=DEFAULT_PAIR_COR_MAX,
             dE=DEFAULT_ENERGY_TOLERANCE,

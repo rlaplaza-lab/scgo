@@ -131,3 +131,8 @@ Module reference
    :exclude-members: _*
 
 .. autofunction:: scgo.initialization.geometry_helpers.reorder_cluster_to_composition
+
+.. autoclass:: scgo.initialization.geometry_helpers.ClusterExtent
+   :members:
+   :undoc-members:
+

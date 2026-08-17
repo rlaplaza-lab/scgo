@@ -544,14 +544,19 @@ class TestGenerateBatchPositionsOnConvexHull:
 class TestGetConvexHullVertexIndices:
     """Tests for get_convex_hull_vertex_indices."""
 
-    def test_small_cluster_returns_empty(self):
-        """Clusters with <4 atoms return empty array."""
-        for n in (1, 2, 3):
-            atoms = Atoms("Pt" + str(n), positions=[[i, 0, 0] for i in range(n)])
-            idx = get_convex_hull_vertex_indices(atoms)
-            assert isinstance(idx, np.ndarray)
-            assert idx.dtype == np.intp
-            assert len(idx) == 0
+    def test_single_atom_returns_empty(self):
+        """Clusters with fewer than two atoms return an empty array."""
+        atoms = Atoms("Pt", positions=[[0, 0, 0]])
+        idx = get_convex_hull_vertex_indices(atoms)
+        assert isinstance(idx, np.ndarray)
+        assert idx.dtype == np.intp
+        assert len(idx) == 0
+
+    def test_dimer_returns_both_endpoints(self):
+        """Linear dimers expose both atom indices as extent vertices."""
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [2, 0, 0]])
+        idx = get_convex_hull_vertex_indices(atoms)
+        assert set(idx) == {0, 1}
 
     def test_tetrahedron_returns_four_vertices(self):
         """Tetrahedron has 4 hull vertices (all atoms)."""

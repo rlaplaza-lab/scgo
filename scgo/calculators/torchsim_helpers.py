@@ -39,7 +39,11 @@ from scgo.exceptions import (
 from scgo.metadata.atoms import set_tags
 from scgo.metadata.provenance import is_cuda_oom_error
 from scgo.utils.helpers import copy_atoms, ensure_float64_forces
-from scgo.utils.logging import get_logger, suppress_matching_stdout
+from scgo.utils.logging import (
+    drain_inductor_filelock_summary,
+    get_logger,
+    suppress_matching_stdout,
+)
 from scgo.utils.run_helpers import cleanup_torch_cuda
 
 logger = get_logger(__name__)
@@ -1129,6 +1133,7 @@ class TorchSimBatchRelaxer:
         with suppress_matching_stdout(_MODEL_MEMORY_ESTIMATION, captured=captured):
             result = fn()
         self._maybe_announce_autobatcher(kind, captured)
+        drain_inductor_filelock_summary(logger)
         return result
 
     def _maybe_announce_autobatcher(self, kind: str, captured: list[str]) -> None:

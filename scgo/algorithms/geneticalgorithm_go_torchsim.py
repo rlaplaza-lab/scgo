@@ -95,6 +95,7 @@ from scgo.utils.helpers import (
     extract_minima_from_database,
 )
 from scgo.utils.logging import (
+    drain_inductor_filelock_summary,
     get_logger,
     log_debug_v,
     log_info_v,
@@ -106,6 +107,8 @@ from scgo.utils.parallel_workers import (
     resolve_n_jobs_for_tasks,
 )
 from scgo.utils.phase_logging import (
+    compact_ga_ineligible_reason,
+    format_count_summary,
     log_generation_offspring_summaries,
     log_phase_subheader,
 )
@@ -703,11 +706,12 @@ def _relax_unrelaxed_candidates(
     enforce_adsorbate_subgraph_integrity: bool = True,
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, int, dict[str, int]]:
     """Relax unrelaxed candidates in batches and commit them to the database.
 
     Returns:
-        Tuple of (GA-eligible count, ineligible count) for this relax call.
+        Tuple of (GA-eligible count, ineligible count, compact ineligible
+        reason counts) for this relax call.
     """
     available = database_retry(
         da.get_number_of_unrelaxed_candidates,
@@ -716,7 +720,7 @@ def _relax_unrelaxed_candidates(
     )
 
     if available == 0:
-        return (0, 0)
+        return (0, 0, {})
     # Relax every currently available candidate instead of returning early when
     # `available < max_batch`. A generation that produced few children no longer
     # defers work and starves the GPU; candidates left over after this call stay
@@ -736,7 +740,7 @@ def _relax_unrelaxed_candidates(
         profiling["db_read_s"] = profiling.get("db_read_s", 0.0) + (perf_counter() - t0)
 
     if not batch:
-        return (0, 0)
+        return (0, 0, {})
 
     t0 = perf_counter()
     surface_mode = uses_surface(system_type)
@@ -764,13 +768,18 @@ def _relax_unrelaxed_candidates(
 
     # Batch write results under a single database connection.
     # Structures failing validation are persisted but marked ineligible for GA
-    # evolution.
+    # evolution. Reset counters each retry so a mid-batch SQLite rollback does
+    # not double-count.
     successful_count = 0
     ineligible_count = 0
+    ineligible_reasons: dict[str, int] = {}
 
     def _write_batch_under_connection():
         """Write relaxed results under a single connection."""
-        nonlocal ineligible_count, successful_count
+        nonlocal ineligible_count, successful_count, ineligible_reasons
+        successful_count = 0
+        ineligible_count = 0
+        ineligible_reasons = {}
         with da.c:
             for idx, (original, (energy, relaxed)) in enumerate(
                 zip(batch, relaxed_results, strict=True)
@@ -801,6 +810,8 @@ def _relax_unrelaxed_candidates(
                 )
                 if validation_error is not None:
                     ineligible_count += 1
+                    reason = compact_ga_ineligible_reason(validation_error)
+                    ineligible_reasons[reason] = ineligible_reasons.get(reason, 0) + 1
                     label = (
                         "Offspring" if generation is not None else "Initial candidate"
                     )
@@ -834,7 +845,7 @@ def _relax_unrelaxed_candidates(
                 "population_update_s", 0.0
             ) + (perf_counter() - t0)
 
-    return (successful_count, ineligible_count)
+    return (successful_count, ineligible_count, ineligible_reasons)
 
 
 def ga_go(
@@ -1286,6 +1297,7 @@ def ga_go(
         initial_pop_count = 0
         initial_discarded_count = 0
         initial_ineligible_relaxed_count = 0
+        initial_ineligible_reasons: dict[str, int] = {}
         inserted_initial_population: list[Atoms] = []
 
         def _insert_unrelaxed(cand):
@@ -1356,9 +1368,12 @@ def ga_go(
             )
             return []
 
-        # Helper to write a relaxed batch into the database under a single connection
+        # Write a relaxed batch under one connection. Per-attempt counters reset
+        # inside the writer so SQLite retries do not double-count.
         def _write_relaxed_batch(batch, relaxed_results):
-            nonlocal initial_ineligible_relaxed_count
+            nonlocal batch_ineligible_count, batch_ineligible_reasons
+            batch_ineligible_count = 0
+            batch_ineligible_reasons = {}
             with da.c:
                 for original, (energy, relaxed) in zip(
                     batch, relaxed_results, strict=True
@@ -1388,7 +1403,11 @@ def ga_go(
                         run_id=run_id,
                     )
                     if validation_error is not None:
-                        initial_ineligible_relaxed_count += 1
+                        batch_ineligible_count += 1
+                        reason = compact_ga_ineligible_reason(validation_error)
+                        batch_ineligible_reasons[reason] = (
+                            batch_ineligible_reasons.get(reason, 0) + 1
+                        )
                         logger.debug(
                             "Initial candidate failed validation after "
                             "relaxation; storing but excluding from GA "
@@ -1400,6 +1419,8 @@ def ga_go(
         batch_size_internal = batch_size or len(inserted_initial_population)
         t0_relax = 0.0
         t0_write = 0.0
+        batch_ineligible_count = 0
+        batch_ineligible_reasons: dict[str, int] = {}
         for i in range(0, len(inserted_initial_population), batch_size_internal):
             batch = inserted_initial_population[i : i + batch_size_internal]
             t_start = perf_counter()
@@ -1434,6 +1455,11 @@ def ga_go(
                 config=RetryConfig(max_retries=5),
                 operation_name="write_initial_relaxed_batch",
             )
+            initial_ineligible_relaxed_count += batch_ineligible_count
+            for reason, count in batch_ineligible_reasons.items():
+                initial_ineligible_reasons[reason] = (
+                    initial_ineligible_reasons.get(reason, 0) + count
+                )
             t0_write += perf_counter() - t_start
 
             initial_pop_count += len(batch)
@@ -1471,13 +1497,17 @@ def ga_go(
         )
         population._write_log()
         eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
+        ineligible_detail = format_count_summary(initial_ineligible_reasons)
+        ineligible_suffix = f" ({ineligible_detail})" if ineligible_detail else ""
         log_info_v(
             logger,
-            "Initial population: size=%d, %d GA-eligible, %d discarded pre-relax, %d ineligible post-relax",
+            "Initial population: size=%d, %d GA-eligible, %d discarded "
+            "pre-relax, %d ineligible post-relax%s",
             len(population.pop),
             eligible_initial,
             initial_discarded_count,
             initial_ineligible_relaxed_count,
+            ineligible_suffix,
             verbosity=verbosity,
         )
         log_debug_v(
@@ -1826,28 +1856,30 @@ def ga_go(
             pre_db_write = float(profile_timings.get("db_write_s", 0.0))
             pre_pop_update = float(profile_timings.get("population_update_s", 0.0))
             t0_relax_call = perf_counter()
-            eligible_count, ineligible_count = _relax_unrelaxed_candidates(
-                da,
-                relaxer,
-                population=population,
-                max_batch=per_gen_max,
-                generation=generation,
-                run_id=run_id,
-                surface_config=surface_config,
-                n_slab=n_slab,
-                n_frozen_prefix=n_fixed,
-                system_type=system_type,
-                profiling=profile_timings,
-                counters=profile_counters,
-                composition=composition,
-                adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                cluster_adsorbate_config=cluster_adsorbate_config,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
-                adsorbate_fragment_templates=adsorbate_fragment_template,
+            eligible_count, ineligible_count, ineligible_reasons = (
+                _relax_unrelaxed_candidates(
+                    da,
+                    relaxer,
+                    population=population,
+                    max_batch=per_gen_max,
+                    generation=generation,
+                    run_id=run_id,
+                    surface_config=surface_config,
+                    n_slab=n_slab,
+                    n_frozen_prefix=n_fixed,
+                    system_type=system_type,
+                    profiling=profile_timings,
+                    counters=profile_counters,
+                    composition=composition,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    cluster_adsorbate_config=cluster_adsorbate_config,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+                    adsorbate_fragment_templates=adsorbate_fragment_template,
+                )
             )
             offspring_count = eligible_count
             relax_call_wall_s = perf_counter() - t0_relax_call
@@ -1861,12 +1893,15 @@ def ga_go(
             gen_pop_update_s_from_relax = max(0.0, post_pop_update - pre_pop_update)
             pop_update_s = gen_pop_update_s_from_relax
             if verbosity >= 1 and (eligible_count + ineligible_count) > 0:
+                reason_detail = format_count_summary(ineligible_reasons)
+                reason_suffix = f" ({reason_detail})" if reason_detail else ""
                 log_info_v(
                     logger,
-                    "Relaxation: %d/%d GA-eligible, %d ineligible",
+                    "Relaxation: %d/%d GA-eligible, %d ineligible%s",
                     eligible_count,
                     eligible_count + ineligible_count,
                     ineligible_count,
+                    reason_suffix,
                     verbosity=verbosity,
                 )
             if offspring_count > 0:
@@ -1971,6 +2006,7 @@ def ga_go(
             len(all_minima),
             verbosity=verbosity,
         )
+        drain_inductor_filelock_summary(logger)
 
         # Sort by fitness (highest first) for non-default strategies
         sort_minima_by_fitness(

@@ -317,6 +317,37 @@ def test_suppress_matching_stdout(capfd):
     assert "Running forward pass" in captured[0]
 
 
+def test_inductor_filelock_events_suppressed_and_summarized(capfd):
+    """TorchInductor filelock DEBUG spam becomes one INFO summary when drained."""
+    from scgo.utils.logging import drain_inductor_filelock_summary
+
+    configure_logging(2)
+    filelock_logger = logging.getLogger("filelock")
+    lock_path = "/tmp/torchinductor_test/locks/abc.lock"
+    for msg in (
+        "Attempting to acquire lock 123 on %s",
+        "Lock 123 acquired on %s",
+        "Attempting to release lock 123 on %s",
+        "Lock 123 released on %s",
+    ):
+        filelock_logger.debug(msg, lock_path)
+    filelock_logger.debug("Attempting to acquire lock 9 on /tmp/other.lock")
+
+    out = capfd.readouterr().out
+    assert "Attempting to acquire lock" not in out
+    assert "torchinductor" not in out
+
+    scgo_logger = get_logger("test.inductor_filelock")
+    drain_inductor_filelock_summary(scgo_logger)
+    out = capfd.readouterr().out
+    assert out.count("TorchInductor:") == 1
+    assert "4 compile-cache lock event(s)" in out
+    assert "1 lock file" in out
+
+    drain_inductor_filelock_summary(scgo_logger)
+    assert "TorchInductor:" not in capfd.readouterr().out
+
+
 class TestIntegration:
     """Integration tests for verbosity system."""
 

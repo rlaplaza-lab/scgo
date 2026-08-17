@@ -36,6 +36,38 @@ VERBOSITY_LEVELS: dict[int, int] = {
     3: TRACE,  # ultra-verbose - trace-level diagnostics
 }
 
+_TORCHINDUCTOR_LOCK_PATH_RE = re.compile(r" on (\S+\.lock)\s*$")
+
+
+class _InductorFileLockHandler(logging.Handler):
+    """Count TorchInductor filelock DEBUG records; do not propagate to console."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self._events = 0
+        self._paths: set[str] = set()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if "torchinductor" not in message.lower():
+            return
+        match = _TORCHINDUCTOR_LOCK_PATH_RE.search(message)
+        with self.lock:
+            self._events += 1
+            if match is not None:
+                self._paths.add(match.group(1))
+
+    def drain(self) -> tuple[int, int]:
+        """Return (event_count, unique_lock_files) and reset."""
+        with self.lock:
+            count, n_paths = self._events, len(self._paths)
+            self._events = 0
+            self._paths.clear()
+        return count, n_paths
+
+
+_filelock_handler: _InductorFileLockHandler | None = None
+
 
 def get_logger(name: str) -> logging.Logger:
     """Return a logger for ``name`` (typically ``__name__``)."""
@@ -113,7 +145,39 @@ def configure_logging(
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
+    _install_filelock_sink()
     _suppress_third_party_loggers(level, hpc_mode=hpc_mode)
+
+
+def _install_filelock_sink() -> None:
+    """Capture TorchInductor filelock DEBUG without propagating to root.
+
+    ``filelock`` is a sibling of ``torch``, so torch suppression does not cover
+    it. Keep level DEBUG so the counting handler sees events.
+    """
+    global _filelock_handler
+    filelock_logger = logging.getLogger("filelock")
+    filelock_logger.setLevel(logging.DEBUG)
+    filelock_logger.propagate = False
+    if _filelock_handler is None:
+        _filelock_handler = _InductorFileLockHandler()
+    if _filelock_handler not in filelock_logger.handlers:
+        filelock_logger.addHandler(_filelock_handler)
+
+
+def drain_inductor_filelock_summary(logger: logging.Logger) -> None:
+    """Emit one INFO summary if TorchInductor filelock events were captured."""
+    if _filelock_handler is None:
+        return
+    count, n_paths = _filelock_handler.drain()
+    if count <= 0:
+        return
+    logger.info(
+        "TorchInductor: %d compile-cache lock event(s) (%d lock file%s)",
+        count,
+        n_paths,
+        "" if n_paths == 1 else "s",
+    )
 
 
 def _suppress_third_party_loggers(level: int, hpc_mode: bool = False) -> None:

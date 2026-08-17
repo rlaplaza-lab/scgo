@@ -80,9 +80,10 @@ from .geometry_helpers import (
     _validate_cluster_defaults,
     _verify_exact_composition,
     compute_bond_distance_params,
-    get_convex_hull_vertex_indices,
     get_covalent_radius,
     reorder_cluster_to_composition,
+    resolve_cluster_extent,
+    try_convex_hull,
     validate_cluster,
 )
 from .initialization_config import (
@@ -423,17 +424,16 @@ def remove_atoms_from_vertices(
     total_removed = 0
 
     while total_removed < n_remove:
-        vertices: np.ndarray[tuple[Any, ...], np.dtype[Any]] = (
-            get_convex_hull_vertex_indices(current)
-        )
-        if len(vertices) == 0:
+        hull = try_convex_hull(current.get_positions())
+        if hull is None or len(hull.vertices) == 0:
             logger.debug(
-                "remove_atoms_from_vertices: no convex-hull vertices remaining "
+                "remove_atoms_from_vertices: no 3D convex-hull vertices remaining "
                 "(removed %d/%d)",
                 total_removed,
                 n_remove,
             )
             return None
+        vertices = np.asarray(hull.vertices, dtype=np.intp)
 
         positions: Any | np.ndarray[tuple[Any, ...], np.dtype[Any]] = (
             current.get_positions()
@@ -1118,6 +1118,21 @@ def _set_template_info(atoms: Atoms, template_name: str) -> None:
     atoms.info["template_type"] = template_name
 
 
+def _drop_linear_template(atoms: Atoms, template_name: str) -> Atoms | None:
+    """Discard n≥4 templates that shrank to a 1-D line; keep planar and 3-D."""
+    if len(atoms) < 4:
+        return atoms
+    kind = resolve_cluster_extent(atoms.get_positions()).kind
+    if kind != "linear":
+        return atoms
+    logger.debug(
+        "%s shrink produced linear geometry for n=%d; discarding",
+        template_name,
+        len(atoms),
+    )
+    return None
+
+
 def _adjust_template_to_target(
     cluster: Atoms,
     target_n_atoms: int,
@@ -1195,7 +1210,7 @@ def _adjust_template_to_target(
                 )
                 return None
             _set_template_info(grown, template_name)
-            return grown
+            return _drop_linear_template(grown, template_name)
         except (ValueError, SCGOValidationError) as e:
             logger.debug(
                 "Failed to grow %s template from %s to %s atoms: %s",
@@ -1219,6 +1234,14 @@ def _adjust_template_to_target(
             )
             return None
 
+        if try_convex_hull(cluster.get_positions()) is None:
+            logger.debug(
+                "Template shrink skipped: %s base is not 3D (n=%d)",
+                template_name,
+                base_count,
+            )
+            return None
+
         attempts: int = max(1, max_removal_attempts)
         for attempt in range(attempts):
             attempt_rng: Generator = (
@@ -1232,25 +1255,28 @@ def _adjust_template_to_target(
                 min_distance_factor=min_distance_factor,
                 rng=attempt_rng,
             )
-            if adjusted is not None:
-                cluster = adjusted
-                _set_template_info(cluster, template_name)
-                return cluster
-            if attempt < attempts - 1:
-                continue
-            logger.debug(
-                "Template shrink failed after %d removal attempts (%s)",
-                attempts,
-                template_name,
-            )
-            return None
+            if adjusted is None:
+                if attempt < attempts - 1:
+                    continue
+                logger.debug(
+                    "Template shrink failed after %d removal attempts (%s)",
+                    attempts,
+                    template_name,
+                )
+                return None
+            gated = _drop_linear_template(adjusted, template_name)
+            if gated is None:
+                return None
+            _set_template_info(gated, template_name)
+            return gated
+        return None
     else:
         cluster = _assign_exact_composition(
             cluster, composition, target_n_atoms, rng=rng
         )
         _set_template_info(cluster, template_name)
 
-    return cluster
+    return _drop_linear_template(cluster, template_name)
 
 
 def _generate_ase_template_from_registry(

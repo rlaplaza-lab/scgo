@@ -68,6 +68,18 @@
 
 ### Changed
 
+- TorchInductor ``filelock`` acquire/release DEBUG spam is captured during
+  ``configure_logging`` and collapsed into one INFO summary
+  (``TorchInductor: N compile-cache lock event(s)``) when any events occurred;
+  drained from TorchSim relax calls and at GA completion.
+- GA post-relax ineligible INFO lines now include compact reason rollups
+  (e.g. ``2 ineligible (disconnectedx2)``), matching NEB skip-summary style.
+- Linear and planar clusters (for example Co₄ remnants after shrinking oversized
+  magic-number templates) are classified with PCA before scipy's 3D ConvexHull.
+  Degenerate Qhull failures no longer dump ``QH6154`` diagnostics; vertices,
+  adsorbate sites, and hull-based growth fall back to endpoints / 2D hull /
+  out-of-plane placement. Template shrink still requires a 3D hull; linear
+  finished templates are discarded.
 - `run_trials` final structural gate now honors top-level `connectivity_factor`
   (same precedence as algorithm and TS gates: explicit →
   `ClusterAdsorbateConfig.structure_connectivity_factor` →
@@ -178,6 +190,13 @@
 
 ### Fixed
 
+- GA batch writers reset eligible/ineligible counters at the start of each
+  ``database_retry`` attempt so a mid-batch SQLite lock rollback cannot
+  double-count outcomes relative to ``ga_eligible`` tags in the database.
+- Database retry logging is unified: ``retry_transaction`` delegates to
+  ``database_retry``; attempt/recovery lines use %-style messages at DEBUG
+  (WARNING only for connection-open via ``retry_on_lock``); final failure
+  remains ERROR.
 - UMA/UPET CPU CI no longer errors collecting ``test_mace_torch_load_patch``:
   ``mace_helpers`` imports ``mace`` at module load, so the test is now marked
   ``requires_mace`` and imports the helper inside the test (``pytest -m`` still
