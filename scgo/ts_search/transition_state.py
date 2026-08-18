@@ -359,6 +359,11 @@ def _match_atoms_by_fingerprint(
     return mapping
 
 
+def _core_block_match_method(n_slab: int) -> str:
+    """Fingerprint gas cores (rotation-robust); spatial match slab cores (lab frame)."""
+    return "spatial" if int(n_slab) > 0 else "fingerprint"
+
+
 def _permute_atoms_block_to_match(
     a1_block: Atoms,
     a2_block: Atoms,
@@ -504,7 +509,46 @@ def _match_adsorbate_fragments_by_com(
     return out_pos, out_num
 
 
-def _align_endpoints_blockwise(
+def _assign_atom_block(
+    atoms: Atoms,
+    start: int,
+    stop: int,
+    positions: np.ndarray,
+    numbers: np.ndarray,
+) -> None:
+    """Write a contiguous position/number slice onto ``atoms`` in-place."""
+    pos = atoms.get_positions().copy()
+    nums = atoms.numbers.copy()
+    pos[start:stop] = positions
+    nums[start:stop] = numbers
+    atoms.set_positions(pos, apply_constraint=False)
+    atoms.numbers = nums
+
+
+def _match_core_block(
+    a1: Atoms,
+    a2: Atoms,
+    n_slab: int,
+    n_core: int,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
+) -> None:
+    """Permute product core atoms onto the reactant core (in-place)."""
+    if n_core <= 0:
+        return
+    s1, s2 = int(n_slab), int(n_slab) + int(n_core)
+    p_blk, n_blk = _permute_atoms_block_to_match(
+        a1[s1:s2],
+        a2[s1:s2],
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+        method=_core_block_match_method(n_slab),
+    )
+    _assign_atom_block(a2, s1, s2, p_blk, n_blk)
+
+
+def _match_adsorbate_block(
     a1: Atoms,
     a2: Atoms,
     n_slab: int,
@@ -515,10 +559,43 @@ def _align_endpoints_blockwise(
     mic_pbc: np.ndarray | list[bool] | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
 ) -> None:
-    """Match product to reactant per block (slab indices unchanged; core/ads via match).
+    """Permute product adsorbate atoms onto the reactant adsorbate (in-place)."""
+    if n_ads <= 0:
+        return
+    t1 = int(n_slab) + int(n_core)
+    t2 = t1 + int(n_ads)
+    if adsorbate_fragment_lengths:
+        p_blk, n_blk = _match_adsorbate_fragments_by_com(
+            a1[t1:t2],
+            a2[t1:t2],
+            list(adsorbate_fragment_lengths),
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
+        )
+    else:
+        p_blk, n_blk = _permute_atoms_block_to_match(
+            a1[t1:t2], a2[t1:t2], mic_cell=mic_cell, mic_pbc=mic_pbc
+        )
+    _assign_atom_block(a2, t1, t2, p_blk, n_blk)
 
-    Core atoms use spatial Hungarian (minimal travel). Adsorbate atoms use
-    fingerprint matching, or fragment COM matching when lengths are provided.
+
+def _align_endpoints_blockwise(
+    a1: Atoms,
+    a2: Atoms,
+    n_slab: int,
+    n_core: int,
+    n_ads: int,
+    *,
+    mic_cell: np.ndarray | None = None,
+    mic_pbc: np.ndarray | list[bool] | None = None,
+    adsorbate_fragment_lengths: list[int] | None = None,
+    match_adsorbate: bool = True,
+) -> None:
+    """Match product to reactant per block (slab indices unchanged).
+
+    Gas cores use fingerprints; slab cores use spatial matching. Adsorbate
+    matching can be deferred (``match_adsorbate=False``) until after rigid
+    overlay so fragment COMs are assigned in the aligned frame.
     """
     n = len(a1)
     if len(a2) != n:
@@ -527,38 +604,18 @@ def _align_endpoints_blockwise(
         raise SCGOValidationError(
             f"align blockwise: n_slab+n_core+n_ads={n_slab + n_core + n_ads} != len={n}"
         )
-    p2 = a2.get_positions().copy()
-    n2 = a2.numbers.copy()
-    if n_core > 0:
-        s1, s2 = n_slab, n_slab + n_core
-        p_blk, n_blk = _permute_atoms_block_to_match(
-            a1[s1:s2],
-            a2[s1:s2],
+    _match_core_block(a1, a2, n_slab, n_core, mic_cell=mic_cell, mic_pbc=mic_pbc)
+    if match_adsorbate:
+        _match_adsorbate_block(
+            a1,
+            a2,
+            n_slab,
+            n_core,
+            n_ads,
             mic_cell=mic_cell,
             mic_pbc=mic_pbc,
-            method="spatial",
+            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
         )
-        p2[s1:s2] = p_blk
-        n2[s1:s2] = n_blk
-    if n_ads > 0:
-        t1 = n_slab + n_core
-        t2 = t1 + n_ads
-        if adsorbate_fragment_lengths:
-            p_blk, n_blk = _match_adsorbate_fragments_by_com(
-                a1[t1:t2],
-                a2[t1:t2],
-                list(adsorbate_fragment_lengths),
-                mic_cell=mic_cell,
-                mic_pbc=mic_pbc,
-            )
-        else:
-            p_blk, n_blk = _permute_atoms_block_to_match(
-                a1[t1:t2], a2[t1:t2], mic_cell=mic_cell, mic_pbc=mic_pbc
-            )
-        p2[t1:t2] = p_blk
-        n2[t1:t2] = n_blk
-    a2.set_positions(p2, apply_constraint=False)
-    a2.numbers = n2
 
 
 def _kabsch_rotation(P: np.ndarray, Q: np.ndarray) -> np.ndarray:
@@ -930,8 +987,16 @@ def _align_product_surface_pbc(
 
 
 def _requires_surface_pbc_alignment(reactant: Atoms, *, n_slab: int) -> bool:
-    """True when endpoint alignment must use lattice-compatible surface PBC logic."""
-    return n_slab > 0 or bool(np.any(reactant.pbc))
+    """True when endpoint alignment must use lattice-compatible surface PBC logic.
+
+    Slab prefixes (``n_slab > 0``) and slab-like 2D PBC use MIC / in-plane
+    lattice alignment. A gas cluster in a 3D vacuum box (``n_slab == 0``,
+    three periodic axes or none) uses 3D Kabsch even if ``pbc`` is set.
+    """
+    if int(n_slab) > 0:
+        return True
+    pbc = np.asarray(reactant.pbc, dtype=bool)
+    return int(np.count_nonzero(pbc)) == 2
 
 
 def _align_product_for_neb(
@@ -1046,8 +1111,14 @@ def _reorder_product_to_match_reactant(
     n_core_mobile: int | None,
     n_adsorbate_mobile: int | None,
     adsorbate_fragment_lengths: list[int] | None = None,
+    match_adsorbate: bool = True,
 ) -> np.ndarray:
-    """Reorder product atoms (positions and species) to match reactant ordering."""
+    """Reorder product atoms (positions and species) to match reactant ordering.
+
+    When block dimensions are provided, the core is matched first. Adsorbate
+    matching is skipped when ``match_adsorbate`` is False so callers can
+    rigid-align on the core and then match adsorbate in the overlaid frame.
+    """
     n_atom = len(reactant)
     mic_cell, mic_pbc = _mic_matching_context(reactant, n_slab=n_slab)
     use_blocks = (
@@ -1065,6 +1136,7 @@ def _reorder_product_to_match_reactant(
             mic_cell=mic_cell,
             mic_pbc=mic_pbc,
             adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+            match_adsorbate=match_adsorbate,
         )
         return product.get_positions()
     if 0 < n_slab < n_atom:
@@ -1159,13 +1231,15 @@ def interpolate_path(
     """Interpolate between two structures and return images including endpoints.
 
     ``align_endpoints`` (default True): reorder endpoint atoms to match reactant.
-    For slab/surface workflows (``n_slab > 0`` or periodic cell), alignment uses
-    ``_align_product_surface_pbc``: MIC-aware matching, collective mobile
-    lattice-image selection, per-atom MIC snapping, optional integer in-plane
-    lattice shifts (``neb_surface_max_lattice_shift``), and global in-plane rotation
-    evaluated jointly with each shift, with anchors reset to the reactant slab frame
-    (no independent mobile-only rotation). Gas-phase clusters
-    without a slab prefix use Kabsch (3D or in-plane when ``mic`` is active).
+    For slab/surface workflows (``n_slab > 0`` or exactly two periodic axes),
+    alignment uses ``_align_product_surface_pbc``: MIC-aware matching, collective
+    mobile lattice-image selection, per-atom MIC snapping, optional integer
+    in-plane lattice shifts (``neb_surface_max_lattice_shift``), and global
+    in-plane rotation evaluated jointly with each shift, with anchors reset to
+    the reactant slab frame (no independent mobile-only rotation). Gas-phase
+    clusters (no slab prefix, including a 3D vacuum box with ``pbc=True``) use
+    3D Kabsch after core correspondence; adsorbate blocks are matched in that
+    overlaid frame.
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
 
@@ -1196,6 +1270,12 @@ def interpolate_path(
         )
 
     if align_endpoints:
+        n_atom = len(a1_copy)
+        use_blocks = (
+            n_core_mobile is not None
+            and n_adsorbate_mobile is not None
+            and int(n_slab) + int(n_core_mobile) + int(n_adsorbate_mobile) == n_atom
+        )
         new_pos = _reorder_product_to_match_reactant(
             a1_copy,
             a2_copy,
@@ -1203,9 +1283,8 @@ def interpolate_path(
             n_core_mobile=n_core_mobile,
             n_adsorbate_mobile=n_adsorbate_mobile,
             adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+            match_adsorbate=not use_blocks,
         )
-        # Keep species order consistent with reactant for downstream NEB.
-        a2_copy.numbers = a1_copy.numbers.copy()
         aligned = _align_product_for_neb(
             a1_copy,
             new_pos,
@@ -1216,6 +1295,20 @@ def interpolate_path(
             n_core_mobile=n_core_mobile,
         )
         a2_copy.set_positions(aligned, apply_constraint=False)
+        if use_blocks:
+            mic_cell, mic_pbc = _mic_matching_context(a1_copy, n_slab=n_slab)
+            _match_adsorbate_block(
+                a1_copy,
+                a2_copy,
+                int(n_slab),
+                int(n_core_mobile),
+                int(n_adsorbate_mobile),
+                mic_cell=mic_cell,
+                mic_pbc=mic_pbc,
+                adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+            )
+        # Keep species order consistent with reactant for downstream NEB.
+        a2_copy.numbers = a1_copy.numbers.copy()
         if _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab):
             a2_copy.set_cell(a1_copy.cell)
             a2_copy.pbc = a1_copy.pbc

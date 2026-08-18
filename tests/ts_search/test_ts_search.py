@@ -26,6 +26,7 @@ from scgo.ts_search.transition_state import (
     save_neb_result,
 )
 from scgo.ts_search.transition_state_io import (
+    _adsorbate_max_displacement,
     _core_rms_displacement,
     adsorbate_pair_select_cap,
     resolve_ts_pair_select_cap,
@@ -1057,57 +1058,31 @@ def test_select_structure_pairs_max_endpoint_mismatch_hard_gate(monkeypatch):
     assert pairs == [(0, 1)]
 
 
-def test_core_rms_displacement_is_permutation_invariant() -> None:
-    """Same-element core reorder must not inflate core RMS after spatial match."""
-    atoms_i = Atoms(
-        "Pt2OH",
-        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
-    )
-    atoms_j = Atoms(
-        "Pt2OH",
-        positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.3, 0.0, 1.5], [1.3, 0.0, 2.5]],
-    )
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=2, use_mic=False)
-    assert rms < 0.05
-
-
-def test_core_rms_displacement_is_rotation_invariant_for_gas() -> None:
-    """Gas cores Kabsch-align so overall rotation does not inflate RMS."""
-    core = _pt5_tbp_core()
-    atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
-    rot = np.array(
+def _cycle_axes_rotation() -> np.ndarray:
+    """Proper rotation that cycles x→y→z (not a symmetry of the scalene Pt3)."""
+    return np.array(
         [
-            [0.0, -1.0, 0.0],
-            [1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
         ]
     )
-    atoms_j = atoms_i.copy()
-    atoms_j.positions = atoms_j.positions @ rot.T
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=5, use_mic=False)
-    assert rms < 0.05
 
 
-def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop() -> None:
-    """Permuted identical cores should pass the core-RMS gate and remain selectable."""
-    atoms0 = Atoms(
-        "Pt2OH",
-        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
+def _asymmetric_pt3_core() -> Atoms:
+    """Scalene Pt3 with an out-of-plane vertex (no rotational symmetry)."""
+    core = Atoms(
+        "Pt3",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.70, 0.0, 0.0],
+            [0.85, 2.15, 0.45],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
     )
-    atoms1 = Atoms(
-        "Pt2OH",
-        positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.8, 0.0, 1.6], [1.9, 0.0, 2.5]],
-    )
-    minima = [(-1.0, atoms0), (-0.5, atoms1)]
-    pairs = select_structure_pairs(
-        minima,
-        max_pairs=1,
-        use_mic=False,
-        adsorbate_aware=True,
-        n_core_mobile=2,
-        max_endpoint_mismatch=1.25,
-    )
-    assert pairs == [(0, 1)]
+    core.positions -= core.positions.mean(axis=0)
+    return core
 
 
 def _pt5_tbp_core() -> Atoms:
@@ -1156,6 +1131,106 @@ def _attach_oh(core: Atoms, o_pos: np.ndarray, oh_bond: float = 0.96) -> Atoms:
     return core + oh
 
 
+def test_core_rms_displacement_is_permutation_invariant() -> None:
+    """Same-element core reorder must not inflate core RMS after matching."""
+    atoms_i = Atoms(
+        "Pt2OH",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
+    )
+    atoms_j = Atoms(
+        "Pt2OH",
+        positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.3, 0.0, 1.5], [1.3, 0.0, 2.5]],
+    )
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=2, use_mic=False)
+    assert rms < 0.05
+
+
+def test_core_rms_displacement_asymmetric_gas_core_is_rotation_invariant() -> None:
+    """Low-symmetry cores overlay after fingerprint correspondence + Kabsch."""
+    core = _asymmetric_pt3_core()
+    atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    atoms_j = atoms_i.copy()
+    atoms_j.positions = atoms_j.positions @ _cycle_axes_rotation().T
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=3, use_mic=False)
+    assert rms < 0.05
+
+
+def test_core_rms_and_hop_after_translated_gas_pt_oh() -> None:
+    """One-atom gas core overlays by translation; hop is adsorbate travel about Pt."""
+    atoms_i = Atoms(
+        "PtOH",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 0.0, 2.76]],
+    )
+    atoms_j = atoms_i.copy()
+    atoms_j.positions[1] = [1.8, 0.0, 0.0]
+    atoms_j.positions[2] = [1.8, 0.0, 0.96]
+    atoms_j.positions += np.array([3.0, 1.2, -0.5])
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=1, use_mic=False)
+    hop = _adsorbate_max_displacement(
+        atoms_i, atoms_j, n_slab=0, n_core=1, use_mic=False
+    )
+    assert rms < 0.05
+    assert hop == pytest.approx(np.linalg.norm([1.8, 0.0, -1.8]), abs=0.05)
+
+
+def test_core_rms_displacement_slab_keeps_lab_frame_rotation() -> None:
+    """Supported cores are not 3D-Kabsch'd; rotation vs the slab inflates RMS."""
+    slab = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    core = _asymmetric_pt3_core()
+    core.positions += np.array([0.0, 0.0, 2.0])
+    atoms_i = slab + _attach_oh(core, core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    rot_x90 = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+    )
+    atoms_j = atoms_i.copy()
+    mobile = atoms_j.positions[2:]
+    com = mobile[:3].mean(axis=0)
+    atoms_j.positions[2:] = (mobile - com) @ rot_x90.T + com
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=2, n_core=3, use_mic=False)
+    assert rms > 1.0
+
+
+def test_select_structure_pairs_keeps_rotated_asymmetric_core_oh_site_hop() -> None:
+    """Rotated scalene cores with an OH site hop must remain pairable."""
+    core = _asymmetric_pt3_core()
+    site_a = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    site_b = _attach_oh(core.copy(), core.positions[1] + np.array([1.8, 0.0, 0.0]))
+    site_b = site_b.copy()
+    site_b.positions = site_b.positions @ _cycle_axes_rotation().T
+    pairs = select_structure_pairs(
+        [(-10.0, site_a), (-9.7, site_b)],
+        max_pairs=1,
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=3,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_keeps_permuted_core_adsorbate_hop() -> None:
+    """Permuted identical cores should pass the core-RMS gate and remain selectable."""
+    atoms0 = Atoms(
+        "Pt2OH",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
+    )
+    atoms1 = Atoms(
+        "Pt2OH",
+        positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.8, 0.0, 1.6], [1.9, 0.0, 2.5]],
+    )
+    minima = [(-1.0, atoms0), (-0.5, atoms1)]
+    pairs = select_structure_pairs(
+        minima,
+        max_pairs=1,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=2,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
 def test_select_structure_pairs_keeps_same_core_oh_site_hop() -> None:
     """Identical Pt5 core with OH on axial vs equatorial sites must remain pairable.
 
@@ -1187,15 +1262,8 @@ def test_select_structure_pairs_keeps_rotated_same_core_oh_site_hop() -> None:
     core = _pt5_tbp_core()
     axial = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
     equatorial = _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
-    rot = np.array(
-        [
-            [0.0, 0.0, 1.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ]
-    )
     equatorial = equatorial.copy()
-    equatorial.positions = equatorial.positions @ rot.T
+    equatorial.positions = equatorial.positions @ _cycle_axes_rotation().T
     minima = [(-260.0, axial), (-259.7, equatorial)]
     pairs = select_structure_pairs(
         minima,

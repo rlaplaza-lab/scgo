@@ -39,6 +39,7 @@ from scgo.utils.logging import get_logger
 
 from .transition_state import (
     _align_product_kabsch_to_reactant,
+    _core_block_match_method,
     _permute_atoms_block_to_match,
     calculate_structure_similarity,
     minima_provenance_dict,
@@ -212,6 +213,70 @@ def _mobile_slice_atoms(atoms: Atoms, *, n_slab: int) -> Atoms:
     )
 
 
+def _pair_mic_context(
+    atoms: Atoms, use_mic: bool
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Return ``(cell, pbc)`` for MIC pair gates, or ``(None, None)``."""
+    if use_mic and bool(np.any(atoms.pbc)):
+        return (
+            np.asarray(atoms.cell.array, dtype=float),
+            np.asarray(atoms.pbc, dtype=bool),
+        )
+    return None, None
+
+
+def _overlay_product_core(
+    atoms_i: Atoms,
+    pos_j: np.ndarray,
+    nums_j: np.ndarray,
+    *,
+    n_slab: int,
+    n_core: int,
+    mic_cell: np.ndarray | None,
+    mic_pbc: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Permute product core onto reactant; Kabsch-overlay gas mobile atoms.
+
+    Gas: fingerprint correspondence, then core-derived rigid motion (translation
+    if ``n_core == 1``). Slab: spatial match in the lab frame. Adsorbate atoms
+    ride the core transform and are not permuted here.
+    """
+    pos_j = np.asarray(pos_j, dtype=float).copy()
+    nums_j = np.asarray(nums_j, dtype=int).copy()
+    n_slab = max(0, int(n_slab))
+    n_core = max(0, int(n_core))
+    if n_core <= 0 or n_slab + n_core > len(pos_j):
+        return pos_j, nums_j
+    i0, i1 = n_slab, n_slab + n_core
+    core_i = _core_slice_atoms(atoms_i, n_slab=n_slab, n_core=n_core)
+    core_j = Atoms(
+        numbers=nums_j[i0:i1],
+        positions=pos_j[i0:i1],
+        cell=atoms_i.cell,
+        pbc=atoms_i.pbc,
+    )
+    matched_core, matched_nums = _permute_atoms_block_to_match(
+        core_i,
+        core_j,
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+        method=_core_block_match_method(n_slab),
+    )
+    pos_j[i0:i1] = matched_core
+    nums_j[i0:i1] = matched_nums
+    if n_slab == 0:
+        unconstrained = Atoms(
+            numbers=np.asarray(atoms_i.numbers, dtype=int),
+            positions=np.asarray(atoms_i.get_positions(), dtype=float),
+            cell=atoms_i.cell,
+            pbc=atoms_i.pbc,
+        )
+        pos_j = _align_product_kabsch_to_reactant(
+            unconstrained, pos_j, n_slab=0, n_core_mobile=n_core
+        )
+    return pos_j, nums_j
+
+
 def _adsorbate_max_displacement(
     atoms_i: Atoms,
     atoms_j: Atoms,
@@ -220,12 +285,11 @@ def _adsorbate_max_displacement(
     n_core: int,
     use_mic: bool,
 ) -> float:
-    """Max adsorbate-atom displacement after matching the metal core.
+    """Max adsorbate-atom displacement after overlaying the metal core.
 
-    Layout is ``[slab | core | adsorbate]``. The core is Hungarian-matched
-    (and Kabsch-aligned in the gas frame) so a pure site hop reports adsorbate
-    travel, not a rigid cluster reorientation. On slabs the lab/slab frame is
-    kept and MIC is applied when ``use_mic`` is set. Minima are not mutated.
+    Layout is ``[slab | core | adsorbate]``. Overlay (fingerprint+Kabsch in gas,
+    spatial in the slab frame) runs first; then adsorbate atoms are matched so
+    a site hop is not mixed with rigid reorientation. Minima are not mutated.
     """
     n_slab = max(0, int(n_slab))
     n_core = max(0, int(n_core))
@@ -234,29 +298,18 @@ def _adsorbate_max_displacement(
         return 0.0
 
     pos_i = np.asarray(atoms_i.get_positions(), dtype=float)
-    pos_j = np.asarray(atoms_j.get_positions(), dtype=float).copy()
-    nums_j = np.asarray(atoms_j.numbers, dtype=int).copy()
-    mic_cell = None
-    mic_pbc = None
-    if use_mic and bool(np.any(atoms_i.pbc)):
-        mic_cell = np.asarray(atoms_i.cell.array, dtype=float)
-        mic_pbc = np.asarray(atoms_i.pbc, dtype=bool)
+    mic_cell, mic_pbc = _pair_mic_context(atoms_i, use_mic)
 
-    i0, i1 = n_slab, n_slab + n_core
-    a0, a1 = i1, i1 + n_ads
-
-    if n_core > 0:
-        core_i = _core_slice_atoms(atoms_i, n_slab=n_slab, n_core=n_core)
-        core_j = _core_slice_atoms(atoms_j, n_slab=n_slab, n_core=n_core)
-        matched_core, matched_nums = _permute_atoms_block_to_match(
-            core_i,
-            core_j,
-            mic_cell=mic_cell,
-            mic_pbc=mic_pbc,
-            method="spatial",
-        )
-        pos_j[i0:i1] = matched_core
-        nums_j[i0:i1] = matched_nums
+    a0, a1 = n_slab + n_core, n_slab + n_core + n_ads
+    pos_j, nums_j = _overlay_product_core(
+        atoms_i,
+        np.asarray(atoms_j.get_positions(), dtype=float),
+        np.asarray(atoms_j.numbers, dtype=int),
+        n_slab=n_slab,
+        n_core=n_core,
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+    )
 
     ads_i = Atoms(
         numbers=np.asarray(atoms_i.numbers[a0:a1], dtype=int),
@@ -270,26 +323,13 @@ def _adsorbate_max_displacement(
         cell=atoms_j.cell,
         pbc=atoms_j.pbc,
     )
-    matched_ads, matched_ads_nums = _permute_atoms_block_to_match(
+    matched_ads, _matched_ads_nums = _permute_atoms_block_to_match(
         ads_i,
         ads_j,
         mic_cell=mic_cell,
         mic_pbc=mic_pbc,
     )
     pos_j[a0:a1] = matched_ads
-    nums_j[a0:a1] = matched_ads_nums
-
-    # Gas: rigid-align on the core so orientation does not inflate the hop.
-    if n_slab == 0 and n_core > 0:
-        react = Atoms(
-            numbers=np.asarray(atoms_i.numbers, dtype=int),
-            positions=pos_i,
-            cell=atoms_i.cell,
-            pbc=atoms_i.pbc,
-        )
-        pos_j = _align_product_kabsch_to_reactant(
-            react, pos_j, n_slab=0, n_core_mobile=n_core
-        )
 
     dlt = pos_j[a0:a1] - pos_i[a0:a1]
     if mic_cell is not None and mic_pbc is not None:
@@ -305,55 +345,32 @@ def _core_rms_displacement(
     n_core: int,
     use_mic: bool,
 ) -> float:
-    """RMS Cartesian displacement of the core block after spatial matching.
+    """RMS Cartesian displacement of the core after overlaying the product core.
 
-    Same-element core permutations (common from GA) are resolved with a
-    Hungarian spatial match on copies so the gate is order-invariant. Minima
-    atoms are never mutated.
-
-    Gas-phase cores (``n_slab == 0``, two or more atoms) are then Kabsch-aligned
-    so overall rotation/translation does not inflate RMS — the same rigid
-    alignment ``_adsorbate_max_displacement`` already applies before measuring
-    the hop. Slab cores stay in the lab frame: orientation relative to the
-    surface is physically meaningful.
+    Minima are not mutated. Gas cores overlay by fingerprint + Kabsch; slab
+    cores stay in the lab frame.
     """
+    n_core = max(0, int(n_core))
     if n_core <= 0:
         return 0.0
-    i0 = max(0, int(n_slab))
-    i1 = i0 + int(n_core)
+    n_slab = max(0, int(n_slab))
+    i0 = n_slab
+    i1 = i0 + n_core
     if i1 > len(atoms_i) or i1 > len(atoms_j):
         return 0.0
     pos_i = np.asarray(atoms_i.get_positions()[i0:i1], dtype=float)
-    core_i = _core_slice_atoms(atoms_i, n_slab=n_slab, n_core=n_core)
-    core_j = _core_slice_atoms(atoms_j, n_slab=n_slab, n_core=n_core)
-    mic_cell = None
-    mic_pbc = None
-    if use_mic and bool(np.any(atoms_i.pbc)):
-        mic_cell = np.asarray(atoms_i.cell.array, dtype=float)
-        mic_pbc = np.asarray(atoms_i.pbc, dtype=bool)
-    matched_pos, _matched_nums = _permute_atoms_block_to_match(
-        core_i,
-        core_j,
+    mic_cell, mic_pbc = _pair_mic_context(atoms_i, use_mic)
+    pos_j, _nums_j = _overlay_product_core(
+        atoms_i,
+        np.asarray(atoms_j.get_positions(), dtype=float),
+        np.asarray(atoms_j.numbers, dtype=int),
+        n_slab=n_slab,
+        n_core=n_core,
         mic_cell=mic_cell,
         mic_pbc=mic_pbc,
-        method="spatial",
     )
-    if n_slab == 0 and n_core >= 2:
-        core_ref = Atoms(
-            numbers=np.asarray(atoms_i.numbers[i0:i1], dtype=int),
-            positions=pos_i,
-            cell=atoms_i.cell,
-            pbc=atoms_i.pbc,
-        )
-        matched_pos = _align_product_kabsch_to_reactant(
-            core_ref,
-            np.asarray(matched_pos, dtype=float),
-            n_slab=0,
-            n_core_mobile=n_core,
-        )
-    dlt = matched_pos - pos_i
+    dlt = pos_j[i0:i1] - pos_i
     if mic_cell is not None and mic_pbc is not None:
-        # ``find_mic`` is required for skewed cells; fractional rounding is wrong.
         dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
     return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
 

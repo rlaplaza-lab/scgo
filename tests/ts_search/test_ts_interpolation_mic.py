@@ -101,6 +101,8 @@ def test_interpolate_path_mic_alignment_uses_periodic_displacements():
         method="idpp",
         mic=True,
         align_endpoints=True,
+        n_slab=len(slab),
+        system_type="surface_cluster",
     )
 
     disp = images[-1].get_positions() - images[0].get_positions()
@@ -127,6 +129,8 @@ def test_interpolate_path_mic_alignment_anchors_fixed_slab_atoms():
         method="idpp",
         mic=True,
         align_endpoints=True,
+        n_slab=len(slab),
+        system_type="surface_cluster",
     )
 
     disp = images[-1].get_positions() - images[0].get_positions()
@@ -236,12 +240,17 @@ def test_core_rms_displacement_uses_find_mic_for_skewed_cell():
         ]
     )
     pbc = [True, True, False]
+    slab = np.array([[0.0, 0.0, 0.0]])
     pos_i = np.array([[0.0, 0.0, 10.0]])
     pos_j = np.array([[3.7, 0.8, 10.0]])
-    atoms_i = Atoms(numbers=[29], positions=pos_i, cell=cell, pbc=pbc)
-    atoms_j = Atoms(numbers=[29], positions=pos_j, cell=cell, pbc=pbc)
+    atoms_i = Atoms(
+        numbers=[78, 29], positions=np.vstack([slab, pos_i]), cell=cell, pbc=pbc
+    )
+    atoms_j = Atoms(
+        numbers=[78, 29], positions=np.vstack([slab, pos_j]), cell=cell, pbc=pbc
+    )
 
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=1, use_mic=True)
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=1, n_core=1, use_mic=True)
 
     dlt_mic, _ = find_mic(pos_j - pos_i, cell, pbc)
     expected = float(np.sqrt(np.mean(np.sum(dlt_mic**2, axis=1))))

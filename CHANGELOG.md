@@ -206,9 +206,14 @@
 
 ### Fixed
 
-- Gas-phase TS pair selection Kabsch-aligns cores before the core-RMS gate,
-  matching adsorbate-hop scoring, so rotated same-core site hops are not
-  dropped (Kaggle ``gas_cluster_adsorbate`` empty-pair failure).
+- Gas-phase TS pair selection and NEB endpoint prep share one core overlay:
+  fingerprint correspondence then Kabsch (translation-only for a single core
+  atom). Adsorbate matching runs after that overlay so rotated same-core site
+  hops are not dropped and fragment COMs are assigned in the aligned frame.
+  Slab cores stay in the surface lab frame.
+- Surface PBC alignment is used only for a slab prefix or slab-like 2D
+  periodicity. Gas vacuum boxes with ``pbc=True`` and ``n_slab == 0`` still
+  3D-Kabsch.
 - ``update_mutation_weights`` always maps operator names through
   ``_effective_operator_weight``, so partitioned ``in_plane_slide`` /
   ``_core`` / ``_ads`` variants share the table budget 70/15/15 instead of

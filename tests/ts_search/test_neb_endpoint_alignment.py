@@ -21,6 +21,7 @@ from scgo.ts_search.transition_state import (
     _align_product_kabsch_to_reactant,
     _align_product_surface_pbc,
     _lattice_translation_candidates,
+    _requires_surface_pbc_alignment,
     _validate_lattice_compatible_rotation,
     interpolate_path,
     validate_initial_neb_path,
@@ -721,6 +722,91 @@ def test_fragment_wise_matching_swaps_crossed_oh() -> None:
     np.testing.assert_allclose(prod.get_positions()[3:5], oh1, atol=1e-8)
     np.testing.assert_allclose(prod.get_positions()[5:7], oh2, atol=1e-8)
     assert list(prod.numbers[3:7]) == list(react.numbers[3:7])
+
+
+def test_requires_surface_pbc_alignment_ignores_gas_vacuum_pbc() -> None:
+    """3D pbc on a gas cluster is a vacuum box, not slab PBC alignment."""
+    gas = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], pbc=True)
+    gas.set_cell([20.0, 20.0, 20.0])
+    assert _requires_surface_pbc_alignment(gas, n_slab=0) is False
+    slab_like = gas.copy()
+    slab_like.pbc = [True, True, False]
+    assert _requires_surface_pbc_alignment(slab_like, n_slab=0) is True
+    assert _requires_surface_pbc_alignment(gas, n_slab=1) is True
+
+
+def test_align_product_for_neb_gas_vacuum_pbc_uses_3d_kabsch() -> None:
+    """Gas pbc=True still 3D-Kabsches; MIC-only would leave a rotated core."""
+    react = Atoms(
+        symbols=["Pt", "Pt", "O", "H"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.0, 0.0, 1.5],
+            [1.0, 0.0, 2.46],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=True,
+    )
+    rot = np.array(
+        [
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    core_com = react.get_positions()[:2].mean(axis=0)
+    prod_pos = (react.get_positions() - core_com) @ rot.T + core_com
+    aligned = _align_product_for_neb(react, prod_pos, n_slab=0, n_core_mobile=2)
+    core_rms = float(
+        np.sqrt(np.mean(np.sum((aligned[:2] - react.positions[:2]) ** 2, axis=1)))
+    )
+    assert core_rms < 0.05
+
+
+def test_interpolate_path_matches_oh_fragments_after_gas_rotation() -> None:
+    """Fragment COM matching runs after core Kabsch so a rotation cannot swap OH."""
+    core = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.7, 0.0]])
+    oh1 = np.array([[0.0, 0.0, 1.5], [0.0, 0.0, 2.46]])
+    oh2 = np.array([[2.0, 0.0, 1.5], [2.0, 0.0, 2.46]])
+    react = Atoms(
+        symbols=["Pt", "Pt", "Pt", "O", "H", "O", "H"],
+        positions=np.vstack([core, oh1, oh2]),
+        cell=[20.0, 20.0, 20.0],
+        pbc=True,
+    )
+    rot = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    center = core.mean(axis=0)
+    prod_pos = np.vstack([core, oh2, oh1])
+    prod_pos = (prod_pos - center) @ rot.T + center
+    prod = Atoms(
+        symbols=["Pt", "Pt", "Pt", "O", "H", "O", "H"],
+        positions=prod_pos,
+        cell=react.cell,
+        pbc=True,
+    )
+    images = interpolate_path(
+        react,
+        prod,
+        n_images=2,
+        method="linear",
+        mic=False,
+        align_endpoints=True,
+        system_type="gas_cluster_adsorbate",
+        n_slab=0,
+        n_core_mobile=3,
+        n_adsorbate_mobile=4,
+        adsorbate_fragment_lengths=[2, 2],
+    )
+    aligned = images[-1].get_positions()
+    ref = images[0].get_positions()
+    np.testing.assert_allclose(aligned, ref, atol=1e-6)
 
 
 def test_core_anchored_kabsch_ignores_adsorbate_drag() -> None:
