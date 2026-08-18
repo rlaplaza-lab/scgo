@@ -137,7 +137,9 @@ def test_ts_search_params_expose_dedupe_and_tolerance_defaults():
     assert ts.get("minima_energy_tolerance", None) == pytest.approx(
         DEFAULT_ENERGY_TOLERANCE
     )
-    assert ts.get("ts_energy_tolerance", None) == pytest.approx(DEFAULT_ENERGY_TOLERANCE)
+    assert ts.get("ts_energy_tolerance", None) == pytest.approx(
+        DEFAULT_ENERGY_TOLERANCE
+    )
 
     kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
     assert kwargs["dedupe_minima"] is True

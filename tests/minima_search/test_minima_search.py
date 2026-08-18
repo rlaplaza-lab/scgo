@@ -948,7 +948,9 @@ def test_run_trials_dedupe(tmp_path, monkeypatch, rng):
     assert captured["n_top"] == 1
 
 
-def test_run_trials_dedupe_n_top_without_comparator_override(tmp_path, monkeypatch, rng):
+def test_run_trials_dedupe_n_top_without_comparator_override(
+    tmp_path, monkeypatch, rng
+):
     captured: dict[str, object] = {}
 
     def _fake_scgo(*_args, **_kwargs):
