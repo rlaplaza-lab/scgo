@@ -38,10 +38,8 @@ from scgo.utils.helpers import get_cluster_formula, validate_pair_id
 from scgo.utils.logging import get_logger
 
 from .transition_state import (
-    _align_product_kabsch_to_reactant,
-    _core_block_match_method,
+    _overlay_product_core,
     _permute_atoms_block_to_match,
-    _spatial_refine_gas_core_overlay,
     calculate_structure_similarity,
     minima_provenance_dict,
 )
@@ -226,62 +224,6 @@ def _pair_mic_context(
     return None, None
 
 
-def _overlay_product_core(
-    atoms_i: Atoms,
-    pos_j: np.ndarray,
-    nums_j: np.ndarray,
-    *,
-    n_slab: int,
-    n_core: int,
-    mic_cell: np.ndarray | None,
-    mic_pbc: np.ndarray | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Permute product core onto reactant; Kabsch-overlay gas mobile atoms.
-
-    Gas: fingerprint correspondence, core-derived rigid motion (translation if
-    ``n_core == 1``), then a spatial rematch in the overlaid frame so reflected
-    fingerprint labelings cannot inflate RMS. Slab: spatial match in the lab
-    frame. Adsorbate atoms ride the core transform and are not permuted here.
-    """
-    pos_j = np.asarray(pos_j, dtype=float).copy()
-    nums_j = np.asarray(nums_j, dtype=int).copy()
-    n_slab = max(0, int(n_slab))
-    n_core = max(0, int(n_core))
-    if n_core <= 0 or n_slab + n_core > len(pos_j):
-        return pos_j, nums_j
-    i0, i1 = n_slab, n_slab + n_core
-    core_i = _core_slice_atoms(atoms_i, n_slab=n_slab, n_core=n_core)
-    core_j = Atoms(
-        numbers=nums_j[i0:i1],
-        positions=pos_j[i0:i1],
-        cell=atoms_i.cell,
-        pbc=atoms_i.pbc,
-    )
-    matched_core, matched_nums = _permute_atoms_block_to_match(
-        core_i,
-        core_j,
-        mic_cell=mic_cell,
-        mic_pbc=mic_pbc,
-        method=_core_block_match_method(n_slab),
-    )
-    pos_j[i0:i1] = matched_core
-    nums_j[i0:i1] = matched_nums
-    if n_slab == 0:
-        unconstrained = Atoms(
-            numbers=np.asarray(atoms_i.numbers, dtype=int),
-            positions=np.asarray(atoms_i.get_positions(), dtype=float),
-            cell=atoms_i.cell,
-            pbc=atoms_i.pbc,
-        )
-        pos_j = _align_product_kabsch_to_reactant(
-            unconstrained, pos_j, n_slab=0, n_core_mobile=n_core
-        )
-        pos_j, nums_j = _spatial_refine_gas_core_overlay(
-            unconstrained, pos_j, nums_j, n_core=n_core
-        )
-    return pos_j, nums_j
-
-
 def _adsorbate_max_displacement(
     atoms_i: Atoms,
     atoms_j: Atoms,
@@ -292,10 +234,9 @@ def _adsorbate_max_displacement(
 ) -> float:
     """Max adsorbate-atom displacement after overlaying the metal core.
 
-    Layout is ``[slab | core | adsorbate]``. Overlay (fingerprint+Kabsch, then a
-    spatial rematch in the gas frame; spatial in the slab frame) runs first;
-    then adsorbate atoms are matched so a site hop is not mixed with rigid
-    reorientation. Minima are not mutated.
+    Layout is ``[slab | core | adsorbate]``. Overlay (same operator as NEB
+    endpoint prep) runs first; then adsorbate atoms are matched so a site hop
+    is not mixed with rigid reorientation. Minima are not mutated.
     """
     n_slab = max(0, int(n_slab))
     n_core = max(0, int(n_core))
@@ -353,8 +294,8 @@ def _core_rms_displacement(
 ) -> float:
     """RMS Cartesian displacement of the core after overlaying the product core.
 
-    Minima are not mutated. Gas cores overlay by fingerprint + Kabsch + a
-    spatial rematch in the overlaid frame; slab cores stay in the lab frame.
+    Minima are not mutated. Gas cores overlay by fingerprint + Kabsch + spatial
+    rematch; slab cores stay in the lab frame.
     """
     n_core = max(0, int(n_core))
     if n_core <= 0:

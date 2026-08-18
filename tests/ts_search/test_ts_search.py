@@ -14,10 +14,15 @@ from ase.constraints import FixAtoms, FixBondLengths
 
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
+from scgo.pair_selection_defaults import (
+    DEFAULT_PAIR_CORE_RMS_MAX_GAS,
+    DEFAULT_PAIR_CORE_RMS_MAX_SURFACE,
+)
 from scgo.param_presets import get_ts_defaults
 from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
 from scgo.ts_search import transition_state_run as ts_run_mod
 from scgo.ts_search.transition_state import (
+    _overlay_product_core,
     calculate_structure_similarity,
     find_transition_state,
     interpolate_path,
@@ -1173,8 +1178,22 @@ def test_core_rms_and_hop_after_translated_gas_pt_oh() -> None:
     assert hop == pytest.approx(np.linalg.norm([1.8, 0.0, -1.8]), abs=0.05)
 
 
-def test_core_rms_displacement_slab_keeps_lab_frame_rotation() -> None:
-    """Supported cores are not 3D-Kabsch'd; rotation vs the slab inflates RMS."""
+def _block_rms(a: Atoms, b: Atoms, *, n_slab: int, n_core: int) -> float:
+    i0, i1 = n_slab, n_slab + n_core
+    dlt = b.get_positions()[i0:i1] - a.get_positions()[i0:i1]
+    return float(np.sqrt(np.mean(np.sum(dlt * dlt, axis=1))))
+
+
+def _with_reflected_tbp_labels(atoms: Atoms) -> Atoms:
+    """Swap TBP equatorials (indices 3, 4) and apply a proper rotation."""
+    out = atoms.copy()
+    pos = out.positions.copy()
+    pos[3], pos[4] = pos[4].copy(), pos[3].copy()
+    out.positions = pos @ _cycle_axes_rotation().T
+    return out
+
+
+def _slab_rotated_core_oh_pair() -> tuple[Atoms, Atoms]:
     slab = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
     core = _asymmetric_pt3_core()
     core.positions += np.array([0.0, 0.0, 2.0])
@@ -1186,6 +1205,12 @@ def test_core_rms_displacement_slab_keeps_lab_frame_rotation() -> None:
     mobile = atoms_j.positions[2:]
     com = mobile[:3].mean(axis=0)
     atoms_j.positions[2:] = (mobile - com) @ rot_x90.T + com
+    return atoms_i, atoms_j
+
+
+def test_core_rms_displacement_slab_keeps_lab_frame_rotation() -> None:
+    """Supported cores are not 3D-Kabsch'd; lab-frame rotation stays large."""
+    atoms_i, atoms_j = _slab_rotated_core_oh_pair()
     rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=2, n_core=3, use_mic=False)
     assert rms > 1.0
 
@@ -1277,32 +1302,20 @@ def test_select_structure_pairs_keeps_rotated_same_core_oh_site_hop() -> None:
     assert pairs == [(0, 1)]
 
 
-def test_core_rms_displacement_recovers_reflected_tbp_labeling() -> None:
-    """Fingerprint-reflected TBP equatorials must still overlay after spatial refine.
+def test_reflected_tbp_labels_pass_gas_pair_gate_and_match_neb_overlay() -> None:
+    """Reflected TBP labels overlay below the gas RMS gate; pairing matches NEB.
 
-    Local-distance fingerprints cannot distinguish a proper rotation from a
-    reflected equatorial swap on Pt5 TBP. Proper Kabsch then leaves core RMS
-    ~2.8 Å (above ``pair_core_rms_max``). Spatial rematch in the overlaid frame
-    recovers the proper labeling.
+    Fingerprint Hungarian can assign a reflected equatorial labeling; without
+    spatial rematch, proper Kabsch leaves RMS ~2.8 Å and empties the pair pool.
     """
     core = _pt5_tbp_core()
-    atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
-    atoms_j = atoms_i.copy()
-    pos = atoms_j.positions.copy()
-    pos[3], pos[4] = pos[4].copy(), pos[3].copy()
-    atoms_j.positions = pos @ _cycle_axes_rotation().T
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=5, use_mic=False)
-    assert rms < 0.05
-
-
-def test_select_structure_pairs_keeps_reflected_tbp_oh_labeling() -> None:
-    """Reflected TBP equatorial labels plus an OH site hop must remain pairable."""
-    core = _pt5_tbp_core()
     axial = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
-    equatorial = _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
-    pos = equatorial.positions.copy()
-    pos[3], pos[4] = pos[4].copy(), pos[3].copy()
-    equatorial.positions = pos @ _cycle_axes_rotation().T
+    equatorial = _with_reflected_tbp_labels(
+        _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
+    )
+    rms = _core_rms_displacement(axial, equatorial, n_slab=0, n_core=5, use_mic=False)
+    assert rms < 0.05
+    assert rms < DEFAULT_PAIR_CORE_RMS_MAX_GAS
     pairs = select_structure_pairs(
         [(-260.0, axial), (-259.7, equatorial)],
         max_pairs=1,
@@ -1311,8 +1324,145 @@ def test_select_structure_pairs_keeps_reflected_tbp_oh_labeling() -> None:
         adsorbate_aware=True,
         n_core_mobile=5,
         max_endpoint_mismatch=1.25,
+        pair_core_rms_max=DEFAULT_PAIR_CORE_RMS_MAX_GAS,
     )
     assert pairs == [(0, 1)]
+
+    images = interpolate_path(
+        axial,
+        equatorial,
+        n_images=2,
+        method="linear",
+        mic=False,
+        align_endpoints=True,
+        system_type="gas_cluster_adsorbate",
+        n_slab=0,
+        n_core_mobile=5,
+        n_adsorbate_mobile=2,
+    )
+    neb_rms = _block_rms(images[0], images[-1], n_slab=0, n_core=5)
+    assert neb_rms < 0.05
+    assert neb_rms == pytest.approx(rms, abs=1e-6)
+
+    pos_overlay, _nums = _overlay_product_core(
+        axial,
+        equatorial.get_positions(),
+        np.asarray(equatorial.numbers, dtype=int),
+        n_slab=0,
+        n_core=5,
+        mic_cell=None,
+        mic_pbc=None,
+    )
+    np.testing.assert_allclose(
+        pos_overlay[:5], images[-1].get_positions()[:5], atol=1e-6
+    )
+
+
+def test_reflected_tbp_labels_overlay_for_bare_gas_cluster() -> None:
+    """Bare gas_cluster NEB overlay rematches reflected TBP labels too."""
+    react = _pt5_tbp_core()
+    prod = _with_reflected_tbp_labels(react)
+    images = interpolate_path(
+        react,
+        prod,
+        n_images=2,
+        method="linear",
+        mic=False,
+        align_endpoints=True,
+        system_type="gas_cluster",
+        n_slab=0,
+        n_core_mobile=5,
+    )
+    assert _block_rms(images[0], images[-1], n_slab=0, n_core=5) < 0.05
+
+
+def test_overlay_product_core_is_noop_without_core() -> None:
+    """surface / surface_adsorbate (n_core=0) must not permute or Kabsch."""
+    atoms = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]])
+    shifted = atoms.get_positions() + np.array([1.5, -0.4, 0.2])
+    pos, nums = _overlay_product_core(
+        atoms,
+        shifted,
+        np.asarray(atoms.numbers, dtype=int),
+        n_slab=0,
+        n_core=0,
+        mic_cell=None,
+        mic_pbc=None,
+    )
+    np.testing.assert_allclose(pos, shifted)
+    np.testing.assert_array_equal(nums, atoms.numbers)
+
+
+@pytest.mark.parametrize(
+    ("surface", "scale", "limit", "expect_pair"),
+    [
+        (False, 1.4, DEFAULT_PAIR_CORE_RMS_MAX_GAS, True),
+        (False, 1.8, DEFAULT_PAIR_CORE_RMS_MAX_GAS, False),
+        (True, 1.4, DEFAULT_PAIR_CORE_RMS_MAX_SURFACE, True),
+        (True, 1.8, DEFAULT_PAIR_CORE_RMS_MAX_SURFACE, False),
+    ],
+)
+def test_pair_core_rms_max_defaults_are_hard_gates(
+    surface: bool, scale: float, limit: float, expect_pair: bool
+) -> None:
+    """Uniform core breathing is kept or dropped by the gas 1.5 / surface 2.0 gates."""
+    core = _pt5_tbp_core()
+    if surface:
+        slab = Atoms(
+            "C2",
+            positions=[[0.0, 0.0, 0.0], [1.42, 0.0, 0.0]],
+            cell=[20.0, 20.0, 20.0],
+            pbc=[True, True, False],
+        )
+        core = core.copy()
+        core.positions += np.array([0.0, 0.0, 3.0])
+        atoms_i = slab + _attach_oh(core, core.positions[0] + np.array([0.0, 0.0, 1.8]))
+        n_slab, n_core = 2, 5
+    else:
+        atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+        n_slab, n_core = 0, 5
+    atoms_j = atoms_i.copy()
+    i0, i1 = n_slab, n_slab + n_core
+    com = atoms_j.positions[i0:i1].mean(axis=0)
+    atoms_j.positions[i0:i1] = com + (atoms_j.positions[i0:i1] - com) * scale
+    rms = _core_rms_displacement(
+        atoms_i, atoms_j, n_slab=n_slab, n_core=n_core, use_mic=False
+    )
+    if expect_pair:
+        assert rms < limit
+    else:
+        assert rms > limit
+    pairs = select_structure_pairs(
+        [(-260.0, atoms_i), (-259.7, atoms_j)],
+        max_pairs=1,
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=n_core,
+        n_slab=n_slab if n_slab else None,
+        max_endpoint_mismatch=10.0,
+        pair_core_rms_max=limit,
+        surface_aware=surface,
+    )
+    assert (pairs == [(0, 1)]) is expect_pair
+
+
+def test_interpolate_path_surface_cluster_adsorbate_keeps_lab_frame_core() -> None:
+    """NEB must not 3D-Kabsch a supported core the way gas overlay does."""
+    atoms_i, atoms_j = _slab_rotated_core_oh_pair()
+    images = interpolate_path(
+        atoms_i,
+        atoms_j,
+        n_images=2,
+        method="linear",
+        mic=False,
+        align_endpoints=True,
+        system_type="surface_cluster_adsorbate",
+        n_slab=2,
+        n_core_mobile=3,
+        n_adsorbate_mobile=2,
+    )
+    assert _block_rms(images[0], images[-1], n_slab=2, n_core=3) > 1.0
 
 
 def test_select_structure_pairs_skips_distinct_core_isomers() -> None:
@@ -1333,6 +1483,7 @@ def test_select_structure_pairs_skips_distinct_core_isomers() -> None:
         adsorbate_aware=True,
         n_core_mobile=5,
         max_endpoint_mismatch=1.25,
+        pair_core_rms_max=DEFAULT_PAIR_CORE_RMS_MAX_GAS,
     )
     assert pairs == []
 

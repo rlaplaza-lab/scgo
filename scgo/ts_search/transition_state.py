@@ -364,50 +364,6 @@ def _core_block_match_method(n_slab: int) -> str:
     return "spatial" if int(n_slab) > 0 else "fingerprint"
 
 
-def _spatial_refine_gas_core_overlay(
-    reactant: Atoms,
-    pos_j: np.ndarray,
-    nums_j: np.ndarray,
-    *,
-    n_core: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Rematch gas-core labels in the overlaid frame and re-Kabsch.
-
-    Local-distance fingerprints are chirality-blind, so Hungarian can assign a
-    reflected labeling on near-symmetric cores (e.g. Pt5 TBP equatorials).
-    Proper Kabsch cannot overlay that correspondence, and Cartesian core RMS
-    stays above ``pair_core_rms_max``. Spatial matching after the coarse overlay
-    recovers the RMS-minimizing proper labeling; a second Kabsch reapplies the
-    core-derived rigid motion to all mobile atoms.
-    """
-    n_core = max(0, int(n_core))
-    pos_j = np.asarray(pos_j, dtype=float).copy()
-    nums_j = np.asarray(nums_j, dtype=int).copy()
-    if n_core <= 0 or n_core > len(pos_j) or n_core > len(reactant):
-        return pos_j, nums_j
-    core_i = Atoms(
-        numbers=np.asarray(reactant.numbers[:n_core], dtype=int),
-        positions=np.asarray(reactant.get_positions()[:n_core], dtype=float),
-        cell=reactant.cell,
-        pbc=reactant.pbc,
-    )
-    core_j = Atoms(
-        numbers=nums_j[:n_core],
-        positions=pos_j[:n_core],
-        cell=reactant.cell,
-        pbc=reactant.pbc,
-    )
-    refined_pos, refined_nums = _permute_atoms_block_to_match(
-        core_i, core_j, method="spatial"
-    )
-    pos_j[:n_core] = refined_pos
-    nums_j[:n_core] = refined_nums
-    pos_j = _align_product_kabsch_to_reactant(
-        reactant, pos_j, n_slab=0, n_core_mobile=n_core
-    )
-    return pos_j, nums_j
-
-
 def _permute_atoms_block_to_match(
     a1_block: Atoms,
     a2_block: Atoms,
@@ -1147,6 +1103,105 @@ def _align_product_kabsch_to_reactant(
     return (p_prod_c @ rot.T) + center_ref
 
 
+def _rematch_gas_core_and_kabsch(
+    reactant: Atoms,
+    pos_j: np.ndarray,
+    nums_j: np.ndarray,
+    *,
+    n_core: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Spatial-rematch a gas core in the overlaid frame and re-Kabsch.
+
+    Fingerprints are chirality-blind, so Hungarian can assign a reflected
+    labeling on near-symmetric cores. Proper Kabsch cannot overlay that;
+    Cartesian rematch recovers a proper labeling.
+    """
+    n_core = max(0, int(n_core))
+    pos_j = np.asarray(pos_j, dtype=float).copy()
+    nums_j = np.asarray(nums_j, dtype=int).copy()
+    if n_core <= 0 or n_core > len(pos_j) or n_core > len(reactant):
+        return pos_j, nums_j
+    core_i = Atoms(
+        numbers=np.asarray(reactant.numbers[:n_core], dtype=int),
+        positions=np.asarray(reactant.get_positions()[:n_core], dtype=float),
+        cell=reactant.cell,
+        pbc=reactant.pbc,
+    )
+    core_j = Atoms(
+        numbers=nums_j[:n_core],
+        positions=pos_j[:n_core],
+        cell=reactant.cell,
+        pbc=reactant.pbc,
+    )
+    refined_pos, refined_nums = _permute_atoms_block_to_match(
+        core_i, core_j, method="spatial"
+    )
+    pos_j[:n_core] = refined_pos
+    nums_j[:n_core] = refined_nums
+    return (
+        _align_product_kabsch_to_reactant(
+            reactant, pos_j, n_slab=0, n_core_mobile=n_core
+        ),
+        nums_j,
+    )
+
+
+def _overlay_product_core(
+    atoms_i: Atoms,
+    pos_j: np.ndarray,
+    nums_j: np.ndarray,
+    *,
+    n_slab: int,
+    n_core: int,
+    mic_cell: np.ndarray | None,
+    mic_pbc: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Permute product core onto reactant; Kabsch-overlay gas mobile atoms.
+
+    Shared by TS pairing and NEB endpoint prep. Layout is
+    ``[slab | core | adsorbate]``; adsorbate atoms ride the core transform and
+    are not permuted here.
+
+    Gas (``n_slab == 0``): fingerprint correspondence, core-derived rigid
+    motion (translation if ``n_core == 1``), spatial rematch, re-Kabsch.
+    Slab: spatial match in the lab frame; no 3D Kabsch.
+    """
+    pos_j = np.asarray(pos_j, dtype=float).copy()
+    nums_j = np.asarray(nums_j, dtype=int).copy()
+    n_slab = max(0, int(n_slab))
+    n_core = max(0, int(n_core))
+    if n_core <= 0 or n_slab + n_core > len(pos_j):
+        return pos_j, nums_j
+    i0, i1 = n_slab, n_slab + n_core
+    core_i = Atoms(
+        numbers=np.asarray(atoms_i.numbers[i0:i1], dtype=int),
+        positions=np.asarray(atoms_i.get_positions()[i0:i1], dtype=float),
+        cell=atoms_i.cell,
+        pbc=atoms_i.pbc,
+    )
+    core_j = Atoms(
+        numbers=nums_j[i0:i1],
+        positions=pos_j[i0:i1],
+        cell=atoms_i.cell,
+        pbc=atoms_i.pbc,
+    )
+    matched_core, matched_nums = _permute_atoms_block_to_match(
+        core_i,
+        core_j,
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+        method=_core_block_match_method(n_slab),
+    )
+    pos_j[i0:i1] = matched_core
+    nums_j[i0:i1] = matched_nums
+    if n_slab != 0:
+        return pos_j, nums_j
+    pos_j = _align_product_kabsch_to_reactant(
+        atoms_i, pos_j, n_slab=0, n_core_mobile=n_core
+    )
+    return _rematch_gas_core_and_kabsch(atoms_i, pos_j, nums_j, n_core=n_core)
+
+
 def _reorder_product_to_match_reactant(
     reactant: Atoms,
     product: Atoms,
@@ -1282,9 +1337,8 @@ def interpolate_path(
     in-plane rotation evaluated jointly with each shift, with anchors reset to
     the reactant slab frame (no independent mobile-only rotation). Gas-phase
     clusters (no slab prefix, including a 3D vacuum box with ``pbc=True``) use
-    3D Kabsch after core correspondence, with a spatial rematch in the overlaid
-    frame so reflected fingerprint labelings cannot inflate core RMS; adsorbate
-    blocks are matched in that overlaid frame.
+    the same core overlay as pair selection (fingerprint + Kabsch + spatial
+    rematch). Adsorbate blocks are matched in that overlaid frame.
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
 
@@ -1315,59 +1369,83 @@ def interpolate_path(
         )
 
     if align_endpoints:
+        n_slab_i = int(n_slab)
         n_atom = len(a1_copy)
         use_blocks = (
             n_core_mobile is not None
             and n_adsorbate_mobile is not None
-            and int(n_slab) + int(n_core_mobile) + int(n_adsorbate_mobile) == n_atom
+            and n_slab_i + int(n_core_mobile) + int(n_adsorbate_mobile) == n_atom
         )
-        new_pos = _reorder_product_to_match_reactant(
-            a1_copy,
-            a2_copy,
-            n_slab=n_slab,
-            n_core_mobile=n_core_mobile,
-            n_adsorbate_mobile=n_adsorbate_mobile,
-            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
-            match_adsorbate=not use_blocks,
-        )
-        aligned = _align_product_for_neb(
-            a1_copy,
-            new_pos,
-            n_slab=n_slab,
-            surface_cell_remap=surface_cell_remap,
-            surface_lattice_rotation=surface_lattice_rotation,
-            surface_max_lattice_shift=neb_surface_max_lattice_shift,
-            n_core_mobile=n_core_mobile,
-        )
-        if (
-            use_blocks
-            and int(n_slab) == 0
-            and n_core_mobile is not None
-            and int(n_core_mobile) > 0
-        ):
-            aligned, refined_nums = _spatial_refine_gas_core_overlay(
-                a1_copy,
-                aligned,
-                np.asarray(a2_copy.numbers, dtype=int),
-                n_core=int(n_core_mobile),
-            )
-            a2_copy.numbers = refined_nums
-        a2_copy.set_positions(aligned, apply_constraint=False)
+        surface_pbc = _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab_i)
+        mic_cell, mic_pbc = _mic_matching_context(a1_copy, n_slab=n_slab_i)
         if use_blocks:
-            mic_cell, mic_pbc = _mic_matching_context(a1_copy, n_slab=n_slab)
+            pos_j, nums_j = _overlay_product_core(
+                a1_copy,
+                a2_copy.get_positions(),
+                np.asarray(a2_copy.numbers, dtype=int),
+                n_slab=n_slab_i,
+                n_core=int(n_core_mobile),
+                mic_cell=mic_cell,
+                mic_pbc=mic_pbc,
+            )
+            if surface_pbc:
+                pos_j = _align_product_for_neb(
+                    a1_copy,
+                    pos_j,
+                    n_slab=n_slab_i,
+                    surface_cell_remap=surface_cell_remap,
+                    surface_lattice_rotation=surface_lattice_rotation,
+                    surface_max_lattice_shift=neb_surface_max_lattice_shift,
+                    n_core_mobile=n_core_mobile,
+                )
+            a2_copy.set_positions(pos_j, apply_constraint=False)
+            a2_copy.numbers = nums_j
             _match_adsorbate_block(
                 a1_copy,
                 a2_copy,
-                int(n_slab),
+                n_slab_i,
                 int(n_core_mobile),
                 int(n_adsorbate_mobile),
                 mic_cell=mic_cell,
                 mic_pbc=mic_pbc,
                 adsorbate_fragment_lengths=adsorbate_fragment_lengths,
             )
+        else:
+            pos_j = _reorder_product_to_match_reactant(
+                a1_copy,
+                a2_copy,
+                n_slab=n_slab_i,
+                n_core_mobile=n_core_mobile,
+                n_adsorbate_mobile=n_adsorbate_mobile,
+                adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+                match_adsorbate=True,
+            )
+            pos_j = _align_product_for_neb(
+                a1_copy,
+                pos_j,
+                n_slab=n_slab_i,
+                surface_cell_remap=surface_cell_remap,
+                surface_lattice_rotation=surface_lattice_rotation,
+                surface_max_lattice_shift=neb_surface_max_lattice_shift,
+                n_core_mobile=n_core_mobile,
+            )
+            if not surface_pbc:
+                n_fit = (
+                    int(n_core_mobile)
+                    if n_core_mobile is not None and int(n_core_mobile) > 0
+                    else n_atom
+                )
+                pos_j, nums_j = _rematch_gas_core_and_kabsch(
+                    a1_copy,
+                    pos_j,
+                    np.asarray(a2_copy.numbers, dtype=int),
+                    n_core=n_fit,
+                )
+                a2_copy.numbers = nums_j
+            a2_copy.set_positions(pos_j, apply_constraint=False)
         # Keep species order consistent with reactant for downstream NEB.
         a2_copy.numbers = a1_copy.numbers.copy()
-        if _requires_surface_pbc_alignment(a1_copy, n_slab=n_slab):
+        if surface_pbc:
             a2_copy.set_cell(a1_copy.cell)
             a2_copy.pbc = a1_copy.pbc
 

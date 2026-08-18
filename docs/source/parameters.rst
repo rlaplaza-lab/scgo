@@ -428,10 +428,10 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
    * - ``pair_core_rms_max``
      - see **Pair selection** below
      - Hard max core RMS (Å) for adsorbate+core pairing. Gas cores are
-       fingerprint-matched then Kabsch-aligned (including 1-atom translation),
-       then spatially rematched in the overlaid frame so reflected fingerprint
-       labelings cannot inflate RMS. Slab cores stay in the
-       surface frame. NEB endpoint overlay uses the same operator.
+       fingerprint-matched, Kabsch-aligned (including 1-atom translation),
+       then spatially rematched so reflected fingerprint labelings cannot
+       inflate RMS. Slab cores stay in the surface frame. Pair selection and
+       NEB endpoint prep (including bare gas clusters) share this overlay.
    * - ``pair_score_*``
      - see **Pair selection** below
      - Soft ranking scales and weights (gap / distinct / mismatch / core)

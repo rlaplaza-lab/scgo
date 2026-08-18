@@ -6,6 +6,10 @@ from ase.build import fcc111
 import scgo.param_presets as param_presets_module
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_NEB_TANGENT_METHOD
 from scgo.exceptions import SCGOValidationError
+from scgo.pair_selection_defaults import (
+    DEFAULT_PAIR_CORE_RMS_MAX_GAS,
+    DEFAULT_PAIR_CORE_RMS_MAX_SURFACE,
+)
 from scgo.param_presets import (
     TS_DEFAULTS_BY_SYSTEM_TYPE,
     get_default_params,
@@ -215,6 +219,31 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert surf["pair_score_gap_center"] == pytest.approx(0.55)
     assert surf["neb_surface_cell_remap"] is True
     assert surf["neb_surface_lattice_rotation"] is False
+
+
+@pytest.mark.parametrize(
+    ("system_type", "expected"),
+    [
+        ("gas_cluster", None),
+        ("surface_cluster", None),
+        ("surface", None),
+        ("gas_cluster_adsorbate", DEFAULT_PAIR_CORE_RMS_MAX_GAS),
+        ("surface_cluster_adsorbate", DEFAULT_PAIR_CORE_RMS_MAX_SURFACE),
+        ("surface_adsorbate", DEFAULT_PAIR_CORE_RMS_MAX_SURFACE),
+    ],
+)
+def test_pair_core_rms_max_default_matches_regime(system_type, expected):
+    """Core-RMS hard gate is set only for adsorbate+core regimes (gas 1.5, surface 2.0).
+
+    ``surface_adsorbate`` has no metal core, so the gate is unused at runtime
+    (``n_core_mobile == 0``), but the regime default stays the surface-adsorbate
+    value from :func:`~scgo.pair_selection_defaults.pair_selection_param_defaults`.
+    """
+    ts = _ts_search_params_for(system_type)
+    if expected is None:
+        assert ts["pair_core_rms_max"] is None
+    else:
+        assert ts["pair_core_rms_max"] == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))
