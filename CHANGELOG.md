@@ -206,6 +206,9 @@
 
 ### Fixed
 
+- Gas-phase TS pair selection Kabsch-aligns cores before the core-RMS gate,
+  matching adsorbate-hop scoring, so rotated same-core site hops are not
+  dropped (Kaggle ``gas_cluster_adsorbate`` empty-pair failure).
 - ``update_mutation_weights`` always maps operator names through
   ``_effective_operator_weight``, so partitioned ``in_plane_slide`` /
   ``_core`` / ``_ads`` variants share the table budget 70/15/15 instead of

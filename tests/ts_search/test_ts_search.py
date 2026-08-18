@@ -26,6 +26,7 @@ from scgo.ts_search.transition_state import (
     save_neb_result,
 )
 from scgo.ts_search.transition_state_io import (
+    _core_rms_displacement,
     adsorbate_pair_select_cap,
     resolve_ts_pair_select_cap,
     select_structure_pairs,
@@ -1058,8 +1059,6 @@ def test_select_structure_pairs_max_endpoint_mismatch_hard_gate(monkeypatch):
 
 def test_core_rms_displacement_is_permutation_invariant() -> None:
     """Same-element core reorder must not inflate core RMS after spatial match."""
-    from scgo.ts_search.transition_state_io import _core_rms_displacement
-
     atoms_i = Atoms(
         "Pt2OH",
         positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.2, 0.0, 1.5], [1.2, 0.0, 2.5]],
@@ -1069,6 +1068,23 @@ def test_core_rms_displacement_is_permutation_invariant() -> None:
         positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.3, 0.0, 1.5], [1.3, 0.0, 2.5]],
     )
     rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=2, use_mic=False)
+    assert rms < 0.05
+
+
+def test_core_rms_displacement_is_rotation_invariant_for_gas() -> None:
+    """Gas cores Kabsch-align so overall rotation does not inflate RMS."""
+    core = _pt5_tbp_core()
+    atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    rot = np.array(
+        [
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    atoms_j = atoms_i.copy()
+    atoms_j.positions = atoms_j.positions @ rot.T
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=5, use_mic=False)
     assert rms < 0.05
 
 
@@ -1149,6 +1165,37 @@ def test_select_structure_pairs_keeps_same_core_oh_site_hop() -> None:
     core = _pt5_tbp_core()
     axial = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
     equatorial = _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
+    minima = [(-260.0, axial), (-259.7, equatorial)]
+    pairs = select_structure_pairs(
+        minima,
+        max_pairs=1,
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=5,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
+def test_select_structure_pairs_keeps_rotated_same_core_oh_site_hop() -> None:
+    """Rotated identical Pt5 cores with an OH site hop must remain pairable.
+
+    Without Kabsch on the core-RMS gate, a rigid rotation inflates Cartesian RMS
+    past ``pair_core_rms_max`` and empties the gas-adsorbate NEB pool.
+    """
+    core = _pt5_tbp_core()
+    axial = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    equatorial = _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
+    rot = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    equatorial = equatorial.copy()
+    equatorial.positions = equatorial.positions @ rot.T
     minima = [(-260.0, axial), (-259.7, equatorial)]
     pairs = select_structure_pairs(
         minima,

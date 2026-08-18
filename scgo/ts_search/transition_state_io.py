@@ -310,6 +310,12 @@ def _core_rms_displacement(
     Same-element core permutations (common from GA) are resolved with a
     Hungarian spatial match on copies so the gate is order-invariant. Minima
     atoms are never mutated.
+
+    Gas-phase cores (``n_slab == 0``, two or more atoms) are then Kabsch-aligned
+    so overall rotation/translation does not inflate RMS — the same rigid
+    alignment ``_adsorbate_max_displacement`` already applies before measuring
+    the hop. Slab cores stay in the lab frame: orientation relative to the
+    surface is physically meaningful.
     """
     if n_core <= 0:
         return 0.0
@@ -332,6 +338,19 @@ def _core_rms_displacement(
         mic_pbc=mic_pbc,
         method="spatial",
     )
+    if n_slab == 0 and n_core >= 2:
+        core_ref = Atoms(
+            numbers=np.asarray(atoms_i.numbers[i0:i1], dtype=int),
+            positions=pos_i,
+            cell=atoms_i.cell,
+            pbc=atoms_i.pbc,
+        )
+        matched_pos = _align_product_kabsch_to_reactant(
+            core_ref,
+            np.asarray(matched_pos, dtype=float),
+            n_slab=0,
+            n_core_mobile=n_core,
+        )
     dlt = matched_pos - pos_i
     if mic_cell is not None and mic_pbc is not None:
         # ``find_mic`` is required for skewed cells; fractional rounding is wrong.

@@ -427,7 +427,8 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
        before NEB.
    * - ``pair_core_rms_max``
      - see **Pair selection** below
-     - Hard max core RMS (Å) for adsorbate+core pairing
+     - Hard max core RMS (Å) for adsorbate+core pairing. Gas cores are
+       Kabsch-aligned first so overall rotation does not inflate RMS.
    * - ``pair_score_*``
      - see **Pair selection** below
      - Soft ranking scales and weights (gap / distinct / mismatch / core)
@@ -597,7 +598,8 @@ Meaning of each soft term:
 - ``pair_score_mismatch_scale`` + ``w_mismatch``: bare systems tolerate some
   fingerprint difference; adsorbate systems prefer small core difference.
 - ``pair_score_core_rms_scale`` + ``w_core``: adsorbate+core only; prefer small
-  core RMS after matching.
+  core RMS after matching. Gas cores are Kabsch-aligned (slab cores stay in
+  the lab frame).
 
 Override any of these in ``ts_params``. If the adsorbate pair pool is empty,
 logs include skip counts (energy gap, mismatch, core RMS, and so on).
