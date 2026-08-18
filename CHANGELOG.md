@@ -208,9 +208,11 @@
 
 - Gas-phase TS pair selection and NEB endpoint prep share one core overlay:
   fingerprint correspondence then Kabsch (translation-only for a single core
-  atom). Adsorbate matching runs after that overlay so rotated same-core site
-  hops are not dropped and fragment COMs are assigned in the aligned frame.
-  Slab cores stay in the surface lab frame.
+  atom), then a spatial rematch in the overlaid frame so reflected fingerprint
+  labelings on near-symmetric cores cannot inflate Cartesian RMS past
+  ``pair_core_rms_max``. Adsorbate matching runs after that overlay so rotated
+  same-core site hops are not dropped and fragment COMs are assigned in the
+  aligned frame. Slab cores stay in the surface lab frame.
 - Surface PBC alignment is used only for a slab prefix or slab-like 2D
   periodicity. Gas vacuum boxes with ``pbc=True`` and ``n_slab == 0`` still
   3D-Kabsch.

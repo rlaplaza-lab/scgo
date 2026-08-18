@@ -41,6 +41,7 @@ from .transition_state import (
     _align_product_kabsch_to_reactant,
     _core_block_match_method,
     _permute_atoms_block_to_match,
+    _spatial_refine_gas_core_overlay,
     calculate_structure_similarity,
     minima_provenance_dict,
 )
@@ -237,9 +238,10 @@ def _overlay_product_core(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Permute product core onto reactant; Kabsch-overlay gas mobile atoms.
 
-    Gas: fingerprint correspondence, then core-derived rigid motion (translation
-    if ``n_core == 1``). Slab: spatial match in the lab frame. Adsorbate atoms
-    ride the core transform and are not permuted here.
+    Gas: fingerprint correspondence, core-derived rigid motion (translation if
+    ``n_core == 1``), then a spatial rematch in the overlaid frame so reflected
+    fingerprint labelings cannot inflate RMS. Slab: spatial match in the lab
+    frame. Adsorbate atoms ride the core transform and are not permuted here.
     """
     pos_j = np.asarray(pos_j, dtype=float).copy()
     nums_j = np.asarray(nums_j, dtype=int).copy()
@@ -274,6 +276,9 @@ def _overlay_product_core(
         pos_j = _align_product_kabsch_to_reactant(
             unconstrained, pos_j, n_slab=0, n_core_mobile=n_core
         )
+        pos_j, nums_j = _spatial_refine_gas_core_overlay(
+            unconstrained, pos_j, nums_j, n_core=n_core
+        )
     return pos_j, nums_j
 
 
@@ -287,9 +292,10 @@ def _adsorbate_max_displacement(
 ) -> float:
     """Max adsorbate-atom displacement after overlaying the metal core.
 
-    Layout is ``[slab | core | adsorbate]``. Overlay (fingerprint+Kabsch in gas,
-    spatial in the slab frame) runs first; then adsorbate atoms are matched so
-    a site hop is not mixed with rigid reorientation. Minima are not mutated.
+    Layout is ``[slab | core | adsorbate]``. Overlay (fingerprint+Kabsch, then a
+    spatial rematch in the gas frame; spatial in the slab frame) runs first;
+    then adsorbate atoms are matched so a site hop is not mixed with rigid
+    reorientation. Minima are not mutated.
     """
     n_slab = max(0, int(n_slab))
     n_core = max(0, int(n_core))
@@ -347,8 +353,8 @@ def _core_rms_displacement(
 ) -> float:
     """RMS Cartesian displacement of the core after overlaying the product core.
 
-    Minima are not mutated. Gas cores overlay by fingerprint + Kabsch; slab
-    cores stay in the lab frame.
+    Minima are not mutated. Gas cores overlay by fingerprint + Kabsch + a
+    spatial rematch in the overlaid frame; slab cores stay in the lab frame.
     """
     n_core = max(0, int(n_core))
     if n_core <= 0:

@@ -1277,6 +1277,44 @@ def test_select_structure_pairs_keeps_rotated_same_core_oh_site_hop() -> None:
     assert pairs == [(0, 1)]
 
 
+def test_core_rms_displacement_recovers_reflected_tbp_labeling() -> None:
+    """Fingerprint-reflected TBP equatorials must still overlay after spatial refine.
+
+    Local-distance fingerprints cannot distinguish a proper rotation from a
+    reflected equatorial swap on Pt5 TBP. Proper Kabsch then leaves core RMS
+    ~2.8 Å (above ``pair_core_rms_max``). Spatial rematch in the overlaid frame
+    recovers the proper labeling.
+    """
+    core = _pt5_tbp_core()
+    atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    atoms_j = atoms_i.copy()
+    pos = atoms_j.positions.copy()
+    pos[3], pos[4] = pos[4].copy(), pos[3].copy()
+    atoms_j.positions = pos @ _cycle_axes_rotation().T
+    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=5, use_mic=False)
+    assert rms < 0.05
+
+
+def test_select_structure_pairs_keeps_reflected_tbp_oh_labeling() -> None:
+    """Reflected TBP equatorial labels plus an OH site hop must remain pairable."""
+    core = _pt5_tbp_core()
+    axial = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
+    equatorial = _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
+    pos = equatorial.positions.copy()
+    pos[3], pos[4] = pos[4].copy(), pos[3].copy()
+    equatorial.positions = pos @ _cycle_axes_rotation().T
+    pairs = select_structure_pairs(
+        [(-260.0, axial), (-259.7, equatorial)],
+        max_pairs=1,
+        energy_gap_threshold=0.75,
+        use_mic=False,
+        adsorbate_aware=True,
+        n_core_mobile=5,
+        max_endpoint_mismatch=1.25,
+    )
+    assert pairs == [(0, 1)]
+
+
 def test_select_structure_pairs_skips_distinct_core_isomers() -> None:
     """TBP vs square-pyramid cores still fail max_endpoint_mismatch and/or core RMS."""
     tbp = _attach_oh(

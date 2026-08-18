@@ -809,6 +809,72 @@ def test_interpolate_path_matches_oh_fragments_after_gas_rotation() -> None:
     np.testing.assert_allclose(aligned, ref, atol=1e-6)
 
 
+def test_interpolate_path_recovers_reflected_tbp_core_labeling() -> None:
+    """Spatial rematch after Kabsch overlays a reflected TBP equatorial swap."""
+    r = 2.70
+    z = r * np.sqrt(6.0) / 3.0
+    core = np.array(
+        [
+            [0.0, 0.0, z],
+            [0.0, 0.0, -z],
+            [r, 0.0, 0.0],
+            [-r / 2.0, r * np.sqrt(3.0) / 2.0, 0.0],
+            [-r / 2.0, -r * np.sqrt(3.0) / 2.0, 0.0],
+        ]
+    )
+    core -= core.mean(axis=0)
+    oh = np.array(
+        [core[0] + np.array([0.0, 0.0, 1.8]), core[0] + np.array([0.0, 0.0, 2.76])]
+    )
+    react_pos = np.vstack([core, oh])
+    rot = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    prod_pos = react_pos.copy()
+    prod_pos[3], prod_pos[4] = prod_pos[4].copy(), prod_pos[3].copy()
+    prod_pos = prod_pos @ rot.T
+    react = Atoms(
+        symbols=["Pt"] * 5 + ["O", "H"],
+        positions=react_pos,
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    prod = Atoms(
+        symbols=["Pt"] * 5 + ["O", "H"],
+        positions=prod_pos,
+        cell=react.cell,
+        pbc=False,
+    )
+    images = interpolate_path(
+        react,
+        prod,
+        n_images=2,
+        method="linear",
+        mic=False,
+        align_endpoints=True,
+        system_type="gas_cluster_adsorbate",
+        n_slab=0,
+        n_core_mobile=5,
+        n_adsorbate_mobile=2,
+    )
+    core_rms = float(
+        np.sqrt(
+            np.mean(
+                np.sum(
+                    (images[-1].get_positions()[:5] - images[0].get_positions()[:5])
+                    ** 2,
+                    axis=1,
+                )
+            )
+        )
+    )
+    assert core_rms < 0.05
+
+
 def test_core_anchored_kabsch_ignores_adsorbate_drag() -> None:
     """Kabsch fit on core should not be pulled by a large adsorbate hop."""
     react = Atoms(

@@ -364,6 +364,50 @@ def _core_block_match_method(n_slab: int) -> str:
     return "spatial" if int(n_slab) > 0 else "fingerprint"
 
 
+def _spatial_refine_gas_core_overlay(
+    reactant: Atoms,
+    pos_j: np.ndarray,
+    nums_j: np.ndarray,
+    *,
+    n_core: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rematch gas-core labels in the overlaid frame and re-Kabsch.
+
+    Local-distance fingerprints are chirality-blind, so Hungarian can assign a
+    reflected labeling on near-symmetric cores (e.g. Pt5 TBP equatorials).
+    Proper Kabsch cannot overlay that correspondence, and Cartesian core RMS
+    stays above ``pair_core_rms_max``. Spatial matching after the coarse overlay
+    recovers the RMS-minimizing proper labeling; a second Kabsch reapplies the
+    core-derived rigid motion to all mobile atoms.
+    """
+    n_core = max(0, int(n_core))
+    pos_j = np.asarray(pos_j, dtype=float).copy()
+    nums_j = np.asarray(nums_j, dtype=int).copy()
+    if n_core <= 0 or n_core > len(pos_j) or n_core > len(reactant):
+        return pos_j, nums_j
+    core_i = Atoms(
+        numbers=np.asarray(reactant.numbers[:n_core], dtype=int),
+        positions=np.asarray(reactant.get_positions()[:n_core], dtype=float),
+        cell=reactant.cell,
+        pbc=reactant.pbc,
+    )
+    core_j = Atoms(
+        numbers=nums_j[:n_core],
+        positions=pos_j[:n_core],
+        cell=reactant.cell,
+        pbc=reactant.pbc,
+    )
+    refined_pos, refined_nums = _permute_atoms_block_to_match(
+        core_i, core_j, method="spatial"
+    )
+    pos_j[:n_core] = refined_pos
+    nums_j[:n_core] = refined_nums
+    pos_j = _align_product_kabsch_to_reactant(
+        reactant, pos_j, n_slab=0, n_core_mobile=n_core
+    )
+    return pos_j, nums_j
+
+
 def _permute_atoms_block_to_match(
     a1_block: Atoms,
     a2_block: Atoms,
@@ -1238,8 +1282,9 @@ def interpolate_path(
     in-plane rotation evaluated jointly with each shift, with anchors reset to
     the reactant slab frame (no independent mobile-only rotation). Gas-phase
     clusters (no slab prefix, including a 3D vacuum box with ``pbc=True``) use
-    3D Kabsch after core correspondence; adsorbate blocks are matched in that
-    overlaid frame.
+    3D Kabsch after core correspondence, with a spatial rematch in the overlaid
+    frame so reflected fingerprint labelings cannot inflate core RMS; adsorbate
+    blocks are matched in that overlaid frame.
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
 
@@ -1294,6 +1339,19 @@ def interpolate_path(
             surface_max_lattice_shift=neb_surface_max_lattice_shift,
             n_core_mobile=n_core_mobile,
         )
+        if (
+            use_blocks
+            and int(n_slab) == 0
+            and n_core_mobile is not None
+            and int(n_core_mobile) > 0
+        ):
+            aligned, refined_nums = _spatial_refine_gas_core_overlay(
+                a1_copy,
+                aligned,
+                np.asarray(a2_copy.numbers, dtype=int),
+                n_core=int(n_core_mobile),
+            )
+            a2_copy.numbers = refined_nums
         a2_copy.set_positions(aligned, apply_constraint=False)
         if use_blocks:
             mic_cell, mic_pbc = _mic_matching_context(a1_copy, n_slab=n_slab)
