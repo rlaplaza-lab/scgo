@@ -235,6 +235,8 @@ def coerce_ts_params_to_runner_kwargs(
     generic_defaults = {
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+        "dedupe_ts": True,
+        "ts_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }
     for key, def_val in generic_defaults.items():
         kwargs[key] = ts_params.get(key, def_val)

@@ -870,7 +870,7 @@ def test_run_trials_passes_hessian_params_to_is_true_minimum(
 
     monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
     monkeypatch.setattr(
-        main_mod, "filter_unique_minima", lambda candidates, **_: candidates
+        main_mod, "filter_unique_minima", lambda candidates, *_args, **_kw: candidates
     )
 
     outdir = str(tmp_path / "searches")
@@ -896,38 +896,79 @@ def test_run_trials_passes_hessian_params_to_is_true_minimum(
     assert captured.get("imag_freq_threshold") == 25.0
 
 
-def test_run_trials_dedupe_uses_search_mobile_count(tmp_path, monkeypatch, rng):
-    """Dedupe n_top must come from search_mobile_count when supplied.
-
-    For slab search the composition (full slab) is large while the mobile
-    region is small/empty; using ``len(composition)`` would collapse distinct
-    mobile-top minima. ``search_mobile_count`` carries the true trailing-mobile
-    atom count the comparator compares on.
-    """
-    from ase.calculators.emt import EMT
-
+def test_run_trials_dedupe(tmp_path, monkeypatch, rng):
     captured: dict[str, object] = {}
 
     def _fake_scgo(*_args, **_kwargs):
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
         atoms.calc = EMT()
-        energy = float(atoms.get_potential_energy())
-        return [(energy, atoms)]
+        return [(float(atoms.get_potential_energy()), atoms)]
 
     monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
 
-    def _spy_filter(candidates, *, n_top, **kwargs):
+    def _spy_filter(
+        candidates,
+        energy_tolerance=None,
+        *,
+        n_top,
+        comparator_tol=None,
+        comparator_pair_cor_max=None,
+        **kwargs,
+    ):
+        captured["energy_tolerance"] = energy_tolerance
+        captured["comparator_tol"] = comparator_tol
+        captured["comparator_pair_cor_max"] = comparator_pair_cor_max
         captured["n_top"] = n_top
         return candidates
 
     monkeypatch.setattr(main_mod, "filter_unique_minima", _spy_filter)
 
-    outdir = str(tmp_path / "searches")
     run_trials(
         composition=["Pt", "Pt"],
+        global_optimizer="ga",
+        global_optimizer_kwargs={
+            "niter": 1,
+            "system_type": "gas_cluster",
+            "energy_tolerance": 0.05,
+            "comparator_tol": 0.02,
+            "comparator_pair_cor_max": 0.4,
+            "comparator_n_top": 1,
+        },
+        output_dir=str(tmp_path / "searches"),
+        calculator_for_global_optimization=EMT(),
+        validate_with_hessian=False,
+        rng=rng,
+        clean=True,
+        search_mobile_count=2,
+    )
+
+    assert captured["energy_tolerance"] == pytest.approx(0.05)
+    assert captured["comparator_tol"] == pytest.approx(0.02)
+    assert captured["comparator_pair_cor_max"] == pytest.approx(0.4)
+    assert captured["n_top"] == 1
+
+
+def test_run_trials_dedupe_n_top_without_comparator_override(tmp_path, monkeypatch, rng):
+    captured: dict[str, object] = {}
+
+    def _fake_scgo(*_args, **_kwargs):
+        atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
+        atoms.calc = EMT()
+        return [(float(atoms.get_potential_energy()), atoms)]
+
+    monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
+
+    def _spy_filter(candidates, _energy_tolerance=None, *, n_top, **kwargs):
+        captured["n_top"] = n_top
+        return candidates
+
+    monkeypatch.setattr(main_mod, "filter_unique_minima", _spy_filter)
+
+    run_trials(
+        composition=["Pt", "Pt", "Pt"],
         global_optimizer="bh",
         global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-        output_dir=outdir,
+        output_dir=str(tmp_path / "searches"),
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,
@@ -938,32 +979,27 @@ def test_run_trials_dedupe_uses_search_mobile_count(tmp_path, monkeypatch, rng):
     assert captured["n_top"] == 3
 
 
-def test_run_trials_dedupe_falls_back_to_composition(tmp_path, monkeypatch, rng):
-    """Without search_mobile_count the dedupe n_top stays len(composition)."""
-    from ase.calculators.emt import EMT
-
+def test_run_trials_dedupe_n_top_falls_back_to_composition(tmp_path, monkeypatch, rng):
     captured: dict[str, object] = {}
 
     def _fake_scgo(*_args, **_kwargs):
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
         atoms.calc = EMT()
-        energy = float(atoms.get_potential_energy())
-        return [(energy, atoms)]
+        return [(float(atoms.get_potential_energy()), atoms)]
 
     monkeypatch.setattr(main_mod, "scgo", _fake_scgo)
 
-    def _spy_filter(candidates, *, n_top, **kwargs):
+    def _spy_filter(candidates, _energy_tolerance=None, *, n_top, **kwargs):
         captured["n_top"] = n_top
         return candidates
 
     monkeypatch.setattr(main_mod, "filter_unique_minima", _spy_filter)
 
-    outdir = str(tmp_path / "searches")
     run_trials(
         composition=["Pt", "Pt", "Pt"],
         global_optimizer="bh",
         global_optimizer_kwargs={"niter": 1, "system_type": "gas_cluster"},
-        output_dir=outdir,
+        output_dir=str(tmp_path / "searches"),
         calculator_for_global_optimization=EMT(),
         validate_with_hessian=False,
         rng=rng,

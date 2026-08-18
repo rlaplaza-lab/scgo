@@ -28,6 +28,7 @@ from scgo.algorithms import bh_go, ga_go, simple_go
 from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
+from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.database import SCGODatabaseManager
 from scgo.exceptions import (
     SCGODatabaseError,
@@ -62,6 +63,7 @@ from scgo.system_types import (
     validate_minimum_structure,
     validate_system_type_settings,
 )
+from scgo.utils.comparators import uniqueness_settings_from_mapping
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
     adsorbate_primary_cell_shift,
@@ -983,15 +985,24 @@ def run_trials(
             "system_type must be set in global_optimizer_kwargs for minima dedupe."
         )
     dedupe_mic = resolve_structure_mic(system_type_for_mic, surface_cfg)
-    dedupe_n_top = (
-        int(search_mobile_count)
-        if search_mobile_count is not None
-        else len(composition)
-    )
+    uniqueness = uniqueness_settings_from_mapping(global_optimizer_kwargs)
+    energy_tol = global_optimizer_kwargs.get("energy_tolerance")
+    if energy_tol is None:
+        energy_tol = DEFAULT_ENERGY_TOLERANCE
+    comparator_n_top = global_optimizer_kwargs.get("comparator_n_top")
+    if comparator_n_top is not None:
+        dedupe_n_top = int(comparator_n_top)
+    elif search_mobile_count is not None:
+        dedupe_n_top = int(search_mobile_count)
+    else:
+        dedupe_n_top = len(composition)
     unique_candidates = filter_unique_minima(
         all_minima_for_filtering,
+        float(energy_tol),
         n_top=dedupe_n_top,
         mic=dedupe_mic,
+        comparator_tol=uniqueness.comparator_tol,
+        comparator_pair_cor_max=uniqueness.comparator_pair_cor_max,
     )
     logger.info("Found %s unique candidates", len(unique_candidates))
 

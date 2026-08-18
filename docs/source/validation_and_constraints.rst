@@ -96,9 +96,9 @@ Every candidate minimum goes through
 
 After global optimization,
 :func:`~scgo.minima_search.core.run_trials` applies the same structural gate to
-deduplicated unique candidates before the Hessian/vibration check. Surface
-candidates are checked against the prepared slab search config when the slab is
-the search target.
+deduplicated unique candidates before the Hessian/vibration check. See
+:doc:`/uniqueness`. Surface candidates are checked against the prepared slab
+search config when the slab is the search target.
 
 The connectivity factor resolves the same way at every gate: explicit
 ``connectivity_factor``, then ``ClusterAdsorbateConfig``, then

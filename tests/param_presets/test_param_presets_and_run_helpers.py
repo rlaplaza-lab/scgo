@@ -7,6 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from scgo.constants import (
+    DEFAULT_COMPARATOR_TOL,
+    DEFAULT_ENERGY_TOLERANCE,
+    DEFAULT_PAIR_COR_MAX,
+)
 from scgo.exceptions import SCGOValidationError
 from scgo.param_presets import (
     get_default_params,
@@ -58,6 +63,16 @@ def test_get_default_params_structure():
     }
     for algo, slot in params["optimizer_params"].items():
         assert identity_keys.isdisjoint(slot), f"{algo} slot has identity keys"
+
+
+def test_go_slots_share_uniqueness_defaults():
+    params = get_default_params()
+    for algo in ("simple", "bh", "ga"):
+        slot = params["optimizer_params"][algo]
+        assert slot["energy_tolerance"] == pytest.approx(DEFAULT_ENERGY_TOLERANCE)
+        assert slot["comparator_tol"] == pytest.approx(DEFAULT_COMPARATOR_TOL)
+        assert slot["comparator_pair_cor_max"] == pytest.approx(DEFAULT_PAIR_COR_MAX)
+        assert slot["comparator_n_top"] is None
 
 
 def test_torchsim_ga_params_stamps_surface_config_top_level_only():

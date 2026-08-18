@@ -62,7 +62,11 @@ from scgo.calculators.torchsim_helpers import (
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import prepare_atoms_for_local_relax
 from scgo.cluster_adsorbate.rigid import enforce_frozen_adsorbate_geometry
-from scgo.constants import DEFAULT_ENERGY_TOLERANCE
+from scgo.constants import (
+    DEFAULT_COMPARATOR_TOL,
+    DEFAULT_ENERGY_TOLERANCE,
+    DEFAULT_PAIR_COR_MAX,
+)
 from scgo.database import (
     RetryConfig,
     close_data_connection,
@@ -88,6 +92,7 @@ from scgo.system_types import (
     uses_surface,
     validate_minimum_structure,
 )
+from scgo.utils.comparators import UniquenessSettings
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
 )
@@ -859,6 +864,9 @@ def ga_go(
     niter_local_relaxation: int = 250,
     optimizer: type[Optimizer] = FIRE,
     energy_tolerance: float = DEFAULT_ENERGY_TOLERANCE,
+    comparator_tol: float = DEFAULT_COMPARATOR_TOL,
+    comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
+    comparator_n_top: int | None = None,
     mutation_probability: float = 0.4,
     population_size: int = 10,
     offspring_fraction: float = 0.5,
@@ -1191,17 +1199,27 @@ def ga_go(
     )
 
     comp_mic = resolve_structure_mic(system_type, surface_config)
+    geometry = UniquenessSettings(
+        comparator_tol=comparator_tol,
+        comparator_pair_cor_max=comparator_pair_cor_max,
+    )
+    uniqueness_n_top = (
+        int(comparator_n_top) if comparator_n_top is not None else n_to_optimize
+    )
     diversity_scorer = setup_diversity_scorer(
         fitness_strategy=fitness_strategy,
         diversity_reference_db=diversity_reference_db,
         composition=search_composition,
-        n_to_optimize=n_to_optimize,
+        n_to_optimize=uniqueness_n_top,
         diversity_max_references=diversity_max_references,
         logger=logger,
         base_dir=output_dir,
         mic=comp_mic,
+        uniqueness=geometry,
     )
-    comp = create_structure_comparator(n_to_optimize, energy_tolerance, mic=comp_mic)
+    comp = create_structure_comparator(
+        uniqueness_n_top, energy_tolerance, geometry, mic=comp_mic
+    )
 
     t0_batch_build = perf_counter()
     if surface_mode:

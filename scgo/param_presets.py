@@ -266,6 +266,10 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "fmax": 0.05,
                 "niter": 1,
                 "niter_local_relaxation": "auto",
+                "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+                "comparator_tol": DEFAULT_COMPARATOR_TOL,
+                "comparator_pair_cor_max": DEFAULT_PAIR_COR_MAX,
+                "comparator_n_top": None,
             },
             "bh": {
                 "optimizer": "FIRE",
@@ -296,6 +300,9 @@ def _get_default_params_template() -> GLOptimizerParams:
                 "fmax": 0.05,
                 "vacuum": 10.0,
                 "energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+                "comparator_tol": DEFAULT_COMPARATOR_TOL,
+                "comparator_pair_cor_max": DEFAULT_PAIR_COR_MAX,
+                "comparator_n_top": None,
                 "use_adaptive_mutations": True,
                 "stagnation_trigger": 4,
                 "stagnation_full_trigger": 8,
@@ -864,6 +871,8 @@ def get_ts_search_params(
         "use_parallel_neb": True,
         "dedupe_minima": True,
         "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
+        "dedupe_ts": True,
+        "ts_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }
     params.update(
         pair_selection_param_defaults(

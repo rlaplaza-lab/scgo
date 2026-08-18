@@ -1210,6 +1210,8 @@ def run_transition_state_search(
             str(ts_results_root),
             composition,
             energy_tolerance=ts_energy_tolerance,
+            similarity_tolerance=similarity_tolerance,
+            similarity_pair_cor_max=similarity_pair_cor_max,
             minima=minima,
             minima_base_dir=str(minima_dir),
             run_context=run_context,

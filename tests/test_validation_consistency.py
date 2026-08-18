@@ -134,7 +134,7 @@ def test_run_trials_final_gate_drops_fragmented_candidate(
 
     injected = [(0.0, connected), (5.0, disconnected)]
 
-    def _fake_filter(unfiltered, **kwargs):
+    def _fake_filter(unfiltered, *_args, **kwargs):
         return list(injected)
 
     monkeypatch.setattr("scgo.minima_search.core.filter_unique_minima", _fake_filter)

@@ -74,6 +74,10 @@
 
 ### Changed
 
+- GO uniqueness is energy **and** mobile geometry on every optimizer path; GA
+  in-search no longer ORs ASE comparators. Shared knobs on ``simple`` / ``bh`` /
+  ``ga``; see ``docs/source/uniqueness.rst``. TS pair gating and final
+  unique-TS clustering share ``similarity_*`` and ``ts_energy_tolerance``.
 - TorchInductor ``filelock`` acquire/release DEBUG spam is captured during
   ``configure_logging`` and collapsed into one INFO summary
   (``TorchInductor: N compile-cache lock event(s)``) when any events occurred;

@@ -745,13 +745,11 @@ def filter_unique_minima(
         energy_tolerance: The energy difference (in eV) below which two
                           structures are considered potential duplicates (if their
                           geometries also match). Defaults to `DEFAULT_ENERGY_TOLERANCE`.
-        n_top: Number of trailing atoms to compare (same as GA ``n_to_optimize``).
+        n_top: Trailing atoms to compare (system-type search-mobile count).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC),
              matching :func:`scgo.algorithms.ga_common.create_structure_comparator`.
-        comparator_tol: Cumulative structural difference tolerance passed to
-             :class:`~scgo.utils.comparators.PureInteratomicDistanceComparator`.
-        comparator_pair_cor_max: Maximum single-distance difference tolerance
-             passed to the comparator.
+        comparator_tol: Cumulative structural difference tolerance.
+        comparator_pair_cor_max: Maximum single-distance difference tolerance.
 
     Returns:
         A new list of (energy, Atoms) tuples containing only the unique
@@ -776,7 +774,6 @@ def filter_unique_minima(
         n_top=n_top,
         tol=comparator_tol,
         pair_cor_max=comparator_pair_cor_max,
-        dE=energy_tolerance,
         mic=mic,
     )
 

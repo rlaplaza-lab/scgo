@@ -28,7 +28,7 @@ from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_NEB_TANGENT_METHOD,
-    DEFAULT_PAIR_COR_MAX,
+    DEFAULT_TS_PAIR_COR_MAX,
 )
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.metadata.atoms import get_tag, set_tags
@@ -155,7 +155,7 @@ def calculate_structure_similarity(
     atoms1: Atoms,
     atoms2: Atoms,
     tolerance: float = DEFAULT_COMPARATOR_TOL,
-    pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
+    pair_cor_max: float = DEFAULT_TS_PAIR_COR_MAX,
     *,
     ignore_fixed_atoms: bool = True,
     use_mic: bool = False,

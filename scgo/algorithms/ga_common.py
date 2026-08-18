@@ -17,11 +17,6 @@ from ase.calculators.calculator import Calculator
 from ase.constraints import FixAtoms as ASEFixAtoms
 from ase.constraints import FixBondLengths as ASEFixBondLengths
 from ase_ga.offspring_creator import OperationSelector
-from ase_ga.standard_comparators import (
-    InteratomicDistanceComparator,
-    RawScoreComparator,
-    SequentialComparator,
-)
 from ase_ga.startgenerator import StartGenerator
 from ase_ga.utilities import get_all_atom_types
 from numpy.random import Generator
@@ -51,11 +46,6 @@ from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster_batch,
 )
 from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
-from scgo.constants import (
-    DEFAULT_COMPARATOR_TOL,
-    DEFAULT_PAIR_COR_CUM_DIFF,
-    DEFAULT_PAIR_COR_MAX,
-)
 
 # Prefer tag reader for raw_score and other fields
 from scgo.database import SCGODatabaseManager
@@ -87,7 +77,11 @@ from scgo.system_types import (
     validate_composition_against_adsorbate,
     validate_minimum_structure,
 )
-from scgo.utils.comparators import PureInteratomicDistanceComparator
+from scgo.utils.comparators import (
+    EnergyAndStructureComparator,
+    UniquenessSettings,
+    create_geometry_comparator,
+)
 from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
@@ -1481,33 +1475,13 @@ def update_mutation_weights(
 def create_structure_comparator(
     n_atoms: int,
     energy_tolerance: float,
+    settings: UniquenessSettings | None = None,
     *,
     mic: bool = False,
-) -> SequentialComparator:
-    """Create a SequentialComparator for structure duplicate detection.
-
-    This is the shared comparator factory used by both GA population management
-    and run-level filtering to ensure consistent duplicate detection criteria.
-
-    Args:
-        n_atoms: Number of trailing (mobile) atoms to compare.
-        energy_tolerance: Energy difference tolerance for duplicate detection (eV).
-        mic: If True, use minimum-image convention for pairwise distances (slab PBC).
-
-    Returns:
-        Configured SequentialComparator.
-    """
-    return SequentialComparator(
-        methods=[
-            RawScoreComparator(dist=energy_tolerance),
-            InteratomicDistanceComparator(
-                n_top=n_atoms,
-                mic=mic,
-                dE=energy_tolerance,
-                pair_cor_cum_diff=DEFAULT_PAIR_COR_CUM_DIFF,
-            ),
-        ],
-    )
+) -> EnergyAndStructureComparator:
+    resolved = settings if settings is not None else UniquenessSettings()
+    geometry = create_geometry_comparator(n_top=n_atoms, mic=mic, settings=resolved)
+    return EnergyAndStructureComparator(energy_tolerance, geometry)
 
 
 def _as_fitness_strategy(fitness_strategy: str | FitnessStrategy) -> FitnessStrategy:
@@ -1570,6 +1544,7 @@ def setup_diversity_scorer(
     *,
     base_dir: str,
     mic: bool = False,
+    uniqueness: UniquenessSettings | None = None,
 ) -> DiversityScorer | None:
     """Setup DiversityScorer for diversity fitness strategy.
 
@@ -1582,6 +1557,7 @@ def setup_diversity_scorer(
         logger: Logger instance for logging messages.
         base_dir: Base directory for resolving reference DB glob patterns.
         mic: Whether the diversity comparator uses the minimum-image convention.
+        uniqueness: Geometry tolerances for diversity scoring (GO defaults when omitted).
 
     Returns:
         DiversityScorer instance when fitness_strategy is "diversity" and at least
@@ -1619,11 +1595,10 @@ def setup_diversity_scorer(
         )
         return None
 
-    comparator_for_diversity = PureInteratomicDistanceComparator(
+    comparator_for_diversity = create_geometry_comparator(
         n_top=n_to_optimize,
-        tol=DEFAULT_COMPARATOR_TOL,
-        pair_cor_max=DEFAULT_PAIR_COR_MAX,
         mic=mic,
+        settings=uniqueness,
     )
     return DiversityScorer(reference_structures, comparator_for_diversity)
 

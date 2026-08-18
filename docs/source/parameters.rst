@@ -215,6 +215,8 @@ The subsections below list **algorithm hyperparameters** only
 ``surface_config``, or adsorbate identity keys in these slots. See
 *Parameter resolution* above.
 
+Uniqueness knobs are documented in :doc:`/uniqueness`.
+
 **Simple** (``optimizer_params["simple"]``), used for 1-2 atom gas clusters only:
 
 .. list-table::
@@ -232,6 +234,19 @@ The subsections below list **algorithm hyperparameters** only
    * - ``niter_local_relaxation``
      - ``"auto"``
      - Local relaxation budget
+   * - ``energy_tolerance``
+     - ``0.02`` eV
+     - Energy window for campaign uniqueness (see :doc:`/uniqueness`)
+   * - ``comparator_tol``
+     - ``0.015``
+     - Cumulative pair-correlation uniqueness tolerance
+   * - ``comparator_pair_cor_max``
+     - ``0.7`` Å
+     - Maximum single-distance uniqueness cutoff
+   * - ``comparator_n_top``
+     - ``None``
+     - Expert override of trailing mobile-atom count; ``None`` uses the
+       system-type mobile region
 
 **GA** (``optimizer_params["ga"]``):
 
@@ -268,6 +283,19 @@ Production and TorchSim/UMA/UPET benchmark presets default to ``-2``.
    * - ``vacuum``
      - ``10.0``
      - Vacuum around clusters (\ :math:`\AA`)
+   * - ``energy_tolerance``
+     - ``0.02`` eV
+     - Energy window for in-search and campaign uniqueness (see :doc:`/uniqueness`)
+   * - ``comparator_tol``
+     - ``0.015``
+     - Cumulative pair-correlation uniqueness tolerance
+   * - ``comparator_pair_cor_max``
+     - ``0.7`` Å
+     - Maximum single-distance uniqueness cutoff
+   * - ``comparator_n_top``
+     - ``None``
+     - Expert override of trailing mobile-atom count; ``None`` uses
+       ``n_to_optimize``
    * - ``use_adaptive_mutations``
      - ``True``
      - Auto-adjust mutation rate
@@ -327,22 +355,23 @@ Production and TorchSim/UMA/UPET benchmark presets default to ``-2``.
      - Fraction of atoms to move
    * - ``deduplicate``
      - ``True``
-     - Remove duplicates
+     - BH end-of-run uniqueness pass (campaign filtering still runs)
    * - ``energy_tolerance``
-     - ``1e-5``
-     - Energy tolerance for duplicates (eV)
+     - ``0.02`` eV
+     - Energy window for uniqueness (see :doc:`/uniqueness`)
    * - ``move_strategy``
      - ``"random"``
      - Atom move strategy
    * - ``comparator_tol``
-     - (default)
-     - Structure comparator tolerance
+     - ``0.015``
+     - Cumulative pair-correlation uniqueness tolerance
    * - ``comparator_pair_cor_max``
-     - (default)
-     - Pair correlation cutoff for deduplication
+     - ``0.7`` Å
+     - Maximum single-distance uniqueness cutoff
    * - ``comparator_n_top``
      - ``None``
-     - Optional ``n_top`` for comparator
+     - Expert override of trailing mobile-atom count; ``None`` uses the
+       system-type mobile region
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
@@ -403,8 +432,16 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - see **Pair selection** below
      - Soft ranking scales and weights (gap / distinct / mismatch / core)
    * - ``minima_energy_tolerance``
-     - ``1e-5``
-     - Energy tolerance when deduplicating minima
+     - ``0.02`` eV
+     - Energy window when deduplicating GO minima before pairing (GO geometry
+       cutoffs; see :doc:`/uniqueness`)
+   * - ``dedupe_ts``
+     - ``True``
+     - Cluster successful TS geometries for ``final_unique_ts/``
+   * - ``ts_energy_tolerance``
+     - ``0.02`` eV
+     - Energy window for final unique-TS clustering (geometry uses
+       ``similarity_*``)
    * - ``write_timing_json``
      - ``False``
      - Write ``{ts_run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``

@@ -44,7 +44,7 @@ from scgo.system_types import (
     resolve_structure_mic,
     validate_minimum_structure,
 )
-from scgo.utils.comparators import PureInteratomicDistanceComparator
+from scgo.utils.comparators import UniquenessSettings, create_geometry_comparator
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
@@ -310,7 +310,7 @@ def bh_go(
         energy_tolerance: Energy difference (eV) below which structures are considered duplicates.
         comparator_tol: Tolerance for interatomic distance comparator.
         comparator_pair_cor_max: Maximum pair correlation for comparator.
-        comparator_n_top: Number of top distances to use in comparator. If None, uses all.
+        comparator_n_top: Optional override of trailing mobile-atom count.
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace). Default 1.
         run_id: Optional run ID for tracking.
         clean: If True, remove an existing database in the output directory.
@@ -430,11 +430,14 @@ def bh_go(
         int(comparator_n_top) if comparator_n_top is not None else len(movable_indices)
     )
     comp_mic = resolve_structure_mic(system_type, surface_config)
-    comparator = PureInteratomicDistanceComparator(
+    geometry = UniquenessSettings(
+        comparator_tol=comparator_tol,
+        comparator_pair_cor_max=comparator_pair_cor_max,
+    )
+    comparator = create_geometry_comparator(
         n_top=effective_n_top,
-        tol=comparator_tol,
-        pair_cor_max=comparator_pair_cor_max,
         mic=comp_mic,
+        settings=geometry,
     )
 
     # Load reference structures and create DiversityScorer for diversity strategy
@@ -447,6 +450,7 @@ def bh_go(
         logger=logger,
         base_dir=output_dir,
         mic=comp_mic,
+        uniqueness=geometry,
     )
 
     # Detach calculator temporarily for DB setup to avoid pickling issues

@@ -58,6 +58,7 @@ Contents
    surface_slab_guide
    output_layout
    parameters
+   uniqueness
    validation_and_constraints
    benchmarks
 

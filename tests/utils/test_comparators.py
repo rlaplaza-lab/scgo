@@ -10,10 +10,14 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 from ase import Atoms
 from ase.build import fcc111
 
+from scgo.algorithms.ga_common import create_structure_comparator
 from scgo.ase_ga_patches.population import count_looks_like
+from scgo.constants import DEFAULT_COMPARATOR_TOL, DEFAULT_PAIR_COR_MAX
+from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import resolve_neb_mic, resolve_structure_mic
 from scgo.utils.comparators import (
@@ -21,6 +25,7 @@ from scgo.utils.comparators import (
     PureInteratomicDistanceComparator,
     _compute_sorted_dist_list,
     get_sorted_dist_list,
+    uniqueness_settings_from_mapping,
 )
 from scgo.utils.diversity_scorer import DiversityScorer
 
@@ -260,3 +265,51 @@ def test_sorted_dist_list_mic_matches_nested_get_distance():
     gas_fp = _compute_sorted_dist_list(gas, mic=False)
     assert 29 in gas_fp
     assert len(gas_fp[29]) == 6
+
+
+def _with_raw_score(atoms: Atoms, energy: float) -> Atoms:
+    set_tags(atoms, raw_score=-float(energy))
+    return atoms
+
+
+def test_uniqueness_settings_from_mapping_defaults_and_overrides() -> None:
+    defaults = uniqueness_settings_from_mapping(None)
+    assert defaults.comparator_tol == pytest.approx(DEFAULT_COMPARATOR_TOL)
+    assert defaults.comparator_pair_cor_max == pytest.approx(DEFAULT_PAIR_COR_MAX)
+
+    overridden = uniqueness_settings_from_mapping(
+        {"comparator_tol": None, "comparator_pair_cor_max": 0.4}
+    )
+    assert overridden.comparator_tol == pytest.approx(DEFAULT_COMPARATOR_TOL)
+    assert overridden.comparator_pair_cor_max == pytest.approx(0.4)
+
+
+def test_create_structure_comparator_energy_and_geometry() -> None:
+    same_geom = Atoms("Pt3", positions=POSITIONS)
+    other_geom = Atoms(
+        "Pt3", positions=[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [2.5, 4.3, 0.0]]
+    )
+    close = _with_raw_score(same_geom.copy(), 1.0)
+    close_copy = _with_raw_score(same_geom.copy(), 1.001)
+    far_same_geom = _with_raw_score(same_geom.copy(), 1.5)
+    close_other = _with_raw_score(other_geom.copy(), 1.0)
+
+    comp = create_structure_comparator(3, 0.02)
+    assert bool(comp.looks_like(close, close_copy)) is True
+    assert bool(comp.looks_like(close, close_other)) is False
+    assert bool(comp.looks_like(close, far_same_geom)) is False
+
+
+def test_create_structure_comparator_ignores_prefix_atoms() -> None:
+    base = Atoms(
+        "Pt4",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.1, 0.0], [0.0, 0.0, 4.0]],
+    )
+    shifted = base.copy()
+    shifted.positions[0] += [0.8, 0.0, 0.0]
+    _with_raw_score(base, 1.0)
+    _with_raw_score(shifted, 1.0)
+    mobile_only = create_structure_comparator(3, 0.02)
+    full = create_structure_comparator(4, 0.02)
+    assert bool(mobile_only.looks_like(base, shifted)) is True
+    assert bool(full.looks_like(base, shifted)) is False

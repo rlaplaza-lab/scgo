@@ -11,7 +11,6 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 
 import tests.constants as _tc
-from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_PAIR_COR_CUM_DIFF
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.db_stamp import is_scgo_db
 from scgo.metadata.run_dir import get_run_directories, load_run_dir_record
@@ -463,38 +462,10 @@ def mark_test_minima_as_final(db_path: Path | str) -> None:
 
 
 def create_ga_comparator(n_top: int):
-    """Create a SequentialComparator for GA testing.
+    from scgo.algorithms.ga_common import create_structure_comparator
+    from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 
-    This helper reduces duplication in GA patch tests by extracting the common
-    comparator configuration pattern.
-
-    Args:
-        n_top: Number of atoms in the cluster (for InteratomicDistanceComparator)
-
-    Returns:
-        SequentialComparator instance configured for GA testing
-
-    Example:
-        >>> comp = create_ga_comparator(len(pt3_atoms))
-        >>> population = Population(..., comparator=comp, ...)
-    """
-    from ase_ga.standard_comparators import (
-        InteratomicDistanceComparator,
-        RawScoreComparator,
-        SequentialComparator,
-    )
-
-    return SequentialComparator(
-        methods=[
-            RawScoreComparator(dist=DEFAULT_ENERGY_TOLERANCE),
-            InteratomicDistanceComparator(
-                n_top=n_top,
-                mic=False,
-                dE=DEFAULT_ENERGY_TOLERANCE,
-                pair_cor_cum_diff=DEFAULT_PAIR_COR_CUM_DIFF,
-            ),
-        ],
-    )
+    return create_structure_comparator(n_top, DEFAULT_ENERGY_TOLERANCE)
 
 
 def get_structure_signature(atoms: Atoms, *, precision: int = 6) -> tuple[float, ...]:

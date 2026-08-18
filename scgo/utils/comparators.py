@@ -8,6 +8,9 @@ described in Vilhelmsen and Hammer, PRL 108, 126101 (2012).
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from ase import Atoms
@@ -66,7 +69,7 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
     numbers = atoms.numbers
     unique_types = set(numbers)
     pair_cor: dict[int, np.ndarray] = {}
-    # Honor ``mic`` literally so GA (ASE comparator) and Pure stay coherent when
+    # Honor ``mic`` literally so GA uniqueness and Pure stay coherent when
     # callers pass mic=False on periodic cells (e.g. comparator_use_mic=False).
     use_mic_path = bool(mic)
 
@@ -375,3 +378,61 @@ class PureInteratomicDistanceComparator:
             )
 
         return (total_cum_diff, max_diff)
+
+
+@dataclass(frozen=True)
+class UniquenessSettings:
+    comparator_tol: float = DEFAULT_COMPARATOR_TOL
+    comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX
+
+
+def uniqueness_settings_from_mapping(
+    params: Mapping[str, Any] | None,
+) -> UniquenessSettings:
+    params = params or {}
+    tol = params.get("comparator_tol")
+    pair_cor = params.get("comparator_pair_cor_max")
+    return UniquenessSettings(
+        comparator_tol=DEFAULT_COMPARATOR_TOL if tol is None else float(tol),
+        comparator_pair_cor_max=DEFAULT_PAIR_COR_MAX
+        if pair_cor is None
+        else float(pair_cor),
+    )
+
+
+def create_geometry_comparator(
+    *,
+    n_top: int,
+    mic: bool = False,
+    settings: UniquenessSettings | None = None,
+) -> PureInteratomicDistanceComparator:
+    resolved = settings if settings is not None else UniquenessSettings()
+    return PureInteratomicDistanceComparator(
+        n_top=n_top,
+        tol=resolved.comparator_tol,
+        pair_cor_max=resolved.comparator_pair_cor_max,
+        mic=mic,
+    )
+
+
+class EnergyAndStructureComparator:
+    """Energy AND geometry ``looks_like`` for GA population dedup."""
+
+    def __init__(
+        self,
+        energy_tolerance: float,
+        structure_comparator: PureInteratomicDistanceComparator,
+    ) -> None:
+        self.energy_tolerance = float(energy_tolerance)
+        self.structure_comparator = structure_comparator
+
+    def looks_like(self, a1: Atoms, a2: Atoms) -> bool:
+        e1 = get_tag(a1, "raw_score", default=None)
+        e2 = get_tag(a2, "raw_score", default=None)
+        if e1 is None or e2 is None:
+            raise SCGOValidationError(
+                "EnergyAndStructureComparator requires raw_score on both candidates."
+            )
+        if abs(float(e1) - float(e2)) > self.energy_tolerance:
+            return False
+        return self.structure_comparator.looks_like(a1, a2)

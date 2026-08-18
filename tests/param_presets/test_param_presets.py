@@ -133,13 +133,17 @@ def test_ts_search_params_expose_dedupe_and_tolerance_defaults():
     ts = get_ts_search_params(system_type="gas_cluster")
 
     assert ts.get("dedupe_minima", None) is True
+    assert ts.get("dedupe_ts", None) is True
     assert ts.get("minima_energy_tolerance", None) == pytest.approx(
         DEFAULT_ENERGY_TOLERANCE
     )
+    assert ts.get("ts_energy_tolerance", None) == pytest.approx(DEFAULT_ENERGY_TOLERANCE)
 
     kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
     assert kwargs["dedupe_minima"] is True
     assert kwargs["minima_energy_tolerance"] == pytest.approx(DEFAULT_ENERGY_TOLERANCE)
+    assert kwargs["dedupe_ts"] is True
+    assert kwargs["ts_energy_tolerance"] == pytest.approx(DEFAULT_ENERGY_TOLERANCE)
     assert kwargs.get("neb_interpolation_mic") is False
     assert kwargs.get("neb_tangent_method") == DEFAULT_NEB_TANGENT_METHOD
     assert kwargs.get("similarity_pair_cor_max") == pytest.approx(0.1)
@@ -224,10 +228,18 @@ def test_ts_search_params_allow_overrides():
     ts = get_ts_search_params(system_type="gas_cluster")
     ts["dedupe_minima"] = False
     ts["minima_energy_tolerance"] = 0.05
+    ts["dedupe_ts"] = False
+    ts["ts_energy_tolerance"] = 0.03
+    ts["similarity_tolerance"] = 0.02
+    ts["similarity_pair_cor_max"] = 0.05
 
     kwargs = coerce_ts_params_to_runner_kwargs(ts, system_type="gas_cluster")
     assert kwargs["dedupe_minima"] is False
     assert kwargs["minima_energy_tolerance"] == pytest.approx(0.05)
+    assert kwargs["dedupe_ts"] is False
+    assert kwargs["ts_energy_tolerance"] == pytest.approx(0.03)
+    assert kwargs["similarity_tolerance"] == pytest.approx(0.02)
+    assert kwargs["similarity_pair_cor_max"] == pytest.approx(0.05)
 
 
 def test_ts_search_params_embed_surface_config_for_surface_systems():
