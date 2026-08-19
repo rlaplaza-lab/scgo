@@ -176,7 +176,8 @@ Under each ``run_*`` directory:
 Campaign-level files:
 
 - ``results_summary.json``: run statistics and serializable TS pair results
-- ``final_unique_minima/`` or ``final_unique_ts/``: deduplicated structure exports
+- ``final_unique_minima/`` or ``final_unique_ts/``: unique-structure
+  exports (see :doc:`/uniqueness`)
 - ``ts_network_metadata.json``: minima connectivity graph (TS only)
 - ``go_ts_timing.json``: GO+TS pipeline rollup at the campaign root when timing
   JSON is enabled in ``go_params`` and/or ``ts_params``; includes

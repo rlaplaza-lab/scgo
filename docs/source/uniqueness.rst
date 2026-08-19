@@ -1,119 +1,114 @@
 Uniqueness (de-duplication)
 ===========================
 
-SCGO treats two minima as the **same structure** only when both are true:
+Global optimization will find the same isomer more than once. SCGO keeps a
+structure only if it is **new in energy and in shape**. Both must match before
+two results are treated as duplicates:
 
-1. Their energies differ by at most ``energy_tolerance``.
-2. Their **mobile** geometries match the Vilhelmsen–Hammer pair-correlation
-   test (:class:`~scgo.utils.comparators.PureInteratomicDistanceComparator`).
+1. Energies differ by at most ``0.02`` eV (``energy_tolerance``).
+2. The **moving** atoms have the same geometry: sorted interatomic distances
+   agree closely (no single distance off by more than ``0.7`` Å).
 
-Distinct isomers at similar energy are kept. Similar geometries at very
-different energies are kept. See :doc:`/parameters` for the knob tables;
-this page explains the rule and how to change it.
+A high-energy copy of a known isomer is dropped. Two different shapes at almost
+the same energy are both kept. Frozen atoms (the lower slab, for example) are
+ignored.
 
 What is compared
 ----------------
 
-Geometry fingerprints the **trailing mobile atoms** (``n_top``), not the full
-cell. That slice is the search-mobile region from
-:func:`~scgo.system_types.resolve_search_mobile_composition` (the same count
-``run_go`` passes as ``search_mobile_count``):
+Only the atoms that the search is allowed to move go into the comparison:
 
 .. list-table::
    :widths: 40 60
    :header-rows: 1
 
    * - System type
-     - Mobile atoms in the fingerprint
+     - Atoms compared
    * - ``gas_cluster`` / ``gas_cluster_adsorbate``
-     - Whole composition (core + adsorbate)
+     - The whole cluster, including adsorbates
    * - ``surface_cluster`` / ``surface_cluster_adsorbate``
-     - Deposited cluster (+ adsorbate); fixed slab ignored
+     - The deposited cluster (and adsorbates); the fixed slab is ignored
    * - ``surface`` / ``surface_adsorbate``
-     - Mobile top slab layers (+ adsorbate); fixed bottom layers ignored
+     - Mobile top slab layers (and adsorbates); fixed bottom layers are ignored
 
-MIC (minimum-image distances) follows
-:func:`~scgo.system_types.resolve_structure_mic`: off for gas, and for surfaces
-the ``SurfaceSystemConfig.comparator_use_mic`` flag.
+On a periodic slab, distances wrap through the cell so the same site on opposite
+edges counts as the same geometry. That wrap is off for gas-phase clusters.
 
-Energy is a cheap prefilter
----------------------------
+When it runs
+------------
 
-Pair correlation is more expensive than comparing two floats. Basin Hopping
-end-of-run filtering and campaign-level
-:func:`~scgo.utils.helpers.filter_unique_minima` **bin by energy** first
-(bin width ``1.5 × energy_tolerance``) and only run geometry on neighbors that
-could still match. That is an optimization, not a second uniqueness policy:
-the decision remains energy **and** mobile geometry.
+The same rule is applied:
 
-The GA population has no energy index, so
-:class:`~scgo.utils.comparators.EnergyAndStructureComparator` applies the same
-``|ΔE|`` gate inside ``looks_like`` before calling Pure.
+- during a **genetic algorithm** search, so the population does not fill with
+  copies
+- at the end of **basin hopping** (unless you set ``deduplicate=False``)
+- at the end of every **campaign**, before connectivity and Hessian checks
 
-Where it runs
--------------
+The simple (1–2 atom) optimizer has no in-search filter; it relies on that
+final campaign pass.
+Unique structures are written under ``final_unique_minima/`` (see
+:doc:`/output_layout`).
 
-All three use the same knobs from the **active** optimizer slot
-(``optimizer_params["simple"|"bh"|"ga"]``):
+Throwing out identical **starting guesses** is a separate, simpler check. It
+does not use the energy-and-shape rule above.
 
-- **GA in-search:** population duplicate gate on every candidate.
-- **BH end-of-run:** when ``deduplicate=True`` (default).
-- **Campaign filter:** always, in :func:`~scgo.minima_search.core.run_trials`,
-  before the structural and Hessian gates. Simple GO has no in-algorithm
-  uniqueness pass; it relies on this filter.
+How to change it
+----------------
 
-How to control it
------------------
-
-Set these on the optimizer slot you actually run (they share the same defaults):
+Set the knobs on the optimizer you actually run
+(``optimizer_params["ga"]``, ``"bh"``, or ``"simple"``). Defaults are shared:
 
 .. list-table::
-   :widths: 32 18 50
+   :widths: 36 16 48
    :header-rows: 1
 
    * - Knob
      - Default
-     - Role
+     - Meaning
    * - ``energy_tolerance``
      - ``0.02`` eV
-     - Energy window and binning width
-   * - ``comparator_tol``
-     - ``0.015``
-     - Cumulative pair-correlation tolerance (unitless)
+     - How close two energies must be to even compare shapes
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å
-     - Maximum single interatomic-distance difference
+     - Largest allowed difference in any one interatomic distance
+   * - ``comparator_tol``
+     - ``0.015``
+     - How much overall mismatch is still "the same shape"
    * - ``comparator_n_top``
      - ``None``
-     - Expert override of trailing mobile-atom count. Leave ``None`` so
-       uniqueness uses the system-type mobile region.
+     - Leave ``None`` (uses the moving atoms in the table above)
    * - ``deduplicate`` (BH only)
      - ``True``
-     - Run BH's end-of-run uniqueness pass. ``False`` skips it; campaign
-       filtering still runs
-   * - ``comparator_use_mic``
-     - ``True`` on surfaces
-     - MIC for periodic slabs (``SurfaceSystemConfig``)
+     - End-of-run BH filter. The campaign pass still runs if this is ``False``
 
-Example::
+Smaller values keep more structures as distinct. Larger values collapse more
+near-copies::
 
    from scgo.param_presets import get_default_params
 
    params = get_default_params()
-   params["optimizer_params"]["ga"]["energy_tolerance"] = 0.05
-   params["optimizer_params"]["ga"]["comparator_pair_cor_max"] = 0.5
+   params["optimizer_params"]["ga"]["energy_tolerance"] = 0.01
+   params["optimizer_params"]["ga"]["comparator_pair_cor_max"] = 0.4
 
-Not this
---------
+On slabs, distance wrapping is on by default. Turn it off with
+``comparator_use_mic=False`` when you build the surface.
 
-**TS uniqueness is a separate, tighter policy** (same energy-and-geometry rule,
-``DEFAULT_TS_PAIR_COR_MAX`` = ``0.1`` Å instead of ``0.7`` Å):
+Transition states
+-----------------
 
-- Pre-pair minima use GO uniqueness (``minima_energy_tolerance`` plus GO
-  geometry cutoffs).
-- Pair near-dupe gating and final unique-TS clustering share
-  ``similarity_tolerance``, ``similarity_pair_cor_max``, and
-  ``ts_energy_tolerance``.
+TS search uses the **same energy-and-shape idea**, with a tighter distance
+cutoff (``0.1`` Å instead of ``0.7`` Å):
 
-Seed and template signature deduplication during initialization is a different
-mechanism (rounded distance signatures), not this comparator.
+- Minima loaded for pairing are first filtered with the **GO** rule
+  (``minima_energy_tolerance`` plus the GO geometry cutoffs).
+- Successful saddles are filtered into ``final_unique_ts/``
+  (``ts_energy_tolerance`` plus ``similarity_tolerance`` and
+  ``similarity_pair_cor_max``).
+
+The same ``similarity_*`` knobs are reused when pair selection asks whether two
+endpoints look alike. Choosing *which* pairs to connect (energy gap, overlay
+checks, and so on) is a different step, documented under **Pair selection** in
+:doc:`/parameters`.
+
+The geometry test follows Vilhelmsen and Hammer, *Phys. Rev. Lett.* **108**,
+126101 (2012). Knob tables for every optimizer live in :doc:`/parameters`.

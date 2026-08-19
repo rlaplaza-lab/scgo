@@ -239,14 +239,14 @@ Uniqueness knobs are documented in :doc:`/uniqueness`.
      - Energy window for campaign uniqueness (see :doc:`/uniqueness`)
    * - ``comparator_tol``
      - ``0.015``
-     - Cumulative pair-correlation uniqueness tolerance
+     - Overall shape mismatch still counted as the same isomer
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å
-     - Maximum single-distance uniqueness cutoff
+     - Largest allowed difference in any one interatomic distance
    * - ``comparator_n_top``
      - ``None``
-     - Expert override of trailing mobile-atom count; ``None`` uses the
-       system-type mobile region
+     - Leave ``None``; uses the moving atoms for this system type
+       (see :doc:`/uniqueness`)
 
 **GA** (``optimizer_params["ga"]``):
 
@@ -288,14 +288,14 @@ Production and TorchSim/UMA/UPET benchmark presets default to ``-2``.
      - Energy window for in-search and campaign uniqueness (see :doc:`/uniqueness`)
    * - ``comparator_tol``
      - ``0.015``
-     - Cumulative pair-correlation uniqueness tolerance
+     - Overall shape mismatch still counted as the same isomer
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å
-     - Maximum single-distance uniqueness cutoff
+     - Largest allowed difference in any one interatomic distance
    * - ``comparator_n_top``
      - ``None``
-     - Expert override of trailing mobile-atom count; ``None`` uses
-       ``n_to_optimize``
+     - Leave ``None``; uses the moving atoms for this system type
+       (see :doc:`/uniqueness`)
    * - ``use_adaptive_mutations``
      - ``True``
      - Auto-adjust mutation rate
@@ -364,14 +364,14 @@ Production and TorchSim/UMA/UPET benchmark presets default to ``-2``.
      - Atom move strategy
    * - ``comparator_tol``
      - ``0.015``
-     - Cumulative pair-correlation uniqueness tolerance
+     - Overall shape mismatch still counted as the same isomer
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å
-     - Maximum single-distance uniqueness cutoff
+     - Largest allowed difference in any one interatomic distance
    * - ``comparator_n_top``
      - ``None``
-     - Expert override of trailing mobile-atom count; ``None`` uses the
-       system-type mobile region
+     - Leave ``None``; uses the moving atoms for this system type
+       (see :doc:`/uniqueness`)
    * - ``write_timing_json``
      - ``False``
      - Write ``{run_dir}/timing.json``; enables ``go_ts_timing.json`` rollup in ``run_go_ts``
@@ -410,21 +410,20 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Use TorchSim for NEB
    * - ``dedupe_minima``
      - ``True``
-     - Remove duplicate minima before pairing
+     - Drop duplicate GO minima before pairing (GO uniqueness; see
+       :doc:`/uniqueness`)
    * - ``connectivity_factor``
      - ``1.4``
      - Same connectivity spec as GO (float or per-element/pair dict); resolved
        with the same precedence for TS structural gates.
    * - ``similarity_tolerance``
      - ``0.015``
-     - Comparator tolerance for fingerprint ``are_similar`` (bare systems skip
-       similar pairs; adsorbate systems keep them)
+     - Overall shape mismatch for TS uniqueness (same role as GO
+       ``comparator_tol``; see :doc:`/uniqueness`)
    * - ``similarity_pair_cor_max``
-     - ``0.1``
-     - Pair-correlation cap (Å) for the TS structure comparator
-       (``DEFAULT_TS_PAIR_COR_MAX``). Tighter than GO uniqueness
-       (``DEFAULT_PAIR_COR_MAX`` = ``0.7`` Å) so near-duplicates are rejected
-       before NEB.
+     - ``0.1`` Å
+     - Largest allowed distance difference for TS uniqueness (tighter than GO
+       ``0.7`` Å; see :doc:`/uniqueness`)
    * - ``pair_core_rms_max``
      - see **Pair selection** below
      - Hard max core RMS (Å) for adsorbate+core pairing. Gas cores are
@@ -437,14 +436,14 @@ Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``
      - Soft ranking scales and weights (gap / distinct / mismatch / core)
    * - ``minima_energy_tolerance``
      - ``0.02`` eV
-     - Energy window when deduplicating GO minima before pairing (GO geometry
-       cutoffs; see :doc:`/uniqueness`)
+     - Energy window when dropping duplicate GO minima before pairing
+       (see :doc:`/uniqueness`)
    * - ``dedupe_ts``
      - ``True``
-     - Cluster successful TS geometries for ``final_unique_ts/``
+     - Keep unique successful saddles in ``final_unique_ts/``
    * - ``ts_energy_tolerance``
      - ``0.02`` eV
-     - Energy window for final unique-TS clustering (geometry uses
+     - Energy window for that TS uniqueness pass (geometry uses
        ``similarity_*``)
    * - ``write_timing_json``
      - ``False``

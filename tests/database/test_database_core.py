@@ -174,7 +174,7 @@ def _write_to_database(args):
     db_path, batch_size, worker_id = args
 
     # Stagger workers so both processes do not open and write on the same tick.
-    time.sleep(0.05 * worker_id)
+    time.sleep(0.1 * worker_id)
 
     atoms_list = []
     for i in range(batch_size):
@@ -186,8 +186,8 @@ def _write_to_database(args):
         atoms.info["data"] = {"worker_tag": f"w{worker_id}"}
         atoms_list.append(atoms)
 
-    with get_connection(db_path) as da:
-        for atoms in atoms_list:
+    for atoms in atoms_list:
+        with get_connection(db_path, wal_mode=True) as da:
             database_retry(
                 lambda _a=atoms: da.add_unrelaxed_candidate(
                     _a, description=f"concurrent_stress:w{worker_id}"
