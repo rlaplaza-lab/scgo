@@ -12,11 +12,11 @@ import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
 from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import (
-    atoms_too_close,
-    atoms_too_close_two_sets,
+from scgo.ase_ga_patches._slab_clash import (
+    SlabClashChecker,
+    mobile_too_close_no_copy,
+    mobile_too_close_tagged,
 )
-
 from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
@@ -231,6 +231,20 @@ class CutAndSplicePairing(OffspringCreator):
         self.scaling_volume = None
         self.descriptor = "CutAndSplicePairing"
         self.min_inputs = 2
+
+        # Pre-build the cached slab clash checker so slab positions and PBC
+        # images are expanded only once per pairing operator instance.
+        # The checker is rebuilt if test_dist_to_slab is False or slab is empty.
+        if self.test_dist_to_slab and len(self.slab) > 0:
+            self._slab_clash_checker: SlabClashChecker | None = SlabClashChecker(
+                slab_numbers=slab.get_atomic_numbers(),
+                slab_positions=slab.get_positions(),
+                cell=slab.get_cell(),
+                pbc=slab.get_pbc(),
+                blmin=blmin,
+            )
+        else:
+            self._slab_clash_checker = None
 
     def _group_centers_and_weights(self, atoms):
         tags = atoms.get_tags() if self.use_tags else np.arange(len(atoms))
@@ -514,13 +528,26 @@ class CutAndSplicePairing(OffspringCreator):
                 if child is None:
                     continue
 
-                if atoms_too_close(child, self.blmin, use_tags=self.use_tags):
-                    continue
+                if self.use_tags:
+                    if mobile_too_close_tagged(
+                        child, self.blmin, system_type=self.system_type
+                    ):
+                        continue
+                else:
+                    if mobile_too_close_no_copy(
+                        child.get_atomic_numbers(),
+                        child.get_positions(),
+                        child.get_pbc(),
+                        child.get_cell(),
+                        self.blmin,
+                    ):
+                        continue
 
                 if (
-                    self.test_dist_to_slab
-                    and len(self.slab) > 0
-                    and atoms_too_close_two_sets(self.slab, child, self.blmin)
+                    self._slab_clash_checker is not None
+                    and self._slab_clash_checker.is_too_close(
+                        child.get_atomic_numbers(), child.get_positions()
+                    )
                 ):
                     continue
 

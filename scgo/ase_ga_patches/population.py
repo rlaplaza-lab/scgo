@@ -153,22 +153,40 @@ class Population:
         all_cand = self._get_all_relaxed_candidates(use_extinct=ue)
         all_cand.sort(key=_population_candidate_sort_key)
 
-        # Fill up the population with the fittest unique candidates.
+        # Fill the population with the fittest unique candidates.
+        # Each new candidate is checked only against the already-accepted pop
+        # (O(pop) per candidate).  When a duplicate is found the matching
+        # pop member's rediscovery counter is incremented in-place so the
+        # full O(history) rescan below is no longer needed.
         i = 0
         while i < len(all_cand) and len(self.pop) < self.population_size:
             c = all_cand[i]
             i += 1
-            eq = False
+            duplicate_of = None
             for a in self.pop:
                 if self.comparator.looks_like(a, c):
-                    eq = True
+                    duplicate_of = a
                     break
-            if not eq:
+            if duplicate_of is None:
+                c.info["looks_like"] = 0
                 self.pop.append(c)
+            else:
+                duplicate_of.info["looks_like"] = (
+                    int(duplicate_of.info.get("looks_like", 0)) + 1
+                )
 
-        for a in self.pop:
-            a.info["looks_like"] = count_looks_like(a, all_cand,
-                                                    self.comparator)
+        # Any remaining all_cand (beyond population_size) that were never
+        # checked in the loop above are also counted as duplicates only if
+        # they are identical to a pop member.  These come after the worst
+        # pop member in score order so they would not have been accepted.
+        # Count them to keep looks_like consistent with the historical meaning.
+        while i < len(all_cand):
+            c = all_cand[i]
+            i += 1
+            for a in self.pop:
+                if self.comparator.looks_like(a, c):
+                    a.info["looks_like"] = int(a.info.get("looks_like", 0)) + 1
+                    break
 
         self.all_cand = all_cand
         self.__calc_participation__()
@@ -190,13 +208,29 @@ class Population:
         after the population object has been created.
         This method extracts these new candidates from the
         database and includes them in the population.
+
+        When ``new_cand`` is provided the database is not read; the caller
+        supplies already-in-memory Atoms (e.g. from a just-completed relax
+        batch).  Passing an empty list is valid and skips the round-trip
+        entirely.  ``None`` falls back to the database path.
         """
-        if len(self.pop) == 0:
+        if len(self.pop) == 0 and new_cand is None:
             self.__initialize_pop__()
 
         if new_cand is None:
             ue = self.use_extinct
             new_cand = self._get_all_relaxed_candidates(only_new=True, use_extinct=ue)
+        else:
+            new_cand = self._filter_candidates_by_run_id(new_cand)
+            new_cand = self._filter_candidates_by_ga_eligibility(new_cand)
+            # Sync already_returned so a later update(new_cand=None) call
+            # (e.g. from get_two_candidates) does not re-fetch these gaids.
+            already = getattr(self.dc, "already_returned", None)
+            if already is not None:
+                for a in new_cand:
+                    gaid = a.info.get("confid")
+                    if gaid is not None:
+                        already.add(int(gaid))
 
         new_cand.sort(key=_population_candidate_sort_key)
 
@@ -210,9 +244,7 @@ class Population:
         """Adds a single candidate to the population."""
         # An empty population accepts the candidate unconditionally.
         if not self.pop:
-            a.info["looks_like"] = count_looks_like(a,
-                                                    self.all_cand,
-                                                    self.comparator)
+            a.info["looks_like"] = 0
             self.pop.append(a)
             return
 
@@ -232,12 +264,15 @@ class Population:
                 # candidate would be discarded and the population could never
                 # improve past it. Ties keep the incumbent.
                 if _raw_score(b) < raw_score_a:
+                    # Newcomer inherits the incumbent's rediscovery count + 1
+                    # so the fitness penalty is not reset on replacement.
+                    a.info["looks_like"] = int(b.info.get("looks_like", 0)) + 1
                     del self.pop[i]
-                    a.info["looks_like"] = count_looks_like(a,
-                                                            self.all_cand,
-                                                            self.comparator)
                     self.pop.append(a)
                     self.pop.sort(key=_raw_score, reverse=True)
+                else:
+                    # Incumbent keeps its seat; count this as another rediscovery.
+                    b.info["looks_like"] = int(b.info.get("looks_like", 0)) + 1
                 return
 
         # the new candidate needs to be added, so ensure we have room
@@ -248,9 +283,7 @@ class Population:
             del self.pop[-1]
 
         # add the new candidate
-        a.info["looks_like"] = count_looks_like(a,
-                                                self.all_cand,
-                                                self.comparator)
+        a.info["looks_like"] = 0
         self.pop.append(a)
         self.pop.sort(key=_raw_score, reverse=True)
 
@@ -467,9 +500,9 @@ class FitnessStrategyPopulation(Population):
 
         return fitness_values
 
-    def update(self):
+    def update(self, new_cand=None):
         """Update population and periodically add new references."""
-        super().update()
+        super().update(new_cand=new_cand)
 
         # Periodic reference update for diversity strategy
         if (

@@ -74,6 +74,12 @@
 
 ### Changed
 
+- GA offspring job payloads can ship mobile-only atoms for slab runs and
+  reconstruct full slab+mobile frames inside workers, reducing per-job
+  serialization without changing pairing/mutation semantics.
+- GA population uniqueness bookkeeping now tracks rediscovery counts during
+  O(population)-time in-search checks (instead of rescanning full history),
+  preserving `looks_like` penalty behavior while avoiding O(history) updates.
 - GO uniqueness is energy **and** mobile geometry on every optimizer path; GA
   in-search no longer ORs ASE comparators. Shared knobs on ``simple`` / ``bh`` /
   ``ga``; see ``docs/source/uniqueness.rst``. TS pair gating and final
@@ -206,6 +212,12 @@
 
 ### Fixed
 
+- Surface crossover clash checks now use cached slab-image distance screening
+  plus mobile-only no-copy clash helpers in `CutAndSplicePairing`, keeping
+  acceptance logic equivalent to ASE-GA while reducing inner-loop overhead.
+- `Population.update(new_cand=...)` now supports in-memory relaxed batches
+  (including empty batches), filters by run-id and GA eligibility, syncs
+  `already_returned`, and avoids redundant DB round-trips.
 - Gas-phase TS pair selection and NEB endpoint prep share one core overlay:
   fingerprint correspondence, Kabsch (translation-only for a single core atom),
   spatial rematch in the overlaid frame, then re-Kabsch. That rematch recovers

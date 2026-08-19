@@ -21,9 +21,11 @@ from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import resolve_neb_mic, resolve_structure_mic
 from scgo.utils.comparators import (
+    _SORTED_DIST_FP_ATTR_KEY,
     _SORTED_DIST_FP_INFO_KEY,
     PureInteratomicDistanceComparator,
     _compute_sorted_dist_list,
+    _sorted_dist_cache_slot,
     get_sorted_dist_list,
     uniqueness_settings_from_mapping,
 )
@@ -200,6 +202,15 @@ def test_comparator_tolerance():
     assert not comp_strict.looks_like(atoms1, atoms2)
 
 
+def _fp_store(atoms: Atoms, *, n_top: int = 0, mic: bool = False) -> dict:
+    """Return the per-(n_top, mic) cache entry stored on atoms.info."""
+    store = getattr(atoms, _SORTED_DIST_FP_ATTR_KEY, {})
+    n_top_i = int(n_top)
+    if n_top_i <= 0 or n_top_i >= len(atoms):
+        n_top_i = 0
+    return store.get(_sorted_dist_cache_slot(n_top_i, mic), {})
+
+
 def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
     """Repeated looks_like / get_sorted_dist_list should populate and reuse cache."""
     atoms1 = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.1, 0]])
@@ -208,7 +219,7 @@ def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
 
     first = get_sorted_dist_list(atoms1)
     assert _SORTED_DIST_FP_INFO_KEY in atoms1.info
-    cached_id = id(atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"])
+    cached_id = id(_fp_store(atoms1)["pair_cor"])
     second = get_sorted_dist_list(atoms1)
     assert second is first
     assert id(second) == cached_id
@@ -223,7 +234,7 @@ def test_sorted_dist_list_cache_hit_on_repeated_looks_like():
     atoms1.positions[0, 0] += 0.5
     refreshed = get_sorted_dist_list(atoms1)
     assert refreshed is not first
-    assert atoms1.info[_SORTED_DIST_FP_INFO_KEY]["pair_cor"] is refreshed
+    assert _fp_store(atoms1)["pair_cor"] is refreshed
     assert get_sorted_dist_list(atoms1) is refreshed
 
 
@@ -313,3 +324,69 @@ def test_create_structure_comparator_ignores_prefix_atoms() -> None:
     full = create_structure_comparator(4, 0.02)
     assert bool(mobile_only.looks_like(base, shifted)) is True
     assert bool(full.looks_like(base, shifted)) is False
+
+
+@pytest.mark.parametrize(
+    "n_top,expected_slot",
+    [
+        (3, 0),  # n_top == len -> canonical full-structure slot
+        (2, 2),  # n_top < len -> subset slot
+    ],
+)
+def test_n_top_comparator_caches_on_original(n_top: int, expected_slot: int) -> None:
+    """looks_like stores/reuses fingerprint cache on original atoms."""
+    atoms = Atoms("Pt3", positions=POSITIONS)
+    other = atoms.copy()
+    other.positions[0, 0] += 1e-4
+    comp = PureInteratomicDistanceComparator(n_top=n_top)
+
+    comp.looks_like(atoms, other)
+    assert _SORTED_DIST_FP_INFO_KEY in atoms.info
+    first = _fp_store(atoms, n_top=expected_slot)["pair_cor"]
+    comp.looks_like(atoms, other)
+    assert _fp_store(atoms, n_top=expected_slot)["pair_cor"] is first
+
+
+@pytest.mark.parametrize("mic,n_top,atol", [(False, 5, 1e-10), (True, 4, 1e-8)])
+def test_n_top_fingerprint_matches_sliced_reference(
+    mic: bool, n_top: int, atol: float
+) -> None:
+    """n_top fingerprint on original equals old sliced-Atoms behavior."""
+    if mic:
+        base = fcc111("Pt", size=(2, 2, 3), vacuum=6.0, orthogonal=True)
+    else:
+        base = Atoms(
+            ["Ag"] * 4 + ["O", "H", "O"],
+            positions=[[i * 2.5, 0, 0] for i in range(7)],
+        )
+
+    ref = get_sorted_dist_list(base[-n_top:], mic=mic, n_top=0)
+    result = get_sorted_dist_list(base, mic=mic, n_top=n_top)
+    assert set(ref.keys()) == set(result.keys())
+    for elem in ref:
+        assert np.allclose(ref[elem], result[elem], atol=atol), f"Mismatch for {elem}"
+
+
+def test_different_n_top_keys_coexist_in_cache() -> None:
+    """Full-atom and n_top fingerprints coexist without eviction."""
+    atoms = Atoms("Pt4", positions=[[i * 2.5, 0, 0] for i in range(4)])
+    full_fp = get_sorted_dist_list(atoms, mic=False, n_top=0)
+    top2_fp = get_sorted_dist_list(atoms, mic=False, n_top=2)
+    assert _fp_store(atoms, n_top=0).get("pair_cor") is full_fp
+    assert _fp_store(atoms, n_top=2).get("pair_cor") is top2_fp
+
+
+def test_old_flat_cache_format_gracefully_replaced() -> None:
+    """An atoms.info with the old flat-dict cache must not crash; new entry wins."""
+    atoms = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    # Simulate old flat-format cache
+    atoms.info[_SORTED_DIST_FP_INFO_KEY] = {
+        "pair_cor": {78: np.array([2.5])},
+        "mic": False,
+        "dirty_token": (),
+        "content_key": (),
+    }
+    # Must not raise and must return a fresh fingerprint
+    result = get_sorted_dist_list(atoms, mic=False)
+    assert isinstance(result, dict)
+    assert 78 in result

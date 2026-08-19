@@ -44,6 +44,15 @@ The same rule is applied:
 - at the end of **basin hopping** (unless you set ``deduplicate=False``)
 - at the end of every **campaign**, before connectivity and Hessian checks
 
+**GA in-search check (performance note).** Acceptance is decided against the
+current population (O(population size), not O(history)).  Each time an
+isomer is re-presented to the population its incumbent's rediscovery count is
+incremented; that count feeds the fitness penalty ``1/√(1 + L)`` used in
+parent selection.  Geometry fingerprints are cached on each structure without
+copying the ``Atoms`` object, so repeated comparisons reuse the fingerprint
+computed on the first call.  The end-of-campaign ``filter_unique_minima`` pass
+(BH and simple GO) is a separate full-history check and is unchanged.
+
 The simple (1–2 atom) optimizer has no in-search filter; it relies on that
 final campaign pass.
 Unique structures are written under ``final_unique_minima/`` (see

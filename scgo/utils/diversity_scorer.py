@@ -90,7 +90,9 @@ class DiversityScorer:
         Returns:
             1D numpy array of sorted interatomic distances.
         """
-        dist_dict = get_sorted_dist_list(atoms, mic=self.comparator.mic)
+        dist_dict = get_sorted_dist_list(
+            atoms, mic=self.comparator.mic, n_top=self.comparator.n_top
+        )
 
         descriptor_parts = [
             dist_dict[atomic_num] for atomic_num in sorted(dist_dict.keys())

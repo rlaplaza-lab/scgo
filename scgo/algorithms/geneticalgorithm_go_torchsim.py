@@ -233,6 +233,30 @@ def _picklable_atoms_copy(atoms: Atoms | None) -> Atoms | None:
     return copy
 
 
+def _mobile_only_copy(atoms: Atoms, n_frozen_prefix: int) -> Atoms:
+    """Return only the trailing mobile atoms, dropping the frozen slab prefix.
+
+    The slab is available in the worker via the cached pairing operator so it
+    does not need to be transmitted per job.  ``info`` is shallow-copied so
+    that ``confid`` (needed by ``get_new_individual``) travels with the frame.
+    """
+    mobile = atoms[n_frozen_prefix:].copy()
+    mobile.calc = None
+    mobile.info = dict(atoms.info)
+    return mobile
+
+
+def _reconstruct_full_frame(mobile: Atoms, slab: Atoms) -> Atoms:
+    """Reconstruct the full slab+mobile frame from a mobile-only job payload.
+
+    The slab is taken from the cached pairing operator; mobile carries ``info``
+    (including ``confid``) copied at job-build time.
+    """
+    full = slab + mobile
+    full.info = dict(mobile.info)
+    return full
+
+
 def _picklable_fragment_templates(
     templates: AdsorbateFragmentInput | None,
 ) -> list[Atoms] | None:
@@ -330,6 +354,30 @@ def _offspring_worker_init() -> None:
     os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 
+def _pairing_slab(pairing: Any) -> Atoms | None:
+    """Return the slab held by the (possibly dual) pairing operator."""
+    if isinstance(pairing, DualCutAndSplicePairing):
+        return pairing.primary.slab if len(pairing.primary.slab) > 0 else None
+    if isinstance(pairing, CutAndSplicePairing):
+        return pairing.slab if len(pairing.slab) > 0 else None
+    return None
+
+
+def _pairing_last_attempt_count(pairing: Any) -> int:
+    """Return the inner cut-config attempt count from the last cross() call.
+
+    ``CutAndSplicePairing.last_attempt_count`` tracks how many (outer × cut)
+    combinations were tested.  For ``DualCutAndSplicePairing`` the active
+    variant's count is returned (max of both, since only one ran).
+    """
+    if isinstance(pairing, DualCutAndSplicePairing):
+        return max(
+            getattr(pairing.primary, "last_attempt_count", 0),
+            getattr(pairing.exploratory, "last_attempt_count", 0),
+        )
+    return int(getattr(pairing, "last_attempt_count", 0))
+
+
 def _build_offspring_worker(
     job: dict[str, Any],
 ) -> dict[str, Any]:
@@ -341,6 +389,10 @@ def _build_offspring_worker(
     (parent frames, task seed, and the dynamic adaptive config / mutation
     probability / epoch) is pickled per ``submit``, avoiding the per-job pickle
     of the slab ``Atoms`` and the operator list.
+
+    When ``job["mobile_only"]`` is True the parent frames contain only the
+    trailing mobile atoms; the slab prefix is reattached here from the cached
+    pairing operator before crossover and integrity checks.
     """
     ctx: OffspringBuildContext = _OFFSPRING_WORKER_STATE["static_ctx"]
     pairing_rng, operator_rng, decision_rng = offspring_rng_triple(job["task_seed"])
@@ -359,9 +411,25 @@ def _build_offspring_worker(
         rng=decision_rng,
     )
     operator_setup_s = perf_counter() - setup_t0
+
+    # Reconstruct full frames for surface runs where only mobile atoms were sent.
+    if job.get("mobile_only"):
+        _slab = _pairing_slab(local_pairing)
+        if _slab is None or len(_slab) == 0:
+            raise SCGORuntimeError(
+                "mobile_only job received but pairing has no slab - "
+                "reconstruction impossible"
+            )
+        a1_full = _reconstruct_full_frame(job["a1"], _slab)
+        a2_full = _reconstruct_full_frame(job["a2"], _slab)
+    else:
+        a1_full = job["a1"]
+        a2_full = job["a2"]
+
     crossover_t0 = perf_counter()
-    child, desc = local_pairing.get_new_individual([job["a1"], job["a2"]])
+    child, desc = local_pairing.get_new_individual([a1_full, a2_full])
     crossover_s = perf_counter() - crossover_t0
+    pairing_attempt_count = _pairing_last_attempt_count(local_pairing)
     mutation_s = 0.0
     mutation_applied = False
     if child is None:
@@ -374,6 +442,7 @@ def _build_offspring_worker(
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
+            "pairing_attempt_count": pairing_attempt_count,
         }
     if _fails_fast_geometric_prefilter(child, ctx.blmin, n_slab=ctx.n_frozen_prefix):
         return {
@@ -385,6 +454,7 @@ def _build_offspring_worker(
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
+            "pairing_attempt_count": pairing_attempt_count,
         }
     if decision_rng.random() < job["current_mutation_probability"]:
         mutation_t0 = perf_counter()
@@ -408,7 +478,9 @@ def _build_offspring_worker(
         ctx.system_type,
     )
     # Post-operator atom-count + stoichiometry guard (covers crossover + mutation).
-    _assert_offspring_integrity(child, job["a1"])
+    # Use the reconstructed full frame so the length check is against the full
+    # slab+mobile count, not the mobile-only payload length.
+    _assert_offspring_integrity(child, a1_full)
     try:
         # Pre-relax geometric screen (raw frame); eligibility is decided post-relax
         # via validate_structure_for_ga_storage after canonicalization.
@@ -435,6 +507,7 @@ def _build_offspring_worker(
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
+            "pairing_attempt_count": pairing_attempt_count,
         }
     return {
         "index": job["index"],
@@ -445,6 +518,7 @@ def _build_offspring_worker(
         "operator_setup_s": operator_setup_s,
         "crossover_s": crossover_s,
         "mutation_s": mutation_s,
+        "pairing_attempt_count": pairing_attempt_count,
     }
 
 
@@ -640,32 +714,44 @@ def _write_relaxed_candidate(
     return validation_error
 
 
-def _read_candidate_batch(da: DataConnection, to_take: int) -> list[Atoms]:
+_META_COLS = {"include_data": False, "columns": ["id", "mtime", "key_value_pairs"]}
+
+
+def _read_candidate_batch(
+    da: DataConnection,
+    to_take: int | None,
+) -> list[Atoms]:
     """Read a batch of unrelaxed candidates under a single DB connection.
 
-    Uses indexed ``relaxed`` / ``queued`` filters instead of a full-table
-    ``select()``. For each requested gaid the latest trajectory (max mtime,
-    tie-broken by max id) is loaded.
+    Uses metadata-only (no blob) indexed ``relaxed`` / ``queued`` filters to
+    build the exclusion set, then ``get_atoms`` only for the taken gaids.  This
+    avoids deserializing position / force blobs for every row on every call.
 
     Rows without a ``gaid`` (e.g. the stoichiometry template row written at
     database setup) are skipped. A gaid is excluded when *any* of its rows is
     relaxed or queued, because ``add_relaxed_step`` appends a new ``relaxed=1``
     row and leaves the original ``relaxed=0`` row in place. Up to ``to_take``
     gaids, sorted by gaid, are returned as ``Atoms`` with ``confid`` set.
+
+    Parameters
+    ----------
+    to_take:
+        Maximum number of gaids to return.  Pass ``None`` to return all
+        pending gaids (no cap).
     """
     with da.c:
         excluded_gaids: set[int] = set()
-        for r in da.c.select(relaxed=1):
+        for r in da.c.select(relaxed=1, **_META_COLS):
             gaid = getattr(r, "gaid", None)
             if gaid is not None:
                 excluded_gaids.add(int(gaid))
-        for r in da.c.select(queued=1):
+        for r in da.c.select(queued=1, **_META_COLS):
             gaid = getattr(r, "gaid", None)
             if gaid is not None:
                 excluded_gaids.add(int(gaid))
 
         rows_by_gaid: dict[int, list] = {}
-        for r in da.c.select(relaxed=0):
+        for r in da.c.select(relaxed=0, **_META_COLS):
             gaid = getattr(r, "gaid", None)
             if gaid is None:
                 continue
@@ -674,7 +760,8 @@ def _read_candidate_batch(da: DataConnection, to_take: int) -> list[Atoms]:
                 continue
             rows_by_gaid.setdefault(gaid_i, []).append(r)
 
-        gaids = sorted(rows_by_gaid.keys())[:to_take]
+        all_gaids = sorted(rows_by_gaid.keys())
+        gaids = all_gaids if to_take is None else all_gaids[:to_take]
         out: list[Atoms] = []
         for gaid in gaids:
             latest = max(rows_by_gaid[gaid], key=lambda row: (row.mtime, row.id))
@@ -718,26 +805,14 @@ def _relax_unrelaxed_candidates(
         Tuple of (GA-eligible count, ineligible count, compact ineligible
         reason counts) for this relax call.
     """
-    available = database_retry(
-        da.get_number_of_unrelaxed_candidates,
-        config=RetryConfig(max_retries=5),
-        operation_name="get_unrelaxed_candidates_count",
-    )
-
-    if available == 0:
-        return (0, 0, {})
-    # Relax every currently available candidate instead of returning early when
-    # `available < max_batch`. A generation that produced few children no longer
-    # defers work and starves the GPU; candidates left over after this call stay
-    # unrelaxed and are picked up by the next call.
-    # A user-set `max_batch` still caps the take via `min` below unless `force`.
-
-    to_take = available if force or max_batch is None else min(available, max_batch)
+    # Avoid a separate get_number_of_unrelaxed_candidates call (three blob selects);
+    # _read_candidate_batch does the same three selects metadata-only.
+    batch_cap: int | None = None if (force or max_batch is None) else max_batch
 
     # Batch read candidates under a single database connection
     t0 = perf_counter()
     batch = database_retry(
-        lambda: _read_candidate_batch(da, to_take),
+        lambda: _read_candidate_batch(da, batch_cap),
         config=RetryConfig(max_retries=5),
         operation_name="read_candidate_batch",
     )
@@ -778,13 +853,19 @@ def _relax_unrelaxed_candidates(
     successful_count = 0
     ineligible_count = 0
     ineligible_reasons: dict[str, int] = {}
+    eligible_relaxed: list[Atoms] = []
 
     def _write_batch_under_connection():
         """Write relaxed results under a single connection."""
-        nonlocal ineligible_count, successful_count, ineligible_reasons
+        nonlocal \
+            ineligible_count, \
+            successful_count, \
+            ineligible_reasons, \
+            eligible_relaxed
         successful_count = 0
         ineligible_count = 0
         ineligible_reasons = {}
+        eligible_relaxed = []
         with da.c:
             for idx, (original, (energy, relaxed)) in enumerate(
                 zip(batch, relaxed_results, strict=True)
@@ -830,6 +911,7 @@ def _relax_unrelaxed_candidates(
                     )
                 else:
                     successful_count += 1
+                    eligible_relaxed.append(original)
 
     t0 = perf_counter()
     database_retry(
@@ -844,7 +926,7 @@ def _relax_unrelaxed_candidates(
 
     if population is not None:
         t0 = perf_counter()
-        population.update()
+        population.update(new_cand=eligible_relaxed)
         if profiling is not None:
             profiling["population_update_s"] = profiling.get(
                 "population_update_s", 0.0
@@ -1614,6 +1696,7 @@ def ga_go(
             worker_failures_gen = 0
             worker_failure_types_gen: dict[str, int] = {}
             retry_failure_reasons_gen: dict[str, int] = {}
+            pairing_cuts_gen = 0
             generation_all_job_results: list[dict[str, Any]] = []
             total_crossover_jobs_gen = 0
 
@@ -1684,11 +1767,21 @@ def ga_go(
                             continue
                         a1, a2 = candidates
                         task_seed = int(rng.integers(0, 2**31 - 1))
+                        _nfp = offspring_ctx.n_frozen_prefix
+                        if _nfp > 0:
+                            _a1 = _mobile_only_copy(a1, _nfp)
+                            _a2 = _mobile_only_copy(a2, _nfp)
+                        else:
+                            _a1 = a1.copy()
+                            _a1.calc = None
+                            _a2 = a2.copy()
+                            _a2.calc = None
                         jobs.append(
                             {
                                 "index": len(jobs),
-                                "a1": a1.copy(),
-                                "a2": a2.copy(),
+                                "a1": _a1,
+                                "a2": _a2,
+                                "mobile_only": _nfp > 0,
                                 "task_seed": task_seed,
                                 "operators_epoch": offspring_ctx.operators_epoch,
                                 "adaptive_config": offspring_ctx.adaptive_config,
@@ -1790,6 +1883,7 @@ def ga_go(
                         t_operator_setup_gen += float(result["operator_setup_s"])
                         t_crossover_gen += float(result["crossover_s"])
                         t_mutation_gen += float(result["mutation_s"])
+                        pairing_cuts_gen += int(result.get("pairing_attempt_count", 0))
                         child = result["child"]
                         if child is None:
                             reason = result.get("failure_reason") or "unknown"
@@ -1821,6 +1915,9 @@ def ga_go(
             generation_acceptance = created / max(attempts, 1)
             recent_acceptance_ratios.append(generation_acceptance)
             profile_counters["offspring_attempts_total"] += attempts
+            profile_counters["pairing_cut_attempts_total"] = (
+                profile_counters.get("pairing_cut_attempts_total", 0) + pairing_cuts_gen
+            )
             for reason, count in retry_failure_reasons_gen.items():
                 profile_retry_failures[reason] = (
                     profile_retry_failures.get(reason, 0) + count

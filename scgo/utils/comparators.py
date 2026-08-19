@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
+from ase.geometry import get_distances
 from scipy.spatial.distance import pdist
 
 from scgo.constants import (
@@ -28,6 +29,29 @@ from scgo.exceptions import (
 from scgo.metadata.atoms import get_tag
 
 _SORTED_DIST_FP_INFO_KEY = "_scgo_sorted_dist_fp"
+_SORTED_DIST_FP_ATTR_KEY = "_scgo_sorted_dist_fp_cache"
+
+
+def _sorted_dist_cache_slot(n_top: int, mic: bool) -> str:
+    """Stable, serializable cache slot key for ``atoms.info`` storage."""
+    return f"{int(n_top)}|{int(bool(mic))}"
+
+
+def _get_sorted_dist_cache_store(atoms: Atoms) -> dict[str, dict]:
+    """Return mutable in-memory cache store attached to the Atoms object.
+
+    The heavy fingerprint data lives on a private attribute instead of
+    ``atoms.info`` so exports (e.g. extxyz) do not carry non-serializable
+    nested dictionaries. A lightweight marker in ``atoms.info`` preserves
+    debuggability and backwards intent.
+    """
+    existing = getattr(atoms, _SORTED_DIST_FP_ATTR_KEY, None)
+    if not isinstance(existing, dict):
+        existing = {}
+        setattr(atoms, _SORTED_DIST_FP_ATTR_KEY, existing)
+    # Keep a tiny, hashable marker in atoms.info for visibility.
+    atoms.info[_SORTED_DIST_FP_INFO_KEY] = "cached"
+    return existing
 
 
 def _array_dirty_token(arr: np.ndarray) -> tuple:
@@ -64,9 +88,27 @@ def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
     return key
 
 
-def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
-    """Compute per-element sorted distance fingerprints without using the cache."""
-    numbers = atoms.numbers
+def _compute_sorted_dist_list(
+    atoms: Atoms,
+    mic: bool,
+    *,
+    n_top: int = 0,
+) -> dict[int, np.ndarray]:
+    """Compute per-element sorted distance fingerprints without using the cache.
+
+    When ``n_top > 0`` and ``n_top < len(atoms)`` only the trailing ``n_top``
+    atoms are fingerprinted (using NumPy index views, not an Atoms slice).
+    """
+    all_pos = atoms.arrays["positions"]
+    all_numbers = atoms.arrays["numbers"]
+
+    if 0 < n_top < len(atoms):
+        positions_arr = all_pos[-n_top:]
+        numbers = all_numbers[-n_top:]
+    else:
+        positions_arr = all_pos
+        numbers = all_numbers
+
     unique_types = set(numbers)
     pair_cor: dict[int, np.ndarray] = {}
     # Honor ``mic`` literally so GA uniqueness and Pure stay coherent when
@@ -75,7 +117,18 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
 
     all_d: np.ndarray | None = None
     if use_mic_path:
-        all_d = atoms.get_all_distances(mic=True)
+        # Compute MIC distances only for the relevant subset while preserving
+        # the original cell/PBC.
+        # get_distances returns (D_vec, D_scalar); we only need D_scalar.
+        _, all_d = get_distances(
+            positions_arr,
+            positions_arr,
+            cell=atoms.cell.array,
+            pbc=atoms.pbc,
+        )
+        # Mirror the upper-triangle behaviour: zero the lower triangle so
+        # triu_indices picks only unique pairs (same as get_all_distances path).
+        all_d = np.triu(all_d, k=1)
 
     for n in unique_types:
         i_un = np.flatnonzero(numbers == n)
@@ -83,15 +136,13 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
             continue
 
         if not use_mic_path:
-            positions = atoms.arrays["positions"][i_un]
-            d = pdist(positions).tolist()
+            d = pdist(positions_arr[i_un]).tolist()
         else:
             if all_d is None:
                 raise TypeError(
                     "all_d distance matrix is required when use_mic_path=True"
                 )
             sub = all_d[np.ix_(i_un, i_un)]
-            # Upper triangle excluding diagonal (same order as nested get_distance).
             d = sub[np.triu_indices(len(i_un), k=1)].tolist()
 
         d.sort()
@@ -99,7 +150,12 @@ def _compute_sorted_dist_list(atoms: Atoms, mic: bool) -> dict[int, np.ndarray]:
     return pair_cor
 
 
-def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarray]:
+def get_sorted_dist_list(
+    atoms: Atoms,
+    mic: bool = False,
+    *,
+    n_top: int = 0,
+) -> dict[int, np.ndarray]:
     """Calculates a dictionary of sorted interatomic distances for an Atoms object.
 
     This utility method is used to generate a structural fingerprint of a cluster
@@ -109,22 +165,32 @@ def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarra
     invalidated when positions, numbers, or (for MIC) cell/PBC change. Cache hits
     use a cheap dirty token (array pointer/shape/sum) and skip byte hashing.
 
+    The cache is keyed by ``(n_top, mic)`` so different subsets of the same
+    structure can coexist in the cache without evicting each other.
+
     Args:
         atoms: The Atoms object for which to calculate the distances.
         mic: Whether to use the minimum image convention for periodic systems.
             Defaults to False.
+        n_top: Number of trailing atoms to fingerprint.  When ``0`` (default)
+            or ``>= len(atoms)`` all atoms are used.  The fingerprint is stored
+            on the original ``atoms.info``; no ``Atoms`` slice is created.
 
     Returns:
         A dictionary where keys are atomic numbers (integers) and values are
         sorted 1D numpy arrays of interatomic distances for that element type.
     """
     mic_b = bool(mic)
-    cached = atoms.info.get(_SORTED_DIST_FP_INFO_KEY)
-    if (
-        isinstance(cached, dict)
-        and cached.get("mic") == mic_b
-        and isinstance(cached.get("pair_cor"), dict)
-    ):
+    n_top_i = int(n_top)
+    if n_top_i <= 0 or n_top_i >= len(atoms):
+        # Canonicalize "full-structure" requests so cache keys are stable.
+        n_top_i = 0
+    cache_key = _sorted_dist_cache_slot(n_top_i, mic_b)
+
+    # Cache entries are keyed by slot so different n_top values don't collide.
+    fp_store = _get_sorted_dist_cache_store(atoms)
+    cached = fp_store.get(cache_key)
+    if isinstance(cached, dict) and isinstance(cached.get("pair_cor"), dict):
         dirty = _atoms_geometry_dirty_token(atoms, mic=mic_b)
         if cached.get("dirty_token") == dirty:
             return cached["pair_cor"]
@@ -135,11 +201,10 @@ def get_sorted_dist_list(atoms: Atoms, mic: bool = False) -> dict[int, np.ndarra
     else:
         content_key = _sorted_dist_content_key(atoms, mic=mic_b)
 
-    pair_cor = _compute_sorted_dist_list(atoms, mic=mic_b)
-    atoms.info[_SORTED_DIST_FP_INFO_KEY] = {
+    pair_cor = _compute_sorted_dist_list(atoms, mic=mic_b, n_top=n_top_i)
+    fp_store[cache_key] = {
         "content_key": content_key,
         "dirty_token": _atoms_geometry_dirty_token(atoms, mic=mic_b),
-        "mic": mic_b,
         "pair_cor": pair_cor,
     }
     return pair_cor
@@ -316,17 +381,18 @@ class PureInteratomicDistanceComparator:
                 "The two configurations must have the same number of atoms",
             )
 
-        # If n_top is defined, only compare the specified number of atoms
-        a1top = a1[-self.n_top :] if self.n_top > 0 else a1
-        a2top = a2[-self.n_top :] if self.n_top > 0 else a2
-        return self.__compare_structure__(a1top, a2top)
+        return self.__compare_structure__(a1, a2)
 
     def __compare_structure__(self, a1: Atoms, a2: Atoms) -> tuple[float, float]:
         """Private method to perform the core structural comparison.
 
+        Uses the trailing ``n_top`` atoms when ``n_top > 0``, obtained via
+        NumPy index views without copying the ``Atoms`` object so fingerprints
+        are cached on the original ``atoms.info``.
+
         Args:
-            a1: The first Atoms object (or subset).
-            a2: The second Atoms object (or subset).
+            a1: The first Atoms object.
+            a2: The second Atoms object.
 
         Returns:
             A tuple containing the cumulative difference and the maximum difference.
@@ -334,21 +400,35 @@ class PureInteratomicDistanceComparator:
             are reported as a maximal non-match ``(inf, inf)`` rather than
             raising, so callers such as :meth:`looks_like` simply return False.
         """
-        if Counter(a1.numbers) != Counter(a2.numbers):
+        n_top = self.n_top
+        n = len(a1)
+
+        # Determine the compared subset's atom numbers (NumPy view, no copy).
+        all_nums1 = a1.arrays["numbers"]
+        all_nums2 = a2.arrays["numbers"]
+        if 0 < n_top < n:
+            sub_nums1 = all_nums1[-n_top:]
+            sub_nums2 = all_nums2[-n_top:]
+        else:
+            sub_nums1 = all_nums1
+            sub_nums2 = all_nums2
+
+        if Counter(sub_nums1) != Counter(sub_nums2):
             # Different compositions can never "look like" each other; report a
             # maximal difference instead of raising so population dedup and
             # diversity scoring keep working on mixed-composition pools.
             return (float("inf"), float("inf"))
 
-        p1 = get_sorted_dist_list(a1, mic=self.mic)
-        p2 = get_sorted_dist_list(a2, mic=self.mic)
-        numbers = a1.numbers
+        # Fingerprints are cached on the originals keyed by (n_top, mic).
+        p1 = get_sorted_dist_list(a1, mic=self.mic, n_top=n_top)
+        p2 = get_sorted_dist_list(a2, mic=self.mic, n_top=n_top)
+        numbers = sub_nums1
         total_cum_diff = 0.0
         max_diff = 0.0
 
-        for n in p1:
-            c1 = p1[n]
-            c2 = p2[n]
+        for elem in p1:
+            c1 = p1[elem]
+            c2 = p2[elem]
 
             if len(c1) != len(c2):
                 # This should not happen if compositions are the same
@@ -369,7 +449,7 @@ class PureInteratomicDistanceComparator:
 
             max_diff = max(max_diff, max_diff_for_type)
 
-            num_atoms_of_type = float(np.sum(numbers == n))  # Vectorized operation
+            num_atoms_of_type = float(np.sum(numbers == elem))  # Vectorized operation
             total_cum_diff += (
                 cum_diff_for_type
                 / total_dist_sum
