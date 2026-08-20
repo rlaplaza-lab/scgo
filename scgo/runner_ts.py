@@ -30,6 +30,7 @@ from scgo.runner_params import (
     _reject_system_keys,
     _require_system_type,
     _resolve_go_ts_params,
+    _resolve_surface_config,
     _resolve_ts_params,
     _resolved_path,
     _validate_go_ts_param_coherence,
@@ -356,28 +357,35 @@ def run_go_ts_campaign(
     configure()
     try:
         st = _require_system_type(system_type, "run_go_ts_campaign")
-        validate_system_type_settings(system_type=st, surface_config=surface_config)
         if go_params is not None:
             _reject_system_keys(go_params, context="run_go_ts_campaign")
         if ts_params is not None:
             _reject_system_keys(ts_params, context="run_go_ts_campaign", kind="ts")
+        resolved_surface = _resolve_surface_config(surface_config, go_params)
+        if resolved_surface is None:
+            resolved_surface = _resolve_surface_config(None, ts_params)
+        validate_system_type_settings(system_type=st, surface_config=resolved_surface)
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
     go_mat, ts_mat = _resolve_go_ts_params(
         system_type=st,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
         go_params=go_params,
         ts_params=ts_params,
     )
     eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
     rng = ensure_rng(eff_seed)
-    go_prep = _with_surface_on_params(go_mat, surface_config=surface_config)
+    go_prep = _with_surface_on_params(go_mat, surface_config=resolved_surface)
     _validate_go_ts_param_coherence(
         go_prepared=go_prep,
         ts_params=ts_mat,
         system_type=st,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
+    )
+    _validate_go_ts_surface_config(
+        system_type=st,
+        surface_config=resolved_surface,
     )
 
     full_compositions: list[list[str]] = []
@@ -386,7 +394,8 @@ def run_go_ts_campaign(
     preset_ads = (
         extract_adsorbate_definition_from_params(go_mat) if adsorbates is None else None
     )
-    for core_comp in _as_composition_list(compositions):
+    allow_empty = get_system_policy(st).slab_is_search_target
+    for core_comp in _as_composition_list(compositions, allow_empty=allow_empty):
         ads_def, ads_temp, full_comp = resolve_adsorbate_run_composition(
             system_type=st,
             composition=core_comp,
@@ -396,16 +405,12 @@ def run_go_ts_campaign(
         )
         full_compositions.append(full_comp)
         composition_adsorbate.append((ads_def, ads_temp))
-        _validate_go_ts_surface_config(
-            system_type=st,
-            surface_config=surface_config,
-        )
 
     ts_kwargs = _coerce_ts_for_runner(
         ts_mat,
         fn_name="run_go_ts_campaign",
         system_type=st,
-        surface_config=surface_config,
+        surface_config=resolved_surface,
     )
     campaign_root = resolve_campaign_root_from_args(
         output_dir,
@@ -417,7 +422,7 @@ def run_go_ts_campaign(
             adsorbate_definition=composition_adsorbate[0][0]
             if composition_adsorbate
             else None,
-            surface_config=surface_config,
+            surface_config=resolved_surface,
             params=go_prep,
         ),
         calc_slug=calculator_slug_from_go_params(go_mat),
@@ -440,7 +445,7 @@ def run_go_ts_campaign(
             comp,
             system_type=st,
             adsorbate_definition=ads_def,
-            surface_config=surface_config,
+            surface_config=resolved_surface,
             params=go_local,
         )
         comp_seed = int(rng.integers(0, 2**63 - 1))
@@ -579,19 +584,25 @@ def run_ts_campaign(
     configure()
     try:
         st = _require_system_type(system_type, "run_ts_campaign")
-        validate_system_type_settings(system_type=st, surface_config=surface_config)
         if ts_params is not None:
             _reject_system_keys(ts_params, context="run_ts_campaign", kind="ts")
+        resolved_surface = _resolve_surface_config(surface_config, ts_params)
+        validate_system_type_settings(system_type=st, surface_config=resolved_surface)
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
     ts_mat = _resolve_ts_params(
-        ts_params, system_type=st, surface_config=surface_config
+        ts_params, system_type=st, surface_config=resolved_surface
     )
-    ts_base = initialize_ts_params(None, system_type=st, surface_config=surface_config)
+    ts_base = initialize_ts_params(
+        None, system_type=st, surface_config=resolved_surface
+    )
     eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
     ts_kwargs = _coerce_ts_for_runner(
-        ts_mat, fn_name="run_ts_campaign", system_type=st, surface_config=surface_config
+        ts_mat,
+        fn_name="run_ts_campaign",
+        system_type=st,
+        surface_config=resolved_surface,
     )
     ts_kwargs.pop("system_type", None)  # passed as positional arg below
     configure_logging(verbosity)
@@ -612,7 +623,8 @@ def run_ts_campaign(
     preset_ads = (
         extract_adsorbate_definition_from_params(ts_mat) if adsorbates is None else None
     )
-    for core in _as_composition_list(compositions):
+    allow_empty = get_system_policy(st).slab_is_search_target
+    for core in _as_composition_list(compositions, allow_empty=allow_empty):
         ads_def, _, full = resolve_adsorbate_run_composition(
             system_type=st,
             composition=core,

@@ -684,6 +684,64 @@ def test_run_ts_campaign_requires_system_type():
         )
 
 
+def test_run_go_ts_campaign_accepts_params_only_surface_config(monkeypatch, tmp_path):
+    """Campaign APIs resolve top-level surface_config like single-run APIs."""
+    cfg = _surface_cfg()
+    calls: list[dict] = []
+
+    def _fake_pipeline(composition, system_type, **kwargs):
+        calls.append({"composition": list(composition), "system_type": system_type})
+        return {"formula": "x", "ts_total_count": 0, "ts_success_count": 0}
+
+    monkeypatch.setattr("scgo.runner_ts._run_go_ts_pipeline", _fake_pipeline)
+    ts_params = {
+        **get_ts_search_params(
+            system_type="surface_cluster",
+            surface_config=cfg,
+            calculator="EMT",
+            calculator_kwargs={},
+        ),
+        "use_parallel_neb": False,
+        "use_torchsim": False,
+    }
+    run_go_ts_campaign(
+        [["Pt", "Pt"]],
+        go_params={"surface_config": cfg, "optimizer_params": {"ga": {}}},
+        ts_params=ts_params,
+        output_dir=tmp_path / "camp",
+        verbosity=0,
+        system_type="surface_cluster",
+        log_summary=False,
+    )
+    assert len(calls) == 1
+    assert calls[0]["system_type"] == "surface_cluster"
+
+
+def test_run_go_campaign_allows_empty_surface_composition(tmp_path):
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, True]
+    cfg = SurfaceSystemConfig(
+        slab=slab,
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+    )
+    ctx = _prepare_run_go_campaign_context(
+        [[]],
+        params={"surface_config": cfg},
+        seed=1,
+        verbosity=0,
+        run_id=None,
+        clean=False,
+        output_dir=tmp_path / "camp",
+        calculator_for_global_optimization=None,
+        surface_config=None,
+        system_type="surface",
+        adsorbates=None,
+    )
+    assert ctx.compositions == [[]]
+    assert ctx.system_type == "surface"
+
+
 def test_run_go_ts_campaign_paths(monkeypatch, tmp_path):
     calls: list[dict] = []
 

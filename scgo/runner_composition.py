@@ -141,8 +141,10 @@ def _as_composition(
         )
 
 
-def _as_composition_list(items: Iterable[CompositionInput]) -> list[list[str]]:
-    out = [_as_composition(x) for x in items]
+def _as_composition_list(
+    items: Iterable[CompositionInput], *, allow_empty: bool = False
+) -> list[list[str]]:
+    out = [_as_composition(x, allow_empty=allow_empty) for x in items]
     if not out:
         raise SCGOValidationError("compositions iterable must not be empty")
     return out

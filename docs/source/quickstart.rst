@@ -291,7 +291,7 @@ slab layers** rather than a deposited nanoparticle. Pass an empty composition
    from scgo.param_presets import get_default_params
 
    surface_config = make_defected_graphite_surface_config(
-       slab_layers=3, slab_repeat_xy=3, n_vacancies=1, seed=42
+       n_vacancies=1, seed=42
    )
 
    results = run_go(
@@ -311,7 +311,7 @@ slab layers** rather than a deposited nanoparticle. Pass an empty composition
    from scgo.param_presets import get_default_params
 
    surface_config = make_n_doped_graphite_surface_config(
-       slab_layers=3, slab_repeat_xy=3, n_dopants=2, seed=42
+       n_dopants=2, seed=42
    )
    oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.97]])
 

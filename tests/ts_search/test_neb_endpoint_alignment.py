@@ -961,3 +961,86 @@ def test_copy_atoms_isolates_nested_info_from_metadata_writes() -> None:
     shallow = src.copy()
     set_tags(shallow, raw_score=-3.0)
     assert extract_energy_from_atoms(src) == pytest.approx(3.0)
+
+
+def test_prepare_neb_endpoints_slab_search_empty_core_uses_deposit_prefix() -> None:
+    """Empty-core surface_adsorbate NEB prep must not treat top-layer as adsorbate."""
+    from scgo.surface.config import SurfaceSystemConfig
+    from scgo.surface.partition import prepare_slab_search_surface_config
+    from scgo.ts_search.neb_endpoints import prepare_neb_endpoints
+    from scgo.utils.ts_runner_kwargs import NebRunConfig
+
+    slab = fcc111("Pt", size=(2, 2, 3), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    cfg = SurfaceSystemConfig(
+        slab=slab,
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+        adsorption_height_min=1.0,
+        adsorption_height_max=3.0,
+        comparator_use_mic=True,
+    )
+    cfg, part = prepare_slab_search_surface_config(cfg)
+    n_fixed = int(part.n_fixed)
+    n_full = len(cfg.slab)
+    z_top = float(np.max(cfg.slab.positions[:, 2]))
+    xy = np.mean(cfg.slab.positions[n_fixed:, :2], axis=0)
+
+    def _combined(dx: float) -> Atoms:
+        oh = Atoms(
+            "OH",
+            positions=[
+                [xy[0] + dx, xy[1], z_top + 1.8],
+                [xy[0] + dx, xy[1], z_top + 2.76],
+            ],
+            cell=cfg.slab.cell,
+            pbc=cfg.slab.pbc,
+        )
+        combined = cfg.slab.copy() + oh
+        tags = np.zeros(len(combined), dtype=int)
+        tags[n_full:] = 1
+        combined.set_tags(tags)
+        return combined
+
+    ads = AdsorbateDefinition(
+        core_symbols=[],
+        adsorbate_symbols=["O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    neb_cfg = NebRunConfig(
+        neb_n_images=5,
+        neb_spring_constant=0.1,
+        neb_fmax=0.5,
+        neb_steps=10,
+        neb_climb=False,
+        neb_interpolation_method="linear",
+        neb_align_endpoints=True,
+        neb_perturb_sigma=0.0,
+        neb_interpolation_mic=True,
+        neb_tangent_method="improvedtangent",
+        neb_surface_cell_remap=False,
+        neb_surface_lattice_rotation=False,
+        neb_surface_max_lattice_shift=0,
+        n_slab=n_fixed,
+        n_core_mobile=n_full - n_fixed,
+        n_adsorbate_mobile=2,
+        adsorbate_fragment_lengths=[2],
+        max_endpoint_mismatch=3.0,
+        neb_prescreen_clash_distance=0.5,
+        min_saddle_prominence=0.0,
+        neb_max_spurious_barrier=10.0,
+        binding_penetration_tolerance_a=0.5,
+        layer_cluster_threshold_ang=0.4,
+        neb_interpolation_bond_tolerance_a=0.5,
+        adsorbate_definition=ads,
+        connectivity_factor=1.4,
+        allow_cluster_fragmentation=True,
+        allow_adsorbate_surface_detachment=True,
+        enforce_adsorbate_subgraph_integrity=True,
+        system_type="surface_adsorbate",
+        surface_config=cfg,
+        torchsim_params=None,
+    )
+    react, prod = prepare_neb_endpoints(_combined(0.0), _combined(1.2), neb_cfg)
+    assert len(react) == n_full + 2
+    assert len(prod) == n_full + 2

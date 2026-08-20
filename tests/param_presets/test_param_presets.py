@@ -168,7 +168,49 @@ def test_ts_defaults_expose_promoted_thresholds():
         assert d["binding_penetration_tolerance_a"] == 0.1
         assert d["layer_cluster_threshold_ang"] == 0.4
         assert d["neb_interpolation_bond_tolerance_a"] == 0.5
-        assert d["neb_max_spurious_barrier"] == 8.0
+        if system_type == "surface":
+            assert d["neb_max_spurious_barrier"] == 50.0
+            assert d["max_endpoint_mismatch"] == pytest.approx(3.0)
+            assert d["neb_prescreen_clash_distance"] == pytest.approx(0.35)
+        elif system_type == "surface_cluster":
+            assert d["neb_max_spurious_barrier"] == 8.0
+            assert d["max_endpoint_mismatch"] == pytest.approx(2.5)
+        else:
+            assert d["neb_max_spurious_barrier"] == 8.0
+
+
+def test_ts_search_params_allow_cluster_fragmentation_for_surface_regimes():
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, True]
+    cfg = SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
+    assert (
+        get_ts_search_params(system_type="gas_cluster")["allow_cluster_fragmentation"]
+        is False
+    )
+    assert (
+        get_ts_search_params(system_type="surface_cluster", surface_config=cfg)[
+            "allow_cluster_fragmentation"
+        ]
+        is True
+    )
+    assert (
+        get_ts_search_params(system_type="surface", surface_config=cfg)[
+            "allow_cluster_fragmentation"
+        ]
+        is True
+    )
+    assert (
+        get_ts_search_params(
+            system_type="surface_cluster_adsorbate", surface_config=cfg
+        )["allow_cluster_fragmentation"]
+        is False
+    )
+    assert (
+        get_ts_search_params(system_type="surface_adsorbate", surface_config=cfg)[
+            "allow_cluster_fragmentation"
+        ]
+        is True
+    )
 
 
 def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
@@ -219,6 +261,11 @@ def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     assert surf["pair_score_gap_center"] == pytest.approx(0.55)
     assert surf["neb_surface_cell_remap"] is True
     assert surf["neb_surface_lattice_rotation"] is False
+
+    bare_ads = get_ts_search_params(system_type="surface_adsorbate", surface_config=cfg)
+    assert bare_ads["max_endpoint_mismatch"] == pytest.approx(3.0)
+    assert bare_ads["neb_climb"] is True
+    assert bare_ads["neb_surface_lattice_rotation"] is False
 
 
 @pytest.mark.parametrize(

@@ -785,6 +785,49 @@ def test_save_neb_result_failed(temp_output_dir):
     assert load_completed_neb_result(temp_output_dir, "3_4") is None
 
 
+def test_load_completed_neb_result_requires_converged_and_ts_xyz(temp_output_dir):
+    """Resume rejects success-without-convergence or missing TS geometry."""
+    ts_atoms = Atoms("H2", positions=[[0, 0, 0], [1.2, 0, 0]])
+    ts_atoms.center(vacuum=5.0)
+    base = {
+        "status": "success",
+        "pair_id": "0_1",
+        "neb_converged": False,
+        "n_images": 5,
+        "spring_constant": 0.1,
+        "reactant_energy": -1.0,
+        "product_energy": -0.8,
+        "ts_energy": -0.5,
+        "barrier_height": 0.5,
+        "transition_state": ts_atoms,
+        "ts_image_index": 3,
+        "error": None,
+        "use_torchsim": False,
+        "fmax": 0.05,
+        "neb_steps": 100,
+        "interpolation_method": "idpp",
+    }
+    save_neb_result(base, temp_output_dir, "0_1")
+    assert load_completed_neb_result(temp_output_dir, "0_1") is None
+
+    converged = dict(base)
+    converged["neb_converged"] = True
+    converged["pair_id"] = "2_3"
+    save_neb_result(converged, temp_output_dir, "2_3")
+    os.remove(os.path.join(temp_output_dir, "ts_2_3.xyz"))
+    assert load_completed_neb_result(temp_output_dir, "2_3") is None
+
+    converged["pair_id"] = "5_6"
+    save_neb_result(converged, temp_output_dir, "5_6")
+    meta_path = os.path.join(temp_output_dir, "neb_5_6_metadata.json")
+    with open(meta_path) as f:
+        meta = json.load(f)
+    meta.pop("neb_converged", None)
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+    assert load_completed_neb_result(temp_output_dir, "5_6") is None
+
+
 def test_serial_resume_skips_completed_pair(tmp_path, monkeypatch):
     """Completed success metadata under run_dir skips find_transition_state."""
     atoms_a = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])

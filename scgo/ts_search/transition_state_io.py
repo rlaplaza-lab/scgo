@@ -231,17 +231,35 @@ def _adsorbate_max_displacement(
     n_slab: int,
     n_core: int,
     use_mic: bool,
+    n_adsorbate: int | None = None,
 ) -> float:
-    """Max adsorbate-atom displacement after overlaying the metal core.
+    """Max adsorbate-atom displacement after overlaying the metal/mobile core.
 
     Layout is ``[slab | core | adsorbate]``. Overlay (same operator as NEB
     endpoint prep) runs first; then adsorbate atoms are matched so a site hop
     is not mixed with rigid reorientation. Minima are not mutated.
+
+    When ``n_adsorbate`` is set (surface adsorbate on a searchable top slab
+    layer), the adsorbate block is the trailing ``n_adsorbate`` atoms and any
+    middle mobile-slab block is treated as the overlay core even if
+    ``n_core==0``.
     """
     n_slab = max(0, int(n_slab))
     n_core = max(0, int(n_core))
-    n_ads = len(atoms_i) - n_slab - n_core
-    if n_ads <= 0 or len(atoms_j) != len(atoms_i):
+    if len(atoms_j) != len(atoms_i):
+        return 0.0
+    if n_adsorbate is not None:
+        n_ads = max(0, int(n_adsorbate))
+        n_middle = len(atoms_i) - n_slab - n_ads
+        if n_middle < 0 or n_ads <= 0:
+            return 0.0
+        # Empty metal-core + searchable top layer: treat the middle block as
+        # the overlay core so the hop is OH-only, not top-layer+OH.
+        if n_core == 0 and n_middle > 0:
+            n_core = n_middle
+    else:
+        n_ads = len(atoms_i) - n_slab - n_core
+    if n_ads <= 0:
         return 0.0
 
     pos_i = np.asarray(atoms_i.get_positions(), dtype=float)
@@ -335,6 +353,7 @@ def select_structure_pairs(
     max_endpoint_mismatch: float | None = None,
     adsorbate_aware: bool = False,
     n_core_mobile: int | None = None,
+    n_adsorbate_mobile: int | None = None,
     pair_core_rms_max: float | None = None,
     pair_score_gap_center: float | None = None,
     pair_score_gap_width: float | None = None,
@@ -560,6 +579,7 @@ def select_structure_pairs(
                     n_slab=slab_len,
                     n_core=n_core,
                     use_mic=mic,
+                    n_adsorbate=n_adsorbate_mobile,
                 )
 
             # Core present: gate on core fingerprint. Adsorbate-only: gate on

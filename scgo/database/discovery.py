@@ -155,10 +155,12 @@ class DatabaseDiscovery:
                         record = load_run_dir_record(str(self.base_dir / run_id))
                         run_formula_cache[run_id] = record.formula if record else None
                     known_formula = run_formula_cache[run_id]
-                    if known_formula is not None:
-                        if known_formula == target_formula:
-                            filtered.append(db_path)
+                    if known_formula is not None and known_formula == target_formula:
+                        filtered.append(db_path)
                         continue
+                    # Metadata formula is often mobile-only (e.g. ``Pt5``) while
+                    # TS loads slab+mobile (``C150Pt5``). Fall through to the
+                    # atom composition probe instead of rejecting the DB.
                 with get_connection(db_path) as db:
                     first_candidate = self._get_first_relaxed_candidate(db)
 

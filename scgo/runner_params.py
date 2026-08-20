@@ -259,12 +259,13 @@ def _validate_go_ts_surface_config(
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None,
 ) -> None:
-    """For surface system types, require a ``SurfaceSystemConfig`` run argument."""
+    """For surface system types, require a resolved ``SurfaceSystemConfig``."""
     if not get_system_policy(system_type).uses_surface:
         return
     if not isinstance(surface_config, SurfaceSystemConfig):
         raise SCGOValidationError(
-            f"system_type={system_type!r} requires the run surface_config argument "
+            f"system_type={system_type!r} requires surface_config "
+            "(run argument or top-level go_params/ts_params key) "
             "to be a SurfaceSystemConfig."
         )
 
@@ -621,11 +622,11 @@ def _prepare_run_go_campaign_context(
     composition_adsorbate: list[
         tuple[AdsorbateDefinition | None, Atoms | list[Atoms] | None]
     ] = []
-    for composition_item in _as_composition_list(compositions):
-        comp = _as_composition(composition_item)
+    allow_empty = get_system_policy(st).slab_is_search_target
+    for composition_item in _as_composition_list(compositions, allow_empty=allow_empty):
         ads_def, ads_temp, full_comp = resolve_adsorbate_run_composition(
             system_type=st,
-            composition=comp,
+            composition=composition_item,
             adsorbates=adsorbates,
             preset_adsorbate_definition=preset_ads_def,
             context="run_go_campaign",

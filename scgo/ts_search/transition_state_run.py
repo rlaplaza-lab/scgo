@@ -470,8 +470,14 @@ def _apply_surface_ts_geometry_gate(
     binding_penetration_tolerance_a: float = 0.1,
     layer_cluster_threshold_ang: float = 0.4,
     n_slab_deposit: int | None = None,
+    run_dir: Path | None = None,
+    verbosity: int = 1,
 ) -> None:
-    """Reject successful TS results that violate supported-deposit geometry."""
+    """Reject successful TS results that violate supported-deposit geometry.
+
+    When a result is demoted, rewrite ``pair_*/neb_*_metadata.json`` under
+    ``run_dir`` so resume cannot reload a stale success.
+    """
     if surface_config is None:
         return
     policy = get_system_policy(system_type)
@@ -492,12 +498,14 @@ def _apply_surface_ts_geometry_gate(
     for result in ts_results:
         if result.get("status") != "success":
             continue
+        demoted = False
         for label, key in checks:
             atoms = result.get(key)
             if atoms is None:
                 result["status"] = "failed"
                 result["neb_converged"] = False
                 result["error"] = f"Missing {label} structure for surface TS validation"
+                demoted = True
                 break
             try:
                 validate_minimum_structure(
@@ -518,7 +526,14 @@ def _apply_surface_ts_geometry_gate(
                 result["status"] = "failed"
                 result["neb_converged"] = False
                 result["error"] = f"{label} failed surface geometry validation: {exc}"
+                demoted = True
                 break
+        if demoted and run_dir is not None:
+            pair_id = str(result.get("pair_id") or "")
+            if pair_id:
+                pair_dir = run_dir / f"pair_{pair_id}"
+                pair_dir.mkdir(parents=True, exist_ok=True)
+                save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
 
 
 def run_transition_state_search(
@@ -921,6 +936,30 @@ def run_transition_state_search(
         formula,
         verbosity=verbosity,
     )
+    # Surface adsorbate on a searchable top layer: run metadata / resolve dims
+    # only know the adsorbate fragment (e.g. OH → n_ads=2, n_core=0). Infer the
+    # middle mobile-slab block as the NEB "core" so layout is
+    # [fixed | top_layer | adsorbate] for pairing, hop gates, and FixBondLengths.
+    if (
+        slab_search_partition is not None
+        and neb_n_ads_m is not None
+        and int(neb_n_ads_m) > 0
+        and minima
+        and (neb_n_core_m is None or int(neb_n_core_m) == 0)
+    ):
+        inferred_core = len(minima[0][1]) - int(neb_n_slab) - int(neb_n_ads_m)
+        if inferred_core > 0:
+            neb_n_core_m = inferred_core
+            log_info_v(
+                logger,
+                "Inferred n_core_mobile=%d for slab-search adsorbate "
+                "(n_slab=%d n_ads=%d n_atoms=%d)",
+                neb_n_core_m,
+                neb_n_slab,
+                neb_n_ads_m,
+                len(minima[0][1]),
+                verbosity=verbosity,
+            )
     if neb_align_endpoints:
         log_debug_v(
             logger,
@@ -952,6 +991,7 @@ def run_transition_state_search(
         max_endpoint_mismatch=max_endpoint_mismatch,
         adsorbate_aware=bool(system_policy.has_adsorbate),
         n_core_mobile=neb_n_core_m,
+        n_adsorbate_mobile=neb_n_ads_m,
         pair_core_rms_max=pair_core_rms_max,
         pair_score_gap_center=pair_score_gap_center,
         pair_score_gap_width=pair_score_gap_width,
@@ -1183,6 +1223,8 @@ def run_transition_state_search(
             if slab_search_partition is not None
             else None
         ),
+        run_dir=run_dir,
+        verbosity=verbosity,
     )
 
     save_transition_state_results(

@@ -523,8 +523,12 @@ Per-system-type defaults (with a caller-set ``max_pairs=N``):
      - ``1.25``
      - Yes
      - up to ``adsorbate_pair_select_cap(N)`` → ``N``
-   * - ``surface_cluster_adsorbate`` / ``surface_adsorbate``
+   * - ``surface_cluster_adsorbate``
      - ``1.5``
+     - Yes
+     - up to ``adsorbate_pair_select_cap(N)`` → ``N``
+   * - ``surface_adsorbate``
+     - ``3.0``
      - Yes
      - up to ``adsorbate_pair_select_cap(N)`` → ``N``
 
@@ -643,12 +647,13 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
        the TorchSim relaxer's ``expected_max_atoms`` / ``max_atoms_to_try``. A
        chunk that hits CUDA OOM is retried once at half the budget
    * - ``max_endpoint_mismatch``
-     - ``None`` / ``1.25`` (gas adsorbate) / ``1.25`` (surface) / ``1.5`` (surface adsorbate)
+     - ``None`` / ``1.25`` (gas adsorbate / surface) / ``1.5`` (surface cluster+adsorbate) / ``3.0`` (surface adsorbate only)
      - Å geometric gate on comparator difference; when set, also enables the
        pre-NEB endpoint-displacement check. For adsorbate + metal-core systems,
        pair selection fingerprints the **core** and this gate means “cores too
        different”; adsorbate site hops with an identical core are kept. For
-       adsorbate-only slabs the same threshold gates adsorbate travel. On
+       adsorbate-only slabs the same threshold gates adsorbate travel (wider
+       default so graphite hollow/bridge hops are not rejected wholesale). On
        adsorbate system types it also enables select oversampling (see **Budget
        and oversampling**); on bare surface it does not.
    * - ``neb_prescreen_clash_distance``
@@ -793,6 +798,13 @@ Surface Config
    use **0.5 / 1.5 Å**. The values above are the class and
    ``make_surface_config`` defaults, which apply only when you build a config
    directly rather than through a preset. See :doc:`/surface_slab_guide`.
+
+.. note::
+   Graphite and graphene presets default to the HOPG 5×5 × 3-layer footprint
+   (~150 C atoms, ~12.3 Å hexagonal in-plane vectors, 30 Å total vacuum /
+   ~36.7 Å cell height). Pass explicit ``slab_layers`` / ``slab_repeat_xy``
+   (or ``nx`` / ``ny`` for graphene) to recover a smaller cell. Named helpers
+   ``make_hopg_5x5_*`` pin the same geometry.
 
 Adsorbate Config
 ----------------

@@ -181,6 +181,23 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "parallel_neb_max_batch_atoms": 4000,
 }
 
+# Supported clusters: Pt/metal rearrangements on graphite routinely exceed the
+# shared 1.25 Å * 3 cartesian gate (~6 Å). Widen the hard gate so near-minima
+# pairs are not discarded before NEB.
+_SURFACE_CLUSTER_TS_NEB_DEFAULTS: dict[str, Any] = {
+    **_SURFACE_TS_NEB_DEFAULTS,
+    "max_endpoint_mismatch": 2.5,
+}
+
+# Bare-slab vacancy/rearrangement NEBs: top-layer atoms can approach closely on
+# linear/IDPP paths; keep a softer clash floor and a wider displacement gate.
+_SURFACE_BARE_TS_NEB_DEFAULTS: dict[str, Any] = {
+    **_SURFACE_TS_NEB_DEFAULTS,
+    "max_endpoint_mismatch": 3.0,
+    "neb_prescreen_clash_distance": 0.35,
+    "neb_max_spurious_barrier": 50.0,
+}
+
 # Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),
 # and a larger step budget. Keep neb_fmax and torchsim_fmax equal to the shared
 # tolerance so ASE and TorchSim stay synced. Parallel multi-band NEB is on for
@@ -224,13 +241,21 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_interpolation_bond_tolerance_a": 0.5,
 }
 
+# Bare-slab + adsorbate (no metal core): pair selection gates on adsorbate
+# Cartesian hop, not core fingerprint. Graphite hollow/bridge site hops are
+# ~2.5 Å, so keep a wider hard gate than the cluster+adsorbate 1.5 Å core gate.
+_SURFACE_ONLY_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
+    **_SURFACE_ADSORBATE_TS_NEB_DEFAULTS,
+    "max_endpoint_mismatch": 3.0,
+}
+
 TS_DEFAULTS_BY_SYSTEM_TYPE: dict[SystemType, dict[str, Any]] = {
     "gas_cluster": dict(_GAS_TS_NEB_DEFAULTS),
     "gas_cluster_adsorbate": dict(_GAS_ADSORBATE_TS_NEB_DEFAULTS),
-    "surface_cluster": dict(_SURFACE_TS_NEB_DEFAULTS),
+    "surface_cluster": dict(_SURFACE_CLUSTER_TS_NEB_DEFAULTS),
     "surface_cluster_adsorbate": dict(_SURFACE_ADSORBATE_TS_NEB_DEFAULTS),
-    "surface": dict(_SURFACE_TS_NEB_DEFAULTS),
-    "surface_adsorbate": dict(_SURFACE_ADSORBATE_TS_NEB_DEFAULTS),
+    "surface": dict(_SURFACE_BARE_TS_NEB_DEFAULTS),
+    "surface_adsorbate": dict(_SURFACE_ONLY_ADSORBATE_TS_NEB_DEFAULTS),
 }
 
 
@@ -856,7 +881,12 @@ def get_ts_search_params(
         "calculator": calculator,
         "calculator_kwargs": dict(calculator_kwargs),
         "connectivity_factor": CONNECTIVITY_FACTOR,
-        "allow_cluster_fragmentation": False,
+        # Bare-slab search and supported clusters often pass through temporarily
+        # fragmented mobile geometries on NEB paths; keep adsorbate metal-cores
+        # connected by default.
+        "allow_cluster_fragmentation": bool(
+            policy.slab_is_search_target or system_type == "surface_cluster"
+        ),
         "allow_adsorbate_surface_detachment": False,
         "enforce_adsorbate_subgraph_integrity": True,
         "max_pairs": None,

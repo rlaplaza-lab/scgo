@@ -60,9 +60,10 @@ results = run_go(
 | Multi-composition TS / GO+TS | `run_ts_campaign` / `run_go_ts_campaign` |
 
 `system_type` is always a run argument (never inside `go_params` /
-`optimizer_params` slots). Surfaces need `surface_config=`, adsorbates need
-`adsorbates=`. Top-level `surface_config` in presets must agree with the run
-argument when both are set.
+`optimizer_params` slots). Surfaces prefer `surface_config=` as a run
+argument; a top-level `surface_config` in `go_params` / `ts_params` is
+enough when the run argument is omitted (both must agree when set).
+Adsorbates need `adsorbates=`.
 
 **Output:** `run_go` writes `{path_key}_searches/` with datetime-tagged `run_*/` subdirectories. GO+TS creates sibling `{path_key}_ts_results/`. The `path_key` combines nanoparticle formula, adsorbate fragments, and surface name (for example `Pt5`, `Pt5_OH_OH_graphite`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 

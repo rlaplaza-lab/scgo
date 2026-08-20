@@ -4,6 +4,17 @@
 
 ### Added
 
+- Core-fingerprint adsorbate TS pair selection with tunable soft-rank gates
+  (`pair_core_rms_max`, `pair_score_gap_*`, `pair_score_w_*`, …); gas/surface
+  cores share the fingerprint + Kabsch overlay used for NEB endpoint prep.
+- Grouped NEB pair outcome summaries at default verbosity (per-pair detail at
+  verbosity ≥ 2).
+- Run `verbosity` threaded end-to-end through GO/TS/logging helpers;
+  `infer_verbosity` removed.
+- TorchSim Model Memory Estimation / autobatcher probe prints collapsed to a
+  one-line INFO scaler summary.
+- GO-only ORR example: `examples/example_pt5_orr_defected_graphite.py` (bare
+  Pt5 then O/OH/OOH on monovacancy graphite via `run_go`).
 - `connectivity_factor` and `structure_connectivity_factor` accept a float or a
   dict of per-element and/or per-pair multipliers (`"Pt-C"` or `("Pt", "C")`;
   pair entries override element-derived thresholds; missing keys fall back to
@@ -63,7 +74,8 @@
 - `DEFAULT_TS_PAIR_COR_MAX` (`0.1` Å) for TS pair near-dupe gating, distinct
   from GO uniqueness (`DEFAULT_PAIR_COR_MAX` = `0.7` Å).
 - NEB resume: `run_transition_state_search(run_id=...)` skips pairs whose
-  `neb_{pair_id}_metadata.json` already has `status="success"`
+  `neb_{pair_id}_metadata.json` already has `status="success"`,
+  `neb_converged=true`, and a readable `ts_{pair_id}.xyz`
   (`load_completed_neb_result`). Run-dir `metadata.json` and NEB metadata are
   written via temp + `os.replace`.
 - `torch_load_weights_only_false()` context manager scopes the MACE/e3nn
@@ -212,6 +224,35 @@
 
 ### Fixed
 
+- ``prepare_neb_endpoints`` passes full-slab ``n_slab`` plus
+  ``n_slab_deposit=n_fixed`` for slab-search systems (NEB ``n_slab`` alone is the
+  frozen prefix). Without that, empty-core ``surface_adsorbate`` NEBs failed with
+  ``adsorbate_fragment_lengths must sum to mobile adsorbate length``.
+- After loading minima, slab-search adsorbate runs infer ``n_core_mobile`` as the
+  searchable top-layer atom count so NEB layout is ``[fixed | top | adsorbate]``.
+- ``surface_cluster`` / bare ``surface`` TS presets allow temporary mobile
+  fragmentation on NEB paths (``allow_cluster_fragmentation=True``), widen the
+  endpoint-displacement gate for supported clusters (``2.5`` Å), and use a
+  softer clash / higher spurious-barrier floor for bare-slab vacancy hops.
+- ``_adsorbate_max_displacement`` accepts ``n_adsorbate`` so surface-adsorbate
+  slab searches measure OH/site hops on the trailing adsorbate block only
+  (not the whole searchable top layer). Without that, every N-doped OH pair
+  failed the ``max_endpoint_mismatch`` hard gate.
+- DB discovery no longer rejects slab+mobile TS loads when run-dir metadata
+  stores a mobile-only formula (e.g. ``Pt5`` vs ``C150Pt5``); atom composition
+  is checked instead of treating the metadata formula as an exclusive gate.
+- ``surface_adsorbate`` ``max_endpoint_mismatch`` default is ``3.0`` Å (was
+  shared ``1.5`` with cluster+adsorbate). Pair selection gates that type on
+  adsorbate Cartesian hop, and graphite hollow/bridge site hops are ~2.5 Å, so
+  the old gate rejected every candidate pair in the N-doped OH example.
+- `run_go_ts_campaign` / `run_ts_campaign` / `run_go_campaign` resolve
+  top-level ``params['surface_config']`` the same way as single-run APIs, and
+  allow empty compositions when ``system_type`` is a slab search target.
+- NEB resume only skips pairs with ``status=success``, ``neb_converged=true``,
+  and a readable ``ts_*.xyz``; missing ``neb_converged`` is treated as not
+  resume-ready. Surface geometry demotions rewrite pair metadata so stale
+  success cannot be resumed. Parallel finalize clears ``neb_converged`` when
+  status is failed.
 - Surface crossover clash checks now use cached slab-image distance screening
   plus mobile-only no-copy clash helpers in `CutAndSplicePairing`, keeping
   acceptance logic equivalent to ASE-GA while reducing inner-loop overhead.

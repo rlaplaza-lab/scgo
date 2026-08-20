@@ -2422,10 +2422,11 @@ def load_completed_neb_result(
     output_dir: str | os.PathLike[str],
     pair_id: str,
 ) -> dict[str, Any] | None:
-    """Return a prior NEB result if ``neb_{pair_id}_metadata.json`` is complete.
+    """Return a prior NEB result if ``neb_{pair_id}_metadata.json`` is resume-ready.
 
-    Only ``status == "success"`` with parseable JSON counts as resume-ready.
-    Corrupt or truncated files return ``None`` so the pair is re-run.
+    Resume requires ``status == "success"``, ``neb_converged`` true (missing
+    treated as not converged), and a readable ``ts_{pair_id}.xyz``. Corrupt or
+    incomplete artifacts return ``None`` so the pair is re-run.
     """
     metadata_path = os.path.join(str(output_dir), f"neb_{pair_id}_metadata.json")
     if not os.path.isfile(metadata_path):
@@ -2436,6 +2437,16 @@ def load_completed_neb_result(
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     if not isinstance(metadata, dict) or metadata.get("status") != "success":
+        return None
+    if not bool(metadata.get("neb_converged", False)):
+        return None
+
+    ts_path = os.path.join(str(output_dir), f"ts_{pair_id}.xyz")
+    if not os.path.isfile(ts_path):
+        return None
+    try:
+        transition_state = read(ts_path)
+    except (OSError, ValueError):
         return None
 
     use_torchsim = metadata.get("neb_backend") == "torchsim" or bool(
@@ -2462,7 +2473,7 @@ def load_completed_neb_result(
         error=metadata.get("error"),
     )
     result["status"] = "success"
-    result["neb_converged"] = bool(metadata.get("neb_converged", True))
+    result["neb_converged"] = True
     result["ts_energy"] = metadata.get("ts_energy")
     result["ts_image_index"] = metadata.get("ts_image_index")
     result["barrier_height"] = metadata.get("barrier_height")
@@ -2470,11 +2481,7 @@ def load_completed_neb_result(
     result["steps_taken"] = metadata.get("steps_taken")
     result["force_calls"] = metadata.get("force_calls")
     result["resumed"] = True
-
-    ts_path = os.path.join(str(output_dir), f"ts_{pair_id}.xyz")
-    if os.path.isfile(ts_path):
-        with contextlib.suppress(OSError, ValueError):
-            result["transition_state"] = read(ts_path)
+    result["transition_state"] = transition_state
 
     for label, key in (
         ("reactant", "reactant_structure"),

@@ -756,10 +756,12 @@ def run_parallel_neb_search(
                 )
             except (RuntimeError, SCGOValidationError) as e:
                 result["status"] = "failed"
+                result["neb_converged"] = False
                 result["error"] = str(e)
                 _detach_calc(result.get("transition_state"))
 
         if result["neb_converged"] and result.get("status") != "success":
+            result["neb_converged"] = False
             logger.warning(
                 "Parallel NEB converged but no usable TS for pair %s; marking failed",
                 result.get("pair_id"),
