@@ -213,6 +213,31 @@ def test_ts_search_params_allow_cluster_fragmentation_for_surface_regimes():
     )
 
 
+def test_low_effort_surface_cluster_ts_defaults_match_example_path():
+    """Example ``surface_cluster`` TS must keep production physics, not recover knobs.
+
+    ``example_pt5_graphite`` only overrides ``max_pairs`` / ``connectivity_factor``.
+    Fragmentation + endpoint mismatch must already be on so low-effort NEBs can
+    converge without a separate loosened re-run.
+    """
+    cfg = _surface_config_for_test()
+    production = get_ts_search_params(system_type="surface_cluster", surface_config=cfg)
+    low = get_low_effort_ts_search_params(
+        system_type="surface_cluster", surface_config=cfg
+    )
+    assert low["allow_cluster_fragmentation"] is True
+    assert low["max_endpoint_mismatch"] == pytest.approx(2.5)
+    assert low["neb_max_spurious_barrier"] == pytest.approx(8.0)
+    assert (
+        low["neb_prescreen_clash_distance"]
+        == production["neb_prescreen_clash_distance"]
+    )
+    assert low["neb_climb"] is False
+    assert low["neb_fmax"] == pytest.approx(production["neb_fmax"])
+    assert low["neb_n_images"] == production["neb_n_images"]
+    assert low["neb_steps"] < production["neb_steps"]
+
+
 def test_adsorbate_ts_presets_enable_climb_and_mismatch_gate():
     gas = get_ts_search_params(system_type="gas_cluster_adsorbate")
     assert gas["neb_climb"] is True
