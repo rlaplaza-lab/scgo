@@ -87,14 +87,41 @@ jobs:
 
       - name: Check Modal secrets
         run: |
-          if [ -z "${MODAL_TOKEN_ID}" ]; then
+          # Trim whitespace/newlines from pasted secrets, then re-export.
+          TOKEN_ID="$(printf '%s' "${MODAL_TOKEN_ID}" | tr -d '[:space:]')"
+          TOKEN_SECRET="$(printf '%s' "${MODAL_TOKEN_SECRET}" | tr -d '[:space:]')"
+          if [ -z "${TOKEN_ID}" ]; then
             echo "Missing repo secret MODAL_TOKEN_ID (Modal token id, e.g. ak-...)"
             exit 1
           fi
-          if [ -z "${MODAL_TOKEN_SECRET}" ]; then
-            echo "Missing repo secret MODAL_API_TOKEN (mapped to MODAL_TOKEN_SECRET)"
+          if [ -z "${TOKEN_SECRET}" ]; then
+            echo "Missing repo secret MODAL_API_TOKEN (Modal token secret, e.g. as-...)"
             exit 1
           fi
+          case "${TOKEN_ID}" in
+            ak-*) ;;
+            *)
+              echo "MODAL_TOKEN_ID must be the token id starting with ak- (got length ${#TOKEN_ID})"
+              exit 1
+              ;;
+          esac
+          case "${TOKEN_SECRET}" in
+            as-*) ;;
+            ak-*)
+              echo "MODAL_API_TOKEN looks like a token id (ak-...), not the secret (as-...)."
+              echo "Set MODAL_TOKEN_ID=ak-... and MODAL_API_TOKEN=as-... from Modal Settings → API Tokens."
+              exit 1
+              ;;
+            *)
+              echo "MODAL_API_TOKEN must be the token secret starting with as- (got length ${#TOKEN_SECRET})"
+              exit 1
+              ;;
+          esac
+          {
+            echo "MODAL_TOKEN_ID=${TOKEN_ID}"
+            echo "MODAL_TOKEN_SECRET=${TOKEN_SECRET}"
+          } >> "$GITHUB_ENV"
+          echo "Modal credentials present (id length ${#TOKEN_ID}, secret length ${#TOKEN_SECRET})"
 
       - name: Checkout repository
         uses: actions/checkout@v4
