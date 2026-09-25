@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 import traceback
@@ -63,6 +64,16 @@ if MLIP_EXTRA not in ("mace", "upet"):
     )
 
 
+def _bash_lc(script: str) -> str:
+    """Wrap a multiline script as one Dockerfile-safe ``bash -lc`` command.
+
+    Modal's ``run_commands`` turns each string into a Dockerfile ``RUN`` line;
+    bare ``for``/``break`` / heredoc newlines break the Dockerfile parser, so
+    the whole script must be a single shell invocation.
+    """
+    return "bash -lc " + shlex.quote(script.strip())
+
+
 def _deps_install_command(mlip_extra: str) -> str:
     """Shell+Python snippet: install pyproject deps (no torch / lint tooling)."""
     # Embed the extra name as a literal; the script runs only at image build.
@@ -98,17 +109,17 @@ if mlip_extra == "upet":
         check=True,
     )
 PY
-""".strip()
+"""
 
 
-def _build_image(mlip_extra: str) -> modal.Image:
-    """Layer CUDA torch, then MLIP deps from pyproject; mount the repo at runtime."""
-    torch_install = """
+def _torch_install_command() -> str:
+    indexes = " ".join(shlex.quote(u) for u in CUDA_INDEXES)
+    return f"""
 set -e
 ok=0
 for index in {indexes}; do
-  if pip install --no-cache-dir "{torch_spec}" \\
-      --index-url "$index" --extra-index-url "{pypi}"; then
+  if pip install --no-cache-dir {shlex.quote(TORCH_SPEC)} \\
+      --index-url "$index" --extra-index-url {shlex.quote(PYPI_INDEX)}; then
     echo "Installed torch from $index"
     ok=1
     break
@@ -119,16 +130,16 @@ if [ "$ok" != 1 ]; then
   echo "Failed to install torch from all CUDA indexes" >&2
   exit 1
 fi
-""".format(
-        indexes=" ".join(f'"{u}"' for u in CUDA_INDEXES),
-        torch_spec=TORCH_SPEC,
-        pypi=PYPI_INDEX,
-    ).strip()
+"""
+
+
+def _build_image(mlip_extra: str) -> modal.Image:
+    """Layer CUDA torch, then MLIP deps from pyproject; mount the repo at runtime."""
     return (
         modal.Image.debian_slim(python_version="3.12")
-        .run_commands(torch_install)
+        .run_commands(_bash_lc(_torch_install_command()))
         .add_local_file("pyproject.toml", "/build/pyproject.toml", copy=True)
-        .run_commands(_deps_install_command(mlip_extra))
+        .run_commands(_bash_lc(_deps_install_command(mlip_extra)))
         .add_local_dir(
             ".",
             remote_path=REPO_REMOTE,
