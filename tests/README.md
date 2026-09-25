@@ -7,7 +7,7 @@
 | `slow` | Real optimizers, NEB, or heavy placement loops | Selected by slow job (`slow and not benchmark`) |
 | `integration` | Full workflow (GO campaigns, output trees) | Must also be `slow`; excluded from fast job (`not integration`), selected by slow job |
 | `benchmark` | Long MLIP regression (Cu₄ MACE E2E) | Excluded from CI |
-| `requires_cuda` | Needs GPU | Deselected on CPU runners (`not requires_cuda`); Kaggle only |
+| `requires_cuda` | Needs GPU | Deselected on CPU runners (`not requires_cuda`); Kaggle / Modal GPU CI |
 | `requires_mace` | Needs MACE extra | Excluded from UMA/UPET CI jobs; Kaggle MACE suite |
 | `requires_upet` | Needs UPET extra | Excluded from MACE/UMA CI jobs; Kaggle UPET suite |
 | `requires_uma` | Needs UMA extra | Excluded from MACE/UPET CI jobs |
@@ -107,21 +107,67 @@ UMA tests that only import helpers / use mocks run on the UMA CPU job. Tests tha
 construct a real FairChem relaxer may skip when HuggingFace weights are
 unavailable (no `HF_TOKEN` on Actions).
 
-## Kaggle GPU CI
+## GPU CI (Kaggle weekly + Modal monthly)
 
-GPU tests are **not** run on GitHub-hosted CPU runners. Use Kaggle:
+GPU tests are **not** run on GitHub-hosted CPU runners. Two remote workflows
+cover them:
+
+| Workflow | Hardware | Default mode | Schedule |
+|----------|----------|--------------|----------|
+| [kaggle-gpu.yml](../.github/workflows/kaggle-gpu.yml) | Kaggle Tesla T4 | smoke | Weekly (Sunday 06:00 UTC) |
+| [modal-gpu.yml](../.github/workflows/modal-gpu.yml) | Modal H100 | full | Monthly (1st 06:00 UTC) |
+
+**UMA is omitted** from both (HuggingFace auth for fairchem / UMA weights is
+typically unavailable). MACE and UPET always run as separate jobs (mutually
+exclusive extras).
+
+### Kaggle GPU CI (weekly smoke)
 
 | Mode | When | Marker (per suite) | Kernel timeout |
 |------|------|--------------------|----------------|
-| **smoke** (default) | Manual dispatch default; weekly cron (Sunday 06:00 UTC) | `gpu_smoke and requires_{mace\|upet} and not benchmark` | 1 h |
-| **full** | Manual only — do **not** run on every PR | `requires_cuda and requires_{mace\|upet} and not benchmark` | 3 h |
+| **smoke** (default) | Manual dispatch default; weekly cron | `gpu_smoke and requires_{mace\|upet} and not benchmark` | 1 h |
+| **full** | Manual only — prefer Modal for scheduled full runs | `requires_cuda and requires_{mace\|upet} and not benchmark` | 3 h |
 
 1. GitHub → Actions → **Kaggle GPU tests** → **Run workflow**
 2. Choose `mode=smoke` unless you need the full GO+TS example matrix / parallel NEB suite
 3. Leave `ref=main` and empty `marker` unless testing a branch or overriding selection
-4. **UMA is not run on Kaggle** (HuggingFace auth for fairchem / UMA weights is
-   typically unavailable there)
-5. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
+4. Requires repo secret `KAGGLE_API_TOKEN` (single-line API token from Kaggle Settings → API Tokens, or legacy `kaggle.json` pasted as one secret — the workflow normalizes both)
+
+The workflow uploads a source tarball to the private Kaggle dataset
+`rlaplaza/scgocisrc` so the GPU kernel can run without GitHub network access;
+pip installs still require internet on the kernel. The kernel requests a
+Tesla T4 (Kaggle's fallback P100 is incompatible with the cu124 wheels used
+here).
+
+```bash
+# Prefer smoke while iterating
+gh workflow run kaggle-gpu.yml -f ref=<branch> -f mode=smoke
+
+# Full suite on Kaggle (expensive quota); Modal monthly is the usual full run
+gh workflow run kaggle-gpu.yml -f ref=<branch> -f mode=full
+```
+
+### Modal GPU CI (monthly full on H100)
+
+| Mode | When | Marker (per suite) | Function timeout |
+|------|------|--------------------|------------------|
+| **full** (default) | Manual default; monthly cron (1st 06:00 UTC) | `requires_cuda and requires_{mace\|upet} and not benchmark` | 4 h |
+| **smoke** | Manual only | `gpu_smoke and requires_{mace\|upet} and not benchmark` | 4 h |
+
+1. GitHub → Actions → **Modal GPU tests** → **Run workflow**
+2. Leave `mode=full` for the full CUDA suites; use `smoke` only to spend fewer credits
+3. Requires repo secrets:
+   - `MODAL_TOKEN_ID` — Modal token id (`ak-…`)
+   - `MODAL_API_TOKEN` — Modal token secret (mapped to `MODAL_TOKEN_SECRET` in the job)
+4. Modal may place an `H100` request on an H200 at the same price; that is fine
+   for these tests. A payment method must still be on the Modal account even when
+   monthly free credits cover the run.
+
+```bash
+gh workflow run modal-gpu.yml -f ref=<branch> -f mode=full
+```
+
+### Coverage notes
 
 Smoke coverage:
 
@@ -130,28 +176,11 @@ Smoke coverage:
 
 Full coverage also includes the six-type example matrix
 ([`test_gpu_examples_integration.py`](integration/test_gpu_examples_integration.py))
-and other `requires_cuda` tests pinned to one MLIP suite.
-
-The workflow uploads a source tarball to the private Kaggle dataset
-`rlaplaza/scgocisrc` so the GPU kernel can run without GitHub network access;
-pip installs still require internet on the kernel. The kernel requests a
-Tesla T4 (Kaggle's fallback P100 is incompatible with the cu124 wheels used
-here).
-
-Full-mode MACE coverage also includes an example-mimic matrix: all six
-`system_type` values built from the same low-effort presets the `examples/`
-scripts use, with shared e2e bars (run-dir `metadata.json`, SCGO-stamped `*.db`,
-and per-case TS-success / barrier-range requirements).
-
-To exercise a PR branch on Kaggle:
-
-```bash
-# Prefer smoke while iterating
-gh workflow run kaggle-gpu.yml -f ref=<branch> -f mode=smoke
-
-# Full suite when validating GPU/NEB changes (expensive)
-gh workflow run kaggle-gpu.yml -f ref=<branch> -f mode=full
-```
+and other `requires_cuda` tests pinned to one MLIP suite. Full-mode MACE
+coverage includes an example-mimic matrix: all six `system_type` values built
+from the same low-effort presets the `examples/` scripts use, with shared e2e
+bars (run-dir `metadata.json`, SCGO-stamped `*.db`, and per-case TS-success /
+barrier-range requirements).
 
 ### Local equivalents
 

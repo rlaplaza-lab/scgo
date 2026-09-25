@@ -3,7 +3,8 @@ name: CI
 # Marker contract (pytest -m): per-suite fast/slow expressions live in the
 # matrix `include` block below (fast_marker / slow_marker). Each MLIP suite
 # excludes the other two `requires_*` markers; `benchmark` and `requires_cuda`
-# are never run on these CPU runners (GPU: kaggle-gpu.yml).
+# are never run on these CPU runners (GPU: kaggle-gpu.yml weekly smoke;
+# modal-gpu.yml monthly full on H100).
 #
 # PR: mace 3.13 fast+slow, uma/upet 3.13 fast-only (unique coverage, less wall-clock).
 # main push / nightly / workflow_dispatch: full 3 suites x 2 Pythons, fast+slow.
