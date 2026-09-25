@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 import subprocess
 import sys
 import traceback
@@ -19,13 +18,6 @@ from pathlib import Path
 import modal
 
 REPO_REMOTE = "/root/scgo"
-TORCH_SPEC = "torch>=2.12.0,<2.13"
-PYPI_INDEX = "https://pypi.org/simple"
-CUDA_INDEXES = (
-    "https://download.pytorch.org/whl/cu128",
-    "https://download.pytorch.org/whl/cu126",
-    "https://download.pytorch.org/whl/cu124",
-)
 SYNTHETIC_FAILURE_TOKEN = "scgo-simulated-failure"
 IGNORE = [
     ".git",
@@ -64,82 +56,28 @@ if MLIP_EXTRA not in ("mace", "upet"):
     )
 
 
-def _bash_lc(script: str) -> str:
-    """Wrap a multiline script as one Dockerfile-safe ``bash -lc`` command.
-
-    Modal's ``run_commands`` turns each string into a Dockerfile ``RUN`` line;
-    bare ``for``/``break`` / heredoc newlines break the Dockerfile parser, so
-    the whole script must be a single shell invocation.
-    """
-    return "bash -lc " + shlex.quote(script.strip())
-
-
-def _deps_install_command(mlip_extra: str) -> str:
-    """Shell+Python snippet: install pyproject deps (no torch / lint tooling)."""
-    # Embed the extra name as a literal; the script runs only at image build.
-    return f"""
-python - <<'PY'
-from pathlib import Path
-import subprocess
-import tomllib
-
-mlip_extra = {mlip_extra!r}
-data = tomllib.loads(Path("/build/pyproject.toml").read_text(encoding="utf-8"))
-deps = list(data["project"]["dependencies"])
-deps.extend(data["project"]["optional-dependencies"][mlip_extra])
-deps.extend(data["project"]["optional-dependencies"]["dev"])
-skip_prefixes = ("ruff", "pre-commit")
-install_deps = [
-    dep
-    for dep in deps
-    if not dep.startswith(skip_prefixes) and not dep.startswith("torch>=")
-]
-subprocess.run(["pip", "install", "--no-cache-dir", *install_deps], check=True)
-if mlip_extra == "upet":
-    # metatomic-torchsim declares vesin<0.6 but needs skin= from 0.6.0
-    subprocess.run(
-        [
-            "pip",
-            "install",
-            "--no-cache-dir",
-            "vesin==0.6.0",
-            "--force-reinstall",
-            "--no-deps",
-        ],
-        check=True,
-    )
-PY
-"""
-
-
-def _torch_install_command() -> str:
-    indexes = " ".join(shlex.quote(u) for u in CUDA_INDEXES)
-    return f"""
-set -e
-ok=0
-for index in {indexes}; do
-  if pip install --no-cache-dir {shlex.quote(TORCH_SPEC)} \\
-      --index-url "$index" --extra-index-url {shlex.quote(PYPI_INDEX)}; then
-    echo "Installed torch from $index"
-    ok=1
-    break
-  fi
-  echo "Torch install failed from $index; trying next CUDA index"
-done
-if [ "$ok" != 1 ]; then
-  echo "Failed to install torch from all CUDA indexes" >&2
-  exit 1
-fi
-"""
-
-
 def _build_image(mlip_extra: str) -> modal.Image:
-    """Layer CUDA torch, then MLIP deps from pyproject; mount the repo at runtime."""
+    """Layer CUDA torch, then MLIP deps from pyproject; mount the repo at runtime.
+
+    Install scripts are copied as files (not inlined) because Modal's
+    ``run_commands`` Dockerfile generator cannot parse multiline shell with
+    ``for``/``break`` or heredocs.
+    """
     return (
         modal.Image.debian_slim(python_version="3.12")
-        .run_commands(_bash_lc(_torch_install_command()))
+        .add_local_file(
+            ".github/scripts/modal_install_torch.sh",
+            "/build/modal_install_torch.sh",
+            copy=True,
+        )
+        .run_commands("bash /build/modal_install_torch.sh")
         .add_local_file("pyproject.toml", "/build/pyproject.toml", copy=True)
-        .run_commands(_bash_lc(_deps_install_command(mlip_extra)))
+        .add_local_file(
+            ".github/scripts/modal_install_deps.py",
+            "/build/modal_install_deps.py",
+            copy=True,
+        )
+        .run_commands(f"python /build/modal_install_deps.py {mlip_extra}")
         .add_local_dir(
             ".",
             remote_path=REPO_REMOTE,
