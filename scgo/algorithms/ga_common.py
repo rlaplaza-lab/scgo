@@ -130,8 +130,7 @@ def resolve_run_uniqueness_comparator(
     """Build the uniqueness comparator shared by BH and GA.
 
     ``comparator_n_top`` selects the legacy trailing-window path; otherwise
-    type-aware role blocks come from
-    :func:`~scgo.system_types.dedup_geometry.resolve_uniqueness_geometry`.
+    type-aware role blocks come from ``resolve_uniqueness_geometry``.
     """
     user_geometry = UniquenessSettings(
         comparator_tol=comparator_tol,
