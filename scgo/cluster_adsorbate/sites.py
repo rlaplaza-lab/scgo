@@ -295,12 +295,14 @@ def _planar_hollow_sites(
     normal = np.zeros(3, dtype=float)
     normal[axis] = 1.0
     seen: set[tuple[float, float]] = set()
-    for v in vertices:
-        d = np.linalg.norm(proj - v, axis=1)
-        if float(np.min(d)) < min_dist:
+    nn3_dists, nn3_idx = tree.query(vertices, k=min(3, len(proj)))
+    if nn3_dists.ndim == 1:
+        nn3_dists = nn3_dists[:, None]
+        nn3_idx = nn3_idx[:, None]
+    for v_i, v in enumerate(vertices):
+        if float(nn3_dists[v_i, 0]) < min_dist:
             continue
-        order = np.argsort(d)
-        nearest3 = order[:3]
+        nearest3 = nn3_idx[v_i]
         mean_axis = float(np.mean(axis_coords[nearest3]))
         key = (round(float(v[0]), 6), round(float(v[1]), 6))
         if key in seen:

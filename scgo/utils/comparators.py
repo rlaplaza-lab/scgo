@@ -144,9 +144,36 @@ def iter_ordered_units(
     return sorted(units.items(), key=lambda item: _block_unit_sort_key(item[0]))
 
 
-def _sorted_dist_cache_slot(n_top: int, mic: bool) -> str:
+def _sorted_dist_cache_slot(
+    *,
+    index_start: int,
+    index_stop: int,
+    mic: bool,
+) -> str:
     """Stable, serializable cache slot key for ``atoms.info`` storage."""
-    return f"{int(n_top)}|{int(bool(mic))}"
+    return f"{int(index_start)}:{int(index_stop)}|{int(bool(mic))}"
+
+
+def _resolve_fingerprint_window(
+    n_atoms: int,
+    *,
+    n_top: int = 0,
+    index_start: int | None = None,
+    index_stop: int | None = None,
+) -> tuple[int, int]:
+    """Return ``[start, stop)`` atom indices for a fingerprint window."""
+    if index_start is not None or index_stop is not None:
+        start = 0 if index_start is None else int(index_start)
+        stop = n_atoms if index_stop is None else int(index_stop)
+        if start < 0 or stop > n_atoms or start > stop:
+            raise SCGOValidationError(
+                f"Invalid fingerprint window [{start}, {stop}) for {n_atoms} atoms."
+            )
+        return start, stop
+    n_top_i = int(n_top)
+    if 0 < n_top_i < n_atoms:
+        return n_atoms - n_top_i, n_atoms
+    return 0, n_atoms
 
 
 def _get_sorted_dist_cache_store(atoms: Atoms) -> dict[str, dict]:
@@ -205,21 +232,29 @@ def _compute_sorted_dist_list(
     mic: bool,
     *,
     n_top: int = 0,
+    index_start: int | None = None,
+    index_stop: int | None = None,
 ) -> dict[int, np.ndarray]:
     """Compute per-element sorted distance fingerprints without using the cache.
 
-    When ``n_top > 0`` and ``n_top < len(atoms)`` only the trailing ``n_top``
-    atoms are fingerprinted (using NumPy index views, not an Atoms slice).
+    When ``index_start``/``index_stop`` are set they define the window. Otherwise
+    ``n_top > 0`` and ``n_top < len(atoms)`` selects the trailing ``n_top`` atoms
+    (NumPy views, not an Atoms slice).
     """
     all_pos = atoms.arrays["positions"]
     all_numbers = atoms.arrays["numbers"]
-
-    if 0 < n_top < len(atoms):
-        positions_arr = all_pos[-n_top:]
-        numbers = all_numbers[-n_top:]
-    else:
+    start, stop = _resolve_fingerprint_window(
+        len(atoms),
+        n_top=n_top,
+        index_start=index_start,
+        index_stop=index_stop,
+    )
+    if start == 0 and stop == len(atoms):
         positions_arr = all_pos
         numbers = all_numbers
+    else:
+        positions_arr = all_pos[start:stop]
+        numbers = all_numbers[start:stop]
 
     unique_types = set(numbers)
     pair_cor: dict[int, np.ndarray] = {}
@@ -267,6 +302,8 @@ def get_sorted_dist_list(
     mic: bool = False,
     *,
     n_top: int = 0,
+    index_start: int | None = None,
+    index_stop: int | None = None,
 ) -> dict[int, np.ndarray]:
     """Calculates a dictionary of sorted interatomic distances for an Atoms object.
 
@@ -277,7 +314,7 @@ def get_sorted_dist_list(
     invalidated when positions, numbers, or (for MIC) cell/PBC change. Cache hits
     use a cheap dirty token (array pointer/shape/sum) and skip byte hashing.
 
-    The cache is keyed by ``(n_top, mic)`` so different subsets of the same
+    The cache is keyed by ``(start:stop, mic)`` so different subsets of the same
     structure can coexist in the cache without evicting each other.
 
     Args:
@@ -285,21 +322,25 @@ def get_sorted_dist_list(
         mic: Whether to use the minimum image convention for periodic systems.
             Defaults to False.
         n_top: Number of trailing atoms to fingerprint.  When ``0`` (default)
-            or ``>= len(atoms)`` all atoms are used.  The fingerprint is stored
-            on the original ``atoms.info``; no ``Atoms`` slice is created.
+            or ``>= len(atoms)`` all atoms are used.  Ignored when
+            ``index_start``/``index_stop`` are given.
+        index_start: Optional inclusive start of an absolute index window.
+        index_stop: Optional exclusive stop of an absolute index window.
 
     Returns:
         A dictionary where keys are atomic numbers (integers) and values are
         sorted 1D numpy arrays of interatomic distances for that element type.
     """
     mic_b = bool(mic)
-    n_top_i = int(n_top)
-    if n_top_i <= 0 or n_top_i >= len(atoms):
-        # Canonicalize "full-structure" requests so cache keys are stable.
-        n_top_i = 0
-    cache_key = _sorted_dist_cache_slot(n_top_i, mic_b)
+    start, stop = _resolve_fingerprint_window(
+        len(atoms),
+        n_top=n_top,
+        index_start=index_start,
+        index_stop=index_stop,
+    )
+    cache_key = _sorted_dist_cache_slot(index_start=start, index_stop=stop, mic=mic_b)
 
-    # Cache entries are keyed by slot so different n_top values don't collide.
+    # Cache entries are keyed by slot so different windows don't collide.
     fp_store = _get_sorted_dist_cache_store(atoms)
     cached = fp_store.get(cache_key)
     if isinstance(cached, dict) and isinstance(cached.get("pair_cor"), dict):
@@ -313,7 +354,12 @@ def get_sorted_dist_list(
     else:
         content_key = _sorted_dist_content_key(atoms, mic=mic_b)
 
-    pair_cor = _compute_sorted_dist_list(atoms, mic=mic_b, n_top=n_top_i)
+    pair_cor = _compute_sorted_dist_list(
+        atoms,
+        mic=mic_b,
+        index_start=start,
+        index_stop=stop,
+    )
     fp_store[cache_key] = {
         "content_key": content_key,
         "dirty_token": _atoms_geometry_dirty_token(atoms, mic=mic_b),
@@ -566,6 +612,9 @@ class PureInteratomicDistanceComparator:
         cross_weight: Base weight for cross-block cumulative differences; each
             cross unit is scaled by ``sqrt(w_i * w_j)`` of its endpoint role
             weights (ignored without ``blocks``).
+        index_start: Optional inclusive start of an absolute comparison window
+            (overrides trailing ``n_top`` when set with ``index_stop``).
+        index_stop: Optional exclusive stop of an absolute comparison window.
     """
 
     def __init__(
@@ -578,12 +627,16 @@ class PureInteratomicDistanceComparator:
         blocks: ComparatorBlocks | None = None,
         component_weights: Mapping[str, float] | None = None,
         cross_weight: float = 1.0,
+        index_start: int | None = None,
+        index_stop: int | None = None,
     ):
         self.tol = tol
         self.pair_cor_max = pair_cor_max
         self.dE = dE  # Not used, but kept for API consistency
         self.n_top = n_top or 0
         self.mic = mic
+        self.index_start = index_start
+        self.index_stop = index_stop
         self.blocks = blocks
         self.cross_weight = float(cross_weight)
         self.component_weights: dict[str, float] = {}
@@ -731,9 +784,9 @@ class PureInteratomicDistanceComparator:
     def __compare_structure__(self, a1: Atoms, a2: Atoms) -> tuple[float, float]:
         """Private method to perform the core structural comparison.
 
-        Uses the trailing ``n_top`` atoms when ``n_top > 0``, obtained via
-        NumPy index views without copying the ``Atoms`` object so fingerprints
-        are cached on the original ``atoms.info``.
+        Uses an absolute ``[index_start, index_stop)`` window when set, otherwise
+        the trailing ``n_top`` atoms. Fingerprints use NumPy views so they are
+        cached on the original ``Atoms`` object.
 
         Args:
             a1: The first Atoms object.
@@ -745,18 +798,23 @@ class PureInteratomicDistanceComparator:
             are reported as a maximal non-match ``(inf, inf)`` rather than
             raising, so callers such as :meth:`looks_like` simply return False.
         """
-        n_top = self.n_top
         n = len(a1)
+        start, stop = _resolve_fingerprint_window(
+            n,
+            n_top=self.n_top,
+            index_start=self.index_start,
+            index_stop=self.index_stop,
+        )
 
         # Determine the compared subset's atom numbers (NumPy view, no copy).
         all_nums1 = a1.arrays["numbers"]
         all_nums2 = a2.arrays["numbers"]
-        if 0 < n_top < n:
-            sub_nums1 = all_nums1[-n_top:]
-            sub_nums2 = all_nums2[-n_top:]
-        else:
+        if start == 0 and stop == n:
             sub_nums1 = all_nums1
             sub_nums2 = all_nums2
+        else:
+            sub_nums1 = all_nums1[start:stop]
+            sub_nums2 = all_nums2[start:stop]
 
         if Counter(sub_nums1) != Counter(sub_nums2):
             # Different compositions can never "look like" each other; report a
@@ -764,9 +822,9 @@ class PureInteratomicDistanceComparator:
             # diversity scoring keep working on mixed-composition pools.
             return (float("inf"), float("inf"))
 
-        # Fingerprints are cached on the originals keyed by (n_top, mic).
-        p1 = get_sorted_dist_list(a1, mic=self.mic, n_top=n_top)
-        p2 = get_sorted_dist_list(a2, mic=self.mic, n_top=n_top)
+        # Fingerprints are cached on the originals keyed by (start:stop, mic).
+        p1 = get_sorted_dist_list(a1, mic=self.mic, index_start=start, index_stop=stop)
+        p2 = get_sorted_dist_list(a2, mic=self.mic, index_start=start, index_stop=stop)
         numbers = sub_nums1
         total_cum_diff = 0.0
         max_diff = 0.0

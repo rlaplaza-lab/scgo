@@ -36,6 +36,7 @@ from scgo.exceptions import SCGOFileError, SCGORuntimeError, SCGOValidationError
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
 from scgo.system_types import ConnectivityFactorInput, SystemType, get_system_policy
+from scgo.ts_search.neb_endpoints import apply_endpoint_constraints_to_band
 from scgo.ts_search.neb_surface import (
     HESSIAN_MAX_MOBILE,
     K_UPDATE_EVERY,
@@ -186,11 +187,15 @@ def calculate_structure_similarity(
     blocks: ComparatorBlocks | None = None,
     component_weights: dict[str, float] | None = None,
     cross_weight: float = 1.0,
+    index_window: tuple[int, int] | None = None,
 ) -> tuple[float, float, bool]:
     """Return ``(cum_diff, max_diff, are_similar)`` for two Atoms objects.
 
     When ``blocks`` is given it supersedes the mobile-index slicing: the full
     structures are compared with a block-aware weighted comparator.
+
+    When ``index_window`` is ``(start, stop)``, fingerprints are computed on that
+    absolute window of the parent structures (cache-friendly; no Atoms slice).
 
     Raises:
         SCGOValidationError: If the two structures have different atom counts.
@@ -199,6 +204,12 @@ def calculate_structure_similarity(
         raise SCGOValidationError(
             f"Atoms objects have different lengths: {len(atoms1)} vs {len(atoms2)}"
         )
+
+    def _scored(
+        comp: PureInteratomicDistanceComparator, left: Atoms, right: Atoms
+    ) -> tuple[float, float, bool]:
+        cum_diff, max_diff = comp.get_differences(left, right)
+        return cum_diff, max_diff, cum_diff < comp.tol and max_diff < comp.pair_cor_max
 
     if blocks is not None:
         block_comparator = comparator
@@ -216,9 +227,22 @@ def calculate_structure_similarity(
                 component_weights=component_weights,
                 cross_weight=cross_weight,
             )
-        cum_diff, max_diff = block_comparator.get_differences(atoms1, atoms2)
-        are_similar = block_comparator.looks_like(atoms1, atoms2)
-        return cum_diff, max_diff, are_similar
+        return _scored(block_comparator, atoms1, atoms2)
+
+    if index_window is not None:
+        start, stop = int(index_window[0]), int(index_window[1])
+        return _scored(
+            PureInteratomicDistanceComparator(
+                n_top=0,
+                tol=tolerance,
+                pair_cor_max=pair_cor_max,
+                mic=use_mic,
+                index_start=start,
+                index_stop=stop,
+            ),
+            atoms1,
+            atoms2,
+        )
 
     if ignore_fixed_atoms:
         comparison_indices = get_shared_mobile_atom_indices(
@@ -247,10 +271,7 @@ def calculate_structure_similarity(
             mic=use_mic,
         )
 
-    cum_diff, max_diff = comparator.get_differences(atoms1_cmp, atoms2_cmp)
-    are_similar = comparator.looks_like(atoms1_cmp, atoms2_cmp)
-
-    return cum_diff, max_diff, are_similar
+    return _scored(comparator, atoms1_cmp, atoms2_cmp)
 
 
 class TorchSimNEB(NEB):
@@ -2066,6 +2087,7 @@ def find_transition_state(
     neb_surface_max_lattice_shift: int = 1,
     relaxer: Any | None = None,
     neb_cfg: NebRunConfig | None = None,
+    prebuilt_images: list[Atoms] | None = None,
 ) -> dict[str, Any]:
     """Run NEB to locate a transition state between two structures.
 
@@ -2084,6 +2106,9 @@ def find_transition_state(
         neb_surface_lattice_rotation: Enable global in-plane rotation (surface).
         neb_surface_max_lattice_shift: Max integer cell index searched in-plane
             during remap (default ``1``).
+        prebuilt_images: Optional IDPP-screen band (with cached SinglePoint forces).
+            When provided, interpolation is skipped and a second energy screen is
+            skipped when every image already has forces.
 
     Returns:
         A summary dict with TS geometry, energies and convergence status.
@@ -2217,28 +2242,32 @@ def find_transition_state(
             verbosity=verbosity,
         )
         # Keep interpolation unconstrained; constraints are applied during NEB.
-        images = interpolate_path(
-            atoms1,
-            atoms2,
-            n_images=n_images,
-            method=interpolation_method,
-            mic=neb_interpolation_mic,
-            align_endpoints=align_endpoints,
-            perturb_sigma=perturb_sigma,
-            rng=rng,
-            system_type=system_type,
-            n_slab=n_slab,
-            n_core_mobile=n_core_mobile,
-            n_adsorbate_mobile=n_adsorbate_mobile,
-            adsorbate_fragment_lengths=adsorbate_fragment_lengths,
-            neb_surface_cell_remap=neb_surface_cell_remap,
-            neb_surface_lattice_rotation=neb_surface_lattice_rotation,
-            neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
-            neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
-            connectivity_factor=connectivity_factor,
-            allow_symmetry_copies=True,
-            verbosity=verbosity,
-        )
+        if prebuilt_images is not None:
+            images = list(prebuilt_images)
+            apply_endpoint_constraints_to_band(images, atoms1, atoms2)
+        else:
+            images = interpolate_path(
+                atoms1,
+                atoms2,
+                n_images=n_images,
+                method=interpolation_method,
+                mic=neb_interpolation_mic,
+                align_endpoints=align_endpoints,
+                perturb_sigma=perturb_sigma,
+                rng=rng,
+                system_type=system_type,
+                n_slab=n_slab,
+                n_core_mobile=n_core_mobile,
+                n_adsorbate_mobile=n_adsorbate_mobile,
+                adsorbate_fragment_lengths=adsorbate_fragment_lengths,
+                neb_surface_cell_remap=neb_surface_cell_remap,
+                neb_surface_lattice_rotation=neb_surface_lattice_rotation,
+                neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
+                neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
+                connectivity_factor=connectivity_factor,
+                allow_symmetry_copies=True,
+                verbosity=verbosity,
+            )
         validate_initial_neb_path(
             images,
             n_slab=n_slab,
@@ -2283,10 +2312,16 @@ def find_transition_state(
             )
 
             # Full-band SP only when the energy-profile gate is enabled (mirrors
-            # parallel). Forces attach for step-0 reuse.
+            # parallel). Forces attach for step-0 reuse. Skip when the IDPP
+            # screen already cached forces on every image.
             band_energies: list[float] | None = None
             if max_endpoint_mismatch is not None:
-                band_energies = evaluate_neb_image_energies(images, ts_relaxer)
+                if all(_image_has_cached_forces(img) for img in images):
+                    band_energies = [
+                        float(_image_potential_energy(img)) for img in images
+                    ]
+                else:
+                    band_energies = evaluate_neb_image_energies(images, ts_relaxer)
                 validate_initial_neb_energy_profile(
                     band_energies,
                     reference_reactant_energy=reactant_energy,

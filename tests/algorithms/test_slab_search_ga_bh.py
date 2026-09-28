@@ -5,14 +5,10 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
-from scgo.algorithms import geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms.ga_common import (
     SurfaceSlabStartGenerator,
     create_ga_pairing,
     create_mutation_operators,
-)
-from scgo.algorithms.geneticalgorithm_go_torchsim import (
-    _fails_fast_geometric_prefilter,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.partition import (
@@ -20,6 +16,8 @@ from scgo.surface.partition import (
     resolve_slab_search_partition,
 )
 from scgo.system_types import AdsorbateDefinition, get_system_policy
+from scgo.utils import geometric_prefilter as prefilter_mod
+from scgo.utils.geometric_prefilter import fails_fast_geometric_prefilter
 
 
 def _layered_slab(n_per_layer: int = 2, n_layers: int = 3) -> Atoms:
@@ -168,16 +166,17 @@ def test_prefilter_frozen_prefix_enables_bare_surface_clash() -> None:
     blmin = {(78, 78): 2.0}  # Pt-Pt; prefilter threshold = 0.55 * 2.0 = 1.1
 
     # Full slab length disables the gate (n_mobile == 0).
-    assert _fails_fast_geometric_prefilter(slab, blmin, n_slab=n_slab_full) is False
+    assert fails_fast_geometric_prefilter(slab, blmin, n_slab=n_slab_full) is False
     # Frozen prefix enables mobile-region clash detection.
-    assert _fails_fast_geometric_prefilter(slab, blmin, n_slab=n_fixed) is True
+    assert fails_fast_geometric_prefilter(slab, blmin, n_slab=n_fixed) is True
 
     # Same blmin object reuses the per-generation threshold cache.
-    ga_mod._BLMIN_THRESH_CACHE.clear()
+    prefilter_mod.clear_blmin_threshold_cache()
     zs = np.array([78, 78], dtype=int)
-    t1, _ = ga_mod._blmin_threshold_matrix(zs, blmin)
-    t2, _ = ga_mod._blmin_threshold_matrix(zs, blmin)
+    t1, z_to_i1 = prefilter_mod._blmin_threshold_matrix(zs, blmin)
+    t2, z_to_i2 = prefilter_mod._blmin_threshold_matrix(zs, blmin)
     assert t1 is t2
-    assert len(ga_mod._BLMIN_THRESH_CACHE) == 1
-    ga_mod._BLMIN_THRESH_CACHE.clear()
-    assert len(ga_mod._BLMIN_THRESH_CACHE) == 0
+    assert z_to_i1 is z_to_i2
+    assert len(prefilter_mod._BLMIN_THRESH_CACHE) == 1
+    prefilter_mod.clear_blmin_threshold_cache()
+    assert len(prefilter_mod._BLMIN_THRESH_CACHE) == 0

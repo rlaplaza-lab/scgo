@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from ase import Atoms
-from ase_ga.utilities import atoms_too_close_two_sets
 from numpy.random import Generator
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
@@ -296,6 +295,8 @@ def place_fragment_on_cluster(
             _RANKED_CANDIDATES_PER_ATTEMPT,
         )
 
+        cell = core.get_cell()
+        pbc = core.get_pbc()
         ranked: list[tuple[float, _PlacementTrial, np.ndarray]] = []
         for trial in trials:
             target = trial.anchor_surf + trial.height * trial.n_dir
@@ -310,34 +311,30 @@ def place_fragment_on_cluster(
             )
             if pos is None:
                 continue
-            score = steric_deficit_two_sets(
+            score, is_hard_clash = steric_deficit_two_sets(
                 pos,
                 frag_numbers,
                 clash_positions,
                 clash_numbers,
                 blmin,
+                cell=cell,
+                pbc=pbc,
             )
+            if is_hard_clash:
+                continue
             ranked.append((score, trial, pos))
 
         ranked.sort(key=lambda item: item[0])
-
-        accepted: tuple[_PlacementTrial, np.ndarray, Atoms] | None = None
-        for _score, trial, pos in ranked[:3]:
-            frag = Atoms(
-                symbols=symbols,
-                positions=pos,
-                cell=core.get_cell(),
-                pbc=core.get_pbc(),
-            )
-            if atoms_too_close_two_sets(frag, clash_target, blmin):
-                continue
-            accepted = (trial, pos, frag)
-            break
-
-        if accepted is None:
+        if not ranked:
             continue
 
-        trial, _pos, frag = accepted
+        _score, trial, pos = ranked[0]
+        frag = Atoms(
+            symbols=symbols,
+            positions=pos,
+            cell=cell,
+            pbc=pbc,
+        )
         if config.validate_combined_structure:
             trial_combined = combine_core_adsorbate(clash_target, frag)
             ok, _msg = validate_combined_cluster_structure(

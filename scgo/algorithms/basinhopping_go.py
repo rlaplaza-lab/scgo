@@ -35,6 +35,8 @@ from scgo.constants import (
 from scgo.database import HPC_DATABASE_EXCEPTIONS, setup_database
 from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
+from scgo.initialization.atomic_radii import build_blmin_from_zs
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
@@ -52,6 +54,7 @@ from scgo.utils.fitness_strategies import (
     get_fitness_from_atoms,
     set_fitness_in_atoms,
 )
+from scgo.utils.geometric_prefilter import fails_fast_geometric_prefilter
 from scgo.utils.helpers import (
     _create_energy_bins,
     _find_unique_minima_with_binning,
@@ -406,6 +409,11 @@ def bh_go(
                 "Surface system has no movable atoms for basin hopping."
             )
 
+    n_frozen_prefix = int(movable_indices[0]) if movable_indices else 0
+    all_atom_types = sorted({int(z) for z in atoms.get_atomic_numbers()})
+    blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
+    comp_mic = resolve_structure_mic(system_type, surface_config)
+
     # Scale adsorbate moves only; keep full dr/fraction for core when mixed.
     tags = atoms.get_tags()
     ads_movable = [i for i in movable_indices if int(tags[i]) > 0]
@@ -436,7 +444,6 @@ def bh_go(
     effective_n_top = (
         int(comparator_n_top) if comparator_n_top is not None else len(movable_indices)
     )
-    comp_mic = resolve_structure_mic(system_type, surface_config)
     comparator, geometry, uniqueness_blocks = resolve_run_uniqueness_comparator(
         system_type=system_type,
         n_atoms=len(atoms),
@@ -615,6 +622,24 @@ def bh_go(
                 disable=not should_show_progress(verbosity),
             )
 
+        def _structure_error(trial: Atoms) -> SCGOValidationError | None:
+            try:
+                validate_minimum_structure(
+                    trial,
+                    system_type=system_type,
+                    surface_config=surface_config,
+                    n_slab=n_slab if surface_mode else None,
+                    adsorbate_definition=adsorbate_definition,
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                    n_slab_deposit=n_slab_deposit,
+                )
+            except SCGOValidationError as exc:
+                return exc
+            return None
+
         for iteration in iteration_iterator:
             a_trial, desc = _move_atoms(
                 a_current,
@@ -640,6 +665,32 @@ def bh_go(
             )
             if run_id is not None:
                 set_tags(a_trial, run_id=run_id)
+
+            if fails_fast_geometric_prefilter(
+                a_trial,
+                blmin,
+                n_slab=n_frozen_prefix,
+                use_mic=comp_mic,
+            ):
+                profile_counters["rejected_invalid"] += 1
+                log_debug_v(
+                    logger,
+                    "Iteration %d: rejecting trial before relax (steric prefilter)",
+                    iteration,
+                    verbosity=verbosity,
+                )
+                continue
+            invalid = _structure_error(a_trial)
+            if invalid is not None:
+                profile_counters["rejected_invalid"] += 1
+                log_debug_v(
+                    logger,
+                    "Iteration %d: rejecting trial before relax (%s)",
+                    iteration,
+                    invalid,
+                    verbosity=verbosity,
+                )
+                continue
 
             t_ins0 = perf_counter()
             database_retry(
@@ -669,27 +720,15 @@ def bh_go(
             profile_timings["offspring_local_relaxation_s"] = (
                 profile_timings.get("offspring_local_relaxation_s", 0.0) + dt_rel
             )
-            try:
-                validate_minimum_structure(
-                    a_trial,
-                    system_type=system_type,
-                    surface_config=surface_config,
-                    n_slab=n_slab if surface_mode else None,
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    n_slab_deposit=n_slab_deposit,
-                )
-            except SCGOValidationError as exc:
+            invalid = _structure_error(a_trial)
+            if invalid is not None:
                 # A single invalid trial must not abort the whole run: count it as
                 # rejected and continue with the next move.
                 profile_counters["rejected_invalid"] += 1
                 logger.warning(
                     "Iteration %d: rejecting invalid trial structure (%s)",
                     iteration,
-                    exc,
+                    invalid,
                 )
                 continue
             # Don't inherit ga_eligible=False from an invalid initial seed.

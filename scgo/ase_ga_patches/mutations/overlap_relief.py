@@ -24,6 +24,20 @@ from scgo.system_types import SystemType, get_system_policy
 __all__ = ["OverlapReliefMutation"]
 
 
+def _clash_unit_directions(vectors, distances, fallback):
+    directions = np.zeros_like(vectors)
+    nonzero = distances > 1e-12
+    if np.any(nonzero):
+        directions[nonzero] = vectors[nonzero] / distances[nonzero, None]
+    missing = np.flatnonzero(~nonzero)
+    if callable(fallback):
+        for flat_k in missing:
+            directions[flat_k] = fallback()
+    elif missing.size:
+        directions[missing] = fallback
+    return directions
+
+
 class OverlapReliefMutation(OffspringCreator):
     """Resolve steric clashes with bounded geometric sweeps.
 
@@ -91,45 +105,58 @@ class OverlapReliefMutation(OffspringCreator):
         for _ in range(self.n_sweeps):
             displacements = np.zeros_like(positions)
             moved = False
+            n_mobile = len(positions)
 
-            for i in range(len(positions)):
-                for j in range(i + 1, len(positions)):
-                    if self.use_tags and tags[i] == tags[j]:
-                        continue
-                    required = req_matrix[i, j]
-                    vector = positions[j] - positions[i]
-                    distance = np.linalg.norm(vector)
-                    if distance + 1e-12 < required:
-                        direction = (
-                            vector / distance
-                            if distance > 1e-12
-                            else _random_unit_vector(self.rng)
-                        )
-                        shift = 0.5 * (required - distance + self.margin)
-                        displacements[i] -= shift * direction
-                        displacements[j] += shift * direction
+            if n_mobile >= 2:
+                iu, ju = np.triu_indices(n_mobile, k=1)
+                if self.use_tags:
+                    keep = tags[iu] != tags[ju]
+                    iu = iu[keep]
+                    ju = ju[keep]
+                if iu.size > 0:
+                    vectors = positions[ju] - positions[iu]
+                    distances = np.linalg.norm(vectors, axis=1)
+                    required = req_matrix[iu, ju]
+                    clash = distances + 1e-12 < required
+                    if np.any(clash):
                         moved = True
+                        clash_i = iu[clash]
+                        clash_j = ju[clash]
+                        clash_d = distances[clash]
+                        clash_req = required[clash]
+                        directions = _clash_unit_directions(
+                            vectors[clash],
+                            clash_d,
+                            lambda: _random_unit_vector(self.rng),
+                        )
+                        shifts = (
+                            0.5 * (clash_req - clash_d + self.margin)
+                        )[:, None] * directions
+                        np.add.at(displacements, clash_i, -shifts)
+                        np.add.at(displacements, clash_j, shifts)
 
             if self.test_dist_to_slab and len(slab) > 0:
                 slab_positions = slab.get_positions()
-                for i in range(len(positions)):
-                    for j in range(len(slab_positions)):
-                        required = req_cross[i, j]
-                        vector = positions[i] - slab_positions[j]
-                        distance = np.linalg.norm(vector)
-                        if distance + 1e-12 < required:
-                            direction = (
-                                vector / distance
-                                if distance > 1e-12
-                                else np.array([0.0, 0.0, 1.0])
-                            )
-                            shift = (required - distance + self.margin) * direction
-                            if self.use_tags:
-                                select = np.where(tags == tags[i])[0]
-                                displacements[select] += shift
-                            else:
-                                displacements[i] += shift
-                            moved = True
+                vectors = positions[:, None, :] - slab_positions[None, :, :]
+                distances = np.linalg.norm(vectors, axis=2)
+                clash = distances + 1e-12 < req_cross
+                if np.any(clash):
+                    moved = True
+                    ii, jj = np.nonzero(clash)
+                    clash_d = distances[ii, jj]
+                    clash_req = req_cross[ii, jj]
+                    directions = _clash_unit_directions(
+                        vectors[ii, jj],
+                        clash_d,
+                        np.array([0.0, 0.0, 1.0]),
+                    )
+                    shifts = (clash_req - clash_d + self.margin)[:, None] * directions
+                    if self.use_tags:
+                        for atom_i, shift in zip(ii, shifts, strict=True):
+                            select = np.where(tags == tags[atom_i])[0]
+                            displacements[select] += shift
+                    else:
+                        np.add.at(displacements, ii, shifts)
 
             positions += displacements
             if not moved:

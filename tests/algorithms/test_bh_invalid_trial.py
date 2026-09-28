@@ -35,8 +35,10 @@ def test_bh_run_completes_when_one_trial_is_invalid(
     tmp_path, monkeypatch, caplog, rng
 ) -> None:
     """The invalid trial is rejected and the remaining iterations still run."""
-    # Call 1 validates the initial structure; call 2 is the first trial.
-    calls = _patch_validation_failure(monkeypatch, fail_on_call=2)
+    # Call 1 validates the initial structure.
+    # Each trial validates once before relax and once after; fail the first
+    # trial's post-relax check (call 3 = initial + pre + post).
+    calls = _patch_validation_failure(monkeypatch, fail_on_call=3)
 
     with caplog.at_level(logging.WARNING, logger="scgo.algorithms.basinhopping_go"):
         minima = bh_go(
@@ -50,8 +52,10 @@ def test_bh_run_completes_when_one_trial_is_invalid(
             rng=rng,
         )
 
-    # Initial structure + all three trials were validated: no early abort.
-    assert calls["n"] == 4
+    # Initial + 3 trials × (pre + post), with one post-relax rejection:
+    # initial(1) + trial0 pre(2) post-fail(3) + trial1 pre(4) post(5)
+    # + trial2 pre(6) post(7) = 7.
+    assert calls["n"] == 7
     assert isinstance(minima, list)
     assert len(minima) >= 1
     messages = [record.getMessage() for record in caplog.records]
@@ -62,7 +66,8 @@ def test_bh_run_completes_when_last_trial_is_invalid(
     tmp_path, monkeypatch, rng
 ) -> None:
     """A rejected final trial still yields the minima collected so far."""
-    calls = _patch_validation_failure(monkeypatch, fail_on_call=3)
+    # niter=2: initial(1), t0 pre(2) post(3), t1 pre(4) post-fail(5).
+    calls = _patch_validation_failure(monkeypatch, fail_on_call=5)
 
     minima = bh_go(
         atoms=_pt3_with_calc()[0],
@@ -75,7 +80,7 @@ def test_bh_run_completes_when_last_trial_is_invalid(
         rng=rng,
     )
 
-    assert calls["n"] == 3
+    assert calls["n"] == 5
     assert isinstance(minima, list)
     assert len(minima) >= 1
 

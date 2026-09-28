@@ -133,7 +133,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
     logger: Any,
     verbosity: int = 1,
     connectivity_factor: ConnectivityFactorInput | None = None,
-) -> list[tuple[int, int]]:
+) -> list[tuple[int, int, list[Any]]]:
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
 
     Endpoint-max IDPP paths are retained only when the oversampled pool holds no
@@ -146,6 +146,10 @@ def _prioritize_adsorbate_pairs_by_idpp(
     the main pre-screen (a single unbounded ``relax_batch`` over every candidate
     image OOM'd the 16 GB T4). ``relaxer`` must be a
     :class:`TorchSimBatchRelaxer`.
+
+    Returns:
+        Kept ``(i, j, images)`` triples. ``images`` already carry SinglePoint
+        energy/forces from the screen and can be reused by NEB runners.
     """
     # CPU-only stage: build images and validate geometry. Pairs that fail CPU
     # validation are dropped here so the batched energy eval never sees them.
@@ -214,8 +218,8 @@ def _prioritize_adsorbate_pairs_by_idpp(
     )
 
     # Re-associate per-band energies with each pair.
-    ranked: list[tuple[tuple[int, float, float], int, int]] = []
-    for (i, j, _images), energies in zip(valid_pairs, band_energy_lists, strict=True):
+    ranked: list[tuple[tuple[int, float, float], int, int, list[Any]]] = []
+    for (i, j, images), energies in zip(valid_pairs, band_energy_lists, strict=True):
         try:
             validate_initial_neb_energy_profile(
                 energies,
@@ -237,7 +241,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
         )
         if priority[0] <= 0:
             continue
-        ranked.append((priority, i, j))
+        ranked.append((priority, i, j, images))
 
     ranked.sort(
         key=lambda item: (-item[0][0], -item[0][1], -item[0][2], item[1], item[2])
@@ -246,7 +250,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
     # When the oversampled pool has activated IDPP bands, do not spend the
     # NEB budget on endpoint-max slides (CI-NEB often climbs into junk).
     chosen = robust if robust else ranked
-    kept = [(i, j) for _priority, i, j in chosen[: int(max_pairs)]]
+    kept = [(i, j, images) for _priority, i, j, images in chosen[: int(max_pairs)]]
     logger.info(
         "Adsorbate IDPP priority screen: %d/%d pairs kept "
         "(%d robust-interior candidates in pool)",
@@ -269,11 +273,14 @@ def _run_serial_neb_search(
     use_torchsim: bool,
     verbosity: int,
     write_timing_json: bool = False,
+    prebuilt_bands: dict[tuple[int, int], list[Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run NEBs sequentially via :func:`find_transition_state`.
 
     Without TorchSim a fresh ASE calculator is built for each pair; the TorchSim
     path instead shares one ``TorchSimBatchRelaxer`` across all pairs.
+    ``prebuilt_bands`` maps ``(i, j)`` to IDPP-screen images (with cached forces)
+    so NEB can skip a second interpolation and single-point.
     """
     logger = get_logger(__name__)
     ts_results: list[dict[str, Any]] = []
@@ -370,6 +377,9 @@ def _run_serial_neb_search(
                 verbosity=verbosity,
                 write_timing_json=write_timing_json,
                 neb_cfg=neb_cfg,
+                prebuilt_images=(
+                    None if prebuilt_bands is None else prebuilt_bands.get((i, j))
+                ),
             )
         except (SCGOValidationError, ValueError, RuntimeError) as e:
             logger.error(
@@ -1163,8 +1173,9 @@ def run_transition_state_search(
             )
         shared_relaxer = TorchSimBatchRelaxer(**relaxer_params)
 
+    prebuilt_bands: dict[tuple[int, int], list[Any]] = {}
     if needs_idpp_screen:
-        pairs = _prioritize_adsorbate_pairs_by_idpp(
+        screened = _prioritize_adsorbate_pairs_by_idpp(
             pairs,
             minima,
             max_pairs=int(max_pairs),
@@ -1195,13 +1206,19 @@ def run_transition_state_search(
             connectivity_factor=connectivity_factor,
         )
 
-        if not pairs:
+        if not screened:
             logger.error(
                 "No adsorbate pairs survived IDPP priority screening for TS search"
             )
             return []
+        pairs = [(i, j) for i, j, _images in screened]
+        prebuilt_bands = {(i, j): images for i, j, images in screened}
     if max_pairs is not None and int(max_pairs) > 0:
         pairs = pairs[: int(max_pairs)]
+        if prebuilt_bands:
+            prebuilt_bands = {
+                key: prebuilt_bands[key] for key in pairs if key in prebuilt_bands
+            }
 
     log_info_v(
         logger,
@@ -1275,6 +1292,7 @@ def run_transition_state_search(
             parallel_neb_max_bands=parallel_neb_max_bands,
             relaxer=shared_relaxer,
             verbosity=verbosity,
+            prebuilt_bands=prebuilt_bands or None,
         )
         cleanup_torch_cuda(logger=logger)
     else:
@@ -1289,6 +1307,7 @@ def run_transition_state_search(
             use_torchsim=use_torchsim,
             verbosity=verbosity,
             write_timing_json=write_timing_json,
+            prebuilt_bands=prebuilt_bands or None,
         )
 
     ts_phase_wall = perf_counter() - t_ts0

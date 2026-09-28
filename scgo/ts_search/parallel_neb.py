@@ -19,7 +19,7 @@ from scgo.utils.phase_logging import log_neb_search_summaries
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 
-from .neb_endpoints import prepare_neb_endpoints
+from .neb_endpoints import apply_endpoint_constraints_to_band, prepare_neb_endpoints
 from .neb_surface import (
     K_UPDATE_EVERY,
     ensure_symmetry_copy_energy,
@@ -30,6 +30,7 @@ from .transition_state import (
     _detach_calc,
     _finalize_neb_result,
     _image_has_cached_forces,
+    _image_potential_energy,
     attach_minima_traceability,
     attach_singlepoint_from_relax_output,
     evaluate_neb_image_energies,
@@ -501,6 +502,7 @@ def run_parallel_neb_search(
     parallel_neb_max_bands: int | None = None,
     relaxer: Any | None = None,
     verbosity: int = 1,
+    prebuilt_bands: dict[tuple[int, int], list[Atoms]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Run all pairs through ParallelNEBBatch. Returns (results, timing meta).
 
@@ -520,6 +522,9 @@ def run_parallel_neb_search(
     ``relaxer`` lets the caller reuse a single :class:`TorchSimBatchRelaxer`
     (e.g. the one built for the IDPP screen) instead of constructing a fresh
     model load. When ``None``, a relaxer is built from ``neb_cfg.torchsim_params``.
+
+    ``prebuilt_bands`` maps ``(i, j)`` to IDPP-screen images with cached forces so
+    those pairs skip a second ``interpolate_path`` and energy screen.
     """
     t_parallel0 = perf_counter()
     torchsim_params = neb_cfg.torchsim_params or {}
@@ -610,30 +615,35 @@ def run_parallel_neb_search(
             _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
             continue
 
-        images = interpolate_path(
-            react_ep,
-            prod_ep,
-            n_images=neb_cfg.neb_n_images,
-            method=neb_cfg.neb_interpolation_method,
-            mic=neb_cfg.neb_interpolation_mic,
-            align_endpoints=neb_cfg.neb_align_endpoints,
-            perturb_sigma=neb_cfg.neb_perturb_sigma,
-            rng=rng,
-            system_type=system_type,
-            n_slab=neb_cfg.n_slab,
-            n_core_mobile=neb_cfg.n_core_mobile,
-            n_adsorbate_mobile=neb_cfg.n_adsorbate_mobile,
-            adsorbate_fragment_lengths=neb_cfg.adsorbate_fragment_lengths,
-            neb_surface_cell_remap=neb_cfg.neb_surface_cell_remap,
-            neb_surface_lattice_rotation=neb_cfg.neb_surface_lattice_rotation,
-            neb_surface_max_lattice_shift=neb_cfg.neb_surface_max_lattice_shift,
-            neb_interpolation_bond_tolerance_a=(
-                neb_cfg.neb_interpolation_bond_tolerance_a
-            ),
-            connectivity_factor=neb_cfg.connectivity_factor,
-            allow_symmetry_copies=True,
-            verbosity=verbosity,
-        )
+        prebuilt = None if prebuilt_bands is None else prebuilt_bands.get((i, j))
+        if prebuilt is not None:
+            images = list(prebuilt)
+            apply_endpoint_constraints_to_band(images, react_ep, prod_ep)
+        else:
+            images = interpolate_path(
+                react_ep,
+                prod_ep,
+                n_images=neb_cfg.neb_n_images,
+                method=neb_cfg.neb_interpolation_method,
+                mic=neb_cfg.neb_interpolation_mic,
+                align_endpoints=neb_cfg.neb_align_endpoints,
+                perturb_sigma=neb_cfg.neb_perturb_sigma,
+                rng=rng,
+                system_type=system_type,
+                n_slab=neb_cfg.n_slab,
+                n_core_mobile=neb_cfg.n_core_mobile,
+                n_adsorbate_mobile=neb_cfg.n_adsorbate_mobile,
+                adsorbate_fragment_lengths=neb_cfg.adsorbate_fragment_lengths,
+                neb_surface_cell_remap=neb_cfg.neb_surface_cell_remap,
+                neb_surface_lattice_rotation=neb_cfg.neb_surface_lattice_rotation,
+                neb_surface_max_lattice_shift=neb_cfg.neb_surface_max_lattice_shift,
+                neb_interpolation_bond_tolerance_a=(
+                    neb_cfg.neb_interpolation_bond_tolerance_a
+                ),
+                connectivity_factor=neb_cfg.connectivity_factor,
+                allow_symmetry_copies=True,
+                verbosity=verbosity,
+            )
         try:
             validate_initial_neb_path(
                 images,
@@ -651,19 +661,33 @@ def run_parallel_neb_search(
     # fit GPU memory (per-band, input order preserved). Only needed when the
     # ``max_endpoint_mismatch`` energy-profile gate is enabled. Chunking mirrors
     # the optimization pass so a large ``setup_pairs`` list cannot OOM the screen
-    # without recovery.
+    # without recovery. Bands that already carry cached forces (IDPP screen)
+    # are excluded from the fused eval.
     if setup_pairs and neb_cfg.max_endpoint_mismatch is not None:
-        prescreen_band_cap = (
-            int(parallel_neb_max_bands)
-            if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
-            else None
-        )
-        band_energy_lists = _evaluate_bands_in_chunks(
-            [imgs for _ord, _pid, _i, _j, _re, _pe, imgs in setup_pairs],
-            relaxer,
-            atom_budget=neb_cfg.parallel_neb_max_batch_atoms,
-            band_cap=prescreen_band_cap,
-        )
+        need_eval_indices: list[int] = []
+        band_energy_lists: list[list[float] | None] = [None] * len(setup_pairs)
+        for setup_i, (_ord, _pid, _i, _j, _re, _pe, imgs) in enumerate(setup_pairs):
+            if all(_image_has_cached_forces(img) for img in imgs):
+                band_energy_lists[setup_i] = [
+                    float(_image_potential_energy(img)) for img in imgs
+                ]
+            else:
+                need_eval_indices.append(setup_i)
+        if need_eval_indices:
+            prescreen_band_cap = (
+                int(parallel_neb_max_bands)
+                if parallel_neb_max_bands is not None
+                and int(parallel_neb_max_bands) > 0
+                else None
+            )
+            evaluated = _evaluate_bands_in_chunks(
+                [setup_pairs[i][6] for i in need_eval_indices],
+                relaxer,
+                atom_budget=neb_cfg.parallel_neb_max_batch_atoms,
+                band_cap=prescreen_band_cap,
+            )
+            for local_i, setup_i in enumerate(need_eval_indices):
+                band_energy_lists[setup_i] = evaluated[local_i]
     else:
         band_energy_lists = []
 

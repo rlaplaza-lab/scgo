@@ -513,6 +513,7 @@ def test_pairing_attempt_count_in_worker_result():
         system_type="gas_cluster",
         n_slab=0,
         n_frozen_prefix=0,
+        use_mic=False,
         slab_for_pairing=None,
         surface_normal_axis=2,
         adsorbate_definition=None,

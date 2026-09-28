@@ -1387,12 +1387,15 @@ def get_structure_diagnostics(
 
         for ci in range(len(component_list)):
             for cj in range(ci + 1, len(component_list)):
-                for atom1 in component_list[ci]:
-                    for atom2 in component_list[cj]:
-                        d_ij = float(dist[atom1, atom2])
-                        if d_ij < min_dist:
-                            min_dist = d_ij
-                            closest_pair = (atom1, atom2)
+                c1 = np.asarray(component_list[ci], dtype=int)
+                c2 = np.asarray(component_list[cj], dtype=int)
+                block = dist[np.ix_(c1, c2)]
+                flat_idx = int(np.argmin(block))
+                local_i, local_j = np.unravel_index(flat_idx, block.shape)
+                d_ij = float(block[local_i, local_j])
+                if d_ij < min_dist:
+                    min_dist = d_ij
+                    closest_pair = (int(c1[local_i]), int(c2[local_j]))
 
         closest_inter_component_distance = min_dist
 

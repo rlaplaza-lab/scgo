@@ -203,12 +203,18 @@ def test_comparator_tolerance():
 
 
 def _fp_store(atoms: Atoms, *, n_top: int = 0, mic: bool = False) -> dict:
-    """Return the per-(n_top, mic) cache entry stored on atoms.info."""
+    """Return the per-window cache entry stored on the Atoms object."""
     store = getattr(atoms, _SORTED_DIST_FP_ATTR_KEY, {})
+    n = len(atoms)
     n_top_i = int(n_top)
-    if n_top_i <= 0 or n_top_i >= len(atoms):
-        n_top_i = 0
-    return store.get(_sorted_dist_cache_slot(n_top_i, mic), {})
+    if 0 < n_top_i < n:
+        start, stop = n - n_top_i, n
+    else:
+        start, stop = 0, n
+    return store.get(
+        _sorted_dist_cache_slot(index_start=start, index_stop=stop, mic=mic),
+        {},
+    )
 
 
 def test_sorted_dist_list_cache_hit_on_repeated_looks_like():

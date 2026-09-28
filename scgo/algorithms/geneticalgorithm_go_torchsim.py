@@ -24,7 +24,6 @@ from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
 from ase_ga.data import DataConnection
 from ase_ga.utilities import get_all_atom_types
-from scipy.spatial.distance import cdist
 from tqdm import tqdm
 
 from scgo.algorithms.ga_common import (
@@ -97,6 +96,10 @@ from scgo.system_types import (
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
 )
+from scgo.utils.geometric_prefilter import (
+    clear_blmin_threshold_cache,
+    fails_fast_geometric_prefilter,
+)
 from scgo.utils.helpers import (
     extract_minima_from_database,
 )
@@ -136,93 +139,6 @@ from scgo.utils.torchsim_policy import (
 from scgo.utils.validation import validate_composition
 
 logger = get_logger(__name__)
-
-
-_PREFILTER_BLMIN_FACTOR = 0.55
-
-# Cache by (unique Z, id(blmin)). Cleared each GA generation so recycled ids and
-# per-generation empty ``{}`` (prefilter off) cannot accumulate stale entries.
-_BLMIN_THRESH_CACHE: dict[
-    tuple[tuple[int, ...], int], tuple[np.ndarray, dict[int, int]]
-] = {}
-
-
-def _blmin_threshold_matrix(
-    atomic_numbers: np.ndarray, blmin: dict
-) -> tuple[np.ndarray, np.ndarray]:
-    """Map atomic numbers to a dense Z-pair clash-threshold matrix."""
-    unique_z = tuple(sorted(int(z) for z in np.unique(atomic_numbers)))
-    cache_key = (unique_z, id(blmin))
-    cached = _BLMIN_THRESH_CACHE.get(cache_key)
-    if cached is None:
-        z_to_i = {z: i for i, z in enumerate(unique_z)}
-        n_u = len(unique_z)
-        min_allowed = np.zeros((n_u, n_u), dtype=float)
-        for i, zi in enumerate(unique_z):
-            for j, zj in enumerate(unique_z):
-                min_allowed[i, j] = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
-        mask = min_allowed > 0.0
-        thresh = np.zeros((n_u, n_u), dtype=float)
-        thresh[mask] = _PREFILTER_BLMIN_FACTOR * min_allowed[mask]
-        _BLMIN_THRESH_CACHE[cache_key] = (thresh, z_to_i)
-    else:
-        thresh, z_to_i = cached
-
-    index = np.array([z_to_i[int(z)] for z in atomic_numbers], dtype=int)
-    return thresh, index
-
-
-# Cache of upper-triangle index pairs for the mobile–mobile clash prefilter,
-# avoiding a fresh O(n²) boolean mask allocation on every offspring.
-_TRIU_CACHE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
-
-
-def _triu_cache(n: int) -> tuple[np.ndarray, np.ndarray]:
-    return _TRIU_CACHE.setdefault(n, np.triu_indices(n, k=1))
-
-
-def _fails_fast_geometric_prefilter(
-    atoms: Atoms, blmin: dict, *, n_slab: int = 0
-) -> bool:
-    """Return True when a severe clash is detected quickly.
-
-    Only mobile atoms (indices ``n_slab:``) participate: mobile–mobile and
-    mobile–slab pairs are checked; slab–slab pairs are skipped.
-    """
-    n_atoms = len(atoms)
-    if n_atoms < 2:
-        return False
-    n_slab_i = max(0, min(int(n_slab), n_atoms))
-    n_mobile = n_atoms - n_slab_i
-    if n_mobile < 1:
-        return False
-
-    numbers = atoms.get_atomic_numbers()
-    positions = atoms.get_positions()
-    thresh, z_index = _blmin_threshold_matrix(numbers, blmin)
-    mobile_pos = positions[n_slab_i:]
-    mobile_idx = z_index[n_slab_i:]
-
-    # Mobile–mobile pairs (upper triangle, cached index pass).
-    if n_mobile >= 2:
-        mm = cdist(mobile_pos, mobile_pos)
-        pair_thresh = thresh[np.ix_(mobile_idx, mobile_idx)]
-        iu, ju = _triu_cache(n_mobile)
-        mm_u = mm[iu, ju]
-        pt_u = pair_thresh[iu, ju]
-        if np.any((pt_u > 0.0) & (mm_u < pt_u)):
-            return True
-
-    # Mobile–slab pairs.
-    if n_slab_i > 0:
-        slab_pos = positions[:n_slab_i]
-        slab_idx = z_index[:n_slab_i]
-        ms = cdist(mobile_pos, slab_pos)
-        pair_thresh = thresh[np.ix_(mobile_idx, slab_idx)]
-        if np.any((pair_thresh > 0.0) & (ms < pair_thresh)):
-            return True
-
-    return False
 
 
 def _picklable_atoms_copy(atoms: Atoms | None) -> Atoms | None:
@@ -285,6 +201,7 @@ class OffspringBuildContext:
     system_type: SystemType
     n_slab: int
     n_frozen_prefix: int
+    use_mic: bool
     slab_for_pairing: Atoms | None
     surface_normal_axis: int
     adsorbate_definition: AdsorbateDefinition | None
@@ -434,6 +351,21 @@ def _build_offspring_worker(
     mutation_s = 0.0
     mutation_applied = False
     mutation_requested = False
+
+    def _prefilter_reject(*, applied: bool, requested: bool) -> dict[str, Any]:
+        return {
+            "index": job["index"],
+            "child": None,
+            "desc": desc,
+            "failure_reason": "too_close_prefilter",
+            "mutation_applied": applied,
+            "mutation_requested": requested,
+            "operator_setup_s": operator_setup_s,
+            "crossover_s": crossover_s,
+            "mutation_s": mutation_s,
+            "pairing_attempt_count": pairing_attempt_count,
+        }
+
     if child is None:
         return {
             "index": job["index"],
@@ -447,19 +379,13 @@ def _build_offspring_worker(
             "mutation_s": mutation_s,
             "pairing_attempt_count": pairing_attempt_count,
         }
-    if _fails_fast_geometric_prefilter(child, ctx.blmin, n_slab=ctx.n_frozen_prefix):
-        return {
-            "index": job["index"],
-            "child": None,
-            "desc": desc,
-            "failure_reason": "too_close_prefilter",
-            "mutation_applied": False,
-            "mutation_requested": False,
-            "operator_setup_s": operator_setup_s,
-            "crossover_s": crossover_s,
-            "mutation_s": mutation_s,
-            "pairing_attempt_count": pairing_attempt_count,
-        }
+    if fails_fast_geometric_prefilter(
+        child,
+        ctx.blmin,
+        n_slab=ctx.n_frozen_prefix,
+        use_mic=ctx.use_mic,
+    ):
+        return _prefilter_reject(applied=False, requested=False)
     mutation_requested = bool(
         decision_rng.random() < job["current_mutation_probability"]
     )
@@ -470,6 +396,13 @@ def _build_offspring_worker(
         if mutated is not None:
             child = mutated
             mutation_applied = True
+            if fails_fast_geometric_prefilter(
+                child,
+                ctx.blmin,
+                n_slab=ctx.n_frozen_prefix,
+                use_mic=ctx.use_mic,
+            ):
+                return _prefilter_reject(applied=True, requested=True)
     if ctx.freeze_adsorbate_internal_geometry:
         enforce_frozen_adsorbate_geometry(
             child,
@@ -1022,9 +955,9 @@ def ga_go(
         timing_collector: Optional list appended with the timing payload after the run.
         torchsim_dtype: Optional TorchSim compute dtype, ``"float32"`` or ``"float64"``.
             Defaults to ``None``, which keeps the :class:`TorchSimBatchRelaxer`
-            default of ``float64``. Set ``"float32"`` for much faster FP32/TF32 GPU
-            kernels at the cost of some numerical accuracy. Only applies when this
-            function builds the relaxer; ignored when ``relaxer`` is supplied.
+            default of ``float32``. Set ``"float64"`` for ASE MACE wrapper parity.
+            Only applies when this function builds the relaxer; ignored when
+            ``relaxer`` is supplied.
     """
     profile_t0 = perf_counter()
     profile_timings: dict[str, float] = {}
@@ -1076,7 +1009,7 @@ def ga_go(
             f"batch_size must be a positive integer or None, got {batch_size}"
         )
 
-    # Resolve TorchSim dtype for the auto-built relaxer (None -> float64 default).
+    # Resolve TorchSim dtype for the auto-built relaxer (None -> float32 default).
     if torchsim_dtype is not None and torchsim_dtype not in ("float32", "float64"):
         raise SCGOValidationError(
             f"torchsim_dtype must be 'float32' or 'float64', got {torchsim_dtype!r}"
@@ -1706,7 +1639,7 @@ def ga_go(
                 verbosity=verbosity,
             )
 
-            _BLMIN_THRESH_CACHE.clear()
+            clear_blmin_threshold_cache()
             offspring_ctx = OffspringBuildContext(
                 atoms_template=_picklable_atoms_copy(atoms_template),
                 n_to_optimize=n_to_optimize,
@@ -1715,6 +1648,7 @@ def ga_go(
                 system_type=system_type,
                 n_slab=n_slab,
                 n_frozen_prefix=n_fixed,
+                use_mic=comp_mic,
                 slab_for_pairing=_picklable_atoms_copy(slab_for_pairing),
                 surface_normal_axis=(
                     surface_config.surface_normal_axis if surface_mode else 2

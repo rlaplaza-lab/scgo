@@ -189,41 +189,69 @@ class TorchSimFixBondLengths(Constraint):
         )
         return counts
 
-    def _bond_delta(
-        self, positions: torch.Tensor, state: object, k: int
-    ) -> tuple[int, int, torch.Tensor]:
-        """MIC displacement from atom i to j for bond ``k``."""
-        i = int(self.pairs[k, 0])
-        j = int(self.pairs[k, 1])
-        delta = _minimum_image_displacement(
-            dr=(positions[j] - positions[i]).unsqueeze(0),
-            cell=state.cell[int(self.system_idx[k])],
-            pbc=state.pbc,
-        ).squeeze(0)
-        return i, j, delta
+    def _bond_deltas(self, positions: torch.Tensor, state: object) -> torch.Tensor:
+        """MIC displacements from atom i to j for every constrained bond."""
+        i = self.pairs[:, 0]
+        j = self.pairs[:, 1]
+        dr = positions[j] - positions[i]
+        deltas = torch.empty_like(dr)
+        # Bonds in the same system share a cell; group to avoid per-bond sync.
+        for sys_id in torch.unique(self.system_idx):
+            mask = self.system_idx == sys_id
+            deltas[mask] = _minimum_image_displacement(
+                dr=dr[mask],
+                cell=state.cell[int(sys_id.item())],
+                pbc=state.pbc,
+            )
+        return deltas
+
+    def _bond_directions(
+        self, positions: torch.Tensor, state: object
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``(distance, valid, unit MIC direction)`` for every bond."""
+        deltas = self._bond_deltas(positions, state)
+        dist = torch.linalg.norm(deltas, dim=1)
+        valid = dist > 1e-12
+        direction = torch.zeros_like(deltas)
+        if bool(valid.any()):
+            direction[valid] = deltas[valid] / dist[valid].unsqueeze(1)
+        return dist, valid, direction
 
     def adjust_positions(self, state: object, new_positions: torch.Tensor) -> None:
-        """Pull each constrained bond back to its target length."""
-        for k in range(self.pairs.shape[0]):
-            i, j, d = self._bond_delta(new_positions, state, k)
-            dist = torch.linalg.norm(d)
-            if dist <= 1e-12:
-                continue
-            correction = 0.5 * (dist - float(self.bond_lengths[k])) * (d / dist)
-            new_positions[i] = new_positions[i] + correction
-            new_positions[j] = new_positions[j] - correction
+        """Pull constrained bonds back to target lengths (Jacobi sweeps)."""
+        if self.pairs.shape[0] == 0:
+            return
+        i = self.pairs[:, 0]
+        j = self.pairs[:, 1]
+        targets = self.bond_lengths.to(
+            dtype=new_positions.dtype, device=new_positions.device
+        )
+        for _ in range(4):
+            dist, valid, direction = self._bond_directions(new_positions, state)
+            if not bool(valid.any()):
+                break
+            correction = torch.zeros_like(direction)
+            correction[valid] = (
+                0.5 * (dist[valid] - targets[valid]).unsqueeze(1) * direction[valid]
+            )
+            disp = torch.zeros_like(new_positions)
+            disp.index_add_(0, i, correction)
+            disp.index_add_(0, j, -correction)
+            new_positions.add_(disp)
 
     def adjust_forces(self, state: object, forces: torch.Tensor) -> None:
         """Remove the bond-stretching component of the relative force."""
-        for k in range(self.pairs.shape[0]):
-            i, j, d = self._bond_delta(state.positions, state, k)
-            dist = torch.linalg.norm(d)
-            if dist <= 1e-12:
-                continue
-            direction = d / dist
-            parallel = torch.dot(forces[j] - forces[i], direction) * direction
-            forces[i] = forces[i] + 0.5 * parallel
-            forces[j] = forces[j] - 0.5 * parallel
+        if self.pairs.shape[0] == 0:
+            return
+        i = self.pairs[:, 0]
+        j = self.pairs[:, 1]
+        _dist, valid, direction = self._bond_directions(state.positions, state)
+        if not bool(valid.any()):
+            return
+        rel = forces[j] - forces[i]
+        half = 0.5 * (rel * direction).sum(dim=1, keepdim=True) * direction
+        forces.index_add_(0, i, half)
+        forces.index_add_(0, j, -half)
 
     def select_constraint(
         self,

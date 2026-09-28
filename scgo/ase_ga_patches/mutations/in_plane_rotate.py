@@ -102,7 +102,7 @@ class InPlaneRotateMutation(OffspringCreator):
                     slab.get_positions(),
                     slab.numbers,
                     self.blmin,
-                )
+                )[0]
             ranked.append((score, newpos))
         ranked.sort(key=lambda item: item[0])
 

@@ -531,30 +531,28 @@ def select_structure_pairs(
 
     def _fingerprint_pair(atoms_i: Atoms, atoms_j: Atoms) -> tuple[float, float, bool]:
         if fingerprint_core:
-            a_i = _core_slice_atoms(atoms_i, n_slab=slab_len, n_core=n_core)
-            a_j = _core_slice_atoms(atoms_j, n_slab=slab_len, n_core=n_core)
             return calculate_structure_similarity(
-                a_i,
-                a_j,
+                atoms_i,
+                atoms_j,
                 tolerance=similarity_tolerance,
                 pair_cor_max=similarity_pair_cor_max,
                 use_mic=mic,
                 n_slab=None,
                 ignore_fixed_atoms=False,
                 comparator=shared_comparator,
+                index_window=(slab_len, slab_len + n_core),
             )
         if adsorbate_aware and slab_len > 0:
-            a_i = _mobile_slice_atoms(atoms_i, n_slab=slab_len)
-            a_j = _mobile_slice_atoms(atoms_j, n_slab=slab_len)
             return calculate_structure_similarity(
-                a_i,
-                a_j,
+                atoms_i,
+                atoms_j,
                 tolerance=similarity_tolerance,
                 pair_cor_max=similarity_pair_cor_max,
                 use_mic=mic,
                 n_slab=None,
                 ignore_fixed_atoms=False,
                 comparator=shared_comparator,
+                index_window=(slab_len, len(atoms_i)),
             )
         return calculate_structure_similarity(
             atoms_i,

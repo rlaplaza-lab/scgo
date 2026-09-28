@@ -69,3 +69,19 @@ def prepare_neb_endpoints(
     for ep in (react, prod):
         validate_structure_for_system_type(ep, **validate_kwargs)
     return react, prod
+
+
+def apply_endpoint_constraints_to_band(
+    images: list[Atoms],
+    react_ep: Atoms,
+    prod_ep: Atoms,
+) -> None:
+    """Copy endpoint constraints onto a prebuilt band (interiors follow the reactant)."""
+    react_constraints = list(react_ep.constraints)
+    prod_constraints = list(prod_ep.constraints)
+    if react_constraints:
+        images[0].set_constraint(react_constraints)
+        for img in images[1:-1]:
+            img.set_constraint(list(react_constraints))
+    if prod_constraints:
+        images[-1].set_constraint(prod_constraints)

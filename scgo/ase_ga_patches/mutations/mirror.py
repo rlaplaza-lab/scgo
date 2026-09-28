@@ -199,7 +199,7 @@ class MirrorMutation(OffspringCreator):
                             slab.get_positions(),
                             slab.numbers,
                             self.blmin,
-                        )
+                        )[0]
                     ranked_candidates.append((score, mutant))
 
         ranked_candidates.sort(key=lambda item: item[0])

@@ -603,10 +603,9 @@ def build_torchsim_relaxer(
     directly.
 
     Args:
-        dtype: Optional torch dtype (e.g. ``torch.float32``). Pass ``None`` to
-            keep :class:`TorchSimBatchRelaxer`'s default (``torch.float64``, for
-            parity with the ASE MACE wrapper). ``torch.float32`` enables much
-            faster FP32/TF32 GPU kernels at the cost of some numerical accuracy.
+        dtype: Optional torch dtype (e.g. ``torch.float64``). Pass ``None`` to
+            keep :class:`TorchSimBatchRelaxer`'s default (``torch.float32``).
+            ``torch.float64`` restores ASE MACE wrapper parity at higher cost.
     """
     from scgo.utils.torchsim_policy import (
         is_uma_like_calculator,
@@ -620,8 +619,7 @@ def build_torchsim_relaxer(
         "max_atoms_to_try": expected_max_atoms,
     }
     if dtype is not None:
-        # Override the relaxer default (float64) for faster FP32/TF32 kernels.
-        # ``None`` leaves the model default untouched (parity for non-preset users).
+        # Override the relaxer default (float32). ``None`` leaves float32.
         base["dtype"] = dtype
 
     if is_uma_like_calculator(calculator):
@@ -743,8 +741,8 @@ class TorchSimBatchRelaxer:
         Optional torch device. Defaults to CUDA when available, then MPS,
         otherwise CPU.
     dtype:
-        Torch dtype. Defaults to ``torch.float64`` for parity with the ASE MACE
-        wrapper; override to ``torch.float32`` for speed at the cost of accuracy.
+        Torch dtype. Defaults to ``torch.float32`` (matching presets and the TS
+        path). Pass ``torch.float64`` for ASE MACE wrapper parity.
     model:
         Optional TorchSim model implementing ``ModelInterface``. If omitted, a
         model is loaded according to ``model_kind`` (``"mace"`` by default, from
@@ -856,8 +854,9 @@ class TorchSimBatchRelaxer:
                 )
             )
         if self.dtype is None:
-            # Match ASE MACE wrapper default of float64 for parity
-            self.dtype = torch.float64
+            # Match production presets / TS path: FP32 is enough for geometry
+            # optimization to fmax=0.05 eV/Å and is much faster on GPU.
+            self.dtype = torch.float32
 
         # Optional seeding: mutates the global torch RNG (see ``seed`` docstring).
         # Deterministic algorithms are not forced, to avoid CuBLAS constraints.
