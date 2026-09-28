@@ -358,8 +358,8 @@ def ensure_symmetry_copy_energy(
     """Skip a band whose symmetry copy is not the stored product minimum.
 
     Raises:
-        SCGOValidationError: when a non-identity copy drifts past
-        ``SYMMETRY_DRIFT_EV``.
+        SCGOValidationError: when a non-identity copy drifts past the
+            ``SYMMETRY_DRIFT_EV`` energy tolerance.
     """
     if not symmetry_product_rejected(
         product_energy,

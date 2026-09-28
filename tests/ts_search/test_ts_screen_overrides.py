@@ -142,7 +142,9 @@ def test_idpp_screen_threads_prominence_barrier_and_bond_tolerance(monkeypatch):
         verbosity=0,
     )
 
-    assert kept == [(0, 1)]
+    assert len(kept) == 1
+    assert kept[0][0] == 0 and kept[0][1] == 1
+    assert isinstance(kept[0][2], list)
     assert captured["profile"]["min_saddle_prominence"] == pytest.approx(0.63)
     assert captured["profile"]["max_spurious_barrier"] == pytest.approx(4.2)
     assert captured["priority_prominence"] == pytest.approx(0.63)

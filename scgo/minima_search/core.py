@@ -371,7 +371,7 @@ def _align_slab_minimum_to_reference(
     """
     from scgo.ts_search.transition_state import _align_product_surface_pbc
 
-    aligned = _align_product_surface_pbc(
+    aligned, _used_symmetry = _align_product_surface_pbc(
         reference,
         candidate.get_positions(),
         n_slab=n_slab,
