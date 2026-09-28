@@ -24,6 +24,7 @@ from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import pdist
+from scipy.spatial.transform import Rotation, Slerp
 
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import (
@@ -1286,19 +1287,34 @@ def _reorder_product_to_match_reactant(
     return product.get_positions()
 
 
+def _kabsch_row_rotation(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Return ``R`` such that centered row-vectors satisfy ``src @ R ≈ dst``."""
+    h = np.asarray(src, dtype=float).T @ np.asarray(dst, dtype=float)
+    u, _, vt = np.linalg.svd(h)
+    rot = vt.T @ u.T
+    if np.linalg.det(rot) < 0.0:
+        vt = vt.copy()
+        vt[-1] *= -1.0
+        rot = vt.T @ u.T
+    return rot
+
+
 def _restore_agreed_fixbondlengths(
     images: list[Atoms],
     *,
     tol: float,
     mic: bool,
 ) -> None:
-    """Put interior images back on a FixBondLengths distance both ends share.
+    """Rigidly carry frozen fragments between endpoints.
 
     Interpolation runs with ``apply_constraint=False`` so slab ``FixAtoms`` can
-    follow the path. A frozen adsorbate bond (same length at both endpoints)
-    then shortens along the chord of a rotation, and the collapsed bond keeps
-    NEB from reaching ``fmax``. Bonds whose endpoint lengths already differ by
-    more than ``tol`` are left alone: that change is part of the path.
+    follow the path. Cartesian IDPP then shortens a rotating ``FixBondLengths``
+    fragment along the chord, and that clash keeps NEB off ``fmax`` or leaves a
+    spurious multi-eV barrier. Each connected component whose endpoint distances
+    already agree within ``tol`` is replaced by a rigid slerp: the fragment
+    center travels on the straight line between the endpoints, and its
+    orientation follows the Kabsch rotation. Bonds that actually change length
+    are left on the interpolated path.
     """
     if len(images) < 3:
         return
@@ -1307,69 +1323,54 @@ def _restore_agreed_fixbondlengths(
     ]
     if not bond_constraints:
         return
-    reactant = images[0]
-    product = images[-1]
+    reactant_atoms = images[0]
+    product_atoms = images[-1]
+    reactant = reactant_atoms.get_positions()
+    product = product_atoms.get_positions()
+    parent: dict[int, int] = {}
+
+    def _find(x: int) -> int:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
     for constraint in bond_constraints:
         for a, b in constraint.pairs:
             i, j = int(a), int(b)
-            d_r = float(reactant.get_distance(i, j, mic=mic))
-            d_p = float(product.get_distance(i, j, mic=mic))
-            if abs(d_r - d_p) > tol:
-                continue
-            target = 0.5 * (d_r + d_p)
-            fallback = reactant.get_positions()[j] - reactant.get_positions()[i]
-            for _sweep in range(4):
-                moved = False
-                for img in images[1:-1]:
-                    if _project_pair_toward_distance(
-                        img, i, j, target, mic=mic, fallback=fallback
-                    ):
-                        moved = True
-                if not moved:
-                    break
+            d_r = float(reactant_atoms.get_distance(i, j, mic=mic))
+            d_p = float(product_atoms.get_distance(i, j, mic=mic))
+            if abs(d_r - d_p) <= tol:
+                _union(i, j)
+    groups: dict[int, list[int]] = {}
+    for atom in parent:
+        groups.setdefault(_find(atom), []).append(atom)
+    components = [sorted(members) for members in groups.values() if len(members) >= 2]
+    if not components:
+        return
 
-
-def _project_pair_toward_distance(
-    img: Atoms,
-    i: int,
-    j: int,
-    target: float,
-    *,
-    mic: bool,
-    fallback: np.ndarray | None = None,
-) -> bool:
-    """Move atoms ``i`` and ``j`` equally along their bond toward ``target``.
-
-    ``fallback`` is the direction used when the pair has collapsed to one point
-    (a 180 degree interpolation). Returns True when the image was updated.
-    """
-    pos = img.get_positions()
-    dvec = pos[j] - pos[i]
-    if mic and bool(np.any(img.pbc)):
-        dvec_mic, _ = find_mic(
-            dvec.reshape(1, 3), _cell_array(img.cell), np.asarray(img.pbc, dtype=bool)
-        )
-        dvec = np.asarray(dvec_mic[0], dtype=float)
-    dist = float(np.linalg.norm(dvec))
-    if dist <= 1e-12:
-        if fallback is None:
-            return False
-        direction = np.asarray(fallback, dtype=float)
-        norm = float(np.linalg.norm(direction))
-        if norm <= 1e-12:
-            return False
-        direction = direction / norm
-        dist = 0.0
-    else:
-        if abs(dist - target) <= 1e-8:
-            return False
-        direction = dvec / dist
-    correction = 0.5 * (dist - target) * direction
-    updated = pos.copy()
-    updated[i] = pos[i] + correction
-    updated[j] = pos[j] - correction
-    img.set_positions(updated, apply_constraint=False)
-    return True
+    n_img = len(images)
+    for members in components:
+        idx = np.asarray(members, dtype=int)
+        src = reactant[idx]
+        dst = product[idx]
+        com_r = src.mean(axis=0)
+        com_p = dst.mean(axis=0)
+        rot = _kabsch_row_rotation(src - com_r, dst - com_p)
+        slerp = Slerp([0.0, 1.0], Rotation.from_matrix(np.stack([np.eye(3), rot])))
+        for k in range(1, n_img - 1):
+            t = k / (n_img - 1)
+            rot_t = slerp([t]).as_matrix()[0]
+            com_t = (1.0 - t) * com_r + t * com_p
+            pos = images[k].get_positions()
+            pos[idx] = com_t + (src - com_r) @ rot_t
+            images[k].set_positions(pos, apply_constraint=False)
 
 
 def _warn_if_interpolated_bonds_stretch(
