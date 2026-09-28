@@ -3,20 +3,28 @@
 from __future__ import annotations
 
 import pytest
+from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.optimize import LBFGS
 
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.initialization import create_initial_cluster
 from scgo.utils.helpers import perform_local_relaxation
+from tests.constants import EMT_PT2_BOND_ANG
 from tests.helpers import assert_minima_structurally_valid
 
 
 @pytest.mark.slow
 def test_bh_temperature_zero_rejects_uphill(tmp_path, rng) -> None:
     """At T=0, the best returned minimum is no worse than the first relaxed basin."""
-    comp = ["Pt", "Pt"]
-    atoms = create_initial_cluster(comp, rng=rng)
+    # Bonded dimer so the seed passes the connectivity gate (ga_eligible).
+    atoms = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 0.0], [EMT_PT2_BOND_ANG, 0.0, 0.0]],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    atoms.center()
     atoms.calc = EMT()
     perform_local_relaxation(atoms, EMT(), LBFGS, fmax=0.05, steps=20)
     reference_energy = float(atoms.get_potential_energy())
@@ -31,7 +39,7 @@ def test_bh_temperature_zero_rejects_uphill(tmp_path, rng) -> None:
         rng=rng,
     )
     assert len(minima) >= 1
-    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
+    assert_minima_structurally_valid(minima, expected_n_atoms=2)
     best_energy = min(float(e) for e, _a in minima)
     assert best_energy <= reference_energy + 1e-5
 
