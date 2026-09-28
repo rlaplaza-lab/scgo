@@ -236,9 +236,10 @@ def test_square_monolayer_90_deg_symmetry():
 
 
 def test_broken_slab_symmetry_falls_back_to_identity():
+    # Asymmetric in-plane lattice: orthogonal angle but no C2 map.
     slab = Atoms(
         "Pt4",
-        positions=[[0, 0, 0], [3.0, 0, 0], [0, 4.5, 0], [3.0, 4.5, 0]],
+        positions=[[0, 0, 0], [3.0, 0, 0], [0.4, 4.5, 0], [2.2, 3.8, 0]],
         cell=[3.0, 4.5, 12.0],
         pbc=[True, True, False],
     )
@@ -256,6 +257,101 @@ def test_broken_slab_symmetry_falls_back_to_identity():
         a, b_pos, n_slab=n_slab, allow_symmetry_copies=False
     )
     np.testing.assert_allclose(on, off, atol=1e-8)
+
+
+def test_orthogonal_fcc111_proposes_c2():
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    mats = inplane_symmetry_matrices(slab, n_slab=n_slab)
+    assert len(mats) == 2  # identity + C2
+
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.5
+    a = slab.copy() + Atoms(
+        "PtPt",
+        positions=[[1.0, 1.0, z0], [2.5, 1.0, z0]],
+    )
+    center = symmetry_anchor_center(a, n_slab=n_slab)
+    assert center is not None
+    mobile_mask = np.zeros(len(a), dtype=bool)
+    mobile_mask[n_slab:] = True
+    anchor_mask = np.zeros(len(a), dtype=bool)
+    anchor_mask[:n_slab] = True
+    prod_pos = apply_inplane_symmetry(
+        a.get_positions(),
+        mats[1],
+        center=center,
+        mobile_mask=mobile_mask,
+        anchor_mask=anchor_mask,
+        ref_pos=a.get_positions(),
+    )
+    aligned, used = _align_product_surface_pbc(
+        a,
+        prod_pos,
+        n_slab=n_slab,
+        enable_lattice_rotation=False,
+        allow_symmetry_copies=True,
+    )
+    disp = np.linalg.norm(aligned[n_slab:] - a.get_positions()[n_slab:], axis=1)
+    assert float(np.max(disp)) < 0.05
+    assert used is True
+
+
+def test_hex_symmetry_matrices_exclude_reflections():
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=False)
+    slab.pbc = [True, True, False]
+    mats = inplane_symmetry_matrices(slab, n_slab=len(slab))
+    assert len(mats) > 1
+    for m in mats:
+        assert abs(float(np.linalg.det(m)) - 1.0) < 1e-8
+
+
+def test_hex_kabsch_competes_with_discrete_when_rotation_on():
+    """Continuous Kabsch must beat discrete ops for a non-lattice rotation."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=False)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    assert len(inplane_symmetry_matrices(slab, n_slab=n_slab)) > 1
+
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.5
+    a = slab.copy() + Atoms(
+        "PtPt",
+        positions=[[1.0, 1.0, z0], [2.5, 1.0, z0]],
+    )
+    rot20 = ns._rotation_about_normal(20.0, 2)
+    prod_pos = a.get_positions().copy()
+    mobile = prod_pos[n_slab:]
+    com = mobile.mean(axis=0)
+    prod_pos[n_slab:] = (mobile - com) @ rot20.T + com
+
+    aligned, used = _align_product_surface_pbc(
+        a,
+        prod_pos,
+        n_slab=n_slab,
+        enable_lattice_rotation=True,
+        allow_symmetry_copies=True,
+    )
+    disp = float(
+        np.max(np.linalg.norm(aligned[n_slab:] - a.get_positions()[n_slab:], axis=1))
+    )
+    assert disp < 0.05
+    assert used is False
+
+    aligned_no_kabsch, _ = _align_product_surface_pbc(
+        a,
+        prod_pos,
+        n_slab=n_slab,
+        enable_lattice_rotation=False,
+        allow_symmetry_copies=True,
+    )
+    disp_no = float(
+        np.max(
+            np.linalg.norm(
+                aligned_no_kabsch[n_slab:] - a.get_positions()[n_slab:], axis=1
+            )
+        )
+    )
+    assert disp_no > 10.0 * disp
 
 
 def test_symmetry_product_rejected_thresholds():
@@ -316,6 +412,95 @@ def test_find_transition_state_symmetry_drift_skips(monkeypatch, tmp_path):
     assert result["status"] == "skipped"
 
 
+def test_parallel_neb_symmetry_veto_without_mismatch_screen(tmp_path):
+    """Symmetry drift is rejected even when max_endpoint_mismatch is None."""
+    from unittest.mock import patch
+
+    from scgo.ts_search.parallel_neb import run_parallel_neb_search
+    from scgo.utils.ts_runner_kwargs import NebRunConfig
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=False)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.5
+    a = slab.copy() + Atoms("Pt", positions=[[0.5, 0.5, z0]])
+    b = slab.copy() + Atoms("Pt", positions=[[1.2, 0.8, z0]])
+    set_tags(a, potential_energy=0.0)
+    set_tags(b, potential_energy=0.05)
+
+    cfg = NebRunConfig(
+        neb_n_images=1,
+        neb_spring_constant=0.1,
+        neb_fmax=5.0,
+        neb_steps=2,
+        neb_climb=False,
+        neb_interpolation_method="linear",
+        neb_align_endpoints=True,
+        neb_perturb_sigma=0.0,
+        neb_interpolation_mic=True,
+        neb_tangent_method="aseneb",
+        neb_surface_cell_remap=True,
+        neb_surface_lattice_rotation=True,
+        neb_surface_max_lattice_shift=1,
+        n_slab=n_slab,
+        n_core_mobile=None,
+        n_adsorbate_mobile=None,
+        adsorbate_fragment_lengths=None,
+        max_endpoint_mismatch=None,
+        adsorbate_definition=None,
+        connectivity_factor=None,
+        allow_cluster_fragmentation=True,
+        allow_adsorbate_surface_detachment=False,
+        enforce_adsorbate_subgraph_integrity=True,
+        system_type="surface_cluster",
+        surface_config=None,
+        torchsim_params={},
+        neb_prescreen_clash_distance=0.7,
+        min_saddle_prominence=0.40,
+        neb_max_spurious_barrier=8.0,
+        layer_cluster_threshold_ang=0.4,
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+
+    def _fake_interpolate(a1, a2, **_kwargs):
+        imgs = [a1.copy(), a2.copy()]
+        imgs[-1].info["scgo_symmetry_copy"] = True
+        return imgs
+
+    class _FakeRelaxer:
+        def relax_batch(self, atoms_list, steps=0):
+            return [
+                (0.5, atoms.copy())  # drifted vs GO product 0.05 eV
+                for atoms in atoms_list
+            ]
+
+    with (
+        patch(
+            "scgo.ts_search.parallel_neb.prepare_neb_endpoints",
+            side_effect=lambda x, y, _cfg: (x.copy(), y.copy()),
+        ),
+        patch(
+            "scgo.ts_search.parallel_neb.interpolate_path",
+            side_effect=_fake_interpolate,
+        ),
+        patch("scgo.ts_search.parallel_neb.validate_initial_neb_path"),
+        patch("scgo.ts_search.parallel_neb.save_neb_result"),
+    ):
+        results, _meta = run_parallel_neb_search(
+            [(0, 1)],
+            [(0.0, a), (0.05, b)],
+            neb_cfg=cfg,
+            run_dir=tmp_path / "par_sym",
+            rng=None,
+            verbosity=0,
+            relaxer=_FakeRelaxer(),
+        )
+
+    assert len(results) == 1
+    assert results[0]["status"] == "skipped"
+    assert "symmetry copy" in str(results[0].get("error", "")).lower()
+
+
 # --- Springs ------------------------------------------------------------------
 
 
@@ -326,6 +511,13 @@ def test_variable_spring_constants_peak_and_flat():
     assert k[0] == pytest.approx(4.0 - 3.9 * 0.9)
     flat = variable_spring_constants(np.array([1.0, 1.0, 1.0, 1.0]), 0.1)
     np.testing.assert_allclose(flat, 0.1)
+
+
+def test_variable_spring_constants_clamp_when_k_min_above_k_max():
+    k = variable_spring_constants(np.array([0.0, 0.1, 1.0, 0.1, 0.0]), 5.0)
+    assert k.shape == (4,)
+    assert float(np.min(k)) >= 5.0 - 1e-12
+    assert float(np.max(k)) == pytest.approx(5.0)
 
 
 def test_neb_accepts_variable_spring_array():

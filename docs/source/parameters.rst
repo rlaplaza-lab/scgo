@@ -734,10 +734,11 @@ Surface path prep (always on for slab / 2D-PBC bands):
 - Intact mobile fragments are unwrapped before IDPP
   (:func:`~scgo.ts_search.neb_surface.consistent_product_positions`); when a
   correction runs, interpolation uses ``mic=False``.
-- Discrete in-plane slab symmetries (hexagonal / square metrics on slab atoms)
-  compete with lattice shifts; continuous Kabsch stays under
-  ``neb_surface_lattice_rotation``. A symmetry copy whose product single-point
-  drifts more than ``0.1`` eV from the stored minimum is skipped.
+- Discrete in-plane slab symmetries (proper rotations on hexagonal / square /
+  orthogonal metrics, validated on slab atoms) compete with lattice shifts and,
+  when ``neb_surface_lattice_rotation`` is on, with continuous Kabsch. A
+  symmetry copy whose product single-point drifts more than ``0.1`` eV from the
+  stored minimum is skipped.
 - Variable springs: every 40 FIRE steps, surface bands set ``neb.k`` from
   image energies (``neb_spring_constant`` up to ``4.0`` eV/Å² near the peak).
   Gas bands keep a scalar spring.

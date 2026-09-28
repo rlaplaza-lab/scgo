@@ -103,12 +103,14 @@ def consistent_product_positions(
     *,
     n_slab: int = 0,
     connectivity_factor: ConnectivityFactorInput | None = None,
+    max_lattice_shift: int = 1,
 ) -> np.ndarray:
     """Unwrap intact mobile fragments so IDPP does not split them across PBC.
 
     Intact edges are covalent bonds present under MIC in both endpoints. Lone
     adatoms (size-1 components) keep per-atom MIC. Anchors (slab prefix and
-    ``FixAtoms``) stay on the reactant coordinates.
+    ``FixAtoms``) stay on the reactant coordinates. The in-plane image search
+    span matches ``neb_surface_max_lattice_shift`` (default ±1 cell).
     """
     prod = np.asarray(product_positions, dtype=float).copy()
     if not _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
@@ -142,7 +144,12 @@ def consistent_product_positions(
     axis_a, axis_b = _inplane_periodic_axes(pbc_mic)
     a_vec = cell[axis_a]
     b_vec = cell[axis_b]
-    images = [n1 * a_vec + n2 * b_vec for n1 in (-1, 0, 1) for n2 in (-1, 0, 1)]
+    shift_span = max(0, int(max_lattice_shift))
+    images = [
+        n1 * a_vec + n2 * b_vec
+        for n1 in range(-shift_span, shift_span + 1)
+        for n2 in range(-shift_span, shift_span + 1)
+    ]
 
     adjacency: dict[int, list[int]] = defaultdict(list)
     for i, j in intact:
@@ -196,24 +203,6 @@ def _rotation_about_normal(angle_deg: float, normal_axis: int) -> np.ndarray:
     return rot
 
 
-def _reflection_through_inplane_dir(
-    direction: np.ndarray,
-    normal_axis: int,
-) -> np.ndarray:
-    """Householder reflection in the surface plane through ``direction``."""
-    d = np.asarray(direction, dtype=float).copy()
-    d[normal_axis] = 0.0
-    norm = float(np.linalg.norm(d))
-    if norm < 1e-12:
-        return np.eye(3, dtype=float)
-    d /= norm
-    n = np.zeros(3, dtype=float)
-    n[normal_axis] = 1.0
-    perp = np.cross(n, d)
-    perp /= float(np.linalg.norm(perp))
-    return np.eye(3, dtype=float) - 2.0 * np.outer(perp, perp)
-
-
 def _slab_maps_to_itself(
     slab_pos: np.ndarray,
     rot: np.ndarray,
@@ -239,10 +228,11 @@ def inplane_symmetry_matrices(
     *,
     n_slab: int = 0,
 ) -> list[np.ndarray]:
-    """Discrete in-plane rotations/reflections validated on this slab.
+    """Discrete proper in-plane rotations validated on this slab.
 
     Identity is always first. Non-identity ops are kept only when they map every
-    slab atom onto another slab atom under MIC within 0.1 Å.
+    slab atom onto another slab atom under MIC within 0.1 Å. Orthogonal cells
+    with unequal edges still propose 180° when the slab maps.
     """
     identity = np.eye(3, dtype=float)
     n_slab_i = max(0, int(n_slab))
@@ -263,18 +253,18 @@ def inplane_symmetry_matrices(
     cos_ab = max(-1.0, min(1.0, cos_ab))
     theta = float(np.rad2deg(np.arccos(cos_ab)))
     equal_len = abs(la - lb) / max(la, lb) < 1e-6
+    orthogonal = abs(theta - 90.0) <= 1.0
 
     candidates: list[np.ndarray] = [identity]
     if equal_len and (abs(theta - 60.0) <= 1.0 or abs(theta - 120.0) <= 1.0):
         for ang in (60.0, 120.0, 180.0, 240.0, 300.0):
             candidates.append(_rotation_about_normal(ang, normal_axis))
-        candidates.append(_reflection_through_inplane_dir(a_vec, normal_axis))
-        candidates.append(_reflection_through_inplane_dir(a_vec + b_vec, normal_axis))
-    elif equal_len and abs(theta - 90.0) <= 1.0:
+    elif equal_len and orthogonal:
         for ang in (90.0, 180.0, 270.0):
             candidates.append(_rotation_about_normal(ang, normal_axis))
-        candidates.append(_reflection_through_inplane_dir(a_vec, normal_axis))
-        candidates.append(_reflection_through_inplane_dir(a_vec + b_vec, normal_axis))
+    elif orthogonal:
+        # ASE fcc111(..., orthogonal=True) and other rectangular cells.
+        candidates.append(_rotation_about_normal(180.0, normal_axis))
     else:
         return [identity]
 
@@ -378,10 +368,15 @@ def ensure_symmetry_copy_energy(
 
 
 def variable_spring_constants(energies: np.ndarray, k_min: float) -> np.ndarray:
-    """Energy-weighted springs (length ``n_images - 1``), NEBscape / Ásgeirsson form."""
+    """Energy-weighted springs (length ``n_images - 1``), NEBscape / Ásgeirsson form.
+
+    Peak stiffness is ``max(K_MAX, k_min)`` so ``k_min > K_MAX`` cannot invert
+    the barrier.
+    """
     e = np.asarray(energies, dtype=float)
     n_spring = max(0, e.size - 1)
     k_min_f = float(k_min)
+    k_peak = max(K_MAX, k_min_f)
     if n_spring == 0:
         return np.zeros(0, dtype=float)
     e_ref = float(max(e[0], e[-1]))
@@ -393,7 +388,7 @@ def variable_spring_constants(energies: np.ndarray, k_min: float) -> np.ndarray:
     for i in range(n_spring):
         e_i = float(max(e[i], e[i + 1]))
         if e_i > e_ref:
-            out[i] = K_MAX - (K_MAX - k_min_f) * (e_max - e_i) / denom
+            out[i] = k_peak - (k_peak - k_min_f) * (e_max - e_i) / denom
     return out
 
 

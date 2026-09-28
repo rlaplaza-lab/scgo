@@ -100,9 +100,10 @@ NEB path defaults come from each system type's
   adsorbate surface types disable it so fragment-slab registry stays intact.
 - Remap search span is set by ``neb_surface_max_lattice_shift`` in TS presets
   (default ``1`` cell in each in-plane direction).
-- Surface bands apply path prep: moiety unwrap, discrete slab symmetries (a
-  copy whose product energy drifts more than ``0.1`` eV is skipped), variable
-  springs, and diagnostic fidelity.
+- Surface bands apply path prep: moiety unwrap, discrete proper slab
+  symmetries (a copy whose product energy drifts more than ``0.1`` eV is
+  skipped; Kabsch competes when lattice rotation is on), variable springs,
+  and diagnostic fidelity.
   See **Surface NEB** in :doc:`/parameters` and
   :mod:`scgo.ts_search.neb_surface`.
 

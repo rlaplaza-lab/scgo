@@ -249,9 +249,9 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_interpolation_bond_tolerance_a": 0.5,
 }
 
-# Bare-slab + adsorbate (no metal core): pair selection gates on adsorbate
-# Cartesian hop, not core fingerprint. Graphite hollow/bridge site hops are
-# ~2.5 Å, so keep a wider hard gate than the cluster+adsorbate 1.5 Å core gate.
+# surface_adsorbate slab-search: runner infers top-layer as NEB core, so
+# max_endpoint_mismatch gates core fingerprint (pair_core_rms_max is the
+# registry hard gate). Wider than cluster+adsorbate 1.5 Å for ~2.5 Å site hops.
 _SURFACE_ONLY_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_SURFACE_ADSORBATE_TS_NEB_DEFAULTS,
     "max_endpoint_mismatch": 3.0,

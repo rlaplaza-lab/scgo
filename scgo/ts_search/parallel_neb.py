@@ -691,18 +691,38 @@ def run_parallel_neb_search(
     else:
         band_energy_lists = []
 
+    # Symmetry veto even when the full-band energy screen is off.
+    product_sp_by_setup: dict[int, float] = {}
+    sym_need_product: list[int] = []
+    for setup_i, (_ord, _pid, _i, _j, _re, _pe, imgs) in enumerate(setup_pairs):
+        if not imgs[-1].info.get("scgo_symmetry_copy"):
+            continue
+        if band_energy_lists:
+            product_sp_by_setup[setup_i] = float(band_energy_lists[setup_i][-1])
+        elif _image_has_cached_forces(imgs[-1]):
+            product_sp_by_setup[setup_i] = float(_image_potential_energy(imgs[-1]))
+        else:
+            sym_need_product.append(setup_i)
+    if sym_need_product:
+        ep_results = relaxer.relax_batch(
+            [setup_pairs[i][6][-1] for i in sym_need_product], steps=0
+        )
+        for local_i, setup_i in enumerate(sym_need_product):
+            product_sp_by_setup[setup_i] = float(ep_results[local_i][0])
+
     for setup_i, (pair_ord, pair_id, i, j, react_e, prod_e, images) in enumerate(
         setup_pairs
     ):
         band_energies: list[float] | None = None
-        if band_energy_lists:
-            band_energies = band_energy_lists[setup_i]
-            try:
+        try:
+            if setup_i in product_sp_by_setup:
                 ensure_symmetry_copy_energy(
-                    float(band_energies[-1]),
+                    product_sp_by_setup[setup_i],
                     prod_e,
-                    used_symmetry_copy=bool(images[-1].info.get("scgo_symmetry_copy")),
+                    used_symmetry_copy=True,
                 )
+            if band_energy_lists:
+                band_energies = band_energy_lists[setup_i]
                 validate_initial_neb_energy_profile(
                     band_energies,
                     reference_reactant_energy=react_e,
@@ -710,9 +730,9 @@ def run_parallel_neb_search(
                     min_saddle_prominence=neb_cfg.min_saddle_prominence,
                     max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
                 )
-            except SCGOValidationError as e:
-                _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
-                continue
+        except SCGOValidationError as e:
+            _record_skipped_pair(pair_ord, pair_id, i, j, react_e, prod_e, str(e))
+            continue
         pair_two_stage = neb_uses_two_stage_climb(
             neb_cfg.neb_climb, neb_steps_i, initial_energies=band_energies
         )

@@ -587,7 +587,56 @@ class TestRunTrialsSurfaceAlignment:
         assert captured.get("surface_cell_remap") is True
         assert captured.get("surface_lattice_rotation") is False
         assert captured.get("surface_max_lattice_shift") == 1
+        assert captured.get("allow_symmetry_copies") is False
         assert np.allclose(cand.get_positions(), ref.get_positions())
+
+    def test_align_slab_does_not_apply_symmetry_copies(self):
+        """GO write-out must not apply discrete symmetry copies."""
+        from scgo.ts_search.neb_surface import (
+            apply_inplane_symmetry,
+            inplane_symmetry_matrices,
+            symmetry_anchor_center,
+        )
+
+        slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=False)
+        slab.pbc = [True, True, False]
+        n_slab = len(slab)
+        z0 = float(slab.get_positions()[:, 2].max()) + 1.5
+        ref = slab.copy() + Atoms(
+            "PtPt",
+            positions=[[1.0, 1.0, z0], [2.5, 1.0, z0]],
+        )
+        mats = inplane_symmetry_matrices(ref, n_slab=n_slab)
+        center = symmetry_anchor_center(ref, n_slab=n_slab)
+        assert len(mats) > 1 and center is not None
+        mobile_mask = np.zeros(len(ref), dtype=bool)
+        mobile_mask[n_slab:] = True
+        anchor_mask = np.zeros(len(ref), dtype=bool)
+        anchor_mask[:n_slab] = True
+        cand = ref.copy()
+        cand.set_positions(
+            apply_inplane_symmetry(
+                ref.get_positions(),
+                mats[1],
+                center=center,
+                mobile_mask=mobile_mask,
+                anchor_mask=anchor_mask,
+                ref_pos=ref.get_positions(),
+            ),
+            apply_constraint=False,
+        )
+        main_mod._align_slab_minimum_to_reference(
+            ref,
+            cand,
+            n_slab=n_slab,
+            enable_cell_remap=True,
+            enable_lattice_rotation=False,
+            max_lattice_shift=1,
+        )
+        disp = np.linalg.norm(
+            cand.get_positions()[n_slab:] - ref.get_positions()[n_slab:], axis=1
+        )
+        assert float(np.max(disp)) > 0.5
 
     def test_run_trials_aligns_slab_final_minima_to_best(
         self, tmp_path, rng, monkeypatch

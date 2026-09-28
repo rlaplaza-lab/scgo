@@ -158,8 +158,8 @@ For slab prefixes (``n_slab > 0``) or exactly two periodic axes,
 :func:`~scgo.ts_search.transition_state.interpolate_path` uses surface PBC
 alignment (not gas Kabsch):
 
-- Lattice shifts / MIC snapping, then discrete slab-validated in-plane
-  symmetries when the cell metrics allow, else Kabsch when
+- Lattice shifts / MIC snapping, then discrete slab-validated proper rotations
+  when the cell metrics allow, scored alongside Kabsch when
   ``neb_surface_lattice_rotation`` is on.
 - Moiety-aware unwrap of intact mobile fragments so ASE ``mic=True``
   interpolation does not split a bonded adsorbate across a cell boundary.

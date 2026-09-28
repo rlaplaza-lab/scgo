@@ -368,9 +368,9 @@ def _align_slab_minimum_to_reference(
     """Align ``candidate`` to ``reference`` using the TS endpoint protocol (in-place).
 
     Reuses the shared NEB rigid-alignment entry point so GO final writes and NEB
-    share one contract. Only aligned coordinates are applied; the symmetry-copy
-    flag is NEB bookkeeping and is not stored on GO minima. Constraint projectors
-    are skipped (same contract as NEB ``interpolate(..., apply_constraint=False)``).
+    share one contract. Discrete symmetry copies are off here (lattice shifts and
+    policy Kabsch remain). Constraint projectors are skipped (same contract as
+    NEB ``interpolate(..., apply_constraint=False)``).
     """
     aligned, _used_symmetry_copy = _align_product_for_neb(
         reference,
@@ -380,6 +380,7 @@ def _align_slab_minimum_to_reference(
         surface_lattice_rotation=enable_lattice_rotation,
         surface_max_lattice_shift=max_lattice_shift,
         n_core_mobile=n_core_mobile,
+        allow_symmetry_copies=False,
     )
     candidate.set_positions(aligned, apply_constraint=False)
     candidate.set_cell(reference.cell)

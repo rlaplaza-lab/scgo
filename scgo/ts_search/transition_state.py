@@ -40,6 +40,11 @@ from scgo.ts_search.neb_endpoints import apply_endpoint_constraints_to_band
 from scgo.ts_search.neb_surface import (
     HESSIAN_MAX_MOBILE,
     K_UPDATE_EVERY,
+    _cell_array,
+    _infer_surface_normal_axis,
+    _inplane_periodic_axes,
+    _pbc_for_mic_alignment,
+    _requires_surface_pbc_alignment,
     apply_inplane_symmetry,
     classify_band,
     consistent_product_positions,
@@ -704,15 +709,6 @@ def _kabsch_rotation_in_plane(
     return rot
 
 
-def _infer_surface_normal_axis(pbc: np.ndarray | list[bool]) -> int:
-    """Guess vacuum/normal axis as the sole non-periodic direction, else z."""
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    open_axes = [i for i in range(3) if not pbc_arr[i]]
-    if len(open_axes) == 1:
-        return int(open_axes[0])
-    return 2
-
-
 def _fixed_atom_mask(atoms: Atoms) -> np.ndarray:
     """Return a boolean mask for atoms fixed by ``FixAtoms`` constraints."""
     mask = np.zeros(len(atoms), dtype=bool)
@@ -752,30 +748,6 @@ def _mobile_alignment_mask(
         mobile[: min(n_slab, n_atoms)] = False
     mobile &= ~anchor_mask
     return mobile
-
-
-def _cell_array(cell: Any) -> np.ndarray:
-    """Return a 3x3 cell matrix from ASE ``Cell`` or ndarray."""
-    if hasattr(cell, "array"):
-        return np.asarray(cell.array, dtype=float)
-    return np.asarray(cell, dtype=float)
-
-
-def _pbc_for_mic_alignment(pbc: np.ndarray | list[bool]) -> np.ndarray:
-    """PBC mask for MIC: in-plane periodic, vacuum axis open (slab convention)."""
-    pbc_arr = np.asarray(pbc, dtype=bool).copy()
-    normal_axis = _infer_surface_normal_axis(pbc_arr)
-    pbc_arr[normal_axis] = False
-    return pbc_arr
-
-
-def _inplane_periodic_axes(pbc: np.ndarray | list[bool]) -> tuple[int, int]:
-    """Return the two in-plane periodic axis indices for a slab-like cell."""
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    periodic = [i for i in range(3) if pbc_arr[i]]
-    if len(periodic) == 2:
-        return int(periodic[0]), int(periodic[1])
-    return 0, 1
 
 
 def _validate_lattice_compatible_rotation(
@@ -925,8 +897,9 @@ def _align_product_surface_pbc(
     - collective uniform in-plane lattice image for mobile atoms,
     - per-atom minimum-image wrapping,
     - integer in-plane lattice translations up to ``max_lattice_shift`` cells,
-    - discrete slab-validated point-group copies when available, else global
-      in-plane Kabsch when ``enable_lattice_rotation`` is true.
+    - discrete slab-validated proper rotations when available,
+    - global in-plane Kabsch when ``enable_lattice_rotation`` is true
+      (scored alongside discrete ops).
 
     When ``n_core_mobile`` is set, lattice-image / rotation scoring uses the core
     block while transforms still apply to all mobile atoms.
@@ -1012,7 +985,7 @@ def _align_product_surface_pbc(
                     ref_pos, prod_sym_snapped, score_mask, cell, pbc_mic
                 )
                 candidates.append((score_sym, prod_sym_snapped, True))
-        elif enable_lattice_rotation:
+        if enable_lattice_rotation:
             prod_rot = _apply_global_inplane_kabsch(
                 ref_pos,
                 prod_snapped,
@@ -1037,19 +1010,6 @@ def _align_product_surface_pbc(
 
     aligned = _snap_to_reactant_mic_frame(ref_pos, best_pos, cell, pbc_mic, anchor_mask)
     return aligned, best_used_symmetry
-
-
-def _requires_surface_pbc_alignment(reactant: Atoms, *, n_slab: int) -> bool:
-    """True when endpoint alignment must use lattice-compatible surface PBC logic.
-
-    Slab prefixes (``n_slab > 0``) and slab-like 2D PBC use MIC / in-plane
-    lattice alignment. A gas cluster in a 3D vacuum box (``n_slab == 0``,
-    three periodic axes or none) uses 3D Kabsch even if ``pbc`` is set.
-    """
-    if int(n_slab) > 0:
-        return True
-    pbc = np.asarray(reactant.pbc, dtype=bool)
-    return int(np.count_nonzero(pbc)) == 2
 
 
 def _align_product_for_neb(
@@ -1402,9 +1362,10 @@ def interpolate_path(
     alignment uses ``_align_product_surface_pbc``: MIC-aware matching, collective
     mobile lattice-image selection, per-atom MIC snapping, optional integer
     in-plane lattice shifts (``neb_surface_max_lattice_shift``), discrete
-    slab-validated symmetries when available, otherwise global in-plane Kabsch
-    when enabled, with anchors reset to the reactant slab frame. Intact mobile
-    fragments are then unwrapped so ASE MIC interpolation cannot split them.
+    slab-validated proper rotations when available, and global in-plane Kabsch
+    when enabled (scored alongside discrete ops), with anchors reset to the
+    reactant slab frame. Intact mobile fragments are then unwrapped so ASE MIC
+    interpolation cannot split them.
     Gas-phase clusters (no slab prefix, including a 3D vacuum box with
     ``pbc=True``) use the same core overlay as pair selection (fingerprint +
     Kabsch + spatial rematch). Adsorbate blocks are matched in that overlaid
@@ -1529,6 +1490,7 @@ def interpolate_path(
             pre_unwrap,
             n_slab=int(n_slab),
             connectivity_factor=connectivity_factor,
+            max_lattice_shift=int(neb_surface_max_lattice_shift),
         )
         moiety_unwrapped = bool(np.any(np.abs(unwrapped - pre_unwrap) > 1e-8))
         if moiety_unwrapped:

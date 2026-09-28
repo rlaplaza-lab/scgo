@@ -190,29 +190,6 @@ def load_minima_by_composition(
     return minima_by_formula
 
 
-def _core_slice_atoms(atoms: Atoms, *, n_slab: int, n_core: int) -> Atoms:
-    """Thin Atoms copy of ``[n_slab:n_slab+n_core]`` (layout: slab | core | adsorbate)."""
-    i0 = max(0, int(n_slab))
-    i1 = i0 + int(n_core)
-    return Atoms(
-        numbers=np.asarray(atoms.numbers[i0:i1], dtype=int),
-        positions=np.asarray(atoms.get_positions()[i0:i1], dtype=float),
-        cell=atoms.cell,
-        pbc=atoms.pbc,
-    )
-
-
-def _mobile_slice_atoms(atoms: Atoms, *, n_slab: int) -> Atoms:
-    """Thin Atoms copy of atoms after the frozen slab prefix."""
-    i0 = max(0, int(n_slab))
-    return Atoms(
-        numbers=np.asarray(atoms.numbers[i0:], dtype=int),
-        positions=np.asarray(atoms.get_positions()[i0:], dtype=float),
-        cell=atoms.cell,
-        pbc=atoms.pbc,
-    )
-
-
 def _pair_mic_context(
     atoms: Atoms, use_mic: bool
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
