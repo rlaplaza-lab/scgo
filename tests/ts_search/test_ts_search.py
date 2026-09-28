@@ -2185,6 +2185,23 @@ def test_interpolate_path_bond_check_passes_when_preserved(caplog):
     assert not any("FixBondLengths" in r.message for r in caplog.records)
 
 
+def test_interpolate_path_restores_rotated_fixbondlengths() -> None:
+    """A 180 degree flip shortens the chord; frozen bonds are put back."""
+    length = 1.1
+    a1 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [length, 0.0, 0.0]]))
+    a2 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [-length, 0.0, 0.0]]))
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=3,
+        method="linear",
+        align_endpoints=False,
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    for img in images[1:-1]:
+        assert img.get_distance(0, 1) == pytest.approx(length, abs=1e-6)
+
+
 def test_interpolate_path_bond_check_warns_when_stretched(caplog):
     a1 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]))
     a2 = _bonded_dimer(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.5]]))

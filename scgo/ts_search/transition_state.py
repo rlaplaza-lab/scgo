@@ -1286,6 +1286,92 @@ def _reorder_product_to_match_reactant(
     return product.get_positions()
 
 
+def _restore_agreed_fixbondlengths(
+    images: list[Atoms],
+    *,
+    tol: float,
+    mic: bool,
+) -> None:
+    """Put interior images back on a FixBondLengths distance both ends share.
+
+    Interpolation runs with ``apply_constraint=False`` so slab ``FixAtoms`` can
+    follow the path. A frozen adsorbate bond (same length at both endpoints)
+    then shortens along the chord of a rotation, and the collapsed bond keeps
+    NEB from reaching ``fmax``. Bonds whose endpoint lengths already differ by
+    more than ``tol`` are left alone: that change is part of the path.
+    """
+    if len(images) < 3:
+        return
+    bond_constraints = [
+        c for c in images[0].constraints if isinstance(c, FixBondLengths)
+    ]
+    if not bond_constraints:
+        return
+    reactant = images[0]
+    product = images[-1]
+    for constraint in bond_constraints:
+        for a, b in constraint.pairs:
+            i, j = int(a), int(b)
+            d_r = float(reactant.get_distance(i, j, mic=mic))
+            d_p = float(product.get_distance(i, j, mic=mic))
+            if abs(d_r - d_p) > tol:
+                continue
+            target = 0.5 * (d_r + d_p)
+            fallback = reactant.get_positions()[j] - reactant.get_positions()[i]
+            for _sweep in range(4):
+                moved = False
+                for img in images[1:-1]:
+                    if _project_pair_toward_distance(
+                        img, i, j, target, mic=mic, fallback=fallback
+                    ):
+                        moved = True
+                if not moved:
+                    break
+
+
+def _project_pair_toward_distance(
+    img: Atoms,
+    i: int,
+    j: int,
+    target: float,
+    *,
+    mic: bool,
+    fallback: np.ndarray | None = None,
+) -> bool:
+    """Move atoms ``i`` and ``j`` equally along their bond toward ``target``.
+
+    ``fallback`` is the direction used when the pair has collapsed to one point
+    (a 180 degree interpolation). Returns True when the image was updated.
+    """
+    pos = img.get_positions()
+    dvec = pos[j] - pos[i]
+    if mic and bool(np.any(img.pbc)):
+        dvec_mic, _ = find_mic(
+            dvec.reshape(1, 3), _cell_array(img.cell), np.asarray(img.pbc, dtype=bool)
+        )
+        dvec = np.asarray(dvec_mic[0], dtype=float)
+    dist = float(np.linalg.norm(dvec))
+    if dist <= 1e-12:
+        if fallback is None:
+            return False
+        direction = np.asarray(fallback, dtype=float)
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-12:
+            return False
+        direction = direction / norm
+        dist = 0.0
+    else:
+        if abs(dist - target) <= 1e-8:
+            return False
+        direction = dvec / dist
+    correction = 0.5 * (dist - target) * direction
+    updated = pos.copy()
+    updated[i] = pos[i] + correction
+    updated[j] = pos[j] - correction
+    img.set_positions(updated, apply_constraint=False)
+    return True
+
+
 def _warn_if_interpolated_bonds_stretch(
     images: list[Atoms],
     *,
@@ -1515,6 +1601,16 @@ def interpolate_path(
     interpolate_mic = False if moiety_unwrapped else mic
     neb.interpolate(method=method, mic=interpolate_mic, apply_constraint=False)
     images = neb.images
+
+    # Frozen adsorbate bonds share a length at both ends. Interpolation ignores
+    # FixBondLengths, so a rotating fragment collapses along the chord. Project
+    # those pairs back before NEB; bonds that actually change stay untouched.
+    if neb_interpolation_bond_tolerance_a is not None and len(images) > 2:
+        _restore_agreed_fixbondlengths(
+            images,
+            tol=float(neb_interpolation_bond_tolerance_a),
+            mic=interpolate_mic,
+        )
 
     # Diagnostic check (never raises): interior NEB images interpolated with
     # apply_constraint=False must not stretch any FixBondLengths pair far from

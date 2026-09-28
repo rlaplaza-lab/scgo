@@ -777,6 +777,9 @@ def test_parallel_two_stage_climb_runs_after_stage1_converges(
                     "final_fmax": 0.01,
                     "steps_taken": 5 if len(calls) == 1 else 3,
                     "error": None,
+                    # Production ``run_optimization`` sets this explicitly.
+                    # A missing key is a hard failure and skips the climb pass.
+                    "failed": False,
                 }
                 for _ in self.neb_instances
             ]
