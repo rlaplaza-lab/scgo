@@ -355,11 +355,13 @@ def ensure_symmetry_copy_energy(
     *,
     used_symmetry_copy: bool,
 ) -> None:
-    """Skip a band whose symmetry copy is not the stored product minimum.
+    """Raise when a non-identity symmetry copy is not the stored product minimum.
+
+    Uses the same drift limit as :func:`symmetry_product_rejected`
+    (``SYMMETRY_DRIFT_EV``).
 
     Raises:
-        SCGOValidationError: when a non-identity copy drifts past the
-            ``SYMMETRY_DRIFT_EV`` energy tolerance.
+        SCGOValidationError: If the drift check fails.
     """
     if not symmetry_product_rejected(
         product_energy,

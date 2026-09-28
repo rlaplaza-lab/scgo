@@ -64,6 +64,7 @@ from scgo.system_types import (
     validate_system_type_settings,
 )
 from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
+from scgo.ts_search.transition_state import _align_product_for_neb
 from scgo.utils.comparators import ComparatorBlocks, uniqueness_settings_from_mapping
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
@@ -364,20 +365,20 @@ def _align_slab_minimum_to_reference(
     max_lattice_shift: int,
     n_core_mobile: int | None = None,
 ) -> None:
-    """Align ``candidate`` to ``reference`` using the TS slab PBC protocol (in-place).
+    """Align ``candidate`` to ``reference`` using the TS endpoint protocol (in-place).
 
-    Writes the already-computed aligned coordinates without running constraint
-    projectors (same contract as NEB ``interpolate(..., apply_constraint=False)``).
+    Reuses the shared NEB rigid-alignment entry point so GO final writes and NEB
+    share one contract. Only aligned coordinates are applied; the symmetry-copy
+    flag is NEB bookkeeping and is not stored on GO minima. Constraint projectors
+    are skipped (same contract as NEB ``interpolate(..., apply_constraint=False)``).
     """
-    from scgo.ts_search.transition_state import _align_product_surface_pbc
-
-    aligned, _used_symmetry = _align_product_surface_pbc(
+    aligned, _used_symmetry_copy = _align_product_for_neb(
         reference,
         candidate.get_positions(),
         n_slab=n_slab,
-        enable_cell_remap=enable_cell_remap,
-        enable_lattice_rotation=enable_lattice_rotation,
-        max_lattice_shift=max_lattice_shift,
+        surface_cell_remap=enable_cell_remap,
+        surface_lattice_rotation=enable_lattice_rotation,
+        surface_max_lattice_shift=max_lattice_shift,
         n_core_mobile=n_core_mobile,
     )
     candidate.set_positions(aligned, apply_constraint=False)

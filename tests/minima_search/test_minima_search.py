@@ -3,6 +3,7 @@
 import json
 import os
 
+import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
@@ -566,14 +567,11 @@ class TestRunTrialsSurfaceAlignment:
     def test_align_slab_forwards_n_core_mobile(self, monkeypatch):
         captured: dict[str, object] = {}
 
-        def _fake_pbc(reactant, product_positions, **kwargs):
+        def _fake_align(_reactant, product_positions, **kwargs):
             captured.update(kwargs)
-            return product_positions
+            return np.asarray(product_positions, dtype=float), False
 
-        monkeypatch.setattr(
-            "scgo.ts_search.transition_state._align_product_surface_pbc",
-            _fake_pbc,
-        )
+        monkeypatch.setattr(main_mod, "_align_product_for_neb", _fake_align)
         ref = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]], cell=[5, 5, 10], pbc=True)
         cand = ref.copy()
         main_mod._align_slab_minimum_to_reference(
@@ -586,6 +584,10 @@ class TestRunTrialsSurfaceAlignment:
             n_core_mobile=1,
         )
         assert captured.get("n_core_mobile") == 1
+        assert captured.get("surface_cell_remap") is True
+        assert captured.get("surface_lattice_rotation") is False
+        assert captured.get("surface_max_lattice_shift") == 1
+        assert np.allclose(cand.get_positions(), ref.get_positions())
 
     def test_run_trials_aligns_slab_final_minima_to_best(
         self, tmp_path, rng, monkeypatch
