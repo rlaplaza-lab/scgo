@@ -729,6 +729,23 @@ looser (1.0 Å and 0.10 eV). Surface clusters and adsorbates are tighter
 - ``parallel_neb_max_batch_atoms=4000`` (atom budget used when the band cap is
   cleared to ``None``)
 
+Surface path prep (always on for slab / 2D-PBC bands):
+
+- Intact mobile fragments are unwrapped before IDPP
+  (:func:`~scgo.ts_search.neb_surface.consistent_product_positions`); when a
+  correction runs, interpolation uses ``mic=False``.
+- Discrete in-plane slab symmetries (hexagonal / square metrics on slab atoms)
+  compete with lattice shifts; continuous Kabsch stays under
+  ``neb_surface_lattice_rotation``. A symmetry copy whose product single-point
+  drifts more than ``0.1`` eV from the stored minimum is skipped.
+- Variable springs: every 40 FIRE steps, surface bands set ``neb.k`` from
+  image energies (``neb_spring_constant`` up to ``4.0`` eV/Å² near the peak).
+  Gas bands keep a scalar spring.
+- Finalize writes diagnostic fidelity fields
+  (``fidelity_single_step``, ``fidelity_energy_at_bond_change``, optional
+  ``n_imaginary_modes``); these do not change ``status``. See
+  :doc:`/output_layout` and :mod:`scgo.ts_search.neb_surface`.
+
 Surface Config
 --------------
 

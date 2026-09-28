@@ -162,6 +162,31 @@ Under each ``run_*`` directory:
 - ``pair_<i>_<j>/``: NEB artifacts, ``neb_{i}_{j}_metadata.json``, and optional
   ``timing_{i}_{j}.json`` per pair (TS only)
 
+NEB pair metadata
+~~~~~~~~~~~~~~~~~
+
+Each ``neb_{pair_id}_metadata.json`` records barrier fields (``status``,
+``ts_energy``, ``barrier_*``, ``neb_converged``, …) plus surface-band
+diagnostics written at finalize (not used to set ``status``):
+
+.. list-table::
+   :widths: 32 68
+   :header-rows: 1
+
+   * - Field
+     - Meaning
+   * - ``fidelity_single_step``
+     - ``True`` if bond-change images form one contiguous window containing
+       the energy maximum with no interior local minimum; ``False`` if
+       endpoints differ in bonding but that check fails; ``None`` if
+       endpoints share the same mobile bond set.
+   * - ``fidelity_energy_at_bond_change``
+     - ``True`` if the global energy argmax lies in the bond-change region;
+       ``False`` / ``None`` as above.
+   * - ``n_imaginary_modes``
+     - Finite-difference imaginary-mode count at the TS image for ≤ 12 free
+       atoms when forces are available; else ``None``. Cutoff ``−50`` cm⁻¹.
+
 Campaign-level files:
 
 - ``results_summary.json``: run statistics and serializable TS pair results

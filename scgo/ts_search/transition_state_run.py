@@ -132,6 +132,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
     parallel_neb_max_bands: int | None,
     logger: Any,
     verbosity: int = 1,
+    connectivity_factor: ConnectivityFactorInput | None = None,
 ) -> list[tuple[int, int]]:
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
 
@@ -169,6 +170,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
                 neb_surface_lattice_rotation=neb_surface_lattice_rotation,
                 neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
                 neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
+                connectivity_factor=connectivity_factor,
                 verbosity=verbosity,
             )
             validate_initial_neb_path(
@@ -1190,6 +1192,7 @@ def run_transition_state_search(
             parallel_neb_max_bands=parallel_neb_max_bands,
             logger=logger,
             verbosity=verbosity,
+            connectivity_factor=connectivity_factor,
         )
 
         if not pairs:

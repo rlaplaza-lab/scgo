@@ -100,6 +100,11 @@ NEB path defaults come from each system type's
   adsorbate surface types disable it so fragment-slab registry stays intact.
 - Remap search span is set by ``neb_surface_max_lattice_shift`` in TS presets
   (default ``1`` cell in each in-plane direction).
+- Surface bands apply path prep: moiety unwrap, discrete slab symmetries (a
+  copy whose product energy drifts more than ``0.1`` eV is skipped), variable
+  springs, and diagnostic fidelity.
+  See **Surface NEB** in :doc:`/parameters` and
+  :mod:`scgo.ts_search.neb_surface`.
 
 When a system has adsorbates, the GA partitions the mobile region with ASE tags
 (core = ``0``, each fragment = ``1..N``):

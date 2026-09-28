@@ -12,7 +12,7 @@ from ase.optimize import FIRE
 
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import DEFAULT_FMAX_THRESHOLD
-from scgo.exceptions import SCGOValidationError
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.utils.cuda import is_cuda_oom_error
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import log_neb_search_summaries
@@ -20,6 +20,11 @@ from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 
 from .neb_endpoints import prepare_neb_endpoints
+from .neb_surface import (
+    K_UPDATE_EVERY,
+    ensure_symmetry_copy_energy,
+    refresh_surface_neb_springs,
+)
 from .transition_state import (
     TorchSimNEB,
     _detach_calc,
@@ -277,6 +282,12 @@ class ParallelNEBBatch:
 
         step_cap = min(self.max_total_steps, int(max_steps))
         while self.active_nebs and self.step_count < step_cap:
+            if self.step_count > 0 and self.step_count % K_UPDATE_EVERY == 0:
+                for neb_idx in self.active_nebs:
+                    neb = self.neb_instances[neb_idx]
+                    k_min = float(getattr(neb, "_scgo_k_min", neb.k))
+                    refresh_surface_neb_springs(neb, k_min=k_min)
+
             unique_images: list[Atoms] = []
             unique_index: dict[tuple, int] = {}
             neb_image_map: list[tuple[int, int, int]] = []
@@ -619,6 +630,8 @@ def run_parallel_neb_search(
             neb_interpolation_bond_tolerance_a=(
                 neb_cfg.neb_interpolation_bond_tolerance_a
             ),
+            connectivity_factor=neb_cfg.connectivity_factor,
+            allow_symmetry_copies=True,
             verbosity=verbosity,
         )
         try:
@@ -661,6 +674,11 @@ def run_parallel_neb_search(
         if band_energy_lists:
             band_energies = band_energy_lists[setup_i]
             try:
+                ensure_symmetry_copy_energy(
+                    float(band_energies[-1]),
+                    prod_e,
+                    used_symmetry_copy=bool(images[-1].info.get("scgo_symmetry_copy")),
+                )
                 validate_initial_neb_energy_profile(
                     band_energies,
                     reference_reactant_energy=react_e,
@@ -674,15 +692,16 @@ def run_parallel_neb_search(
         pair_two_stage = neb_uses_two_stage_climb(
             neb_cfg.neb_climb, neb_steps_i, initial_energies=band_energies
         )
-        neb_instances.append(
-            TorchSimNEB(
-                images,
-                relaxer,
-                k=neb_cfg.neb_spring_constant,
-                climb=bool(neb_cfg.neb_climb) and not pair_two_stage,
-                method=neb_cfg.neb_tangent_method,
-            )
+        neb = TorchSimNEB(
+            images,
+            relaxer,
+            k=neb_cfg.neb_spring_constant,
+            climb=bool(neb_cfg.neb_climb) and not pair_two_stage,
+            method=neb_cfg.neb_tangent_method,
         )
+        neb._scgo_n_slab = int(neb_cfg.n_slab)
+        neb._scgo_k_min = float(neb_cfg.neb_spring_constant)
+        neb_instances.append(neb)
         neb_two_stage.append(pair_two_stage)
         if band_energies is not None:
             react_e = float(band_energies[0])
@@ -730,11 +749,29 @@ def run_parallel_neb_search(
             )
         else:
             try:
+
+                def _force_fn(displaced: list[Atoms]) -> list[np.ndarray]:
+                    batch = relaxer.relax_batch(displaced, steps=0)
+                    forces_out: list[np.ndarray] = []
+                    for _energy, relaxed_atoms in batch:
+                        forces = relaxed_atoms.arrays.get("forces")
+                        if forces is None and relaxed_atoms.calc is not None:
+                            forces = relaxed_atoms.get_forces()
+                        if forces is None:
+                            raise SCGORuntimeError(
+                                "TorchSim relax_batch did not return forces for Hessian"
+                            )
+                        forces_out.append(np.asarray(forces, dtype=float))
+                    return forces_out
+
                 _finalize_neb_result(
                     result,
                     neb.images,
                     logger=logger,
                     max_spurious_barrier=neb_cfg.neb_max_spurious_barrier,
+                    n_slab=neb_cfg.n_slab,
+                    connectivity_factor=neb_cfg.connectivity_factor,
+                    force_fn=_force_fn,
                 )
             except (RuntimeError, SCGOValidationError) as e:
                 result["status"] = "failed"

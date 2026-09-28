@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+from collections.abc import Callable
 from copy import deepcopy
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
@@ -34,7 +35,19 @@ from scgo.constants import (
 from scgo.exceptions import SCGOFileError, SCGORuntimeError, SCGOValidationError
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import ConnectivityFactorInput, SystemType, get_system_policy
+from scgo.ts_search.neb_surface import (
+    HESSIAN_MAX_MOBILE,
+    K_UPDATE_EVERY,
+    apply_inplane_symmetry,
+    classify_band,
+    consistent_product_positions,
+    count_imaginary_modes_from_forces,
+    ensure_symmetry_copy_energy,
+    inplane_symmetry_matrices,
+    refresh_surface_neb_springs,
+    symmetry_anchor_center,
+)
 from scgo.utils.comparators import (
     ComparatorBlocks,
     PureInteratomicDistanceComparator,
@@ -879,8 +892,9 @@ def _align_product_surface_pbc(
     enable_lattice_rotation: bool = True,
     max_lattice_shift: int = 1,
     n_core_mobile: int | None = None,
-) -> np.ndarray:
-    """Align product to reactant using MIC, lattice shifts, and global in-plane rotation.
+    allow_symmetry_copies: bool = True,
+) -> tuple[np.ndarray, bool]:
+    """Align product to reactant using MIC, lattice shifts, and in-plane transforms.
 
     **Single surface NEB alignment entry point.** Serial (:func:`find_transition_state`),
     parallel (:func:`run_parallel_neb_search`), and :func:`interpolate_path` all route
@@ -890,13 +904,15 @@ def _align_product_surface_pbc(
     - collective uniform in-plane lattice image for mobile atoms,
     - per-atom minimum-image wrapping,
     - integer in-plane lattice translations up to ``max_lattice_shift`` cells,
-    - global in-plane rigid rotation (same ``R`` for all atoms; evaluated jointly
-      with each shift candidate; anchors reset to reactant afterward).
+    - discrete slab-validated point-group copies when available, else global
+      in-plane Kabsch when ``enable_lattice_rotation`` is true.
 
     When ``n_core_mobile`` is set, lattice-image / rotation scoring uses the core
     block while transforms still apply to all mobile atoms.
 
-    Does **not** rotate mobile atoms independently of the lattice frame.
+    Returns:
+        ``(positions, used_symmetry_copy)`` where the flag is true only when the
+        winning candidate applied a non-identity discrete symmetry matrix.
     """
     ref_pos = reactant.get_positions()
     cell = _cell_array(reactant.cell)
@@ -919,7 +935,7 @@ def _align_product_surface_pbc(
     prod = np.asarray(product_positions, dtype=float).copy()
     # Per-shift candidate search below subsumes a collective uniform lattice
     # image: each shift is scored after per-atom MIC snapping, jointly with the
-    # optional in-plane rotation variant.
+    # optional in-plane rotation / symmetry variant.
 
     prod = _snap_to_reactant_mic_frame(ref_pos, prod, cell, pbc_mic, anchor_mask)
 
@@ -927,6 +943,7 @@ def _align_product_surface_pbc(
     best_score, _ = _score_mobile_endpoint_displacement(
         ref_pos, best_pos, score_mask, cell, pbc_mic
     )
+    best_used_symmetry = False
 
     shifts = _lattice_translation_candidates(
         cell, axis_a, axis_b, max_shift=max_lattice_shift
@@ -934,18 +951,47 @@ def _align_product_surface_pbc(
     if not enable_cell_remap:
         shifts = [np.zeros(3, dtype=float)]
 
+    sym_mats = (
+        inplane_symmetry_matrices(reactant, n_slab=n_slab)
+        if allow_symmetry_copies
+        else [np.eye(3, dtype=float)]
+    )
+    use_discrete = allow_symmetry_copies and len(sym_mats) > 1
+    sym_center = (
+        symmetry_anchor_center(reactant, n_slab=n_slab) if use_discrete else None
+    )
+
     for shift in shifts:
         prod_shifted = prod + shift
         prod_snapped = _snap_to_reactant_mic_frame(
             ref_pos, prod_shifted, cell, pbc_mic, anchor_mask
         )
-        candidates: list[tuple[float, np.ndarray]] = []
+        candidates: list[tuple[float, np.ndarray, bool]] = []
         score, _ = _score_mobile_endpoint_displacement(
             ref_pos, prod_snapped, score_mask, cell, pbc_mic
         )
-        candidates.append((score, prod_snapped))
+        candidates.append((score, prod_snapped, False))
 
-        if enable_lattice_rotation:
+        if use_discrete and sym_center is not None:
+            for rot in sym_mats:
+                if np.allclose(rot, np.eye(3), atol=1e-12):
+                    continue
+                prod_sym = apply_inplane_symmetry(
+                    prod_snapped,
+                    rot,
+                    center=sym_center,
+                    mobile_mask=mobile_mask,
+                    anchor_mask=anchor_mask,
+                    ref_pos=ref_pos,
+                )
+                prod_sym_snapped = _snap_to_reactant_mic_frame(
+                    ref_pos, prod_sym, cell, pbc_mic, anchor_mask
+                )
+                score_sym, _ = _score_mobile_endpoint_displacement(
+                    ref_pos, prod_sym_snapped, score_mask, cell, pbc_mic
+                )
+                candidates.append((score_sym, prod_sym_snapped, True))
+        elif enable_lattice_rotation:
             prod_rot = _apply_global_inplane_kabsch(
                 ref_pos,
                 prod_snapped,
@@ -960,14 +1006,16 @@ def _align_product_surface_pbc(
             score_rot, _ = _score_mobile_endpoint_displacement(
                 ref_pos, prod_rot_snapped, score_mask, cell, pbc_mic
             )
-            candidates.append((score_rot, prod_rot_snapped))
+            candidates.append((score_rot, prod_rot_snapped, False))
 
-        for score_c, pos_c in candidates:
+        for score_c, pos_c, used_sym in candidates:
             if score_c < best_score:
                 best_score = score_c
                 best_pos = pos_c
+                best_used_symmetry = used_sym
 
-    return _snap_to_reactant_mic_frame(ref_pos, best_pos, cell, pbc_mic, anchor_mask)
+    aligned = _snap_to_reactant_mic_frame(ref_pos, best_pos, cell, pbc_mic, anchor_mask)
+    return aligned, best_used_symmetry
 
 
 def _requires_surface_pbc_alignment(reactant: Atoms, *, n_slab: int) -> bool:
@@ -992,8 +1040,13 @@ def _align_product_for_neb(
     surface_lattice_rotation: bool = True,
     surface_max_lattice_shift: int = 1,
     n_core_mobile: int | None = None,
-) -> np.ndarray:
-    """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC)."""
+    allow_symmetry_copies: bool = True,
+) -> tuple[np.ndarray, bool]:
+    """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC).
+
+    Returns:
+        ``(positions, used_symmetry_copy)``. The flag is always false for gas.
+    """
     if _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
         return _align_product_surface_pbc(
             reactant,
@@ -1003,13 +1056,17 @@ def _align_product_for_neb(
             enable_lattice_rotation=surface_lattice_rotation,
             max_lattice_shift=surface_max_lattice_shift,
             n_core_mobile=n_core_mobile,
+            allow_symmetry_copies=allow_symmetry_copies,
         )
-    return _align_product_kabsch_to_reactant(
-        reactant,
-        product_positions,
-        n_slab=n_slab,
-        in_plane_only=False,
-        n_core_mobile=n_core_mobile,
+    return (
+        _align_product_kabsch_to_reactant(
+            reactant,
+            product_positions,
+            n_slab=n_slab,
+            in_plane_only=False,
+            n_core_mobile=n_core_mobile,
+        ),
+        False,
     )
 
 
@@ -1313,6 +1370,8 @@ def interpolate_path(
     neb_surface_lattice_rotation: bool = True,
     neb_surface_max_lattice_shift: int = 1,
     neb_interpolation_bond_tolerance_a: float | None = None,
+    connectivity_factor: ConnectivityFactorInput | None = None,
+    allow_symmetry_copies: bool = True,
     verbosity: int = 1,
 ) -> list[Atoms]:
     """Interpolate between two structures and return images including endpoints.
@@ -1321,12 +1380,14 @@ def interpolate_path(
     For slab/surface workflows (``n_slab > 0`` or exactly two periodic axes),
     alignment uses ``_align_product_surface_pbc``: MIC-aware matching, collective
     mobile lattice-image selection, per-atom MIC snapping, optional integer
-    in-plane lattice shifts (``neb_surface_max_lattice_shift``), and global
-    in-plane rotation evaluated jointly with each shift, with anchors reset to
-    the reactant slab frame (no independent mobile-only rotation). Gas-phase
-    clusters (no slab prefix, including a 3D vacuum box with ``pbc=True``) use
-    the same core overlay as pair selection (fingerprint + Kabsch + spatial
-    rematch). Adsorbate blocks are matched in that overlaid frame.
+    in-plane lattice shifts (``neb_surface_max_lattice_shift``), discrete
+    slab-validated symmetries when available, otherwise global in-plane Kabsch
+    when enabled, with anchors reset to the reactant slab frame. Intact mobile
+    fragments are then unwrapped so ASE MIC interpolation cannot split them.
+    Gas-phase clusters (no slab prefix, including a 3D vacuum box with
+    ``pbc=True``) use the same core overlay as pair selection (fingerprint +
+    Kabsch + spatial rematch). Adsorbate blocks are matched in that overlaid
+    frame.
     ``perturb_sigma``: optional Gaussian displacement (Å) on interior images only.
     ``rng``: optional NumPy Generator when ``perturb_sigma`` > 0.
 
@@ -1356,6 +1417,7 @@ def interpolate_path(
             system_policy.neb_surface_lattice_rotation and neb_surface_lattice_rotation
         )
 
+    used_symmetry_copy = False
     if align_endpoints:
         n_slab_i = int(n_slab)
         n_atom = len(a1_copy)
@@ -1377,7 +1439,7 @@ def interpolate_path(
                 mic_pbc=mic_pbc,
             )
             if surface_pbc:
-                pos_j = _align_product_for_neb(
+                pos_j, used_symmetry_copy = _align_product_for_neb(
                     a1_copy,
                     pos_j,
                     n_slab=n_slab_i,
@@ -1385,6 +1447,7 @@ def interpolate_path(
                     surface_lattice_rotation=surface_lattice_rotation,
                     surface_max_lattice_shift=neb_surface_max_lattice_shift,
                     n_core_mobile=n_core_mobile,
+                    allow_symmetry_copies=allow_symmetry_copies,
                 )
             a2_copy.set_positions(pos_j, apply_constraint=False)
             a2_copy.numbers = nums_j
@@ -1408,7 +1471,7 @@ def interpolate_path(
                 adsorbate_fragment_lengths=adsorbate_fragment_lengths,
                 match_adsorbate=True,
             )
-            pos_j = _align_product_for_neb(
+            pos_j, used_symmetry_copy = _align_product_for_neb(
                 a1_copy,
                 pos_j,
                 n_slab=n_slab_i,
@@ -1416,6 +1479,7 @@ def interpolate_path(
                 surface_lattice_rotation=surface_lattice_rotation,
                 surface_max_lattice_shift=neb_surface_max_lattice_shift,
                 n_core_mobile=n_core_mobile,
+                allow_symmetry_copies=allow_symmetry_copies,
             )
             if not surface_pbc:
                 n_fit = (
@@ -1437,6 +1501,23 @@ def interpolate_path(
             a2_copy.set_cell(a1_copy.cell)
             a2_copy.pbc = a1_copy.pbc
 
+        # Unwrap intact mobile fragments so ASE MIC interpolation cannot split them.
+        pre_unwrap = a2_copy.get_positions().copy()
+        unwrapped = consistent_product_positions(
+            a1_copy,
+            pre_unwrap,
+            n_slab=int(n_slab),
+            connectivity_factor=connectivity_factor,
+        )
+        moiety_unwrapped = bool(np.any(np.abs(unwrapped - pre_unwrap) > 1e-8))
+        if moiety_unwrapped:
+            a2_copy.set_positions(unwrapped, apply_constraint=False)
+            a2_copy.info["scgo_moiety_unwrapped"] = True
+        if used_symmetry_copy:
+            a2_copy.info["scgo_symmetry_copy"] = True
+    else:
+        moiety_unwrapped = False
+
     # Build the band from aligned endpoints; ASE interpolation only fills interiors.
     # ``a1_copy``/``a2_copy`` are already de-aliased via ``copy_atoms`` above, but
     # ``Atoms.copy()`` shallow-copies ``info`` so the interior images would share
@@ -1447,7 +1528,9 @@ def interpolate_path(
     neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
     # Interpolate unconstrained positions first; endpoint/image constraints
     # (e.g., fixed slab atoms) are enforced during subsequent optimization.
-    neb.interpolate(method=method, mic=mic, apply_constraint=False)
+    # mic=True would undo a moiety unwrap longer than half a cell edge.
+    interpolate_mic = False if moiety_unwrapped else mic
+    neb.interpolate(method=method, mic=interpolate_mic, apply_constraint=False)
     images = neb.images
 
     # Diagnostic check (never raises): interior NEB images interpolated with
@@ -1457,7 +1540,7 @@ def interpolate_path(
         _warn_if_interpolated_bonds_stretch(
             images,
             tol=float(neb_interpolation_bond_tolerance_a),
-            mic=mic,
+            mic=interpolate_mic,
             verbosity=verbosity,
         )
 
@@ -1817,6 +1900,9 @@ def _finalize_neb_result(
     *,
     logger: Any | None = None,
     max_spurious_barrier: float = MAX_SPURIOUS_NEB_BARRIER_EV,
+    n_slab: int = 0,
+    connectivity_factor: ConnectivityFactorInput | None = None,
+    force_fn: Callable[[list[Atoms]], list[np.ndarray]] | None = None,
 ) -> None:
     """Populate ``result`` with TS / endpoint geometry, energies, and barriers.
 
@@ -1824,6 +1910,11 @@ def _finalize_neb_result(
     ``product_energy`` are already set. Bands whose highest-energy image is an
     endpoint, and barriers above :data:`MAX_SPURIOUS_NEB_BARRIER_EV`, are marked
     failed.
+
+    Always writes ``fidelity_single_step`` and ``fidelity_energy_at_bond_change``
+    (diagnostic; never used for ``status``). Optionally writes
+    ``n_imaginary_modes`` when ``force_fn`` is provided and the band succeeds
+    with a small mobile set.
 
     Raises:
         SCGORuntimeError: If an endpoint energy is missing, or if no image energy
@@ -1841,8 +1932,10 @@ def _finalize_neb_result(
     max_energy_idx = 0
     max_energy = -np.inf
     ts_atoms: Atoms | None = None
+    band_energies: list[float] = []
     for idx, atoms in enumerate(images):
         energy = _image_potential_energy(atoms)
+        band_energies.append(float(energy))
         if energy > max_energy:
             max_energy = energy
             max_energy_idx = idx
@@ -1902,6 +1995,37 @@ def _finalize_neb_result(
             )
     else:
         result["status"] = "success" if result.get("neb_converged") else "failed"
+
+    single_step, energy_at_bond = classify_band(
+        images,
+        band_energies,
+        n_slab=n_slab,
+        connectivity_factor=connectivity_factor,
+    )
+    result["fidelity_single_step"] = single_step
+    result["fidelity_energy_at_bond_change"] = energy_at_bond
+    result["n_imaginary_modes"] = None
+
+    n_mobile = max(0, len(images[0]) - max(0, int(n_slab)))
+    if (
+        result.get("status") == "success"
+        and force_fn is not None
+        and 0 < n_mobile <= HESSIAN_MAX_MOBILE
+        and ts_atoms is not None
+    ):
+        try:
+            result["n_imaginary_modes"] = count_imaginary_modes_from_forces(
+                ts_atoms,
+                force_fn,
+                n_slab=n_slab,
+            )
+        except Exception as exc:
+            if logger is not None:
+                logger.debug(
+                    "Imaginary-mode count failed for pair %s: %s",
+                    pair_id,
+                    exc,
+                )
 
 
 def find_transition_state(
@@ -1993,10 +2117,13 @@ def find_transition_state(
         neb_surface_cell_remap = neb_cfg.neb_surface_cell_remap
         neb_surface_lattice_rotation = neb_cfg.neb_surface_lattice_rotation
         neb_surface_max_lattice_shift = neb_cfg.neb_surface_max_lattice_shift
+        connectivity_factor = neb_cfg.connectivity_factor
         if system_type is None:
             system_type = neb_cfg.system_type
         if torchsim_params is None:
             torchsim_params = neb_cfg.torchsim_params
+    else:
+        connectivity_factor = None
 
     validate_atoms(atoms1)
     validate_atoms(atoms2)
@@ -2108,6 +2235,8 @@ def find_transition_state(
             neb_surface_lattice_rotation=neb_surface_lattice_rotation,
             neb_surface_max_lattice_shift=neb_surface_max_lattice_shift,
             neb_interpolation_bond_tolerance_a=neb_interpolation_bond_tolerance_a,
+            connectivity_factor=connectivity_factor,
+            allow_symmetry_copies=True,
             verbosity=verbosity,
         )
         validate_initial_neb_path(
@@ -2147,6 +2276,12 @@ def find_transition_state(
                 result["reactant_energy"] = float(ep_results[0][0])
                 result["product_energy"] = float(ep_results[1][0])
 
+            ensure_symmetry_copy_energy(
+                result.get("product_energy"),
+                product_energy,
+                used_symmetry_copy=bool(images[-1].info.get("scgo_symmetry_copy")),
+            )
+
             # Full-band SP only when the energy-profile gate is enabled (mirrors
             # parallel). Forces attach for step-0 reuse.
             band_energies: list[float] | None = None
@@ -2180,6 +2315,8 @@ def find_transition_state(
                 climb=bool(climb) and not use_two_stage,
                 method=neb_tangent_method,
             )
+            neb._scgo_n_slab = int(n_slab)
+            neb._scgo_k_min = float(spring_constant)
             if band_energies is not None and all(
                 _image_has_cached_forces(img) for img in images
             ):
@@ -2198,6 +2335,12 @@ def find_transition_state(
                 except (TypeError, AttributeError):
                     shared_calc = True
                     img.calc = calculator
+
+            ensure_symmetry_copy_energy(
+                float(images[-1].get_potential_energy()),
+                product_energy,
+                used_symmetry_copy=bool(images[-1].info.get("scgo_symmetry_copy")),
+            )
 
             # Single-point energy pre-screen for the serial ASE path, mirroring
             # the TorchSim path: evaluated only when the energy-profile gate is
@@ -2225,6 +2368,8 @@ def find_transition_state(
                 method=neb_tangent_method,
                 allow_shared_calculator=shared_calc,
             )
+            neb._scgo_n_slab = int(n_slab)
+            neb._scgo_k_min = float(spring_constant)
 
         opt_logfile = None if verbosity <= 1 else sys.stdout
         # Two-stage CI-NEB: relax without climb, then climb (see helper docstring).
@@ -2241,6 +2386,11 @@ def find_transition_state(
 
         t_neb0 = perf_counter()
         dyn: Optimizer = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
+
+        def _refresh_springs() -> None:
+            refresh_surface_neb_springs(neb, k_min=float(spring_constant))
+
+        dyn.attach(_refresh_springs, interval=K_UPDATE_EVERY)
         dyn.run(fmax=fmax, steps=stage1_cap)
         steps_taken = int(dyn.nsteps)
         if use_two_stage:
@@ -2253,6 +2403,7 @@ def find_transition_state(
                 verbosity=verbosity,
             )
             dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
+            dyn.attach(_refresh_springs, interval=K_UPDATE_EVERY)
             dyn.run(fmax=fmax, steps=stage2_steps)
             steps_taken += int(dyn.nsteps)
         neb_opt = perf_counter() - t_neb0
@@ -2296,11 +2447,34 @@ def find_transition_state(
         if use_torchsim:
             neb.get_forces()
 
+        def _force_fn(displaced: list[Atoms]) -> list[np.ndarray]:
+            if use_torchsim:
+                batch = ts_relaxer.relax_batch(displaced, steps=0)
+                forces_out: list[np.ndarray] = []
+                for _energy, relaxed_atoms in batch:
+                    forces = relaxed_atoms.arrays.get("forces")
+                    if forces is None and relaxed_atoms.calc is not None:
+                        forces = relaxed_atoms.get_forces()
+                    if forces is None:
+                        raise SCGORuntimeError(
+                            "TorchSim relax_batch did not return forces for Hessian"
+                        )
+                    forces_out.append(np.asarray(forces, dtype=float))
+                return forces_out
+            out: list[np.ndarray] = []
+            for img in displaced:
+                img.calc = calculator
+                out.append(np.asarray(img.get_forces(), dtype=float))
+            return out
+
         _finalize_neb_result(
             result,
             neb.images,
             logger=logger,
             max_spurious_barrier=neb_max_spurious_barrier,
+            n_slab=n_slab,
+            connectivity_factor=connectivity_factor,
+            force_fn=_force_fn,
         )
 
         if use_torchsim and result["status"] == "success":
@@ -2573,6 +2747,11 @@ def save_neb_result(
             "product_energy": result["product_energy"],
             "ts_energy": result["ts_energy"],
             "barrier_height": result["barrier_height"],
+            "fidelity_single_step": result.get("fidelity_single_step"),
+            "fidelity_energy_at_bond_change": result.get(
+                "fidelity_energy_at_bond_change"
+            ),
+            "n_imaginary_modes": result.get("n_imaginary_modes"),
             "error": result["error"],
             "final_fmax": result.get("final_fmax"),
             "steps_taken": result.get("steps_taken"),

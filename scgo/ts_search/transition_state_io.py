@@ -762,6 +762,11 @@ def save_transition_state_results(
             "product_energy": result.get("product_energy"),
             "ts_energy": result.get("ts_energy"),
             "barrier_height": result.get("barrier_height"),
+            "fidelity_single_step": result.get("fidelity_single_step"),
+            "fidelity_energy_at_bond_change": result.get(
+                "fidelity_energy_at_bond_change"
+            ),
+            "n_imaginary_modes": result.get("n_imaginary_modes"),
             "error": result.get("error"),
         }
         # Persist the constraint index lists for the reactant/product/TS Atoms so

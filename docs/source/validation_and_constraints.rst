@@ -151,6 +151,24 @@ Pairing regimes per system type (intentional):
    Optimized NEB bands are compared with plain Cartesian image differences;
    minimum-image distances apply at interpolation and at the gates only.
 
+Surface NEB path preparation
+----------------------------
+
+For slab prefixes (``n_slab > 0``) or exactly two periodic axes,
+:func:`~scgo.ts_search.transition_state.interpolate_path` uses surface PBC
+alignment (not gas Kabsch):
+
+- Lattice shifts / MIC snapping, then discrete slab-validated in-plane
+  symmetries when the cell metrics allow, else Kabsch when
+  ``neb_surface_lattice_rotation`` is on.
+- Moiety-aware unwrap of intact mobile fragments so ASE ``mic=True``
+  interpolation does not split a bonded adsorbate across a cell boundary.
+- If a symmetry copy's product single-point drifts more than ``0.1`` eV from
+  the stored GO minimum, the band is skipped.
+
+Gas clusters (no slab, including a 3D vacuum box) are unchanged. See
+:mod:`scgo.ts_search.neb_surface`.
+
 NEB pre-screen gates
 --------------------
 

@@ -73,7 +73,7 @@ def test_surface_alignment_cell_remap_shortens_periodic_jump():
     b = slab.copy() + Atoms("Pt", positions=[[slab.cell[0, 0] - 0.1, 0.1, z0]])
 
     raw = b.get_positions().copy()
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a, raw, n_slab=n_slab, enable_cell_remap=True, enable_lattice_rotation=False
     )
     disp = aligned - a.get_positions()
@@ -103,7 +103,7 @@ def test_surface_alignment_rotation_reduces_mobile_rms():
     a = slab.copy() + Atoms("Pt3", positions=mobile)
     b = slab.copy() + Atoms("Pt3", positions=mobile_rot)
 
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a,
         b.get_positions(),
         n_slab=n_slab,
@@ -183,8 +183,8 @@ def test_align_product_for_neb_routes_mic_alias_to_surface():
     z0 = slab.get_positions()[:, 2].max() + 1.5
     a = slab.copy() + Atoms("Pt", positions=[[0.1, 0.1, z0]])
     b = slab.copy() + Atoms("Pt", positions=[[slab.cell[0, 0] - 0.1, 0.1, z0]])
-    via_for_neb = _align_product_for_neb(a, b.get_positions(), n_slab=len(slab))
-    via_surface = _align_product_surface_pbc(a, b.get_positions(), n_slab=len(slab))
+    via_for_neb, _ = _align_product_for_neb(a, b.get_positions(), n_slab=len(slab))
+    via_surface, _ = _align_product_surface_pbc(a, b.get_positions(), n_slab=len(slab))
     np.testing.assert_allclose(via_for_neb, via_surface, atol=1e-8)
 
 
@@ -400,7 +400,7 @@ def _slab_with_mobile_pt(*, size=(2, 2, 1), mobile_xy=(0.1, 0.1)):
 def test_surface_alignment_y_axis_periodic_jump():
     slab, a, n_slab, z0 = _slab_with_mobile_pt()
     b = slab.copy() + Atoms("Pt", positions=[[0.1, slab.cell[1, 1] - 0.1, z0]])
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a, b.get_positions(), n_slab=n_slab, enable_lattice_rotation=False
     )
     disp = aligned - a.get_positions()
@@ -411,7 +411,7 @@ def test_surface_alignment_diagonal_two_cell_wrap():
     slab, a, n_slab, z0 = _slab_with_mobile_pt()
     shift = slab.cell[0] + slab.cell[1]
     b = slab.copy() + Atoms("Pt", positions=[[0.1 + shift[0], 0.1 + shift[1], z0]])
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a,
         b.get_positions(),
         n_slab=n_slab,
@@ -451,7 +451,7 @@ def test_surface_alignment_split_periodic_images_multi_atom():
     mobile_split[2, 1] += slab.cell[1, 1]
     b = slab.copy() + Atoms("Pt3", positions=mobile_split)
 
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a, b.get_positions(), n_slab=n_slab, enable_lattice_rotation=False
     )
     rms = float(np.sqrt(np.mean((aligned[n_slab:] - a.get_positions()[n_slab:]) ** 2)))
@@ -463,7 +463,7 @@ def test_surface_alignment_remap_only_shortens_x_wrap():
     b = slab.copy() + Atoms(
         "Pt", positions=[[slab.cell[0, 0] - 0.1, 0.1, a.get_positions()[-1, 2]]]
     )
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a,
         b.get_positions(),
         n_slab=n_slab,
@@ -495,7 +495,7 @@ def test_surface_alignment_remap_disabled_leaves_rotated_cluster_misaligned():
     a = slab.copy() + Atoms("Pt3", positions=mobile)
     b = slab.copy() + Atoms("Pt3", positions=mobile_rot)
 
-    aligned = _align_product_surface_pbc(
+    aligned, _ = _align_product_surface_pbc(
         a,
         b.get_positions(),
         n_slab=n_slab,
@@ -526,14 +526,14 @@ def test_surface_alignment_rotation_reduces_rms_on_rotated_cluster():
     a = slab.copy() + Atoms("Pt3", positions=mobile)
     b = slab.copy() + Atoms("Pt3", positions=mobile_rot)
 
-    no_rot = _align_product_surface_pbc(
+    no_rot, _ = _align_product_surface_pbc(
         a,
         b.get_positions(),
         n_slab=n_slab,
         enable_cell_remap=False,
         enable_lattice_rotation=False,
     )
-    with_rot = _align_product_surface_pbc(
+    with_rot, _ = _align_product_surface_pbc(
         a,
         b.get_positions(),
         n_slab=n_slab,
@@ -757,7 +757,7 @@ def test_align_product_for_neb_gas_vacuum_pbc_uses_3d_kabsch() -> None:
     )
     core_com = react.get_positions()[:2].mean(axis=0)
     prod_pos = (react.get_positions() - core_com) @ rot.T + core_com
-    aligned = _align_product_for_neb(react, prod_pos, n_slab=0, n_core_mobile=2)
+    aligned, _ = _align_product_for_neb(react, prod_pos, n_slab=0, n_core_mobile=2)
     core_rms = float(
         np.sqrt(np.mean(np.sum((aligned[:2] - react.positions[:2]) ** 2, axis=1)))
     )

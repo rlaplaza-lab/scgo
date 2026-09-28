@@ -75,6 +75,12 @@ own modules; cross-references use the fully qualified paths.
    :show-inheritance:
    :exclude-members: _*
 
+.. automodule:: scgo.ts_search.neb_surface
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
 .. automodule:: scgo.ts_search.transition_state_io
    :members:
    :undoc-members:
