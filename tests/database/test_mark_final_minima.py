@@ -1,6 +1,7 @@
 import json
 import sqlite3
 
+import pytest
 from ase import Atoms
 from ase.db import connect
 
@@ -101,7 +102,9 @@ def test_mark_final_minima_prefers_relaxed_row_when_final_id_duplicated(tmp_path
     )
 
 
-def test_mark_final_minima_skips_entries_without_final_id(tmp_path):
+def test_mark_final_minima_raises_without_final_id(tmp_path):
+    from scgo.exceptions import SCGOValidationError
+
     dbpath = tmp_path / "no-final-id.db"
     with connect(str(dbpath)) as db:
         db.write(
@@ -113,14 +116,12 @@ def test_mark_final_minima_skips_entries_without_final_id(tmp_path):
 
     atoms = Atoms("Pt", positions=[[0, 0, 0]])
     atoms.info.setdefault("key_value_pairs", {})["run_id"] = "r1"
-    summary = mark_final_minima_in_db(
-        [{"atoms": atoms, "energy": -0.1, "rank": 1, "final_written": "foo.xyz"}],
-        base_dir=str(tmp_path),
-        db_paths=[str(dbpath)],
-    )
-
-    assert summary["rows_updated"] == 0
-    assert all(not kv.get("final_unique_minimum") for kv in _iter_system_kvps(dbpath))
+    with pytest.raises(SCGOValidationError, match="Missing final_id"):
+        mark_final_minima_in_db(
+            [{"atoms": atoms, "energy": -0.1, "rank": 1, "final_written": "foo.xyz"}],
+            base_dir=str(tmp_path),
+            db_paths=[str(dbpath)],
+        )
 
 
 def test_mark_final_minima_fallback_scans_all_db(tmp_path):

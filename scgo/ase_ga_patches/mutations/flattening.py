@@ -11,6 +11,7 @@ from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
+    _filter_unique_tags,
     _IDENTITY_ATOL,
     _ensure_rng,
     _geometry_candidate_directions,
@@ -182,15 +183,11 @@ class FlatteningMutation(OffspringCreator):
         mutant = top.copy()
         pos = mutant.get_positions()
         atomic_numbers = mutant.get_atomic_numbers()
-        tags = mutant.get_tags() if hasattr(mutant, "get_tags") else np.arange(N)
+        tags = mutant.get_tags()
 
-        # Determine which tags to target
-        unique_tags = np.unique(tags)
-        if self.target_tags is not None:
-            target_tags_set = set(self.target_tags)
-            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
+        if unique_tags is None:
+            return None
 
         # Only the targeted tag groups are flattened; the rest stay put.
         mask = np.isin(tags, unique_tags)

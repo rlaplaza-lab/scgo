@@ -613,6 +613,28 @@ def prepare_algorithm_kwargs(
             base_kwargs.get("cluster_adsorbate_config")
         )
 
+    if chosen_go == "simple":
+        # simple_go accepts only its declared params.
+        _simple_keys = {
+            "fmax",
+            "niter_local_relaxation",
+            "optimizer",
+            "verbosity",
+            "system_type",
+            "surface_config",
+            "adsorbate_definition",
+            "n_slab",
+            "connectivity_factor",
+            "cluster_adsorbate_config",
+            "allow_cluster_fragmentation",
+            "allow_adsorbate_surface_detachment",
+            "enforce_adsorbate_subgraph_integrity",
+            "logfile",
+            "trajectory",
+            "clean",
+        }
+        base_kwargs = {k: v for k, v in base_kwargs.items() if k in _simple_keys}
+
     return base_kwargs
 
 

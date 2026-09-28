@@ -525,6 +525,7 @@ def validate_minimum_structure(
         allow_cluster_fragmentation=allow_cluster_fragmentation,
         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        binding_penetration_tolerance_a=binding_penetration_tolerance_a,
         n_slab_deposit=n_slab_deposit,
     )
 

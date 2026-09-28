@@ -10,7 +10,10 @@ from ase.calculators.calculator import Calculator, all_changes
 from scgo.calculators.torch_device import resolve_torch_device
 from scgo.exceptions import SCGONotImplementedError
 from scgo.utils.logging import get_logger
-from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+from scgo.utils.mlip_extras import (
+    ensure_mace_uma_not_both_installed,
+    infer_model_name_from_calculator,
+)
 
 logger = get_logger(__name__)
 
@@ -101,14 +104,9 @@ def disable_metatomic_nvalchemiops() -> None:
 
 def infer_upet_model_name_from_calculator(calculator: Calculator) -> str | None:
     """Return the UPET model identifier from an ASE calculator, if known."""
-    model_name = getattr(calculator, "model_name", None)
-    if isinstance(model_name, str) and model_name:
-        return model_name
-    name = getattr(calculator, "name", "") or ""
-    if name.startswith("UPET-"):
-        suffix = name.removeprefix("UPET-").split("-v")[0]
-        return suffix or None
-    return None
+    return infer_model_name_from_calculator(
+        calculator, prefixes=("UPET-",), strip_version_suffix=True
+    )
 
 
 def _unwrap_metatomic_ase_calculator(calc: object) -> object | None:

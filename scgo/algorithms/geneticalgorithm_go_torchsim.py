@@ -39,6 +39,7 @@ from scgo.algorithms.ga_common import (
     log_early_stopping_info,
     maybe_apply_mobile_core_ads_tags,
     reseed_mutation_operator_rngs,
+    resolve_run_uniqueness_comparator,
     select_population_class,
     setup_diversity_scorer,
     sort_minima_by_fitness,
@@ -69,11 +70,11 @@ from scgo.constants import (
     DEFAULT_PAIR_COR_MAX,
 )
 from scgo.database import (
-    RetryConfig,
     close_data_connection,
     database_retry,
     setup_database,
 )
+from scgo.database.sync import PRESET_HPC
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization import compute_cell_side
 from scgo.initialization.atomic_radii import build_blmin_from_zs
@@ -92,12 +93,6 @@ from scgo.system_types import (
     resolve_structure_mic,
     uses_surface,
     validate_minimum_structure,
-)
-from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
-from scgo.utils.comparators import (
-    ComparatorBlocks,
-    UniquenessSettings,
-    create_geometry_comparator,
 )
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
@@ -536,28 +531,6 @@ def _build_offspring_worker(
     }
 
 
-def _torchsim_prepare_relaxed_copy(
-    cand: Atoms,
-    surface_config: SurfaceSystemConfig | None,
-    n_slab: int,
-    *,
-    surface_mode: bool,
-    freeze_adsorbate_internal_geometry: bool = False,
-    adsorbate_definition: AdsorbateDefinition | None = None,
-    adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
-) -> Atoms:
-    """Copy a candidate and attach slab / adsorbate constraints before relaxation."""
-    return prepare_atoms_for_local_relax(
-        cand,
-        surface_mode=surface_mode,
-        surface_config=surface_config,
-        n_slab=n_slab,
-        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
-        adsorbate_definition=adsorbate_definition,
-        adsorbate_fragment_templates=adsorbate_fragment_templates,
-    )
-
-
 def _record_relax_batch_steps(
     relaxer: TorchSimBatchRelaxer,
     profiling: dict[str, float] | None,
@@ -682,16 +655,8 @@ def _write_relaxed_candidate(
             derived_lists = extract_constraint_index_lists(derived)
             fix_atoms_indices = derived_lists["fix_atoms_indices"]
             fix_bond_lengths_pairs = derived_lists["fix_bond_lengths_pairs"]
-        except (
-            SCGOValidationError,
-            ValueError,
-            KeyError,
-            IndexError,
-            TypeError,
-            AttributeError,
-            RuntimeError,
-        ):
-            logger.debug(
+        except SCGOValidationError:
+            logger.warning(
                 "Could not derive constraint index lists from context; "
                 "storing only the constraints found on the relaxed structure"
             )
@@ -827,7 +792,7 @@ def _relax_unrelaxed_candidates(
     t0 = perf_counter()
     batch = database_retry(
         lambda: _read_candidate_batch(da, batch_cap),
-        config=RetryConfig(max_retries=5),
+        config=PRESET_HPC,
         operation_name="read_candidate_batch",
     )
     if profiling is not None:
@@ -840,11 +805,11 @@ def _relax_unrelaxed_candidates(
     surface_mode = uses_surface(system_type)
     relaxed_results = relaxer.relax_batch(
         [
-            _torchsim_prepare_relaxed_copy(
+            prepare_atoms_for_local_relax(
                 cand,
-                surface_config,
-                n_slab,
                 surface_mode=surface_mode,
+                surface_config=surface_config,
+                n_slab=n_slab,
                 freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                 adsorbate_definition=adsorbate_definition,
                 adsorbate_fragment_templates=adsorbate_fragment_templates,
@@ -930,7 +895,7 @@ def _relax_unrelaxed_candidates(
     t0 = perf_counter()
     database_retry(
         _write_batch_under_connection,
-        config=RetryConfig(max_retries=5),
+        config=PRESET_HPC,
         operation_name="write_relaxed_batch",
     )
     if profiling is not None:
@@ -1106,12 +1071,12 @@ def ga_go(
         fmax=fmax,
     )
 
-    if batch_size is not None and batch_size <= 0:
-        batch_size = None
+    if batch_size is not None and batch_size < 1:
+        raise SCGOValidationError(
+            f"batch_size must be a positive integer or None, got {batch_size}"
+        )
 
-    # Resolve the optional TorchSim dtype knob for the auto-built relaxer.
-    # ``None`` keeps the TorchSimBatchRelaxer default (float64). Callers that
-    # pass their own ``relaxer`` set its dtype directly and ignore this.
+    # Resolve TorchSim dtype for the auto-built relaxer (None -> float64 default).
     if torchsim_dtype is not None and torchsim_dtype not in ("float32", "float64"):
         raise SCGOValidationError(
             f"torchsim_dtype must be 'float32' or 'float64', got {torchsim_dtype!r}"
@@ -1206,8 +1171,7 @@ def ga_go(
             pbc=False,
         )
 
-    pop_for_probe = population_size if population_size is not None else 32
-    expected_max_atoms = (n_to_optimize + n_fixed) * pop_for_probe
+    expected_max_atoms = (n_to_optimize + n_fixed) * population_size
 
     if relaxer is None:
         if is_ml_calculator(calculator):
@@ -1300,17 +1264,6 @@ def ga_go(
     uniqueness_n_top = (
         int(comparator_n_top) if comparator_n_top is not None else n_to_optimize
     )
-    user_geometry = UniquenessSettings(
-        comparator_tol=comparator_tol,
-        comparator_pair_cor_max=comparator_pair_cor_max,
-        component_weights=comparator_component_weights,
-        cross_weight=comparator_cross_weight,
-    )
-    # comparator_n_top forces the legacy trailing-window comparison (documented
-    # escape hatch); otherwise dedupe uses type-aware role blocks.
-    resolved_geo = None
-    uniqueness_blocks: ComparatorBlocks | None = None
-    geometry: UniquenessSettings = user_geometry
     if comparator_n_top is None:
         if policy.slab_is_search_target:
             # search_composition already contains the mobile top-layer atoms.
@@ -1319,15 +1272,23 @@ def ga_go(
             n_total = len(surface_config.slab) + len(search_composition)
         else:
             n_total = len(composition)
-        resolved_geo = resolve_uniqueness_geometry(
+    else:
+        n_total = uniqueness_n_top
+    structure_comparator, geometry, uniqueness_blocks = (
+        resolve_run_uniqueness_comparator(
             system_type=system_type,
             n_atoms=n_total,
             surface_config=surface_config,
             adsorbate_definition=adsorbate_definition,
-            settings=user_geometry,
+            comparator_tol=comparator_tol,
+            comparator_pair_cor_max=comparator_pair_cor_max,
+            comparator_component_weights=comparator_component_weights,
+            comparator_cross_weight=comparator_cross_weight,
+            comparator_n_top=comparator_n_top,
+            effective_n_top=uniqueness_n_top,
+            mic=comp_mic,
         )
-        uniqueness_blocks = resolved_geo.blocks
-        geometry = resolved_geo.settings
+    )
     diversity_scorer = setup_diversity_scorer(
         fitness_strategy=fitness_strategy,
         diversity_reference_db=diversity_reference_db,
@@ -1340,16 +1301,6 @@ def ga_go(
         uniqueness=geometry,
         blocks=uniqueness_blocks,
     )
-    if resolved_geo is not None:
-        structure_comparator = resolved_geo.build_comparator(
-            n_top=uniqueness_n_top, mic=comp_mic
-        )
-    else:
-        structure_comparator = create_geometry_comparator(
-            n_top=uniqueness_n_top,
-            mic=comp_mic,
-            settings=geometry,
-        )
     comp = EnergyAndStructureComparator(energy_tolerance, structure_comparator)
 
     t0_batch_build = perf_counter()
@@ -1506,7 +1457,7 @@ def ga_go(
                     continue
                 database_retry(
                     lambda _cand=cand: _insert_unrelaxed(_cand),
-                    config=RetryConfig(max_retries=5),
+                    config=PRESET_HPC,
                     operation_name="insert_unrelaxed_candidate",
                 )
                 inserted_initial_population.append(cand)
@@ -1577,11 +1528,11 @@ def ga_go(
             t_start = perf_counter()
             relaxed_results = relaxer.relax_batch(
                 [
-                    _torchsim_prepare_relaxed_copy(
+                    prepare_atoms_for_local_relax(
                         c,
-                        surface_config,
-                        n_slab,
                         surface_mode=surface_mode,
+                        surface_config=surface_config,
+                        n_slab=n_slab,
                         freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                         adsorbate_definition=adsorbate_definition,
                         adsorbate_fragment_templates=adsorbate_fragment_template,
@@ -1603,7 +1554,7 @@ def ga_go(
                 lambda _batch=batch, _results=relaxed_results: _write_relaxed_batch(
                     _batch, _results
                 ),
-                config=RetryConfig(max_retries=5),
+                config=PRESET_HPC,
                 operation_name="write_initial_relaxed_batch",
             )
             initial_ineligible_relaxed_count += batch_ineligible_count
@@ -1972,7 +1923,7 @@ def ga_go(
                                             _a3, description=_desc
                                         )
                                     ),
-                                    config=RetryConfig(max_retries=5),
+                                    config=PRESET_HPC,
                                     operation_name="add_unrelaxed_offspring",
                                 )
                                 created += 1
@@ -2185,7 +2136,7 @@ def ga_go(
 
         all_candidates = database_retry(
             da.get_all_relaxed_candidates,
-            config=RetryConfig(max_retries=5),
+            config=PRESET_HPC,
             operation_name="get_final_all_relaxed_candidates",
         )
         if run_id is not None:
@@ -2193,7 +2144,7 @@ def ga_go(
         all_candidates = [
             cand
             for cand in all_candidates
-            if bool(get_tag(cand, "ga_eligible", default=True))
+            if bool(get_tag(cand, "ga_eligible", default=False))
         ]
         all_minima = extract_minima_from_database(all_candidates)
 

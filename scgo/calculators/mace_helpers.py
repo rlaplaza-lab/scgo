@@ -14,7 +14,10 @@ from typing import Any
 
 import torch
 
-from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+from scgo.utils.mlip_extras import (
+    ensure_mace_uma_not_both_installed,
+    infer_model_name_from_calculator,
+)
 
 
 @contextmanager
@@ -165,14 +168,7 @@ class MACE(Calculator):
 
 def infer_mace_model_name_from_calculator(calculator: Calculator) -> str | None:
     """Return the MACE foundation model name from an ASE calculator, if known."""
-    model_name = getattr(calculator, "model_name", None)
-    if isinstance(model_name, str) and model_name:
-        return model_name
-    name = getattr(calculator, "name", "") or ""
-    if name.startswith("MACE-"):
-        suffix = name.removeprefix("MACE-")
-        return suffix or None
-    return None
+    return infer_model_name_from_calculator(calculator, prefixes=("MACE-",))
 
 
 def try_extract_torchsim_model_from_mace_calculator(

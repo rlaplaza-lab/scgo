@@ -56,7 +56,11 @@ def restore_rigid_adsorbate_fragments(
         adsorbate_definition.adsorbate_fragment_lengths
     )
     if len(lengths) != len(fragment_templates):
-        return
+        raise SCGOValidationError(
+            "fragment_templates length "
+            f"({len(fragment_templates)}) does not match "
+            f"adsorbate_fragment_lengths ({lengths})"
+        )
 
     positions = atoms.get_positions()
     ads_start = int(n_slab) + len(core_symbols)

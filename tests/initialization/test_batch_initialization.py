@@ -316,13 +316,13 @@ def test_smart_mode_template_index_alignment():
 
 @pytest.mark.slow
 def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
-    """Test that Metropolis allocation uses logarithmic scaling and respects template cap.
+    """Test Metropolis allocation logarithmic scaling and the one-per-template cap.
 
     Verifies:
-    - Templates get logarithmically scaled allocation (capped at 2 per template)
+    - Templates get logarithmically scaled allocation (capped at 1 per template)
     - Seed+growth gets logarithmically scaled allocation (if seeds available), otherwise 0
     - All templates are used when n_structures >= n_templates
-    - Template cap of 2 per template is enforced
+    - Template cap of 1 per template is enforced
     """
     import numpy as np
 
@@ -368,11 +368,8 @@ def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
             1 + n_templates * TEMPLATE_PREFACTOR
         )
         expected_template_raw = int(n_structures * template_scaling)
-        # Template allocations are additionally capped by the number of available
-        # templates (each template is used at most once when structures are plentiful).
-        expected_template = min(
-            expected_template_raw, 2 * n_templates, n_structures, n_templates
-        )
+        # Cap at one use per template.
+        expected_template = min(expected_template_raw, n_structures, n_templates)
     else:
         expected_template = 0
 
@@ -380,7 +377,7 @@ def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
     if n_seed_combinations > 0:
         seed_scaling = SEED_BASE_PCT * np.log(1 + n_seed_combinations * SEED_PREFACTOR)
         expected_seed_raw = int(n_structures * seed_scaling)
-        # Cap at 2 per seed combination (symmetric to templates)
+        # Cap at 2 per seed combination.
         expected_seed = min(expected_seed_raw, 2 * n_seed_combinations, n_structures)
     else:
         expected_seed = 0
@@ -459,18 +456,17 @@ def test_metropolis_allocation_logarithmic_scaling_and_cap(rng):
         f"Allocation mismatch: {template_count} + {seed_count} + {random_count} != {n_structures}"
     )
 
-    # Verify template cap (2 per template) - symmetric to seed cap
+    # Verify one-per-template cap
     if n_templates > 0:
         template_usage = Counter(
             idx for s, idx in allocations if s == "template" and idx is not None
         )
         total_template_allocations = sum(template_usage.values())
-        max_per_template_cap = 2 * n_templates
+        max_per_template_cap = n_templates
 
-        # Verify total template allocations don't exceed the cap
         assert total_template_allocations <= max_per_template_cap, (
             f"Total template allocations {total_template_allocations} exceed cap "
-            f"{max_per_template_cap} (2 per template * {n_templates} templates). "
+            f"{max_per_template_cap} (1 per template * {n_templates} templates). "
             f"Usage: {dict(template_usage)}"
         )
 

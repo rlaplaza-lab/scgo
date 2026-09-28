@@ -353,7 +353,7 @@ def _is_unexpected_oom_line(line: str) -> bool:
     """True when ``line`` reports a genuine (non-simulated) GPU degradation.
 
     The genuine-OOM substrings below mirror the canonical rule in
-    ``scgo.metadata.provenance.is_cuda_oom_error`` (``"out of memory"``).
+    ``scgo.utils.cuda.is_cuda_oom_error`` (``"out of memory"``).
     """
     lowered = line.lower()
     if SYNTHETIC_FAILURE_TOKEN in lowered:

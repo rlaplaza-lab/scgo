@@ -20,7 +20,6 @@ from scgo.constants import (
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.exceptions import SCGOValidationError
-from scgo.metadata.provenance import is_cuda_oom_error
 from scgo.metadata.run_dir import ensure_run_id, save_run_dir_record
 from scgo.param_presets import default_energy_gap_threshold, get_ts_defaults
 from scgo.surface.composition import full_adsorbate_slab_composition
@@ -44,6 +43,7 @@ from scgo.system_types.dedup_geometry import (
     resolve_uniqueness_geometry,
 )
 from scgo.utils.comparators import UniquenessSettings, get_shared_mobile_atom_indices
+from scgo.utils.cuda import is_cuda_oom_error
 from scgo.utils.helpers import (
     auto_niter_ts,
     copy_atoms,
@@ -948,9 +948,7 @@ def run_transition_state_search(
 
     if not minima_by_formula:
         n_dbs = len(
-            list_discovered_db_paths_with_run(
-                str(minima_dir), composition=composition, use_cache=False
-            )
+            list_discovered_db_paths_with_run(str(minima_dir), composition=composition)
         )
         xyz_dir = Path(minima_dir) / "final_unique_minima"
         n_xyz = len(list(xyz_dir.glob("*.xyz"))) if xyz_dir.is_dir() else 0

@@ -27,6 +27,7 @@ from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
 __all__ = [
     "_append_unique_unit_vector",
     "_ensure_rng",
+    "_filter_unique_tags",
     "_geometry_candidate_directions",
     "_IDENTITY_ATOL",
     "_mobile_is_connected",
@@ -39,6 +40,19 @@ __all__ = [
 
 
 _IDENTITY_ATOL = 1e-8
+
+
+def _filter_unique_tags(
+    unique_tags: np.ndarray,
+    target_tags: list[int] | tuple[int, ...] | set[int] | None,
+) -> np.ndarray | None:
+    """Return tags to mutate, or ``None`` when none remain."""
+    if target_tags is not None:
+        target_tags_set = set(target_tags)
+        unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
+    if len(unique_tags) == 0:
+        return None
+    return unique_tags
 
 
 def _resolve_op_connectivity_factor(

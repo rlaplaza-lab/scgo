@@ -490,7 +490,7 @@ def test_relax_unrelaxed_ineligible_count_stable_across_write_retry(
     assert calls["n"] == 3
     rows = da.get_all_relaxed_candidates()
     assert len(rows) == 2
-    assert all(not bool(get_tag(row, "ga_eligible", default=True)) for row in rows)
+    assert all(not bool(get_tag(row, "ga_eligible", default=False)) for row in rows)
 
 
 def test_per_gen_max_targets_population_when_batch_size_none():

@@ -97,6 +97,26 @@ def installed_mlip_stacks() -> tuple[bool, bool, bool]:
     return mace, uma, upet
 
 
+def infer_model_name_from_calculator(
+    calculator: object,
+    *,
+    prefixes: tuple[str, ...] = (),
+    strip_version_suffix: bool = False,
+) -> str | None:
+    """Return ``model_name``, else a ``name`` with a matching prefix stripped."""
+    model_name = getattr(calculator, "model_name", None)
+    if isinstance(model_name, str) and model_name:
+        return model_name
+    name = getattr(calculator, "name", "") or ""
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            suffix = name.removeprefix(prefix)
+            if strip_version_suffix and suffix:
+                suffix = suffix.split("-v")[0]
+            return suffix or None
+    return None
+
+
 def ensure_mace_uma_not_both_installed() -> None:
     """Fail if more than one MLIP stack is importable (unsupported mixed env)."""
     mace, uma, upet = installed_mlip_stacks()

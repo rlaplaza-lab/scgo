@@ -38,6 +38,15 @@ from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
+from scgo.exceptions import SCGOValidationError
+
+
+def _blmin_threshold(blmin: dict, z1: int, z2: int) -> float:
+    """Clash threshold for ``(z1, z2)``; raises if the pair is missing."""
+    threshold = blmin.get((z1, z2), blmin.get((z2, z1)))
+    if threshold is None:
+        raise SCGOValidationError(f"blmin table missing pair ({z1}, {z2})")
+    return float(threshold)
 
 
 class SlabClashChecker:
@@ -123,11 +132,7 @@ class SlabClashChecker:
                 x2 = np.where(self._num_slab_expanded == z2)[0]
                 if len(x2) == 0:
                     continue
-                threshold = float(
-                    self._blmin.get((z1, z2), self._blmin.get((z2, z1), 0.0))
-                )
-                if threshold <= 0.0:
-                    continue
+                threshold = _blmin_threshold(self._blmin, z1, z2)
                 if float(np.min(dists[np.ix_(x1, x2)])) < threshold:
                     return True
         return False
@@ -169,9 +174,7 @@ def mobile_too_close_no_copy(
         for z1, z2 in itertools.combinations_with_replacement(unique_types, 2):
             x1 = np.where(num == z1)[0]
             x2 = np.where(num == z2)[0]
-            threshold = float(blmin.get((z1, z2), blmin.get((z2, z1), 0.0)))
-            if threshold <= 0.0:
-                continue
+            threshold = _blmin_threshold(blmin, z1, z2)
             if float(np.min(dists[np.ix_(x1, x2)])) < threshold:
                 return True
     return False
@@ -221,9 +224,7 @@ def mobile_too_close_tagged(
         for z1, z2 in itertools.combinations_with_replacement(unique_types, 2):
             x1 = np.where(numbers == z1)[0]
             x2 = np.where(numbers == z2)[0]
-            threshold = float(blmin.get((z1, z2), blmin.get((z2, z1), 0.0)))
-            if threshold <= 0.0:
-                continue
+            threshold = _blmin_threshold(blmin, z1, z2)
             if float(np.min(dists[np.ix_(x1, x2)])) < threshold:
                 return True
     return False

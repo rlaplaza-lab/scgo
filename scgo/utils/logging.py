@@ -283,18 +283,18 @@ def log_warning_v(
     message: str,
     *args: object,
     verbosity: int = 1,
-    min_verbosity: int = 1,
+    min_verbosity: int = 0,
 ) -> None:
-    """Log warning message if verbosity >= min_verbosity (default 1).
+    """Log warning message if verbosity >= min_verbosity (default 0).
 
-    Warnings are typically always shown, but this allows conditional suppression.
+    Warnings are shown at quiet verbosity by default (``min_verbosity=0``).
 
     Args:
         logger: The logger instance.
         message: Format string for the message.
         *args: Arguments for the format string.
         verbosity: Current verbosity level (0-3).
-        min_verbosity: Minimum verbosity to log (default 1).
+        min_verbosity: Minimum verbosity to log (default 0).
     """
     if verbosity >= min_verbosity:
         logger.warning(message, *args)

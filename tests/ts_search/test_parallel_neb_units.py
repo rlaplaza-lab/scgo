@@ -90,42 +90,26 @@ def test_stage1_climb_not_eligible_never_ran():
     assert _stage1_band_climb_eligible(summary) is False
 
 
-def test_stage1_climb_string_sniff_fallback_when_no_failed_key():
-    """Without the explicit ``failed`` boolean the predicate sniffs the error text.
-
-    Summaries produced outside ``run_optimization`` (e.g. OOM-retry stubs) have
-    no ``failed`` key: only an empty error or the soft "did not converge"
-    sentinel stays eligible; non-finite / OOM / any other exception text is a
-    hard failure.
-    """
-    # No error, steps taken -> eligible.
-    assert _stage1_band_climb_eligible({"steps_taken": 3, "error": None}) is True
-    # Soft sentinel -> eligible.
-    assert _stage1_band_climb_eligible(
+def test_stage1_climb_missing_failed_key_is_hard_failure():
+    """Missing ``failed`` is treated as a hard failure."""
+    assert not _stage1_band_climb_eligible({"steps_taken": 3, "error": None})
+    assert not _stage1_band_climb_eligible(
         {"steps_taken": 7, "error": "NEB did not converge after 7 steps"}
     )
-    # Non-finite forces -> hard failure.
     assert not _stage1_band_climb_eligible(
         {"steps_taken": 1, "error": "NEB forces are non-finite (fmax=nan)"}
     )
-    # CUDA OOM text -> hard failure.
     assert not _stage1_band_climb_eligible({"steps_taken": 2, "error": SIMULATED_OOM})
-    # Any other exception message -> hard failure.
-    assert not _stage1_band_climb_eligible(
-        {"steps_taken": 4, "error": "boom: bad tensor"}
-    )
 
 
-def test_stage1_climb_failed_boolean_wins_over_error_text():
-    """The explicit ``failed`` flag takes precedence over the error string."""
-    # failed=False but a soft sentinel error present -> eligible.
+def test_stage1_climb_failed_boolean_controls_eligibility():
+    """``failed`` is the sole hard-failure signal for climb eligibility."""
     assert (
         _stage1_band_climb_eligible(
             {"steps_taken": 5, "failed": False, "error": "NEB did not converge"}
         )
         is True
     )
-    # failed=True even though the error text alone looks soft -> not eligible.
     assert (
         _stage1_band_climb_eligible(
             {"steps_taken": 5, "failed": True, "error": "NEB did not converge"}

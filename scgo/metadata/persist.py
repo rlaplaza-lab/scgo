@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
+from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import get_tag
 from scgo.utils.logging import get_logger
 
@@ -41,18 +42,12 @@ def _match_row_by_stored_final_id(
     select_cols: str,
     final_id: str,
 ) -> tuple | None:
-    fid_conditions = [
-        f"CAST(json_extract({kvp}, '$.final_id') AS TEXT) = ?",
-        f"CAST(json_extract({kvp}, '$.unique_id') AS TEXT) = ?",
-        "CAST(unique_id AS TEXT) = ?",
-    ]
-    fid_params = [final_id, final_id, final_id]
     query = (
         f"SELECT {select_cols} FROM systems WHERE "
-        + " OR ".join(fid_conditions)
-        + " ORDER BY rowid ASC"
+        f"CAST(json_extract({kvp}, '$.final_id') AS TEXT) = ? "
+        "ORDER BY rowid ASC"
     )
-    rows = conn.execute(query, tuple(fid_params)).fetchall()
+    rows = conn.execute(query, (final_id,)).fetchall()
     if not rows:
         return None
     return _find_first_relaxed_row(rows) or rows[0]
@@ -101,12 +96,10 @@ def mark_final_minima_in_db(
         final_id = info.get("final_id")
 
         if atoms is None:
-            logger.warning("Missing atoms entry in mark_final_minima_in_db; skipping")
-            continue
+            raise SCGOValidationError("Missing atoms entry in mark_final_minima_in_db")
 
         if final_id is None:
-            logger.warning("Missing final_id in mark_final_minima_in_db; skipping")
-            continue
+            raise SCGOValidationError("Missing final_id in mark_final_minima_in_db")
 
         run_id = get_tag(atoms, "run_id")
 

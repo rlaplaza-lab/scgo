@@ -49,15 +49,12 @@ class DatabaseDiscovery:
         composition: list[str] | None = None,
         run_id: str | None = None,
         db_filename: str = "*.db",
-        use_cache: bool = True,
     ) -> list[Path]:
         """Find databases matching criteria.
 
-        ``use_cache`` is accepted for API compatibility but ignored. Registry
-        hits are always merged with a ``run_*/`` filesystem scan so a DB on
-        disk that is not yet registered is still found.
+        Registry hits are always merged with a ``run_*/`` filesystem scan so a
+        DB on disk that is not yet registered is still found.
         """
-        _ = use_cache
         by_resolved: dict[str, Path] = {}
 
         if db_filename == "*.db":
@@ -204,17 +201,13 @@ def list_discovered_db_paths_with_run(
     base_dir: str | Path,
     *,
     composition: list[str] | None = None,
-    use_cache: bool = True,
     db_filename: str | None = None,
 ) -> list[tuple[str, str | None]]:
     """List DB paths via :class:`~scgo.database.discovery.DatabaseDiscovery` with run parsed from layout.
 
     Returns tuples ``(absolute_path, run_id)``. ``run_id`` is ``None`` if the path
     is not under a recognizable ``run_*`` directory.
-
-    ``use_cache`` is accepted for API compatibility; discovery always rescans.
     """
-    _ = use_cache
     base_s = os.path.abspath(str(base_dir))
     discovery = _get_discovery(base_s)
     filename_pattern = db_filename if db_filename else "*.db"

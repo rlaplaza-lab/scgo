@@ -136,7 +136,7 @@ class Population:
         return [
             cand
             for cand in candidates
-            if bool(get_tag(cand, "ga_eligible", default=True))
+            if bool(get_tag(cand, "ga_eligible", default=False))
         ]
 
     def _get_all_relaxed_candidates(self, *, only_new=False, use_extinct=False):

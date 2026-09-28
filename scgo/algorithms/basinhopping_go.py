@@ -20,6 +20,7 @@ from tqdm import tqdm
 from scgo.algorithms.ga_common import (
     ga_run_metadata_extras,
     maybe_apply_mobile_core_ads_tags,
+    resolve_run_uniqueness_comparator,
     setup_diversity_scorer,
 )
 from scgo.algorithms.run_context import validate_and_resolve_run_context
@@ -34,7 +35,7 @@ from scgo.constants import (
 from scgo.database import HPC_DATABASE_EXCEPTIONS, setup_database
 from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
-from scgo.metadata.atoms import set_tags
+from scgo.metadata.atoms import get_tag, set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     AdsorbateDefinition,
@@ -44,12 +45,6 @@ from scgo.system_types import (
     SystemType,
     resolve_structure_mic,
     validate_minimum_structure,
-)
-from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
-from scgo.utils.comparators import (
-    ComparatorBlocks,
-    UniquenessSettings,
-    create_geometry_comparator,
 )
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
@@ -442,35 +437,19 @@ def bh_go(
         int(comparator_n_top) if comparator_n_top is not None else len(movable_indices)
     )
     comp_mic = resolve_structure_mic(system_type, surface_config)
-    user_geometry = UniquenessSettings(
+    comparator, geometry, uniqueness_blocks = resolve_run_uniqueness_comparator(
+        system_type=system_type,
+        n_atoms=len(atoms),
+        surface_config=surface_config,
+        adsorbate_definition=adsorbate_definition,
         comparator_tol=comparator_tol,
         comparator_pair_cor_max=comparator_pair_cor_max,
-        component_weights=comparator_component_weights,
-        cross_weight=comparator_cross_weight,
+        comparator_component_weights=comparator_component_weights,
+        comparator_cross_weight=comparator_cross_weight,
+        comparator_n_top=comparator_n_top,
+        effective_n_top=effective_n_top,
+        mic=comp_mic,
     )
-    # comparator_n_top forces the legacy trailing-window comparison; otherwise
-    # dedupe uses type-aware role blocks (mirroring the GA).
-    resolved_geo = None
-    uniqueness_blocks: ComparatorBlocks | None = None
-    geometry: UniquenessSettings = user_geometry
-    if comparator_n_top is None:
-        resolved_geo = resolve_uniqueness_geometry(
-            system_type=system_type,
-            n_atoms=len(atoms),
-            surface_config=surface_config,
-            adsorbate_definition=adsorbate_definition,
-            settings=user_geometry,
-        )
-        uniqueness_blocks = resolved_geo.blocks
-        geometry = resolved_geo.settings
-    if resolved_geo is not None:
-        comparator = resolved_geo.build_comparator(n_top=effective_n_top, mic=comp_mic)
-    else:
-        comparator = create_geometry_comparator(
-            n_top=effective_n_top,
-            mic=comp_mic,
-            settings=geometry,
-        )
 
     # Load reference structures and create DiversityScorer for diversity strategy
     diversity_scorer = setup_diversity_scorer(
@@ -569,6 +548,7 @@ def bh_go(
             n_slab=n_slab,
         )
         profile_timings["initial_local_relaxation_s"] = perf_counter() - t_rel0
+        initial_seed_eligible = True
         try:
             validate_minimum_structure(
                 a_current,
@@ -583,18 +563,17 @@ def bh_go(
                 n_slab_deposit=n_slab_deposit,
             )
         except SCGOValidationError as exc:
-            # The initial seed must not crash the whole run: the trial gate
-            # (below) and the run_trials final gate already treat an invalid
-            # structure as rejectable/droppable. Proceed with the seed as the
-            # starting point; subsequent moves and the final gate still enforce
-            # connectivity, so disconnected minima are never reported downstream.
+            # Keep as walk start; exclude from returned minima via ga_eligible.
+            initial_seed_eligible = False
             logger.warning(
                 "Initial relaxed seed fails structural gate (%s); proceeding "
-                "with it as the starting structure.",
+                "with it as the starting structure but excluding it from "
+                "returned minima.",
                 exc,
             )
         set_tags(
             a_current,
+            ga_eligible=initial_seed_eligible,
             **_run_metadata_extras(),
         )
 
@@ -713,8 +692,10 @@ def bh_go(
                     exc,
                 )
                 continue
+            # Don't inherit ga_eligible=False from an invalid initial seed.
             set_tags(
                 a_trial,
+                ga_eligible=True,
                 **_run_metadata_extras(),
             )
             if run_id is not None:
@@ -810,6 +791,12 @@ def bh_go(
             config=PRESET_HPC,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
+        # Drop ga_eligible=False seeds; untagged older rows stay eligible.
+        all_candidates = [
+            cand
+            for cand in all_candidates
+            if bool(get_tag(cand, "ga_eligible", default=True))
+        ]
         all_minima = extract_minima_from_database(all_candidates)
 
         if not all_minima:

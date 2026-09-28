@@ -78,3 +78,30 @@ def test_bh_run_completes_when_last_trial_is_invalid(
     assert calls["n"] == 3
     assert isinstance(minima, list)
     assert len(minima) >= 1
+
+
+def test_bh_invalid_initial_seed_does_not_poison_later_trials(
+    tmp_path, monkeypatch, rng
+) -> None:
+    """An invalid initial seed stays as walk start but later trials remain returnable."""
+    from scgo.metadata.atoms import get_tag
+
+    calls = _patch_validation_failure(monkeypatch, fail_on_call=1)
+
+    minima = bh_go(
+        atoms=_pt3_with_calc()[0],
+        output_dir=str(tmp_path / "bh_bad_seed"),
+        niter=2,
+        temperature=0.0,
+        dr=0.3,
+        niter_local_relaxation=3,
+        verbosity=0,
+        rng=rng,
+        deduplicate=False,
+    )
+
+    assert calls["n"] >= 2
+    assert len(minima) >= 1
+    assert all(
+        bool(get_tag(atoms, "ga_eligible", default=False)) for _, atoms in minima
+    )

@@ -33,13 +33,14 @@ from scgo.constants import (
 )
 from scgo.exceptions import SCGOFileError, SCGORuntimeError, SCGOValidationError
 from scgo.metadata.atoms import get_tag, set_tags
-from scgo.metadata.provenance import is_cuda_oom_error, output_json_provenance
+from scgo.metadata.provenance import output_json_provenance
 from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.comparators import (
     ComparatorBlocks,
     PureInteratomicDistanceComparator,
     get_shared_mobile_atom_indices,
 )
+from scgo.utils.cuda import is_cuda_oom_error
 from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
 from scgo.utils.logging import (
     get_logger,
@@ -2259,8 +2260,9 @@ def find_transition_state(
         try:
             neb_forces = neb.get_forces()
             final_fmax: float | None = neb_max_atom_force(neb_forces)
-        except (AttributeError, RuntimeError, ValueError):
+        except (AttributeError, RuntimeError, ValueError) as exc:
             final_fmax = None
+            result["error"] = f"Failed to evaluate final NEB forces: {exc}"
 
         result["final_fmax"] = final_fmax
         result["neb_converged"] = final_fmax is not None and final_fmax < fmax

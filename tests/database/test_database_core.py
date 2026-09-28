@@ -728,7 +728,7 @@ class TestDiscovery:
             pass
 
         discovery = DatabaseDiscovery(tmp_path)
-        db_files = discovery.find_databases(db_filename="*.db", use_cache=False)
+        db_files = discovery.find_databases(db_filename="*.db")
         assert db_files
 
     def test_empty_result_is_not_cached(self, tmp_path):
@@ -764,7 +764,7 @@ class TestDiscovery:
             "run_20260204_120000",
             "run_20260204_130000",
         }
-        assert len(list_discovered_db_paths_with_run(tmp_path, use_cache=True)) == 2
+        assert len(list_discovered_db_paths_with_run(tmp_path)) == 2
 
 
 class TestRobustness:

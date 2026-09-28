@@ -18,6 +18,7 @@ from ase import Atoms
 
 from scgo.database.cache import get_global_cache
 from scgo.database.helpers import extract_minima_from_database_file
+from scgo.exceptions import SCGODatabaseError
 from scgo.metadata.atoms import get_tag as _get_db_tag
 from scgo.metadata.run_dir import resolve_run_id_from_db_path
 from scgo.utils.helpers import (
@@ -91,7 +92,7 @@ def _load_candidates_from_file(db_file: str) -> list[CandidateEntry]:
                 )
             results.append((symbols, energy, atoms))
         return results
-    except (sqlite3.DatabaseError, OSError, ValueError) as e:
+    except (sqlite3.DatabaseError, OSError, ValueError, SCGODatabaseError) as e:
         logger.debug("Failed to load candidates from %s: %s", db_file, e)
         return []
 

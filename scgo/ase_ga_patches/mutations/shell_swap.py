@@ -17,7 +17,7 @@ from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
-from scgo.ase_ga_patches.mutations._common import _ensure_rng
+from scgo.ase_ga_patches.mutations._common import _ensure_rng, _filter_unique_tags
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
 
@@ -84,14 +84,9 @@ class ShellSwapMutation(OffspringCreator):
         symbols = top.get_chemical_symbols()
         cell = top.get_cell()
         pbc = top.get_pbc()
-        unique_tags = np.unique(tags)
-
-        # Determine which tags to target
-        if self.target_tags is not None:
-            target_tags_set = set(self.target_tags)
-            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
+        if unique_tags is None:
+            return None
 
         group_indices = []
         group_symbols = []

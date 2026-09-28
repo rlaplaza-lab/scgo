@@ -898,14 +898,10 @@ def place_multi_atom_seed_on_facet(
         A copy of the seed with rotated and translated positions
 
     """
-    # Get the largest facet of the seed
+    # Largest seed facet (never empty; synthesizes a COM facet if needed).
     seed_facets = get_largest_facets(seed_atoms, n_facets=1)
-    if not seed_facets:
-        # Fallback: arbitrary +x axis when no facet can be identified
-        seed_normal = np.array([1.0, 0.0, 0.0])
-    else:
-        _, seed_facet_normal, _ = seed_facets[0]
-        seed_normal = seed_facet_normal
+    _, seed_facet_normal, _ = seed_facets[0]
+    seed_normal = seed_facet_normal
 
     # Create a copy to work with
     placed_seed = seed_atoms.copy()

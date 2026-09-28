@@ -89,7 +89,7 @@ def simple_go(
     verbosity: int = 1,
     run_id: str | None = None,
     clean: bool = False,
-    system_type: SystemType | None = None,
+    system_type: SystemType = "gas_cluster",
     surface_config: SurfaceSystemConfig | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     n_slab: int | None = None,
@@ -100,7 +100,8 @@ def simple_go(
     allow_cluster_fragmentation: bool = False,
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
-    **kwargs: Any,
+    logfile: str | None = None,
+    trajectory: str | None = None,
 ) -> list[tuple[float, Atoms]]:
     """Simple local optimization for 1-2 atom clusters.
 
@@ -120,9 +121,9 @@ def simple_go(
             Gates the progress/diagnostic logging emitted by this function.
         run_id: Optional run id for database provenance (same as other optimizers).
         clean: If True, remove an existing database in the trial directory.
-        ``**kwargs``: Extra keys from shared ``global_optimizer_kwargs``. ``logfile``
-            and ``trajectory`` are forwarded to the local relaxation; any other
-            key is ignored and reported at debug level.
+        system_type: Structural gate system type (default ``gas_cluster``).
+        logfile: Optional ASE optimizer logfile path.
+        trajectory: Optional ASE optimizer trajectory path.
 
     Returns:
         List of (energy, Atoms) tuples for local minima found. With
@@ -151,19 +152,11 @@ def simple_go(
             f"simple_go only supports 1-2 atoms, got {n_atoms} atoms"
         )
 
-    relaxation_kwargs = {
-        k: v for k, v in kwargs.items() if k in {"logfile", "trajectory"}
-    }
-    unknown_kwargs = {
-        k: v for k, v in kwargs.items() if k not in {"logfile", "trajectory"}
-    }
-    if unknown_kwargs:
-        log_debug_v(
-            logger,
-            "Ignoring unknown simple_go kwargs: %s",
-            ", ".join(f"{k}={value!r}" for k, value in unknown_kwargs.items()),
-            verbosity=verbosity,
-        )
+    relaxation_kwargs: dict[str, Any] = {}
+    if logfile is not None:
+        relaxation_kwargs["logfile"] = logfile
+    if trajectory is not None:
+        relaxation_kwargs["trajectory"] = trajectory
     # Detach calculator temporarily for DB setup to avoid pickling issues
     calc = atoms.calc
     atoms.calc = None
@@ -229,25 +222,22 @@ def simple_go(
         if not all_minima:
             return []
 
-        if system_type is not None:
-            try:
-                validate_minimum_structure(
-                    a_optimized,
-                    system_type=system_type,
-                    surface_config=surface_config,
-                    n_slab=n_slab,
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                    cluster_adsorbate_config=cluster_adsorbate_config,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                )
-            except SCGOValidationError as exc:
-                logger.warning(
-                    "simple_go rejecting invalid relaxed structure (%s)", exc
-                )
-                return []
+        try:
+            validate_minimum_structure(
+                a_optimized,
+                system_type=system_type,
+                surface_config=surface_config,
+                n_slab=n_slab,
+                adsorbate_definition=adsorbate_definition,
+                connectivity_factor=connectivity_factor,
+                cluster_adsorbate_config=cluster_adsorbate_config,
+                allow_cluster_fragmentation=allow_cluster_fragmentation,
+                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            )
+        except SCGOValidationError as exc:
+            logger.warning("simple_go rejecting invalid relaxed structure (%s)", exc)
+            return []
 
         return all_minima
 

@@ -19,6 +19,7 @@ from scgo.ase_ga_patches._tag_gather import (
     periodic_sheet_tag_to_skip,
 )
 from scgo.ase_ga_patches.mutations._common import (
+    _filter_unique_tags,
     _append_unique_unit_vector,
     _ensure_rng,
     _preserves_mobile_connectivity,
@@ -214,13 +215,9 @@ class RotationalMutation(OffspringCreator):
         tags = mutant.get_tags()
         numbers = mutant.get_atomic_numbers()
 
-        # Determine which tags to target
-        unique_tags = np.unique(tags)
-        if self.target_tags is not None:
-            target_tags_set = set(self.target_tags)
-            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-            if len(unique_tags) == 0:
-                return None
+        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
+        if unique_tags is None:
+            return None
 
         eligible_tags = self.tags if self.tags is not None else unique_tags
         # Filter eligible_tags to only include tags we're targeting

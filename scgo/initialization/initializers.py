@@ -1276,6 +1276,10 @@ def _try_exact_match(
     composition: list[str],
     exact_candidates: dict[str, list[tuple[float, Atoms]]],
     rng: np.random.Generator,
+    *,
+    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
     """Reuse a previous exact-composition minimum as an initial seed.
 
@@ -1290,6 +1294,8 @@ def _try_exact_match(
         exact_candidates: Mapping of formula -> ``(energy, atoms)`` candidates as
             produced by :func:`_find_exact_candidates` / :func:`_discover_all_candidates`.
         rng: Random number generator for diverse candidate selection.
+        min_distance_factor: Clash scale matching the rest of this run's init.
+        connectivity_factor: Connectivity scale matching the rest of this run's init.
 
     Returns:
         A validated ``Atoms`` object, or ``None`` if no usable exact candidate
@@ -1332,8 +1338,8 @@ def _try_exact_match(
         validated_atoms, _, _ = validate_cluster(
             ordered,
             composition=composition,
-            min_distance_factor=MIN_DISTANCE_FACTOR_DEFAULT,
-            connectivity_factor=CONNECTIVITY_FACTOR,
+            min_distance_factor=min_distance_factor,
+            connectivity_factor=connectivity_factor,
             sort_atoms=True,
             raise_on_failure=True,
             source="exact",
@@ -1403,6 +1409,8 @@ def _generate_single_structure_internal(
             composition=composition,
             exact_candidates=exact_candidates or {},
             rng=structure_rng,
+            min_distance_factor=min_distance_factor,
+            connectivity_factor=connectivity_factor,
         )
 
     def _run_random_spherical_strategy() -> Atoms:

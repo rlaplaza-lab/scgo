@@ -10,7 +10,10 @@ from ase.calculators.calculator import Calculator, all_changes
 from scgo.calculators.torch_device import resolve_torch_device
 from scgo.exceptions import SCGONotImplementedError, SCGOValidationError
 from scgo.utils.logging import get_logger
-from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
+from scgo.utils.mlip_extras import (
+    ensure_mace_uma_not_both_installed,
+    infer_model_name_from_calculator,
+)
 
 logger = get_logger(__name__)
 
@@ -81,14 +84,7 @@ class UMA(Calculator):
 
 def infer_uma_model_name_from_calculator(calculator: Calculator) -> str | None:
     """Return the UMA/FairChem model name from an ASE calculator, if known."""
-    model_name = getattr(calculator, "model_name", None)
-    if isinstance(model_name, str) and model_name:
-        return model_name
-    name = getattr(calculator, "name", "") or ""
-    if name.startswith("UMA-"):
-        suffix = name.removeprefix("UMA-")
-        return suffix or None
-    return None
+    return infer_model_name_from_calculator(calculator, prefixes=("UMA-",))
 
 
 def try_extract_torchsim_model_from_uma_calculator(

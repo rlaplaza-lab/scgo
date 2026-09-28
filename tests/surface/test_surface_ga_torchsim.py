@@ -62,12 +62,12 @@ def test_ga_go_disconnected_rows_persist_but_are_ineligible(
     assert isinstance(minima, list)
     assert len(minima) >= 1
     for _energy, atoms in minima:
-        assert bool(get_tag(atoms, "ga_eligible", default=True))
+        assert bool(get_tag(atoms, "ga_eligible", default=False))
 
     with get_connection(str(out / "ga_go.db")) as da:
         rows = da.get_all_relaxed_candidates()
     assert rows
-    assert any(not bool(get_tag(row, "ga_eligible", default=True)) for row in rows)
+    assert any(not bool(get_tag(row, "ga_eligible", default=False)) for row in rows)
 
 
 @pytest.mark.requires_mace

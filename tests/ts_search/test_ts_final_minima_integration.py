@@ -164,11 +164,7 @@ def test_load_minima_by_composition_returns_all_tagged_finals(tmp_path):
     _setup_pt2_run(formula_dir, "run_prior_a", [[0, 0, 0], [2.5, 0, 0]], 1.0)
     _setup_pt2_run(formula_dir, "run_prior_b", [[0, 0, 0], [2.55, 0, 0]], 1.1)
     assert (
-        len(
-            list_discovered_db_paths_with_run(
-                formula_dir, composition=composition, use_cache=True
-            )
-        )
+        len(list_discovered_db_paths_with_run(formula_dir, composition=composition))
         == 2
     )
 

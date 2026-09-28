@@ -12,6 +12,7 @@ from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
     _ensure_rng,
+    _filter_unique_tags,
     _preserves_mobile_connectivity,
     _resolve_op_connectivity_factor,
     _reanchor_mobile_to_slab,
@@ -122,13 +123,8 @@ class RattleMutation(OffspringCreator):
         cell = atoms.get_cell()
         pbc = atoms.get_pbc()
 
-        # Determine which tags to target
-        unique_tags = np.unique(tags)
-        if self.target_tags is not None:
-            target_tags_set = set(self.target_tags)
-            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-        if len(unique_tags) == 0:
-            # Nothing to rattle (empty mobile region or no matching tag).
+        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
+        if unique_tags is None:
             return None
 
         maxcount = 1000
@@ -251,13 +247,8 @@ class AnisotropicRattleMutation(OffspringCreator):
         cell = atoms.get_cell()
         pbc = atoms.get_pbc()
 
-        # Determine which tags to target
-        unique_tags = np.unique(tags)
-        if self.target_tags is not None:
-            target_tags_set = set(self.target_tags)
-            unique_tags = np.array([t for t in unique_tags if t in target_tags_set])
-        if len(unique_tags) == 0:
-            # Nothing to rattle (empty mobile region or no matching tag).
+        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
+        if unique_tags is None:
             return None
 
         maxcount = 1000

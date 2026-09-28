@@ -8,7 +8,7 @@ from ase import Atoms
 from ase.build import fcc111
 from ase.constraints import FixAtoms, FixBondLengths
 
-from scgo.algorithms.geneticalgorithm_go_torchsim import _torchsim_prepare_relaxed_copy
+from scgo.cluster_adsorbate.constraints import prepare_atoms_for_local_relax
 from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.constraints import (
@@ -210,7 +210,7 @@ def test_attach_slab_constraints_preserves_fixbondlength() -> None:
     assert sorted(int(i) for i in fix[0].index) == list(range(n_slab))
 
 
-def test_torchsim_prepare_relaxed_copy_attaches_fixatoms() -> None:
+def test_prepare_atoms_for_local_relax_attaches_fixatoms() -> None:
     pos = _three_layer_slab_positions()
     slab = Atoms("Pt6", positions=pos, cell=[10, 10, 10], pbc=True)
     ads = Atoms("Pt", positions=[[0.0, 0.0, 5.0]], cell=slab.cell, pbc=True)
@@ -220,6 +220,14 @@ def test_torchsim_prepare_relaxed_copy_attaches_fixatoms() -> None:
         fix_all_slab_atoms=False,
         n_relax_top_slab_layers=1,
     )
-    out = _torchsim_prepare_relaxed_copy(cand, cfg, len(slab), surface_mode=True)
+    out = prepare_atoms_for_local_relax(
+        cand,
+        surface_mode=True,
+        surface_config=cfg,
+        n_slab=len(slab),
+        freeze_adsorbate_internal_geometry=False,
+        adsorbate_definition=None,
+        adsorbate_fragment_templates=None,
+    )
     assert out is not cand
     assert _fix_indices(out) == [0, 1, 2, 3]

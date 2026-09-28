@@ -77,9 +77,11 @@ from scgo.system_types import (
     validate_composition_against_adsorbate,
     validate_minimum_structure,
 )
+from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
 from scgo.utils.comparators import (
     ComparatorBlocks,
     EnergyAndStructureComparator,
+    PureInteratomicDistanceComparator,
     UniquenessSettings,
     create_geometry_comparator,
 )
@@ -99,6 +101,7 @@ from scgo.utils.rng_helpers import (
     ensure_rng_or_create,
     get_child_rng_or_none,
 )
+from scgo.utils.site_counts import increment_site_type_count
 from scgo.utils.validation import (
     validate_in_range,
     validate_integer,
@@ -106,6 +109,55 @@ from scgo.utils.validation import (
 )
 
 logger = get_logger(__name__)
+
+
+def resolve_run_uniqueness_comparator(
+    *,
+    system_type: SystemType,
+    n_atoms: int,
+    surface_config: SurfaceSystemConfig | None,
+    adsorbate_definition: AdsorbateDefinition | None,
+    comparator_tol: float,
+    comparator_pair_cor_max: float,
+    comparator_component_weights: dict[str, float] | None,
+    comparator_cross_weight: float,
+    comparator_n_top: int | None,
+    effective_n_top: int,
+    mic: bool,
+) -> tuple[
+    PureInteratomicDistanceComparator, UniquenessSettings, ComparatorBlocks | None
+]:
+    """Build the uniqueness comparator shared by BH and GA.
+
+    ``comparator_n_top`` selects the legacy trailing-window path; otherwise
+    type-aware role blocks come from
+    :func:`~scgo.system_types.dedup_geometry.resolve_uniqueness_geometry`.
+    """
+    user_geometry = UniquenessSettings(
+        comparator_tol=comparator_tol,
+        comparator_pair_cor_max=comparator_pair_cor_max,
+        component_weights=comparator_component_weights,
+        cross_weight=comparator_cross_weight,
+    )
+    if comparator_n_top is None:
+        resolved_geo = resolve_uniqueness_geometry(
+            system_type=system_type,
+            n_atoms=n_atoms,
+            surface_config=surface_config,
+            adsorbate_definition=adsorbate_definition,
+            settings=user_geometry,
+        )
+        return (
+            resolved_geo.build_comparator(n_top=effective_n_top, mic=mic),
+            resolved_geo.settings,
+            resolved_geo.blocks,
+        )
+    comparator = create_geometry_comparator(
+        n_top=effective_n_top,
+        mic=mic,
+        settings=user_geometry,
+    )
+    return comparator, user_geometry, None
 
 
 def _copy_adsorbate_fragment_template(
@@ -154,8 +206,12 @@ def adsorbate_partition_metadata(
     fragment_lengths = parse_positive_fragment_lengths(
         adsorbate_definition.adsorbate_fragment_lengths
     )
-    if sum(fragment_lengths) != n_ads and n_ads > 0:
-        fragment_lengths = [n_ads]
+    if n_ads > 0 and sum(fragment_lengths) != n_ads:
+        raise SCGOValidationError(
+            "adsorbate_fragment_lengths sum "
+            f"({sum(fragment_lengths)}) does not match adsorbate atom count "
+            f"({n_ads})"
+        )
     return {
         "n_core_atoms": n_core,
         "n_adsorbate_fragment_atoms": n_ads,
@@ -330,15 +386,11 @@ def core_adsorbate_partition_counts(
     """
     if not get_system_policy(system_type).has_adsorbate or adsorbate_definition is None:
         return None
-    try:
-        core_list, ads_list = validate_composition_against_adsorbate(
-            composition,
-            adsorbate_definition,
-            context="core_adsorbate_partition_counts",
-        )
-    except (ValueError, SCGOValidationError) as exc:
-        logger.debug("Validation of core_adsorbate_partition_counts failed: %s", exc)
-        return None
+    core_list, ads_list = validate_composition_against_adsorbate(
+        composition,
+        adsorbate_definition,
+        context="core_adsorbate_partition_counts",
+    )
     if len(ads_list) == 0:
         return None
     if len(core_list) == 0 and not allow_empty_core:
@@ -367,7 +419,10 @@ def core_adsorbate_partition_details(
         adsorbate_definition.adsorbate_fragment_lengths
     )
     if sum(lengths) != n_ads:
-        lengths = [n_ads]
+        raise SCGOValidationError(
+            "adsorbate_fragment_lengths sum "
+            f"({sum(lengths)}) does not match adsorbate atom count ({n_ads})"
+        )
     return (n_core, lengths)
 
 
@@ -658,11 +713,7 @@ class ClusterStartGenerator(StartGenerator):
                         "increase max_hierarchical_attempts or relax ClusterAdsorbateConfig."
                     )
                 site_type = get_tag(atoms, "adsorbate_site_type")
-                if (
-                    isinstance(site_type, str)
-                    and site_type in self._batch_site_type_counts
-                ):
-                    self._batch_site_type_counts[site_type] += 1
+                increment_site_type_count(self._batch_site_type_counts, site_type)
             else:
                 atoms = create_initial_cluster(
                     self.composition,
@@ -776,8 +827,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                     "increase max_placement_attempts or height range."
                 )
             site_type = get_tag(atoms, "adsorbate_site_type")
-            if isinstance(site_type, str) and site_type in self._batch_site_type_counts:
-                self._batch_site_type_counts[site_type] += 1
+            increment_site_type_count(self._batch_site_type_counts, site_type)
 
         if self.calculator is not None:
             atoms.calc = self.calculator
@@ -1603,12 +1653,12 @@ def setup_diversity_scorer(
         blocks: Optional block-aware partition mirroring the uniqueness comparator.
 
     Returns:
-        DiversityScorer instance when fitness_strategy is "diversity" and at least
-        one reference structure was loaded; None otherwise.
+        DiversityScorer instance when fitness_strategy is "diversity".
 
     Raises:
         SCGOValidationError: If diversity_reference_db is None when
-            fitness_strategy is "diversity".
+            fitness_strategy is "diversity", or if the reference glob loads
+            no structures.
     """
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
@@ -1632,11 +1682,10 @@ def setup_diversity_scorer(
         logger.info("Loaded %d reference structures", len(reference_structures))
 
     if not reference_structures:
-        logger.warning(
-            "No reference structures found for diversity strategy; "
-            "diversity optimization may be ineffective"
+        raise SCGOValidationError(
+            f"No reference structures found for diversity strategy "
+            f"(pattern={diversity_reference_db!r} under {base_dir!r})"
         )
-        return None
 
     comparator_for_diversity = create_geometry_comparator(
         n_top=n_to_optimize,

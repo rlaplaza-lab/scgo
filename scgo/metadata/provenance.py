@@ -55,14 +55,3 @@ def package_version(dist_name: str) -> str:
             )
             _version_warned.add(dist_name)
         return "unknown"
-
-
-def is_cuda_oom_error(exc: BaseException) -> bool:
-    """True if ``exc`` is a CUDA OOM error (exception type or message pattern)."""
-    # Avoid importing torch here (keeps provenance import-light for CPU paths).
-    # ``torch.cuda.OutOfMemoryError`` is a ``RuntimeError`` subclass whose type
-    # name is "OutOfMemoryError"; matching on the type name covers it without a
-    # torch import. "cuda error: out of memory" is a subset of "out of memory".
-    if type(exc).__name__ == "OutOfMemoryError":
-        return True
-    return "out of memory" in str(exc).lower()

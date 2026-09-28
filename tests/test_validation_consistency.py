@@ -125,12 +125,20 @@ def _connected_cu3() -> Atoms:
 def test_run_trials_final_gate_drops_fragmented_candidate(
     tmp_path, rng, monkeypatch
 ) -> None:
+    from scgo.minima_search import core as minima_core
     from scgo.minima_search.core import run_trials
 
     connected = _connected_cu3()
     connected.calc = None
     disconnected = _disconnected_gas_cluster()
     disconnected.calc = None
+
+    # Stub a raw BH hit so uniqueness filtering + the final structural gate run.
+    monkeypatch.setitem(
+        minima_core._ALGORITHM_REGISTRY,
+        "bh",
+        lambda *_args, **_kwargs: [(0.0, connected.copy())],
+    )
 
     injected = [(0.0, connected), (5.0, disconnected)]
 
@@ -494,3 +502,24 @@ def test_adsorbate_tag_partition_rejects_mistagged():
             system_type="gas_cluster_adsorbate",
             adsorbate_definition=ads_def,
         )
+
+
+def test_validate_minimum_structure_forwards_binding_penetration_tolerance(
+    monkeypatch,
+) -> None:
+    """Regression: wrapper used to drop binding_penetration_tolerance_a."""
+    captured: dict[str, object] = {}
+
+    def _capture(atoms, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "scgo.system_types.validation.validate_structure_for_system_type",
+        _capture,
+    )
+    validate_minimum_structure(
+        Atoms("Pt", positions=[[0.0, 0.0, 0.0]]),
+        system_type="gas_cluster",
+        binding_penetration_tolerance_a=0.35,
+    )
+    assert captured.get("binding_penetration_tolerance_a") == pytest.approx(0.35)

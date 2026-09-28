@@ -73,6 +73,39 @@ def test_core_adsorbate_partition_details_fragment_lengths() -> None:
     assert details == (2, [2, 2])
 
 
+def test_core_adsorbate_partition_details_rejects_length_mismatch() -> None:
+    ads: AdsorbateDefinition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2],
+    )
+    from scgo.exceptions import SCGOValidationError
+
+    with pytest.raises(SCGOValidationError, match="fragment_lengths"):
+        core_adsorbate_partition_details(
+            "gas_cluster_adsorbate",
+            ["Pt", "Pt", "O", "H", "O", "H"],
+            ads,
+        )
+
+
+def test_adsorbate_partition_metadata_rejects_length_mismatch() -> None:
+    from scgo.algorithms.ga_common import adsorbate_partition_metadata
+    from scgo.exceptions import SCGOValidationError
+
+    ads: AdsorbateDefinition = AdsorbateDefinition(
+        core_symbols=["Pt", "Pt"],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[3],
+    )
+    with pytest.raises(SCGOValidationError, match="fragment_lengths"):
+        adsorbate_partition_metadata(
+            "gas_cluster_adsorbate",
+            ["Pt", "Pt", "O", "H", "O", "H"],
+            ads,
+        )
+
+
 def test_create_ga_pairing_use_tags_for_two_block() -> None:
     comp = ["Pt", "Pt", "O", "H"]
     ads: AdsorbateDefinition = AdsorbateDefinition(

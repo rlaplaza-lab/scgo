@@ -140,7 +140,7 @@ class MirrorMutation(OffspringCreator):
         top = atoms[len(atoms) - self.n_top: len(atoms)]
         num = top.numbers
         pos = top.get_positions().copy()
-        tags = top.get_tags() if hasattr(top, "get_tags") else np.arange(len(top))
+        tags = top.get_tags()
 
         if self.target_tags is not None:
             target_mask = np.isin(tags, list(self.target_tags))

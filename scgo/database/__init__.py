@@ -2,9 +2,9 @@
 
 Designed for **HPC** use: SQLite on shared filesystems (Lustre, GPFS, NFS-class),
 batch jobs, and optional multi-process access. WAL mode is off by default.
-Database discovery uses an in-process registry with a filesystem fallback when
-the registry has no entries. Prefer job-local scratch for heavy I/O when your
-site supports it.
+Database discovery merges an in-process registry with a ``run_*/`` filesystem
+scan so registered and on-disk databases are both found. Prefer job-local
+scratch for heavy I/O when your site supports it.
 """
 
 from __future__ import annotations

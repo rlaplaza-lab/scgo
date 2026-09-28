@@ -6,6 +6,7 @@ import logging
 import os
 
 import numpy as np
+import pytest
 from ase import Atoms
 from ase.calculators.emt import EMT
 
@@ -62,26 +63,29 @@ def test_simple_go_verbosity_one_emits_info_logs(tmp_path, caplog, rng) -> None:
     assert any("simple optimization" in msg for msg in messages)
 
 
-def test_simple_go_forwards_known_kwargs_and_reports_unknown(
-    tmp_path, caplog, rng
-) -> None:
+def test_simple_go_forwards_known_kwargs_and_rejects_unknown(tmp_path, rng) -> None:
     logfile = tmp_path / "relax.log"
-    with caplog.at_level(logging.DEBUG, logger=_SIMPLE_GO_LOGGER):
+    minima = simple_go(
+        _pt2_with_calc(),
+        str(tmp_path / "kwargs"),
+        rng=rng,
+        niter_local_relaxation=5,
+        verbosity=2,
+        logfile=str(logfile),
+        system_type="gas_cluster",
+    )
+
+    assert os.path.exists(logfile)
+    assert isinstance(minima, list)
+
+    with pytest.raises(TypeError, match="unknown_kwarg"):
         simple_go(
             _pt2_with_calc(),
-            str(tmp_path / "kwargs"),
+            str(tmp_path / "bad_kwargs"),
             rng=rng,
             niter_local_relaxation=5,
-            verbosity=2,
-            logfile=str(logfile),
-            system_type="gas_cluster",
-            unknown_kwarg="report-me",
+            unknown_kwarg="reject-me",  # type: ignore[call-arg]
         )
-
-    # ``logfile`` is forwarded to the local relaxation instead of being dropped.
-    assert os.path.exists(logfile)
-    debug_messages = [record.getMessage() for record in _records(caplog, logging.DEBUG)]
-    assert any("unknown_kwarg" in msg for msg in debug_messages)
 
 
 def test_simple_go_uses_rng_to_break_coincident_atoms(tmp_path) -> None:

@@ -25,6 +25,7 @@ from scgo.database import (
     extract_minima_from_database_file,
 )
 from scgo.database.discovery import list_discovered_db_paths_with_run
+from scgo.exceptions import SCGODatabaseError
 from scgo.metadata.atoms import get_tag
 from scgo.metadata.provenance import output_json_provenance
 from scgo.pair_selection_defaults import pair_selection_param_defaults
@@ -116,7 +117,7 @@ def load_minima_by_composition(
     target_formula = get_cluster_formula(composition) if composition else None
 
     db_files_with_run = list_discovered_db_paths_with_run(
-        base_dir, composition=composition, use_cache=False
+        base_dir, composition=composition
     )
 
     for db_file, run_id in db_files_with_run:
@@ -172,7 +173,7 @@ def load_minima_by_composition(
                 validate_stored_mobile_partition_metadata(atoms)
                 minima_by_formula[formula].append((energy, atoms))
 
-        except (ValueError, OSError) as e:
+        except (ValueError, OSError, SCGODatabaseError) as e:
             logger.warning(
                 "Failed to load minima from %s: %s: %s",
                 db_file,

@@ -39,7 +39,6 @@ def _calculate_target_allocations(
         target_template_raw = int(n_structures * template_scaling)
         targets["template"] = min(
             target_template_raw,
-            2 * n_templates,  # Cap at 2 per template
             n_structures,
             n_templates,  # Never ask for more template slots than templates exist
         )
@@ -78,7 +77,7 @@ def _distribute_remaining(
 
     # Prefer filling up to caps (templates first, then seeds, then exact)
     if n_templates > 0:
-        template_cap = 2 * n_templates
+        template_cap = n_templates
         if targets["template"] < template_cap:
             add = min(remaining, template_cap - targets["template"])
             targets["template"] += add
@@ -184,12 +183,12 @@ def _generate_allocations_list(
         needed = targets["template"] - current_count
 
         if needed > 0:
-            for _ in range(needed):
-                weights = [1.0 / (1 + c) for c in template_usage_count]
-                probs = np.array(weights) / sum(weights)
-                idx = rng.choice(n_templates, p=probs)
-                allocations.append(("template", idx))
-                template_usage_count[idx] += 1
+            unused = [i for i, c in enumerate(template_usage_count) if c == 0]
+            chosen = rng.choice(unused, size=needed, replace=False)
+            for idx in np.atleast_1d(chosen):
+                idx_i = int(idx)
+                allocations.append(("template", idx_i))
+                template_usage_count[idx_i] += 1
 
     # 2. Seed allocations
     remaining = n_structures - len(allocations)

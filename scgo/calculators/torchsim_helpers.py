@@ -37,7 +37,7 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.metadata.atoms import set_tags
-from scgo.metadata.provenance import is_cuda_oom_error
+from scgo.utils.cuda import is_cuda_oom_error
 from scgo.utils.helpers import copy_atoms, ensure_float64_forces
 from scgo.utils.logging import (
     drain_inductor_filelock_summary,
@@ -1117,7 +1117,7 @@ class TorchSimBatchRelaxer:
 
     @staticmethod
     def _is_cuda_oom_error(exc: BaseException) -> bool:
-        """True for a genuine GPU OOM (delegates to provenance.is_cuda_oom_error)."""
+        """True for a genuine GPU OOM."""
         return is_cuda_oom_error(exc)
 
     def _autobatcher_probe_cap(self) -> int:

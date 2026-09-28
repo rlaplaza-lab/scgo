@@ -31,7 +31,7 @@ from scgo.database.exceptions import DatabaseSetupError
 from scgo.database.registry import get_registry
 from scgo.database.streaming import iter_database_minima, iter_relaxed_structures
 from scgo.database.sync import PRESET_AGGRESSIVE, database_retry
-from scgo.exceptions import SCGOValidationError
+from scgo.exceptions import SCGODatabaseError, SCGOValidationError
 from scgo.metadata.atoms import ensure_final_id, get_tag, set_tags
 from scgo.metadata.db_stamp import is_scgo_db, stamp_db
 from scgo.metadata.run_dir import load_run_dir_record, resolve_run_id_from_db_path
@@ -160,8 +160,10 @@ def _ensure_database_indices(
             )
         else:
             logger.debug("Could not create all indices on %s: %s", db_path, e)
-    except OSError:
-        logger.exception("Unexpected error creating indices on %s", db_path)
+    except OSError as e:
+        raise DatabaseSetupError(
+            f"Unexpected error creating indices on {db_path}: {e}"
+        ) from e
 
 
 def _register_database_best_effort(
@@ -364,7 +366,9 @@ def setup_database(
         try:
             stamp_db(db_file)
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
-            logger.warning("Failed to stamp SCGO database %s: %s", db_file, e)
+            raise DatabaseSetupError(
+                f"Failed to stamp SCGO database {db_file}: {e}"
+            ) from e
 
         _register_database_best_effort(output_dir_str, db_file, atoms_template, run_id)
 
@@ -450,8 +454,9 @@ def _extract_structures_from_db(
             operation_name=f"extract structures from {db_path}",
         )
     except (sqlite3.DatabaseError, OSError, ValueError, AttributeError) as e:
-        logger.warning("Failed to extract structures from %s: %s", db_path, e)
-        return []
+        raise SCGODatabaseError(
+            f"Failed to extract structures from {db_path}: {e}"
+        ) from e
 
 
 def extract_minima_from_database_file(
@@ -499,7 +504,6 @@ def load_previous_run_results(
     discovered_entries = list_discovered_db_paths_with_run(
         base_output_dir,
         composition=composition,
-        use_cache=True,
         db_filename=db_filename,
     )
 
@@ -533,9 +537,17 @@ def load_previous_run_results(
     logger.info("Loading %s databases sequentially", len(all_db_files))
 
     for db_path, run_id in all_db_files:
-        minima = extract_minima_from_database_file(
-            db_path, run_id or "", require_final=prefer_final_unique
-        )
+        try:
+            minima = extract_minima_from_database_file(
+                db_path, run_id or "", require_final=prefer_final_unique
+            )
+        except SCGODatabaseError as e:
+            logger.warning(
+                "Skipping previous-run database %s: %s",
+                db_path,
+                e,
+            )
+            continue
         filtered_minima = _filter_minima_by_composition(minima, composition)
         all_minima.extend(filtered_minima)
         if filtered_minima:

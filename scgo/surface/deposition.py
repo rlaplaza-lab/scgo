@@ -368,19 +368,29 @@ def _place_cluster_above_slab(
     cf = config.structure_connectivity_factor
 
     slab_symbols = slab.get_chemical_symbols()
-    slab_radius = get_covalent_radius(slab_symbols[0]) if slab_symbols else 1.36
+    if not slab_symbols:
+        raise SCGOValidationError(
+            "Cannot estimate deposition height: slab has no atoms"
+        )
+    slab_radius = get_covalent_radius(slab_symbols[0])
 
     if cluster_atomic_numbers is not None and len(cluster_atomic_numbers) > 0:
         number_to_symbol = {v: k for k, v in ase_atomic_numbers.items()}
 
         unique_atomic_numbers = set(cluster_atomic_numbers)
-        cluster_radii = [
-            get_covalent_radius(number_to_symbol.get(int(z), str(int(z))))
-            for z in unique_atomic_numbers
-        ]
-        cluster_radius_est = max(cluster_radii) if cluster_radii else 1.36
+        cluster_radii = []
+        for z in unique_atomic_numbers:
+            symbol = number_to_symbol.get(int(z))
+            if symbol is None:
+                raise SCGOValidationError(
+                    f"Cannot estimate deposition height: unknown atomic number {z}"
+                )
+            cluster_radii.append(get_covalent_radius(symbol))
+        cluster_radius_est = max(cluster_radii)
     else:
-        cluster_radius_est = 1.36
+        raise SCGOValidationError(
+            "Cannot estimate deposition height: cluster has no atomic numbers"
+        )
 
     connectivity_threshold = max_connectivity_scale(
         normalize_connectivity_factor(cf)
@@ -492,6 +502,32 @@ def create_deposited_cluster(
                     continue
                 if atoms_too_close_two_sets(mobile, slab, blmin):
                     continue
+                n_slab = len(slab)
+                connectivity_factor = resolve_connectivity_factor(
+                    None,
+                    cluster_adsorbate_config=cluster_adsorbate_config,
+                    surface_config=config,
+                )
+                ok, err = validate_supported_cluster_deposit(
+                    combined,
+                    n_slab,
+                    surface_normal_axis=config.surface_normal_axis,
+                    use_mic=bool(config.comparator_use_mic),
+                    connectivity_factor=connectivity_factor,
+                    n_core_mobile=0,
+                    adsorbate_fragment_lengths=list(
+                        adsorbate_definition.adsorbate_fragment_lengths
+                    ),
+                    allow_cluster_fragmentation=True,
+                    allow_adsorbate_surface_detachment=True,
+                )
+                if not ok:
+                    logger.debug(
+                        "Rejected adsorbate-only deposit by supported-cluster "
+                        "check: %s",
+                        err,
+                    )
+                    continue
                 return combined
             else:
                 cluster_seed = build_hierarchical_core_fragment_cluster(
@@ -558,6 +594,16 @@ def create_deposited_cluster(
             surface_normal_axis=config.surface_normal_axis,
             use_mic=bool(config.comparator_use_mic),
             connectivity_factor=connectivity_factor,
+            n_core_mobile=(
+                int(adsorbate_definition.n_core)
+                if adsorbate_definition is not None
+                else None
+            ),
+            adsorbate_fragment_lengths=(
+                list(adsorbate_definition.adsorbate_fragment_lengths)
+                if adsorbate_definition is not None
+                else None
+            ),
         )
         if not ok:
             logger.debug(

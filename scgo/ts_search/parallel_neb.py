@@ -13,7 +13,7 @@ from ase.optimize import FIRE
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import DEFAULT_FMAX_THRESHOLD
 from scgo.exceptions import SCGOValidationError
-from scgo.metadata.provenance import is_cuda_oom_error
+from scgo.utils.cuda import is_cuda_oom_error
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import log_neb_search_summaries
 from scgo.utils.run_helpers import cleanup_torch_cuda
@@ -111,40 +111,11 @@ def _apply_band_cap(chunks: list[list[int]], band_cap: int | None) -> list[list[
     return capped
 
 
-# The soft sentinel "NEB did not converge after N steps" is the only error text
-# that stays climb-eligible: a band that merely exhausted stage-1's half budget
-# is the normal interior-max IDPP case and MUST still proceed to the climb pass.
-# Every other non-empty error (non-finite forces, "not processed", CUDA OOM, or
-# any arbitrary exception message) marks a hard failure.
-_STAGE1_SOFT_NONCONVERGENCE = "did not converge"
-
-
 def _stage1_band_climb_eligible(summary: dict[str, Any]) -> bool:
-    """Return True when a stage-1 band should proceed to the CI-NEB climb pass.
-
-    A band is climb-eligible when it actually took at least one optimizer step
-    and did not *hard*-fail. The previous ``not summary.get("error")`` test
-    filtered out every band that merely exhausted stage-1's half budget (which
-    is stamped ``error="NEB did not converge after N steps"``), so in the normal
-    case no band ever climbed.
-
-    Preference order:
-
-    * the explicit ``summary["failed"]`` boolean set by
-      :meth:`ParallelNEBBatch.run_optimization` (``neb_idx in self.failed_nebs``);
-    * a string sniff of ``summary["error"]`` as a fallback for summaries produced
-      outside ``run_optimization`` (e.g. the OOM-retry stubs), where only an
-      empty error or the soft "did not converge" sentinel stays climb-eligible
-      and any other error text is treated as a hard failure.
-    """
+    """True when stage-1 should climb: steps>0 and ``failed`` is explicitly False."""
     if int(summary.get("steps_taken") or 0) <= 0:
         return False
-    if "failed" in summary:
-        return not bool(summary["failed"])
-    error_text = str(summary.get("error") or "").lower()
-    if not error_text:
-        return True
-    return _STAGE1_SOFT_NONCONVERGENCE in error_text
+    return not bool(summary.get("failed", True))
 
 
 def _evaluate_bands_in_chunks(
@@ -448,7 +419,7 @@ class ParallelNEBBatch:
 
         # Final FIRE.step() invalidates SinglePoint caches on moved images.
         # Refresh PES at the final geometries so barrier finalize can read energies.
-        self._refresh_pes_after_optimization()
+        self._refresh_pes_after_optimization(results)
 
         logger.debug(
             "Parallel NEB batch complete: %d steps, %d converged, %d failed",
@@ -459,11 +430,8 @@ class ParallelNEBBatch:
 
         return results
 
-    def _refresh_pes_after_optimization(self) -> None:
-        """Re-evaluate images of every non-failed NEB at their final positions.
-
-        No optimizer step is taken; failed bands are skipped.
-        """
+    def _refresh_pes_after_optimization(self, results: list[dict[str, Any]]) -> None:
+        """Re-evaluate non-failed NEB images; refresh errors mark bands failed."""
         unique_images: list[Atoms] = []
         unique_index: dict[tuple, int] = {}
         neb_image_map: list[tuple[int, int, int]] = []
@@ -484,10 +452,15 @@ class ParallelNEBBatch:
         try:
             unique_results = self.relaxer.relax_batch(unique_images, steps=0)
         except (RuntimeError, ValueError) as e:
-            logger.warning(
-                "Final NEB PES refresh failed (%s); finalize will use cached energies if present",
-                e,
-            )
+            msg = f"Final NEB PES refresh failed: {e}"
+            logger.warning("%s; marking remaining bands as failed", msg)
+            for neb_idx in range(len(self.neb_instances)):
+                if neb_idx in self.failed_nebs:
+                    continue
+                self.failed_nebs[neb_idx] = msg
+                results[neb_idx]["failed"] = True
+                results[neb_idx]["converged"] = False
+                results[neb_idx]["error"] = msg
             return
 
         for neb_idx, img_idx, unique_slot in neb_image_map:
@@ -881,6 +854,7 @@ def run_parallel_neb_search(
                             "final_fmax": None,
                             "steps_taken": 0,
                             "error": str(exc),
+                            "failed": True,
                         }
                         for _ in sub_chunk
                     ]

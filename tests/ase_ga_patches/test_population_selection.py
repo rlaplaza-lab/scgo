@@ -36,8 +36,7 @@ def _make_candidate(symbols, raw_score, confid, relax_id):
     a = Atoms(symbols)
     a.set_cell([10.0, 10.0, 10.0])
     a.set_pbc(False)
-    # Add metadata used by get_raw_score
-    set_tags(a, raw_score=raw_score)
+    set_tags(a, raw_score=raw_score, ga_eligible=True)
     a.info["confid"] = confid
     a.info["relax_id"] = relax_id
     return a
