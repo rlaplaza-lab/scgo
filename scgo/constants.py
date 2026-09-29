@@ -11,8 +11,13 @@ MIN_ATOMIC_DISTANCE_WARNING: float = 0.5
 BOLTZMANN_K_EV_PER_K: float = 8.617e-5
 """Boltzmann constant (eV/K)."""
 
-DEFAULT_ENERGY_TOLERANCE: float = 0.02
-"""Default energy tolerance (eV)."""
+DEFAULT_ENERGY_TOLERANCE: float = 0.05
+"""Default energy tolerance (eV) for uniqueness / deduplication.
+
+Matched to typical residual energy scatter at the default local-relaxation
+``fmax`` of :data:`DEFAULT_FMAX_THRESHOLD` (0.05 eV/Å); the units differ, but
+independently relaxed copies of the same isomer often differ by tens of meV.
+"""
 
 DEFAULT_COMPARATOR_TOL: float = 0.015
 """Cumulative structure-comparator difference tolerance (normalized, unitless)."""
@@ -58,6 +63,14 @@ DEFAULT_FMAX_THRESHOLD: float = 0.05
 
 DEFAULT_NEB_TANGENT_METHOD: str = "improvedtangent"
 """ASE :class:`ase.mep.neb.NEB` tangent method used by default."""
+
+NEB_RIGID_FRAGMENT_TOLERANCE_A: float = 0.05
+"""Endpoint distance agreement (Å) for treating an adsorbate fragment as rigid.
+
+Used by rigid-pose interpolation and FixBondLengths restore. Distinct from the
+diagnostic ``neb_interpolation_bond_tolerance_a`` (default 0.5 Å), which only
+warns when interior images stretch frozen bonds.
+"""
 
 SURFACE_GA_MIN_LOCAL_RELAX_STEPS: int = 400
 """Minimum local-relaxation steps for GA with ``surface_config`` (slab adsorption)."""

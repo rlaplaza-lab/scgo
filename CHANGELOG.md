@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Default uniqueness energy tolerance raised to 0.05 eV**
+  (`DEFAULT_ENERGY_TOLERANCE`). Independently relaxed copies of the same
+  isomer often differ by tens of meV at the default `fmax` of 0.05 eV/Å; the
+  previous 0.02 eV gate left near-copies as "unique". Geometry gates are
+  unchanged. Applies to GO `energy_tolerance` and TS
+  `minima_energy_tolerance` / `ts_energy_tolerance`.
 - **Bounded genetic-operator retries cut parallel offspring walltime.** Batch
   offspring generation waits on the slowest job, so unbounded inner retry
   loops dominated generation time whenever a parent was hopeless (dense,

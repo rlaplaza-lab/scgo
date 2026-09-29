@@ -5,7 +5,7 @@ Global optimization will find the same isomer more than once. SCGO keeps a
 structure only if it is **new in energy and in shape**. Both must match before
 two results are treated as duplicates:
 
-1. Energies differ by at most ``0.02`` eV (``energy_tolerance``).
+1. Energies differ by at most ``0.05`` eV (``energy_tolerance``).
 2. The **moving** atoms have the same geometry: sorted interatomic distances
    agree closely (no single distance off by more than ``0.7`` Å; tighter gates
    apply to supported clusters — see below).
@@ -102,7 +102,7 @@ runs trivial gas clusters and always uses the plain window):
      - Default
      - Meaning
    * - ``energy_tolerance``
-     - ``0.02`` eV
+     - ``0.05`` eV
      - How close two energies must be to even compare shapes
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å (``0.45`` for supported clusters)
