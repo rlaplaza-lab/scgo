@@ -15,7 +15,7 @@ import numpy as np
 from ase.calculators.emt import EMT
 
 from scgo.cluster_adsorbate.config import resolve_cluster_adsorbate_config
-from scgo.constants import DEFAULT_FMAX_THRESHOLD, SURFACE_GA_MIN_LOCAL_RELAX_STEPS
+from scgo.constants import SURFACE_GA_MIN_LOCAL_RELAX_STEPS
 from scgo.exceptions import (
     SCGOValidationError,
 )
@@ -182,9 +182,7 @@ def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
         return default_params
 
     # copy_base=False mutates default_params; capture calculator first.
-    default_calc = _normalize_calculator_name(
-        str(default_params.get("calculator", "MACE"))
-    )
+    default_calc = _normalize_calculator_name(str(default_params["calculator"]))
     merged = deep_merge_dicts(default_params, params, copy_base=False)
     if "calculator" in params:
         user_calc = _normalize_calculator_name(str(params["calculator"]))
@@ -754,10 +752,10 @@ def log_configuration(
 
     logger.info(
         "SCGO config: validate_with_hessian=%s check_hessian=%s fmax_threshold=%s imag_freq_threshold=%s",
-        params.get("validate_with_hessian", False),
-        params.get("check_hessian", True),
-        params.get("fmax_threshold", DEFAULT_FMAX_THRESHOLD),
-        params.get("imag_freq_threshold", 50.0),
+        params["validate_with_hessian"],
+        params["check_hessian"],
+        params["fmax_threshold"],
+        params["imag_freq_threshold"],
     )
 
     def _format_optimizer_log_value(key: str, value: Any) -> Any:

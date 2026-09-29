@@ -107,7 +107,7 @@ def _validate_gas_connectivity_policy(
     use_mic: bool,
 ) -> tuple[bool, str]:
     """Non-surface path: the whole structure must be one connected component."""
-    components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
+    components = _find_connected_components(atoms, connectivity_factor, use_mic)
     if len(components) != 1:
         return False, _not_connected_message(len(components))
     return True, ""
@@ -149,7 +149,7 @@ def _validate_surface_connectivity_policy(
             stacking_cutoff_a=slab_stacking_cutoff_a,
         )
 
-    components, _ = _find_connected_components(mobile, connectivity_factor, use_mic)
+    components = _find_connected_components(mobile, connectivity_factor, use_mic)
     subgroups = list(components.values())
     allow_split = allow_cluster_fragmentation or allow_adsorbate_surface_detachment
 
@@ -549,7 +549,7 @@ def _validate_input_adsorbate_fragments_connected(
     for idx, frag in enumerate(adsorbates):
         if len(frag) <= 1:
             continue
-        components, _ = _find_connected_components(
+        components = _find_connected_components(
             frag,
             connectivity_factor=CONNECTIVITY_FACTOR,
             use_mic=False,

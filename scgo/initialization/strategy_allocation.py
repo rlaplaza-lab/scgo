@@ -163,7 +163,6 @@ def _generate_allocations_list(
     templates: list[Atoms],
     n_seed_combinations: int,
     rng: np.random.Generator,
-    n_exact: int = 0,
 ) -> list[tuple[str, int | None]]:
     """Generate the list of allocation tuples from target counts."""
     allocations: list[tuple[str, int | None]] = []
@@ -236,7 +235,7 @@ def _allocate_initialization_strategies(
 
     # 3. Generate actual allocations list
     allocations = _generate_allocations_list(
-        targets, n_structures, templates, n_seed_combinations, rng, n_exact
+        targets, n_structures, templates, n_seed_combinations, rng
     )
 
     # Logging (include single-structure runs for operational visibility)

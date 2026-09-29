@@ -15,7 +15,6 @@ from typing import Any, Literal
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
-from scgo.constants import DEFAULT_FMAX_THRESHOLD
 from scgo.exceptions import (
     SCGODatabaseError,
     SCGOFileError,
@@ -150,7 +149,7 @@ def _run_go_trials(
     params = _prepare_go_params(params)
 
     # Validate calculator availability
-    calculator_name = params.get("calculator", "MACE")
+    calculator_name = params["calculator"]
     _ = get_calculator_class(calculator_name)
 
     seed = _resolve_go_seed(seed, params)
@@ -244,14 +243,14 @@ def _run_go_trials(
             if calculator_for_global_optimization is not None
             else get_calculator_class(params["calculator"])(**calculator_kwargs)
         ),
-        validate_with_hessian=params.get("validate_with_hessian", False),
-        fmax_threshold=params.get("fmax_threshold", DEFAULT_FMAX_THRESHOLD),
-        check_hessian=params.get("check_hessian", True),
-        imag_freq_threshold=params.get("imag_freq_threshold", 50.0),
+        validate_with_hessian=params["validate_with_hessian"],
+        fmax_threshold=params["fmax_threshold"],
+        check_hessian=params["check_hessian"],
+        imag_freq_threshold=params["imag_freq_threshold"],
         validation_n_jobs=inherit_n_jobs(
             params.get("validation_n_jobs"), params.get("n_jobs")
         ),
-        tag_final_minima=params.get("tag_final_minima", True),
+        tag_final_minima=params["tag_final_minima"],
         rng=rng,
         verbosity=verbosity,
         run_id=run_id,

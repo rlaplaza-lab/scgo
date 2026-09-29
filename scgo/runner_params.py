@@ -380,15 +380,14 @@ def _resolve_ts_params(
     surface_config: SurfaceSystemConfig | None = None,
     go_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge TS params with defaults; align calculator with merged GO when provided."""
-    merged_go = initialize_params(go_params) if go_params is not None else None
-    if merged_go is not None:
-        _reject_slot_identity_keys(merged_go)
+    """Merge TS params with defaults; align calculator with already-merged GO when provided."""
+    if go_params is not None:
+        _reject_slot_identity_keys(go_params)
     merged = initialize_ts_params(
         ts_params,
         system_type=system_type,
         surface_config=surface_config,
-        go_params=merged_go,
+        go_params=go_params,
     )
     if surface_config is not None and merged.get("surface_config") is None:
         merged = _copy_params(merged)

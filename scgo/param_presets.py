@@ -11,6 +11,7 @@ from scgo.constants import (
     DEFAULT_CROSS_WEIGHT,
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_FMAX_THRESHOLD,
+    DEFAULT_IMAG_FREQ_THRESHOLD,
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_PAIR_COR_MAX,
     DEFAULT_TS_PAIR_COR_MAX,
@@ -281,7 +282,7 @@ def _get_default_params_template() -> GLOptimizerParams:
         "calculator_kwargs": {"model_name": "mace_matpes_0"},
         "fmax_threshold": DEFAULT_FMAX_THRESHOLD,
         "check_hessian": True,
-        "imag_freq_threshold": 50.0,
+        "imag_freq_threshold": DEFAULT_IMAG_FREQ_THRESHOLD,
         "n_jobs": DEFAULT_N_JOBS,  # Single CPU knob (see DEFAULT_N_JOBS); opt in with -1/-2
         "tag_final_minima": True,
         "connectivity_factor": CONNECTIVITY_FACTOR,  # Default for cluster validation
@@ -406,7 +407,8 @@ TS_POSTPROCESS_DEFAULTS: dict[str, Any] = {
 }
 """System-type-agnostic TS post-processing defaults (single specification).
 
-Consumed by ``scgo.utils.ts_runner_kwargs.coerce_ts_params_to_runner_kwargs``;
+Consumed by :func:`get_ts_search_params` and
+``scgo.utils.ts_runner_kwargs.coerce_ts_params_to_runner_kwargs``;
 ``run_transition_state_search`` keeps importing ``DEFAULT_ENERGY_TOLERANCE``
 directly for its signature.
 """
@@ -887,11 +889,8 @@ def get_ts_search_params(
         # parallel_neb_max_bands defaults to 4 bands/force-batch (set in
         # _SURFACE_TS_NEB_DEFAULTS); lower it for very large slab cells.
         "use_parallel_neb": True,
-        "dedupe_minima": True,
-        "minima_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
-        "dedupe_ts": True,
-        "ts_energy_tolerance": DEFAULT_ENERGY_TOLERANCE,
     }
+    params.update(TS_POSTPROCESS_DEFAULTS)
     params.update(
         pair_selection_param_defaults(
             surface_aware=policy.uses_surface,

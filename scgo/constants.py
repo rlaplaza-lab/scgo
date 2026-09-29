@@ -61,6 +61,9 @@ value still equals :data:`DEFAULT_PAIR_COR_MAX`.
 DEFAULT_FMAX_THRESHOLD: float = 0.05
 """Default local-relaxation / Hessian-validation force threshold (eV/Å)."""
 
+DEFAULT_IMAG_FREQ_THRESHOLD: float = 50.0
+"""Default imaginary-frequency magnitude cutoff for Hessian validation (cm^-1)."""
+
 DEFAULT_NEB_TANGENT_METHOD: str = "improvedtangent"
 """ASE :class:`ase.mep.neb.NEB` tangent method used by default."""
 

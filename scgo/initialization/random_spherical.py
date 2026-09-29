@@ -540,8 +540,6 @@ def random_spherical(
         raise SCGOValidationError(f"cell_side must be positive, got {cell_side}")
 
     n_atoms = len(composition)
-    if n_atoms == 0:
-        return Atoms()
 
     steric_floor = resolve_steric_floor(min_distance_factor, blmin_ratio)
     _raise_if_connectivity_below_steric_floor(connectivity_factor, steric_floor)
@@ -587,26 +585,6 @@ def random_spherical(
                 raise SCGOValidationError(error_msg)
             continue  # Try again with different random placement
 
-        if len(final_atoms) > 2 and not is_cluster_connected(
-            final_atoms, connectivity_factor, use_mic=False
-        ):
-            if retry_attempt == max_connectivity_retries - 1:
-                diagnostics = get_structure_diagnostics(
-                    final_atoms, steric_floor, connectivity_factor, use_mic=False
-                )
-                error_msg = format_placement_error_message(
-                    context=f"create connected cluster after {max_connectivity_retries} attempts",
-                    composition=composition,
-                    n_atoms=n_atoms,
-                    placement_radius_scaling=placement_radius_scaling,
-                    min_distance_factor=min_distance_factor,
-                    connectivity_factor=connectivity_factor,
-                    diagnostics=diagnostics,
-                    additional_info="The cluster is disconnected.",
-                )
-                raise SCGOValidationError(error_msg)
-            continue  # Try again with different random placement
-
         final_atoms.center()
 
         validated_atoms, is_valid, _ = validate_cluster(
@@ -615,20 +593,10 @@ def random_spherical(
             min_distance_factor=steric_floor,
             connectivity_factor=connectivity_factor,
             sort_atoms=True,
-            raise_on_failure=False,
+            raise_on_failure=(retry_attempt == max_connectivity_retries - 1),
             source="random_spherical",
         )
         if not is_valid:
-            if retry_attempt == max_connectivity_retries - 1:
-                validate_cluster(
-                    final_atoms,
-                    composition=composition,
-                    min_distance_factor=steric_floor,
-                    connectivity_factor=connectivity_factor,
-                    sort_atoms=True,
-                    raise_on_failure=True,
-                    source="random_spherical",
-                )
             continue
 
         if blmin_ratio is not None and not cluster_passes_ga_blmin(
@@ -641,6 +609,7 @@ def random_spherical(
                 )
             continue
 
+        validated_atoms.info["scgo_validation_complete"] = True
         return validated_atoms
 
     # Should never reach here; raise to indicate placement failure
@@ -771,6 +740,7 @@ def grow_from_seed(
         ):
             return None
 
+        validated_atoms.info["scgo_validation_complete"] = True
         return validated_atoms
 
     # If growth could not complete above, explicitly signal failure
@@ -851,7 +821,6 @@ def _add_atoms_to_cluster_iteratively(
             connectivity_factor,
             is_two_atom_cluster,
             max_attempts_per_atom,
-            logger,
             base_atoms,
             steric_floor=steric_floor,
         )
@@ -866,7 +835,6 @@ def _add_atoms_to_cluster_iteratively(
         rng,
         connectivity_factor,
         max_attempts_per_atom,
-        logger,
         base_atoms,
         steric_floor=steric_floor,
     )
@@ -882,7 +850,6 @@ def _add_atoms_single_mode(
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     is_two_atom_cluster: bool,
     max_attempts_per_atom: int,
-    logger,
     base_atoms: Atoms,
     *,
     steric_floor: float | None = None,
@@ -1156,7 +1123,6 @@ def _add_atoms_batch_mode(
     rng: np.random.Generator,
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
     max_attempts_per_atom: int,
-    logger,
     base_atoms: Atoms,
     *,
     steric_floor: float | None = None,
@@ -1254,7 +1220,6 @@ def _add_atoms_batch_mode(
                 connectivity_factor,
                 False,
                 max_attempts_per_atom,
-                logger,
                 base_atoms,
                 steric_floor=steric_floor,
             )

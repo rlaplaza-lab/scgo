@@ -1432,16 +1432,7 @@ def _generate_single_structure_internal(
 
     if strategy == "random_spherical":
         atoms = _run_random_spherical_strategy()
-        validated_atoms, _, _ = validate_cluster(
-            atoms,
-            composition=composition,
-            min_distance_factor=min_distance_factor,
-            connectivity_factor=connectivity_factor,
-            sort_atoms=True,
-            raise_on_failure=True,
-            source="random_spherical",
-        )
-        return validated_atoms, "random_spherical", None
+        return atoms, "random_spherical", None
 
     sequence = [strategy, "random_spherical"]
     strategy_functions = [(name, strategies[name]) for name in sequence]

@@ -107,7 +107,7 @@ def validate_adsorbate_fragment_integrity(
             offset += frag_len
             continue
         fragment = atoms[frag_global_indices]
-        components, _ = _find_connected_components(
+        components = _find_connected_components(
             fragment,
             connectivity_factor=connectivity_factor,
             use_mic=use_mic,

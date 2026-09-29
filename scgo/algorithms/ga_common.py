@@ -170,6 +170,22 @@ def _copy_adsorbate_fragment_template(
     return None
 
 
+def _require_fragment_lengths(
+    adsorbate_definition: AdsorbateDefinition, n_ads: int
+) -> list[int]:
+    """Parse fragment lengths and require they sum to ``n_ads`` when adsorbate atoms exist."""
+    fragment_lengths = parse_positive_fragment_lengths(
+        adsorbate_definition.adsorbate_fragment_lengths
+    )
+    if n_ads > 0 and sum(fragment_lengths) != n_ads:
+        raise SCGOValidationError(
+            "adsorbate_fragment_lengths sum "
+            f"({sum(fragment_lengths)}) does not match adsorbate atom count "
+            f"({n_ads})"
+        )
+    return fragment_lengths
+
+
 def slab_ga_metadata_extras(
     surface_config: SurfaceSystemConfig | None, n_slab: int, system_type: SystemType
 ) -> dict[str, int | str | list[str]]:
@@ -202,15 +218,7 @@ def adsorbate_partition_metadata(
     )
     n_core = len(core_list)
     n_ads = len(ads_list)
-    fragment_lengths = parse_positive_fragment_lengths(
-        adsorbate_definition.adsorbate_fragment_lengths
-    )
-    if n_ads > 0 and sum(fragment_lengths) != n_ads:
-        raise SCGOValidationError(
-            "adsorbate_fragment_lengths sum "
-            f"({sum(fragment_lengths)}) does not match adsorbate atom count "
-            f"({n_ads})"
-        )
+    fragment_lengths = _require_fragment_lengths(adsorbate_definition, n_ads)
     return {
         "n_core_atoms": n_core,
         "n_adsorbate_fragment_atoms": n_ads,
@@ -411,17 +419,11 @@ def core_adsorbate_partition_details(
         adsorbate_definition,
         allow_empty_core=allow_empty_core,
     )
-    if counts is None or adsorbate_definition is None:
+    if counts is None:
         return None
     n_core, n_ads = counts
-    lengths = parse_positive_fragment_lengths(
-        adsorbate_definition.adsorbate_fragment_lengths
-    )
-    if sum(lengths) != n_ads:
-        raise SCGOValidationError(
-            "adsorbate_fragment_lengths sum "
-            f"({sum(lengths)}) does not match adsorbate atom count ({n_ads})"
-        )
+    assert adsorbate_definition is not None
+    lengths = _require_fragment_lengths(adsorbate_definition, n_ads)
     return (n_core, lengths)
 
 
@@ -622,12 +624,8 @@ class ClusterStartGenerator(StartGenerator):
         self.n_jobs: int = resolve_n_jobs(n_jobs)
         self.system_type: SystemType = system_type
         self.adsorbate_definition = adsorbate_definition
-        self.adsorbate_fragment_template = (
-            [frag.copy() for frag in adsorbate_fragment_template]
-            if isinstance(adsorbate_fragment_template, list)
-            else adsorbate_fragment_template.copy()
-            if adsorbate_fragment_template is not None
-            else None
+        self.adsorbate_fragment_template = _copy_adsorbate_fragment_template(
+            adsorbate_fragment_template
         )
         self.cluster_adsorbate_config = cluster_adsorbate_config
         self.max_hierarchical_attempts: int = max_hierarchical_attempts
@@ -1483,8 +1481,7 @@ def reseed_mutation_operator_rngs(
 ) -> None:
     """Assign fresh child RNGs to mutation operators in deterministic list order."""
     for op in operators:
-        if hasattr(op, "rng"):
-            op.rng = create_child_rng(rng)
+        op.rng = create_child_rng(rng)
 
 
 def update_mutation_weights(

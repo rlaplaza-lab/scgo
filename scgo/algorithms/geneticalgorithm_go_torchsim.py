@@ -290,10 +290,12 @@ def _pairing_last_attempt_count(pairing: Any) -> int:
     """
     if isinstance(pairing, DualCutAndSplicePairing):
         return max(
-            getattr(pairing.primary, "last_attempt_count", 0),
-            getattr(pairing.exploratory, "last_attempt_count", 0),
+            pairing.primary.last_attempt_count,
+            pairing.exploratory.last_attempt_count,
         )
-    return int(getattr(pairing, "last_attempt_count", 0))
+    if isinstance(pairing, CutAndSplicePairing):
+        return pairing.last_attempt_count
+    return 0
 
 
 def _build_offspring_worker(
@@ -1238,8 +1240,6 @@ def ga_go(
 
     t0_batch_build = perf_counter()
     if surface_mode:
-        if slab_ref is None:
-            raise TypeError("slab_ref is required in surface_mode")
         if policy.slab_is_search_target and not policy.has_adsorbate:
             start_generator = SurfaceSlabStartGenerator(
                 slab_ref,

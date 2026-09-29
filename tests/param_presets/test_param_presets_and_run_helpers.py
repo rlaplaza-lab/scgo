@@ -10,6 +10,8 @@ import pytest
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_ENERGY_TOLERANCE,
+    DEFAULT_FMAX_THRESHOLD,
+    DEFAULT_IMAG_FREQ_THRESHOLD,
     DEFAULT_PAIR_COR_MAX,
 )
 from scgo.exceptions import SCGOValidationError
@@ -638,8 +640,8 @@ class TestLogConfiguration:
             "calculator": "EMT",
             "validate_with_hessian": False,
             "check_hessian": True,
-            "fmax_threshold": 0.05,
-            "imag_freq_threshold": 50.0,
+            "fmax_threshold": DEFAULT_FMAX_THRESHOLD,
+            "imag_freq_threshold": DEFAULT_IMAG_FREQ_THRESHOLD,
         }
         optimizer_kwargs = {"niter": 10, "temperature": 0.01}
 
@@ -678,7 +680,13 @@ class TestLogConfiguration:
     def test_log_configuration_redacts_relaxer_model_dump(self, caplog):
         """Test log_configuration keeps relaxer logging compact."""
         caplog.set_level(logging.INFO)
-        params = {"calculator": "EMT"}
+        params = {
+            "calculator": "EMT",
+            "validate_with_hessian": False,
+            "check_hessian": True,
+            "fmax_threshold": DEFAULT_FMAX_THRESHOLD,
+            "imag_freq_threshold": DEFAULT_IMAG_FREQ_THRESHOLD,
+        }
 
         class _VerboseRelaxer:
             def __repr__(self):

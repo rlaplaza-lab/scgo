@@ -9,8 +9,6 @@ from scipy.spatial.distance import cdist
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
-    format_connectivity_factor,
-    normalize_connectivity_factor,
 )
 from scgo.utils.logging import get_logger
 
@@ -18,7 +16,6 @@ from .geometry_helpers import (
     _check_composition_feasibility,
     _generate_rotation_matrix,
     _set_cubic_cell_and_center,
-    analyze_disconnection,
     compute_bond_distance_params,
     get_covalent_radius,
     get_largest_facets,
@@ -187,22 +184,6 @@ def combine_seeds(
 
         combined_atoms.extend(seed_to_add)
         combined_atoms.center()
-
-        if not is_cluster_connected(combined_atoms, connectivity_factor, use_mic=False):
-            suggested_factor, analysis_msg = analyze_disconnection(
-                combined_atoms, connectivity_factor, use_mic=False
-            )
-            logger.warning(
-                "Seed %d placement created disconnected cluster. Current "
-                "connectivity_factor=%s. Analysis: %s. Suggested connectivity_factor: %.2f",
-                i + 1,
-                format_connectivity_factor(
-                    normalize_connectivity_factor(connectivity_factor)
-                ),
-                analysis_msg,
-                suggested_factor,
-            )
-            return None
 
     _set_cubic_cell_and_center(combined_atoms, cell_side)
 

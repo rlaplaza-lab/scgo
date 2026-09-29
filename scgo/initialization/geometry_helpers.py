@@ -930,12 +930,7 @@ def place_multi_atom_seed_on_facet(
         placed_seed.set_positions(rotated_positions)
 
     # Step 2: Translate the seed so its facet contacts the target facet
-    # Get the new facet position after rotation
-    new_facets = get_largest_facets(placed_seed, n_facets=1)
-    if new_facets:
-        new_facet_centroid, _, _ = new_facets[0]
-    else:
-        new_facet_centroid = placed_seed.get_center_of_mass()
+    new_facet_centroid, _, _ = get_largest_facets(placed_seed, n_facets=1)[0]
 
     # Calculate translation vector
     # The facet centroids may be inside the clusters, so we need separation
@@ -1055,7 +1050,7 @@ def _find_connected_components(
     *,
     dist: np.ndarray | None = None,
     radii: np.ndarray | None = None,
-) -> tuple[dict[int, list[int]], list[int]]:
+) -> dict[int, list[int]]:
     """Find connected components using Union-Find algorithm.
 
     Args:
@@ -1066,18 +1061,16 @@ def _find_connected_components(
         radii: Optional precomputed covalent-radii array
 
     Returns:
-        Tuple of (components dict mapping root to atom indices, parent list for Union-Find)
+        Components dict mapping root to atom indices
     """
     if len(atoms) <= 1:
-        return {0: [0] if len(atoms) == 1 else []}, list(range(len(atoms)))
+        return {0: [0] if len(atoms) == 1 else []}
 
     n_atoms = len(atoms)
     i_idx, j_idx = _bonded_pairs(
         atoms, connectivity_factor, use_mic, dist=dist, radii=radii
     )
-    components = _union_find_components(n_atoms, i_idx, j_idx)
-    parent = list(range(n_atoms))
-    return components, parent
+    return _union_find_components(n_atoms, i_idx, j_idx)
 
 
 def is_cluster_connected(
@@ -1107,7 +1100,7 @@ def is_cluster_connected(
     Returns:
         True if all atoms are in one connected component, False otherwise.
     """
-    components, _ = _find_connected_components(atoms, connectivity_factor, use_mic)
+    components = _find_connected_components(atoms, connectivity_factor, use_mic)
     return len(components) <= 1
 
 
@@ -1133,7 +1126,7 @@ def analyze_disconnection(
     if len(atoms) <= 1:
         return max_connectivity_scale(cf), "Single atom or empty cluster"
 
-    components, _ = _find_connected_components(atoms, cf, use_mic)
+    components = _find_connected_components(atoms, cf, use_mic)
 
     if len(components) <= 1:
         return max_connectivity_scale(cf), "Cluster is connected"
@@ -1371,7 +1364,7 @@ def get_structure_diagnostics(
         )
     has_clashes = bool(clash_details)
 
-    components, _ = _find_connected_components(
+    components = _find_connected_components(
         atoms, cf, use_mic, dist=dist, radii=radii_arr
     )
     n_components = len(components)

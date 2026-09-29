@@ -32,13 +32,14 @@ from scgo.constants import (
     DEFAULT_FMAX_THRESHOLD,
     DEFAULT_PAIR_COR_MAX,
 )
-from scgo.database import HPC_DATABASE_EXCEPTIONS, setup_database
+from scgo.database import HPC_DATABASE_EXCEPTIONS, close_data_connection, setup_database
 from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.surface.partition import resolve_slab_search_partition
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
@@ -386,19 +387,10 @@ def bh_go(
     # bottom prefix is the deposit boundary in structural gates.
     n_slab_deposit: int | None = None
     if surface_mode:
+        assert surface_config is not None
         if n_slab <= 0:
-            if surface_config is None:
-                raise SCGOValidationError(
-                    "Surface system type requires n_slab > 0 or surface_config."
-                )
             n_slab = len(surface_config.slab)
         if policy.slab_is_search_target:
-            from scgo.surface.partition import resolve_slab_search_partition
-
-            if surface_config is None:
-                raise SCGOValidationError(
-                    f"system_type={system_type!r} requires surface_config."
-                )
             part = resolve_slab_search_partition(surface_config)
             movable_indices = list(range(part.n_fixed, len(atoms)))
             n_slab_deposit = int(part.n_fixed)
@@ -885,7 +877,4 @@ def bh_go(
         return unique_minima
 
     finally:
-        # Clean up database connection
-        from scgo.database import close_data_connection
-
         close_data_connection(da, log_errors=False)

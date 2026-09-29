@@ -15,6 +15,7 @@ from collections import Counter
 
 import numpy as np
 from ase import Atoms
+from scipy.spatial.distance import pdist
 
 from scgo.database.cache import get_global_cache
 from scgo.database.helpers import extract_minima_from_database_file
@@ -197,8 +198,6 @@ def _compute_files_signature(files: list[str]) -> tuple[tuple[str, float], ...]:
 
 def get_structure_signature(atoms: Atoms, precision: int = 4) -> tuple[float, ...]:
     """Create a signature based on sorted interatomic distances."""
-    from scipy.spatial.distance import pdist
-
     positions = atoms.get_positions()
     if len(positions) <= 1:
         return ()

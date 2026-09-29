@@ -28,7 +28,11 @@ from scgo.algorithms import bh_go, ga_go, simple_go
 from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
-from scgo.constants import DEFAULT_ENERGY_TOLERANCE, DEFAULT_FMAX_THRESHOLD
+from scgo.constants import (
+    DEFAULT_ENERGY_TOLERANCE,
+    DEFAULT_FMAX_THRESHOLD,
+    DEFAULT_IMAG_FREQ_THRESHOLD,
+)
 from scgo.database import SCGODatabaseManager
 from scgo.exceptions import (
     SCGODatabaseError,
@@ -821,7 +825,7 @@ def run_trials(
     validate_with_hessian: bool = True,
     fmax_threshold: float = DEFAULT_FMAX_THRESHOLD,
     check_hessian: bool = True,
-    imag_freq_threshold: float = 50.0,
+    imag_freq_threshold: float = DEFAULT_IMAG_FREQ_THRESHOLD,
     validation_n_jobs: int | None = None,
     tag_final_minima: bool = True,
     verbosity: int = 1,
