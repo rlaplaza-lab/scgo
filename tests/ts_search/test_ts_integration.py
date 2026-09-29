@@ -641,6 +641,9 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
         neb_steps=50,
         # Override similarity tolerance to ensure the two Pt2 geometries are paired
         similarity_tolerance=1e-4,
+        # EMT single-point Pt2 energies differ by ~38 meV; keep both under the
+        # default 0.05 eV uniqueness energy gate so this test can exercise tagging.
+        minima_energy_tolerance=0.01,
     )
 
     # Results must be reported for each requested pair.
@@ -704,6 +707,7 @@ def test_run_transition_state_search_tags_non_ga_db_files(tmp_path):
         neb_n_images=3,
         neb_steps=50,
         similarity_tolerance=1e-4,
+        minima_energy_tolerance=0.01,
     )
 
     assert isinstance(results2, list)

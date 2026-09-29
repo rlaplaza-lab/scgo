@@ -669,8 +669,8 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
      - ``0.5``
      - Post-interpolation FixBondLengths stretch diagnostic (Å); warns, never
        raises. Applied on the serial, parallel, and IDPP-screen paths. Rigid
-       fragment agreement uses the tighter
-       :data:`~scgo.constants.NEB_RIGID_FRAGMENT_TOLERANCE_A` (0.05 Å).
+       fragment agreement uses the tighter ``NEB_RIGID_FRAGMENT_TOLERANCE_A``
+       (0.05 Å).
    * - ``layer_cluster_threshold_ang``
      - ``0.4``
      - Layer-clustering threshold (Å) used when resolving which slab layers

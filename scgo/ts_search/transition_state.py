@@ -1783,10 +1783,10 @@ def interpolate_path(
 
     When block sizes match and ``adsorbate_fragment_lengths`` are set, rigid
     adsorbate fragments (endpoint distances agreeing within
-    :data:`~scgo.constants.NEB_RIGID_FRAGMENT_TOLERANCE_A`) are kept out of
-    Cartesian IDPP: only the slab, cluster, and one binding anchor per fragment
-    are interpolated, then each fragment is rebuilt from a rigid pose about that
-    anchor so bond lengths stay exact and the fragment tracks the binding site.
+    ``NEB_RIGID_FRAGMENT_TOLERANCE_A``) are kept out of Cartesian IDPP: only the
+    slab, cluster, and one binding anchor per fragment are interpolated, then
+    each fragment is rebuilt from a rigid pose about that anchor so bond lengths
+    stay exact and the fragment tracks the binding site.
     ``neb_interpolation_bond_tolerance_a`` is only the post-interpolation
     FixBondLengths stretch diagnostic (warns, never raises).
     """
