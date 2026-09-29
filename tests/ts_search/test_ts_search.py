@@ -12,6 +12,7 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.constraints import FixAtoms, FixBondLengths
 
+from scgo.constants import NEB_RIGID_FRAGMENT_TOLERANCE_A
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.pair_selection_defaults import (
@@ -23,6 +24,7 @@ from scgo.system_types import SYSTEM_TYPE_POLICIES, get_system_policy
 from scgo.ts_search import transition_state_run as ts_run_mod
 from scgo.ts_search.transition_state import (
     _overlay_product_core,
+    _select_fragment_anchor,
     calculate_structure_similarity,
     find_transition_state,
     interpolate_path,
@@ -2215,3 +2217,309 @@ def test_interpolate_path_bond_check_warns_when_stretched(caplog):
             neb_interpolation_bond_tolerance_a=0.1,
         )
     assert any("FixBondLengths" in r.message for r in caplog.records)
+
+
+def _cluster_oh_pair(*, product_side: str = "side") -> tuple[Atoms, Atoms]:
+    """Pt8 cube with OH on the top face (reactant) and a side/rotated product."""
+    core = Atoms(
+        "Pt8",
+        positions=[
+            [i, j, k] for i in (0.0, 2.5) for j in (0.0, 2.5) for k in (0.0, 2.5)
+        ],
+    )
+    length = 0.97
+    oh_r = Atoms(
+        "OH",
+        positions=[
+            [1.25, 1.25, 2.5 + 1.8],
+            [1.25, 1.25, 2.5 + 1.8 + length],
+        ],
+    )
+    if product_side == "side":
+        oh_p = Atoms(
+            "OH",
+            positions=[
+                [2.5 + 1.8, 1.25, 1.25],
+                [2.5 + 1.8 + length, 1.25, 1.25],
+            ],
+        )
+    elif product_side == "rotated_90":
+        oh_p = Atoms(
+            "OH",
+            positions=[
+                [1.25, 1.25, 2.5 + 1.8],
+                [1.25 + length, 1.25, 2.5 + 1.8],
+            ],
+        )
+    else:
+        raise ValueError(product_side)
+    a1 = core.copy() + oh_r
+    a2 = core.copy() + oh_p
+    for atoms in (a1, a2):
+        atoms.set_constraint(FixBondLengths([(8, 9)]))
+    return a1, a2
+
+
+def test_interpolate_path_rigid_pose_keeps_dimer_off_cluster_chord() -> None:
+    """Anchor follows the binding site; bond length stays exact under IDPP."""
+    a1, a2 = _cluster_oh_pair(product_side="side")
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=5,
+        method="idpp",
+        align_endpoints=False,
+        n_slab=0,
+        n_core_mobile=8,
+        n_adsorbate_mobile=2,
+        adsorbate_fragment_lengths=[2],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    length = float(a1.get_distance(8, 9))
+    cluster_com = a1.get_positions()[:8].mean(axis=0)
+    o_r = a1.get_positions()[8]
+    h_r = a1.get_positions()[9]
+    o_p = a2.get_positions()[8]
+    h_p = a2.get_positions()[9]
+    com_chord_mid = 0.5 * (0.5 * (o_r + h_r) + 0.5 * (o_p + h_p))
+    chord_d = float(np.linalg.norm(com_chord_mid - cluster_com))
+    for img in images[1:-1]:
+        assert img.get_distance(8, 9) == pytest.approx(length, abs=1e-6)
+        anchor_d = float(np.linalg.norm(img.get_positions()[8] - cluster_com))
+        # IDPP keeps the binding atom outside the cube; a COM chord cuts closer.
+        assert anchor_d > chord_d
+
+
+def test_interpolate_path_rigid_pose_90deg_dimer_halfway_direction() -> None:
+    a1, a2 = _cluster_oh_pair(product_side="rotated_90")
+    length = float(a1.get_distance(8, 9))
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=1,
+        method="linear",
+        align_endpoints=False,
+        n_slab=0,
+        n_core_mobile=8,
+        n_adsorbate_mobile=2,
+        adsorbate_fragment_lengths=[2],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    mid = images[1]
+    assert mid.get_distance(8, 9) == pytest.approx(length, abs=1e-6)
+    bond = mid.get_positions()[9] - mid.get_positions()[8]
+    bond = bond / np.linalg.norm(bond)
+    # Halfway slerp of +z to +x is the normalized (1, 0, 1) direction.
+    expected = np.array([1.0, 0.0, 1.0])
+    expected = expected / np.linalg.norm(expected)
+    assert float(np.dot(bond, expected)) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_interpolate_path_rigid_pose_bent_fragment_exact_pairs() -> None:
+    """Water reorientation: all three pair distances stay at the reactant lengths."""
+    core = Atoms(
+        "Pt8",
+        positions=[
+            [i, j, k] for i in (0.0, 2.5) for j in (0.0, 2.5) for k in (0.0, 2.5)
+        ],
+    )
+    water_r = Atoms(
+        "OHH",
+        positions=[
+            [1.25, 1.25, 2.5 + 1.8],
+            [1.25 + 0.76, 1.25, 2.5 + 1.8 + 0.59],
+            [1.25 - 0.76, 1.25, 2.5 + 1.8 + 0.59],
+        ],
+    )
+    # Rotate 90° about z through O, then place on the +x face (real Kabsch).
+    water_p = water_r.copy()
+    pos = water_p.get_positions()
+    o = pos[0].copy()
+    rel = pos - o
+    rot90 = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    pos = o + rel @ rot90.T
+    shift = np.array([2.5 + 1.8, 1.25, 1.25]) - pos[0]
+    pos = pos + shift
+    water_p.set_positions(pos)
+    a1 = core.copy() + water_r
+    a2 = core.copy() + water_p
+    pairs = [(8, 9), (8, 10), (9, 10)]
+    for atoms in (a1, a2):
+        atoms.set_constraint(FixBondLengths(pairs))
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=5,
+        method="idpp",
+        align_endpoints=False,
+        n_slab=0,
+        n_core_mobile=8,
+        n_adsorbate_mobile=3,
+        adsorbate_fragment_lengths=[3],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    refs = {pair: float(a1.get_distance(*pair)) for pair in pairs}
+    cluster_com = a1.get_positions()[:8].mean(axis=0)
+    com_r = a1.get_positions()[8:11].mean(axis=0)
+    com_p = a2.get_positions()[8:11].mean(axis=0)
+    chord_d = float(np.linalg.norm(0.5 * (com_r + com_p) - cluster_com))
+    for img in images[1:-1]:
+        for pair, ref in refs.items():
+            assert img.get_distance(*pair) == pytest.approx(ref, abs=1e-6)
+        assert float(np.linalg.norm(img.get_positions()[8] - cluster_com)) > chord_d
+
+
+def test_interpolate_path_nonrigid_fragment_stays_cartesian_and_warns(caplog) -> None:
+    core = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    a1 = core.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 2.97]])
+    a2 = core.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 3.5]])
+    for atoms in (a1, a2):
+        atoms.set_constraint(FixBondLengths([(2, 3)]))
+    with caplog.at_level("WARNING", logger="scgo.ts_search.transition_state"):
+        images = interpolate_path(
+            a1,
+            a2,
+            n_images=3,
+            method="linear",
+            align_endpoints=False,
+            n_slab=0,
+            n_core_mobile=2,
+            n_adsorbate_mobile=2,
+            adsorbate_fragment_lengths=[2],
+            neb_interpolation_bond_tolerance_a=0.1,
+        )
+    assert any("FixBondLengths" in r.message for r in caplog.records)
+    # Changing length stays on the Cartesian path (midpoint bond between endpoints).
+    mid = images[len(images) // 2]
+    d_mid = float(mid.get_distance(2, 3))
+    assert d_mid == pytest.approx(0.5 * (0.97 + 1.5), abs=0.05)
+
+
+def test_interpolate_path_fixatoms_still_free_during_pose_interpolation() -> None:
+    """Slab FixAtoms must not freeze interpolation when the pose path is active."""
+    slab = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]],
+    )
+    a1 = slab.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 2.97]])
+    a2 = slab.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 2.97]])
+    # Move a "fixed" slab atom between endpoints; interpolation must follow it.
+    a2.positions[0, 0] += 0.4
+    for atoms in (a1, a2):
+        atoms.set_constraint([FixAtoms(indices=[0, 1]), FixBondLengths([(2, 3)])])
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=1,
+        method="linear",
+        align_endpoints=False,
+        n_slab=2,
+        n_core_mobile=0,
+        n_adsorbate_mobile=2,
+        adsorbate_fragment_lengths=[2],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    mid_x = float(images[1].get_positions()[0, 0])
+    assert mid_x == pytest.approx(0.2, abs=1e-6)
+    assert images[1].get_distance(2, 3) == pytest.approx(0.97, abs=1e-6)
+
+
+def test_interpolate_path_sub_half_angstrom_bond_change_stays_cartesian() -> None:
+    """Rigidity uses 0.05 Å; a 0.1 Å lengthening must not get a frozen pose."""
+    core = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    a1 = core.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 2.97]])
+    a2 = core.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 3.07]])
+    for atoms in (a1, a2):
+        atoms.set_constraint(FixBondLengths([(2, 3)]))
+    assert (
+        abs(a1.get_distance(2, 3) - a2.get_distance(2, 3))
+        > NEB_RIGID_FRAGMENT_TOLERANCE_A
+    )
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=1,
+        method="linear",
+        align_endpoints=False,
+        n_slab=0,
+        n_core_mobile=2,
+        n_adsorbate_mobile=2,
+        adsorbate_fragment_lengths=[2],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    mid = images[1]
+    assert mid.get_distance(2, 3) == pytest.approx(
+        0.5 * (a1.get_distance(2, 3) + a2.get_distance(2, 3)), abs=1e-6
+    )
+
+
+def test_select_fragment_anchor_uses_worse_endpoint_distance() -> None:
+    """min(max) keeps O bound at both ends; sum-of-distances would pick the H flip."""
+    reactant = Atoms(
+        "PtOH",
+        positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.1, 0.0, 0.0]],
+    )
+    product = Atoms(
+        "PtOH",
+        positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.5, 0.0, 0.0]],
+    )
+    assert _select_fragment_anchor(reactant, product, [1, 2], [0], mic=False) == 1
+
+
+def test_fixbondlengths_restore_uses_anchor_pose_when_support_exists() -> None:
+    """Changing H–H with fixed O–H must track the binding site, not a COM chord."""
+    core = Atoms(
+        "Pt8",
+        positions=[
+            [i, j, k] for i in (0.0, 2.5) for j in (0.0, 2.5) for k in (0.0, 2.5)
+        ],
+    )
+    water_r = Atoms(
+        "OHH",
+        positions=[
+            [1.25, 1.25, 2.5 + 1.8],
+            [1.25 + 0.76, 1.25, 2.5 + 1.8 + 0.59],
+            [1.25 - 0.76, 1.25, 2.5 + 1.8 + 0.59],
+        ],
+    )
+    # Hop to +x and open H–H so all-pairs rigidity fails; then match O–H lengths.
+    water_p = Atoms(
+        "OHH",
+        positions=[
+            [2.5 + 1.8, 1.25, 1.25],
+            [2.5 + 1.8 + 0.3, 1.25 + 1.1, 1.25],
+            [2.5 + 1.8 + 0.3, 1.25 - 1.1, 1.25],
+        ],
+    )
+    for hi in (1, 2):
+        d_r = float(np.linalg.norm(water_r.positions[hi] - water_r.positions[0]))
+        direction = water_p.positions[hi] - water_p.positions[0]
+        direction /= np.linalg.norm(direction)
+        water_p.positions[hi] = water_p.positions[0] + d_r * direction
+    a1 = core.copy() + water_r
+    a2 = core.copy() + water_p
+    for atoms in (a1, a2):
+        atoms.set_constraint(FixBondLengths([(8, 9), (8, 10)]))
+    assert abs(a1.get_distance(9, 10) - a2.get_distance(9, 10)) > 0.05
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=5,
+        method="idpp",
+        align_endpoints=False,
+        n_slab=0,
+        n_core_mobile=8,
+        n_adsorbate_mobile=3,
+        adsorbate_fragment_lengths=[3],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    cluster_com = a1.get_positions()[:8].mean(axis=0)
+    com_r = a1.get_positions()[8:11].mean(axis=0)
+    com_p = a2.get_positions()[8:11].mean(axis=0)
+    chord_d = float(np.linalg.norm(0.5 * (com_r + com_p) - cluster_com))
+    oh_refs = (float(a1.get_distance(8, 9)), float(a1.get_distance(8, 10)))
+    for img in images[1:-1]:
+        assert img.get_distance(8, 9) == pytest.approx(oh_refs[0], abs=1e-5)
+        assert img.get_distance(8, 10) == pytest.approx(oh_refs[1], abs=1e-5)
+        o_d = float(np.linalg.norm(img.get_positions()[8] - cluster_com))
+        assert o_d > chord_d - 1e-6

@@ -137,7 +137,9 @@ def _prioritize_adsorbate_pairs_by_idpp(
     """Keep up to ``max_pairs`` adsorbate bands, preferring robust IDPP interiors.
 
     Endpoint-max IDPP paths are retained only when the oversampled pool holds no
-    robust-interior candidate at all (CI-NEB can still salvage some).
+    robust-interior candidate at all (CI-NEB can still salvage some). Within the
+    robust-interior tier, bands are ordered by ascending prominence so the
+    simplest clear barriers consume the NEB budget first.
 
     The per-pair image construction and geometry-only path validation run on the
     CPU (no GPU). All energy evaluations are then fused into per-band batches and
@@ -244,7 +246,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
         ranked.append((priority, i, j, images))
 
     ranked.sort(
-        key=lambda item: (-item[0][0], -item[0][1], -item[0][2], item[1], item[2])
+        key=lambda item: (-item[0][0], item[0][1], item[0][2], item[1], item[2])
     )
     robust = [item for item in ranked if item[0][0] >= 2]
     # When the oversampled pool has activated IDPP bands, do not spend the

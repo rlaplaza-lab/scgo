@@ -505,7 +505,8 @@ Before any NEB force evaluation, SCGO:
 5. Truncates to the select cap from ``resolve_ts_pair_select_cap``.
 6. For adsorbate types only (when TorchSim and ``max_endpoint_mismatch`` are set
    and more survivors remain than ``max_pairs``): re-ranks the oversampled pool
-   by IDPP path quality and keeps the best ``max_pairs``.
+   by IDPP path quality (robust interior first; within that tier, ascending
+   prominence) and keeps the best ``max_pairs``.
 7. Truncates to ``max_pairs`` again, then runs NEB.
 
 Minima are laid out ``[slab | core | adsorbate]``. Hard gates differ by
@@ -535,7 +536,8 @@ when a finite cap truncates the list.
 - **Adsorbate** systems with ``max_endpoint_mismatch`` set oversample. The
   select pool grows to ``min(max_pairs * 10, max(max_pairs, 50))``
   (:func:`~scgo.ts_search.transition_state_io.adsorbate_pair_select_cap`).
-  Then it is re-ranked by IDPP profile and kept to ``max_pairs`` for NEB.
+  Then it is re-ranked by IDPP profile (simplest robust-interior barrier first)
+  and kept to ``max_pairs`` for NEB.
   Example: ``max_pairs=6`` selects up to 50 ranked pairs, then runs at most
   6 NEBs. If TorchSim or IDPP screening is not available, the runner still
   truncates the oversampled list to ``max_pairs`` before NEB.
@@ -640,13 +642,13 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
        enables select oversampling (see **Budget and oversampling**). On bare
        surface it does not.
    * - ``neb_prescreen_clash_distance``
-     - ``1.0`` (bare gas) / ``0.7`` (surface cluster + all adsorbate) / ``0.35`` (bare surface)
+     - ``1.0`` (bare gas) / ``0.7`` (surface cluster + all adsorbate) / ``0.5`` (bare surface)
      - Interior NEB image min mobile pairwise distance (Å) below which the initial path is rejected.
    * - ``min_saddle_prominence``
      - ``0.10`` (bare gas) / ``0.40`` (surface + adsorbate)
      - Minimum interior-max prominence (eV) above both endpoints for a band to pass the pre-NEB energy profile gate.
    * - ``neb_max_spurious_barrier``
-     - ``8.0`` / ``50.0`` (bare surface)
+     - ``8.0``
      - Maximum allowed IDPP barrier (eV) before a band is rejected as discontinuous.
    * - ``neb_align_endpoints``
      - ``True``
@@ -666,7 +668,9 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
    * - ``neb_interpolation_bond_tolerance_a``
      - ``0.5``
      - Post-interpolation FixBondLengths stretch diagnostic (Å); warns, never
-       raises. Applied on the serial, parallel, and IDPP-screen paths.
+       raises. Applied on the serial, parallel, and IDPP-screen paths. Rigid
+       fragment agreement uses the tighter
+       :data:`~scgo.constants.NEB_RIGID_FRAGMENT_TOLERANCE_A` (0.05 Å).
    * - ``layer_cluster_threshold_ang``
      - ``0.4``
      - Layer-clustering threshold (Å) used when resolving which slab layers
@@ -704,7 +708,8 @@ skips the energy screen.
 
 Per-type defaults are in :doc:`/validation_and_constraints`. Bare gas is
 looser (1.0 Å and 0.10 eV). Surface clusters and adsorbates are tighter
-(0.7 Å and 0.40 eV). Bare surface is widest (0.35 Å and 50.0 eV).
+(0.7 Å and 0.40 eV). Bare surface uses a 0.5 Å clash floor (matching the
+atomic-distance warning) and the shared 8.0 eV barrier cap.
 
 **Adsorbate NEB specifics** (beyond the gates above):
 

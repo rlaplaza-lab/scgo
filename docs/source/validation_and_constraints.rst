@@ -213,9 +213,9 @@ Per-system-type defaults:
      - 8.0
      - 2.5
    * - Bare surface
-     - 0.35
+     - 0.5
      - 0.40
-     - 50.0
+     - 8.0
      - 3.0
    * - Gas adsorbate
      - 0.7

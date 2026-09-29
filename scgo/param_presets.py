@@ -197,13 +197,13 @@ _SURFACE_CLUSTER_TS_NEB_DEFAULTS: dict[str, Any] = {
     "max_endpoint_mismatch": 2.5,
 }
 
-# Bare-slab vacancy/rearrangement NEBs: top-layer atoms can approach closely on
-# linear/IDPP paths; keep a softer clash floor and a wider displacement gate.
+# Bare-slab vacancy/rearrangement NEBs: softer clash floor than adsorbate
+# presets, but at/above the atomic-distance warning and the shared barrier cap.
 _SURFACE_BARE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_SURFACE_TS_NEB_DEFAULTS,
     "max_endpoint_mismatch": 3.0,
-    "neb_prescreen_clash_distance": 0.35,
-    "neb_max_spurious_barrier": 50.0,
+    "neb_prescreen_clash_distance": 0.5,
+    "neb_max_spurious_barrier": 8.0,
 }
 
 # Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),

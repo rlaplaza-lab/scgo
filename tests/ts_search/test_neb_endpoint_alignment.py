@@ -23,6 +23,7 @@ from scgo.ts_search.transition_state import (
     _lattice_translation_candidates,
     _requires_surface_pbc_alignment,
     _validate_lattice_compatible_rotation,
+    idpp_band_optimization_priority,
     interpolate_path,
     validate_initial_neb_path,
 )
@@ -903,8 +904,6 @@ def test_validate_initial_neb_energy_profile_accepts_modest_barrier() -> None:
 
 
 def test_idpp_band_optimization_priority_prefers_robust_interior() -> None:
-    from scgo.ts_search.transition_state import idpp_band_optimization_priority
-
     robust = idpp_band_optimization_priority([0.0, 0.5, 1.2, 0.2])
     endpoint = idpp_band_optimization_priority([0.0, 0.2, 0.5, 1.0])
     soft = idpp_band_optimization_priority([0.0, 0.35, 0.45, 0.4])
@@ -912,6 +911,17 @@ def test_idpp_band_optimization_priority_prefers_robust_interior() -> None:
     assert endpoint[0] == 1
     assert soft[0] == 0
     assert robust > endpoint > soft
+
+
+def test_idpp_priority_sort_prefers_simpler_robust_barrier() -> None:
+    """Within tier 2, ascending prominence should win the NEB budget."""
+    tall = idpp_band_optimization_priority([0.0, 0.8, 2.0, 0.1])
+    short = idpp_band_optimization_priority([0.0, 0.5, 1.0, 0.2])
+    assert tall[0] == short[0] == 2
+    assert short[1] < tall[1]
+    ranked = sorted([tall, short], key=lambda p: (-p[0], p[1], p[2]))
+    assert ranked[0] is short
+    assert ranked[1] is tall
 
 
 def test_neb_uses_two_stage_climb_skips_soft_interior_barriers() -> None:

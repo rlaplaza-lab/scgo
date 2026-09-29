@@ -169,9 +169,9 @@ def test_ts_defaults_expose_promoted_thresholds():
         assert d["layer_cluster_threshold_ang"] == 0.4
         assert d["neb_interpolation_bond_tolerance_a"] == 0.5
         if system_type == "surface":
-            assert d["neb_max_spurious_barrier"] == 50.0
+            assert d["neb_max_spurious_barrier"] == 8.0
             assert d["max_endpoint_mismatch"] == pytest.approx(3.0)
-            assert d["neb_prescreen_clash_distance"] == pytest.approx(0.35)
+            assert d["neb_prescreen_clash_distance"] == pytest.approx(0.5)
         elif system_type == "surface_cluster":
             assert d["neb_max_spurious_barrier"] == 8.0
             assert d["max_endpoint_mismatch"] == pytest.approx(2.5)

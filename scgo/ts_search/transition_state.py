@@ -7,7 +7,7 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
@@ -32,6 +32,7 @@ from scgo.constants import (
     DEFAULT_FMAX_THRESHOLD,
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_TS_PAIR_COR_MAX,
+    NEB_RIGID_FRAGMENT_TOLERANCE_A,
 )
 from scgo.exceptions import SCGOFileError, SCGORuntimeError, SCGOValidationError
 from scgo.metadata.atoms import get_tag, set_tags
@@ -1299,11 +1300,298 @@ def _kabsch_row_rotation(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
     return rot
 
 
+def _row_rotation_aligning_directions(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Minimal rotation ``R`` with ``src @ R ≈ dst`` (no twist about the axis)."""
+    a = np.asarray(src, dtype=float).reshape(3)
+    b = np.asarray(dst, dtype=float).reshape(3)
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    if na < 1e-12 or nb < 1e-12:
+        return np.eye(3)
+    # align_vectors: R.apply(a) ≈ b  =>  a @ R.as_matrix().T ≈ b for row vectors.
+    rot, _rssd = Rotation.align_vectors(b.reshape(1, 3), a.reshape(1, 3))
+    return rot.as_matrix().T
+
+
+def _anchor_centered_points_are_collinear(
+    centered: np.ndarray, *, tol: float = 1e-8
+) -> bool:
+    """True when all rows of ``centered`` lie on one line through the origin."""
+    pts = np.asarray(centered, dtype=float)
+    if len(pts) < 3:
+        return True
+    norms = np.linalg.norm(pts, axis=1)
+    nonzero = pts[norms > tol]
+    if len(nonzero) < 2:
+        return True
+    direction = nonzero[0] / float(np.linalg.norm(nonzero[0]))
+    for row in nonzero[1:]:
+        cross = np.cross(direction, row)
+        if float(np.linalg.norm(cross)) > tol * max(float(np.linalg.norm(row)), 1.0):
+            return False
+    return True
+
+
+def _fragment_endpoint_distances_agree(
+    reactant: Atoms,
+    product: Atoms,
+    members: Sequence[int],
+    *,
+    tol: float,
+    mic: bool,
+) -> bool:
+    """True when every pairwise distance inside ``members`` agrees within ``tol``."""
+    idx = [int(i) for i in members]
+    for i in range(len(idx)):
+        for j in range(i + 1, len(idx)):
+            d_r = float(reactant.get_distance(idx[i], idx[j], mic=mic))
+            d_p = float(product.get_distance(idx[i], idx[j], mic=mic))
+            if abs(d_r - d_p) > tol:
+                return False
+    return True
+
+
+def _min_distance_to_support(
+    point: np.ndarray,
+    support: np.ndarray,
+    *,
+    cell: np.ndarray | None,
+    pbc: np.ndarray | list[bool] | None,
+    mic: bool,
+) -> float:
+    """Nearest distance from ``point`` to any row of ``support``."""
+    if len(support) == 0:
+        return float("inf")
+    dlt = np.asarray(support, dtype=float) - np.asarray(point, dtype=float).reshape(
+        1, 3
+    )
+    if mic and cell is not None and pbc is not None and bool(np.any(pbc)):
+        dlt, _ = find_mic(dlt, cell, pbc)
+    return float(np.linalg.norm(dlt, axis=1).min())
+
+
+def _select_fragment_anchor(
+    reactant: Atoms,
+    product: Atoms,
+    members: Sequence[int],
+    support_indices: Sequence[int],
+    *,
+    mic: bool,
+) -> int:
+    """Fragment atom bound to the support at both endpoints.
+
+    Picks ``argmin_i max(d_reactant(i), d_product(i))`` so a binding-atom flip
+    cannot choose an atom that is only mediocre at each end.
+    """
+    idx = [int(i) for i in members]
+    if len(idx) == 1:
+        return idx[0]
+    support = [int(i) for i in support_indices]
+    if not support:
+        return idx[0]
+    r_pos = reactant.get_positions()
+    p_pos = product.get_positions()
+    r_sup = r_pos[support]
+    p_sup = p_pos[support]
+    cell = _cell_array(reactant.cell) if mic else None
+    pbc = _pbc_for_mic_alignment(reactant.pbc) if mic else None
+    best_i = idx[0]
+    best_score = float("inf")
+    for atom_i in idx:
+        d_r = _min_distance_to_support(
+            r_pos[atom_i], r_sup, cell=cell, pbc=pbc, mic=mic
+        )
+        d_p = _min_distance_to_support(
+            p_pos[atom_i], p_sup, cell=cell, pbc=pbc, mic=mic
+        )
+        score = max(d_r, d_p)
+        if score < best_score - 1e-12 or (
+            abs(score - best_score) <= 1e-12 and atom_i < best_i
+        ):
+            best_score = score
+            best_i = atom_i
+    return best_i
+
+
+def _fragment_pose_rotation(
+    src: np.ndarray,
+    dst: np.ndarray,
+    *,
+    anchor_row: int,
+) -> np.ndarray:
+    """Rotation about the anchor taking reactant fragment coords onto the product."""
+    src_c = np.asarray(src, dtype=float) - np.asarray(src[anchor_row], dtype=float)
+    dst_c = np.asarray(dst, dtype=float) - np.asarray(dst[anchor_row], dtype=float)
+    if _anchor_centered_points_are_collinear(
+        src_c
+    ) or _anchor_centered_points_are_collinear(dst_c):
+        # Principal direction: farthest atom from the anchor (dimers: the other atom).
+        norms = np.linalg.norm(src_c, axis=1)
+        norms[anchor_row] = -1.0
+        far = int(np.argmax(norms))
+        return _row_rotation_aligning_directions(src_c[far], dst_c[far])
+    return _kabsch_row_rotation(src_c, dst_c)
+
+
+def _place_rigid_fragment_about_anchor(
+    images: list[Atoms],
+    members: Sequence[int],
+    anchor: int,
+    *,
+    reactant: np.ndarray,
+    product: np.ndarray,
+) -> None:
+    """Rebuild interior images from a rigid pose about ``anchor`` (IDPP path)."""
+    idx = np.asarray([int(i) for i in members], dtype=int)
+    anchor_i = int(anchor)
+    local = {int(g): li for li, g in enumerate(idx.tolist())}
+    if anchor_i not in local:
+        raise SCGOValidationError("anchor must be a member of the fragment")
+    anchor_row = local[anchor_i]
+    src = reactant[idx]
+    dst = product[idx]
+    rot = _fragment_pose_rotation(src, dst, anchor_row=anchor_row)
+    slerp = Slerp([0.0, 1.0], Rotation.from_matrix(np.stack([np.eye(3), rot])))
+    src_rel = src - src[anchor_row]
+    n_img = len(images)
+    for k in range(1, n_img - 1):
+        t = k / (n_img - 1)
+        rot_t = slerp([t]).as_matrix()[0]
+        pos = images[k].get_positions()
+        anchor_t = pos[anchor_i]
+        pos[idx] = anchor_t + src_rel @ rot_t
+        images[k].set_positions(pos, apply_constraint=False)
+
+
+def _adsorbate_fragment_slices(
+    *,
+    n_slab: int,
+    n_core: int,
+    fragment_lengths: Sequence[int],
+) -> list[list[int]]:
+    """Global atom indices for each adsorbate fragment block."""
+    cursor = int(n_slab) + int(n_core)
+    slices: list[list[int]] = []
+    for frag_len in fragment_lengths:
+        n = int(frag_len)
+        slices.append(list(range(cursor, cursor + n)))
+        cursor += n
+    return slices
+
+
+def _support_indices_for_anchor(
+    *,
+    n_slab: int,
+    n_core: int,
+) -> list[int]:
+    """Cluster block when present; otherwise the slab (surface-adsorbate)."""
+    n_slab_i = int(n_slab)
+    n_core_i = int(n_core)
+    if n_core_i > 0:
+        return list(range(n_slab_i, n_slab_i + n_core_i))
+    if n_slab_i > 0:
+        return list(range(n_slab_i))
+    return []
+
+
+def _interpolate_band_subset(
+    images: list[Atoms],
+    subset_indices: Sequence[int],
+    *,
+    method: str,
+    mic: bool,
+) -> None:
+    """Run linear/IDPP on a constraint-free atom subset and copy positions back."""
+    idx = np.asarray(sorted({int(i) for i in subset_indices}), dtype=int)
+    if len(idx) == 0 or len(images) < 3:
+        return
+    n_interior = len(images) - 2
+    react = images[0]
+    prod = images[-1]
+    sub0 = Atoms(
+        numbers=react.numbers[idx],
+        positions=react.get_positions()[idx],
+        cell=react.cell,
+        pbc=react.pbc,
+    )
+    sub1 = Atoms(
+        numbers=prod.numbers[idx],
+        positions=prod.get_positions()[idx],
+        cell=prod.cell,
+        pbc=prod.pbc,
+    )
+    sub_images = [sub0] + [sub0.copy() for _ in range(n_interior)] + [sub1]
+    neb = NEB(sub_images, method=DEFAULT_NEB_TANGENT_METHOD)
+    neb.interpolate(method=method, mic=mic, apply_constraint=False)
+    for full, sub in zip(images, neb.images, strict=True):
+        pos = full.get_positions()
+        pos[idx] = sub.get_positions()
+        full.set_positions(pos, apply_constraint=False)
+
+
+def _apply_rigid_adsorbate_pose_interpolation(
+    images: list[Atoms],
+    *,
+    method: str,
+    mic: bool,
+    n_slab: int,
+    n_core: int,
+    fragment_lengths: Sequence[int],
+    tol: float,
+) -> set[int]:
+    """IDPP slab/cluster/anchors; rebuild rigid fragments about each anchor.
+
+    Returns the set of atoms placed by a rigid pose (whole fragment, including
+    the anchor) so the FixBondLengths restore can skip them.
+    """
+    if len(images) < 3:
+        return set()
+    reactant = images[0]
+    product = images[-1]
+    r_pos = reactant.get_positions()
+    p_pos = product.get_positions()
+    support = _support_indices_for_anchor(n_slab=n_slab, n_core=n_core)
+    ads_start = int(n_slab) + int(n_core)
+    idpp_indices: list[int] = list(range(ads_start))
+    posed_atoms: set[int] = set()
+    rigid_specs: list[tuple[list[int], int]] = []
+
+    for members in _adsorbate_fragment_slices(
+        n_slab=n_slab, n_core=n_core, fragment_lengths=fragment_lengths
+    ):
+        if len(members) == 1:
+            idpp_indices.append(members[0])
+            continue
+        if not _fragment_endpoint_distances_agree(
+            reactant, product, members, tol=tol, mic=mic
+        ):
+            idpp_indices.extend(members)
+            continue
+        anchor = _select_fragment_anchor(reactant, product, members, support, mic=mic)
+        idpp_indices.append(anchor)
+        rigid_specs.append((members, anchor))
+        posed_atoms.update(members)
+
+    _interpolate_band_subset(images, idpp_indices, method=method, mic=mic)
+    for members, anchor in rigid_specs:
+        _place_rigid_fragment_about_anchor(
+            images,
+            members,
+            anchor,
+            reactant=r_pos,
+            product=p_pos,
+        )
+    return posed_atoms
+
+
 def _restore_agreed_fixbondlengths(
     images: list[Atoms],
     *,
     tol: float,
     mic: bool,
+    exclude_atoms: set[int] | None = None,
+    n_slab: int = 0,
+    n_core: int = 0,
 ) -> None:
     """Rigidly carry frozen fragments between endpoints.
 
@@ -1311,10 +1599,16 @@ def _restore_agreed_fixbondlengths(
     follow the path. Cartesian IDPP then shortens a rotating ``FixBondLengths``
     fragment along the chord, and that clash keeps NEB off ``fmax`` or leaves a
     spurious multi-eV barrier. Each connected component whose endpoint distances
-    already agree within ``tol`` is replaced by a rigid slerp: the fragment
-    center travels on the straight line between the endpoints, and its
-    orientation follows the Kabsch rotation. Bonds that actually change length
-    are left on the interpolated path.
+    already agree within ``tol`` is replaced by a rigid slerp.
+
+    When a support block exists (``n_slab`` or ``n_core``), the fragment is
+    rebuilt about a binding-site anchor so the path tracks the metal rather
+    than cutting through it on a center-of-mass chord. Without a support, the
+    fragment center travels on the straight line between the endpoints.
+
+    Components that intersect ``exclude_atoms`` (rigid adsorbate poses already
+    placed about an IDPP anchor) are skipped so a second restore cannot undo
+    the anchored pose.
     """
     if len(images) < 3:
         return
@@ -1327,6 +1621,7 @@ def _restore_agreed_fixbondlengths(
     product_atoms = images[-1]
     reactant = reactant_atoms.get_positions()
     product = product_atoms.get_positions()
+    skip = exclude_atoms or set()
     parent: dict[int, int] = {}
 
     def _find(x: int) -> int:
@@ -1344,6 +1639,8 @@ def _restore_agreed_fixbondlengths(
     for constraint in bond_constraints:
         for a, b in constraint.pairs:
             i, j = int(a), int(b)
+            if i in skip or j in skip:
+                continue
             d_r = float(reactant_atoms.get_distance(i, j, mic=mic))
             d_p = float(product_atoms.get_distance(i, j, mic=mic))
             if abs(d_r - d_p) <= tol:
@@ -1355,9 +1652,24 @@ def _restore_agreed_fixbondlengths(
     if not components:
         return
 
+    support = _support_indices_for_anchor(n_slab=n_slab, n_core=n_core)
     n_img = len(images)
     for members in components:
+        if any(m in skip for m in members):
+            continue
         idx = np.asarray(members, dtype=int)
+        if support:
+            anchor = _select_fragment_anchor(
+                reactant_atoms, product_atoms, members, support, mic=mic
+            )
+            _place_rigid_fragment_about_anchor(
+                images,
+                members,
+                anchor,
+                reactant=reactant,
+                product=product,
+            )
+            continue
         src = reactant[idx]
         dst = product[idx]
         com_r = src.mean(axis=0)
@@ -1468,6 +1780,15 @@ def interpolate_path(
     For constrained slab systems we always interpolate with
     ``apply_constraint=False``; constraints remain attached and are enforced
     during subsequent NEB optimization.
+
+    When block sizes match and ``adsorbate_fragment_lengths`` are set, rigid
+    adsorbate fragments (endpoint distances agreeing within
+    :data:`~scgo.constants.NEB_RIGID_FRAGMENT_TOLERANCE_A`) are kept out of
+    Cartesian IDPP: only the slab, cluster, and one binding anchor per fragment
+    are interpolated, then each fragment is rebuilt from a rigid pose about that
+    anchor so bond lengths stay exact and the fragment tracks the binding site.
+    ``neb_interpolation_bond_tolerance_a`` is only the post-interpolation
+    FixBondLengths stretch diagnostic (warns, never raises).
     """
     validate_atoms(atoms1)
     validate_atoms(atoms2)
@@ -1595,13 +1916,37 @@ def interpolate_path(
     # raw_score) on one image would then overwrite every other image, so isolate
     # each interior copy with ``copy_atoms``.
     images = [a1_copy] + [copy_atoms(a1_copy) for _ in range(n_images)] + [a2_copy]
-    neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
-    # Interpolate unconstrained positions first; endpoint/image constraints
-    # (e.g., fixed slab atoms) are enforced during subsequent optimization.
     # mic=True would undo a moiety unwrap longer than half a cell edge.
     interpolate_mic = False if moiety_unwrapped else mic
-    neb.interpolate(method=method, mic=interpolate_mic, apply_constraint=False)
-    images = neb.images
+    n_slab_i = int(n_slab)
+    n_core_i = int(n_core_mobile) if n_core_mobile is not None else 0
+    n_ads_i = int(n_adsorbate_mobile) if n_adsorbate_mobile is not None else 0
+    use_rigid_pose = (
+        neb_interpolation_bond_tolerance_a is not None
+        and adsorbate_fragment_lengths
+        and n_core_mobile is not None
+        and n_adsorbate_mobile is not None
+        and n_slab_i + n_core_i + n_ads_i == len(a1_copy)
+        and (n_slab_i > 0 or n_core_i > 0)
+        and sum(int(x) for x in adsorbate_fragment_lengths) == n_ads_i
+    )
+    posed_atoms: set[int] = set()
+    if use_rigid_pose:
+        posed_atoms = _apply_rigid_adsorbate_pose_interpolation(
+            images,
+            method=method,
+            mic=interpolate_mic,
+            n_slab=n_slab_i,
+            n_core=n_core_i,
+            fragment_lengths=list(adsorbate_fragment_lengths),
+            tol=NEB_RIGID_FRAGMENT_TOLERANCE_A,
+        )
+    else:
+        neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
+        # Interpolate unconstrained positions first; endpoint/image constraints
+        # (e.g., fixed slab atoms) are enforced during subsequent optimization.
+        neb.interpolate(method=method, mic=interpolate_mic, apply_constraint=False)
+        images = neb.images
 
     # Frozen adsorbate bonds share a length at both ends. Interpolation ignores
     # FixBondLengths, so a rotating fragment collapses along the chord. Project
@@ -1609,8 +1954,11 @@ def interpolate_path(
     if neb_interpolation_bond_tolerance_a is not None and len(images) > 2:
         _restore_agreed_fixbondlengths(
             images,
-            tol=float(neb_interpolation_bond_tolerance_a),
+            tol=NEB_RIGID_FRAGMENT_TOLERANCE_A,
             mic=interpolate_mic,
+            exclude_atoms=posed_atoms or None,
+            n_slab=n_slab_i,
+            n_core=n_core_i,
         )
 
     # Diagnostic check (never raises): interior NEB images interpolated with
@@ -1867,7 +2215,8 @@ def idpp_band_optimization_priority(
 
     Prefers IDPP bands with a robust interior maximum (tier 2) over endpoint-max
     bands (tier 1). Soft interior maxima (prominence below the gate) get tier 0.
-    Within a tier, larger prominence / barrier is preferred.
+    Sort keys within a tier are ``(prominence, barrier)``; the adsorbate IDPP
+    screen orders them ascending so simpler robust barriers run first.
     """
     e = np.asarray(energies, dtype=float)
     if e.size < 3 or not np.all(np.isfinite(e)):

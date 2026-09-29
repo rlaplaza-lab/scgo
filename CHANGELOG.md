@@ -4,6 +4,15 @@
 
 ### Changed
 
+- **NEB adsorbate interpolation rigidity and ranking.** Rigid-pose agreement
+  uses a dedicated 0.05 Å cutoff (`NEB_RIGID_FRAGMENT_TOLERANCE_A`), separate
+  from the 0.5 Å FixBondLengths stretch diagnostic. Agreeing
+  `FixBondLengths` components with a metal support are rebuilt about a
+  binding-site anchor (no center-of-mass chord through the cluster). Fragment
+  anchors use `min(max(d_reactant, d_product))`. Adsorbate IDPP screens prefer
+  the simplest robust-interior barrier (ascending prominence) within the NEB
+  budget. Bare-surface pre-screens use a 0.5 Å clash floor and the shared
+  8.0 eV spurious-barrier cap.
 - **Default uniqueness energy tolerance raised to 0.05 eV**
   (`DEFAULT_ENERGY_TOLERANCE`). Independently relaxed copies of the same
   isomer often differ by tens of meV at the default `fmax` of 0.05 eV/Å; the
