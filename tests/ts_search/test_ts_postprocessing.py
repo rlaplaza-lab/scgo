@@ -334,7 +334,7 @@ def test_run_transition_state_search_skips_tagging_when_no_db(
     ):
         a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
         a.info.setdefault("key_value_pairs", {})["source_db"] = "missing.db"
-        return {"Pt2": [(0.0, a.copy()), (0.2, a.copy())]}
+        return {"Pt2": [(0.0, a.copy()), (0.1, a.copy())]}
 
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
@@ -396,6 +396,7 @@ def test_run_transition_state_search_skips_tagging_when_no_db(
         params={"calculator": "EMT", "calculator_kwargs": {}},
         tag_ts_in_db=True,
         verbosity=2,
+        dedupe_minima=False,
     )
 
     # add_ts_to_database should not be called because no candidate DB was found
@@ -432,7 +433,7 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
         lambda ts_output_dir, composition, prefer_final_unique: {
-            "Pt2": [(0.0, a.copy()), (0.2, b.copy())]
+            "Pt2": [(0.0, a.copy()), (0.1, b.copy())]
         },
     )
 
@@ -497,6 +498,7 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
         tag_ts_in_db=True,
         verbosity=0,
         max_pairs=1,
+        dedupe_minima=False,
     )
 
     assert called, "add_ts_to_database was not called"
@@ -529,7 +531,7 @@ def test_run_transition_state_search_resolves_neb_steps_auto(monkeypatch):
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
         lambda ts_output_dir, composition, prefer_final_unique: {
-            "Pt3": [(0.0, Atoms("Pt3")), (0.2, Atoms("Pt3"))]
+            "Pt3": [(0.0, Atoms("Pt3")), (0.1, Atoms("Pt3"))]
         },
     )
     monkeypatch.setattr(
@@ -562,10 +564,10 @@ def test_run_transition_state_search_resolves_neb_steps_auto(monkeypatch):
         system_type="gas_cluster",
         params={"calculator": "EMT", "calculator_kwargs": {}},
         verbosity=0,
+        dedupe_minima=False,
     )
 
 
-@pytest.mark.requires_mace
 def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch):
     """Ensure torchsim_params['max_steps']='auto' is resolved before NEB/TorchSim use."""
     from ase import Atoms
@@ -576,10 +578,20 @@ def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch
     comp = ["Pt", "Pt", "Pt", "Pt"]
     expected = auto_niter_ts(comp)
 
+    class FakeRelaxer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def relax_batch(self, atoms_list, steps=0):
+            return [(0.0, a.copy()) for a in atoms_list]
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.TorchSimBatchRelaxer", FakeRelaxer
+    )
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
         lambda ts_output_dir, composition, prefer_final_unique: {
-            "Pt4": [(0.0, Atoms("Pt4")), (0.2, Atoms("Pt4"))]
+            "Pt4": [(0.0, Atoms("Pt4")), (0.1, Atoms("Pt4"))]
         },
     )
     monkeypatch.setattr(
@@ -606,13 +618,12 @@ def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch
         lambda *a, **k: None,
     )
 
-    # EMT does not support TorchSim NEB; keep the TorchSim code path for this check.
+    # Force the TorchSim serial path without loading a real MLIP.
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.resolve_ts_torchsim_flags",
         lambda *_a, **_k: (True, False),
     )
 
-    # Pass explicit torchsim_params with 'max_steps' set to 'auto'
     run_transition_state_search(
         ["Pt", "Pt", "Pt", "Pt"],
         system_type="gas_cluster",
@@ -620,6 +631,7 @@ def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch
         use_torchsim=True,
         torchsim_params={"max_steps": "auto", "force_tol": 0.05},
         verbosity=0,
+        dedupe_minima=False,
     )
 
 
@@ -649,7 +661,7 @@ def test_run_transition_state_search_rejects_buried_surface_ts(monkeypatch, tmp_
     ts_pos[len(slab) :, 2] = -0.6
     buried_ts.set_positions(ts_pos)
 
-    minima = [(0.0, react.copy()), (0.2, prod.copy())]
+    minima = [(0.0, react.copy()), (0.1, prod.copy())]
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.get_cluster_formula",
         lambda _comp: "X",
@@ -712,6 +724,7 @@ def test_run_transition_state_search_rejects_buried_surface_ts(monkeypatch, tmp_
         surface_config=surface_config,
         max_pairs=1,
         verbosity=0,
+        dedupe_minima=False,
     )
     assert len(results) == 1
     assert results[0]["status"] == "failed"

@@ -461,6 +461,55 @@ def mark_test_minima_as_final(db_path: Path | str) -> None:
     stamp_db(db_path)
 
 
+# Distinct Cu–Cu distances for TS fixture DBs. Spaced enough that default
+# uniqueness still keeps multiple endpoints, with EMT gaps under the default
+# 2.0 eV energy_gap_threshold so pairing can run.
+_CU2_TS_FIXTURE_BONDS_ANG: tuple[float, ...] = (2.0, 2.5, 2.8)
+
+
+def create_cu2_ts_searches_dir(
+    root: Path | str,
+    *,
+    n_minima: int = 3,
+    run_name: str = "run_20260101_120000",
+) -> Path:
+    """Build ``{root}/Cu2_searches/{run_name}/candidates.db`` with final Cu2 minima.
+
+    Returns the searches root (``…/Cu2_searches`` parent is ``root``; yield
+    ``root`` from fixtures that pass ``output_dir`` to TS search).
+    """
+    from ase_ga.data import DataConnection
+
+    if not 1 <= n_minima <= len(_CU2_TS_FIXTURE_BONDS_ANG):
+        raise ValueError(
+            f"n_minima must be in 1..{len(_CU2_TS_FIXTURE_BONDS_ANG)}, got {n_minima}"
+        )
+
+    root = Path(root)
+    run_dir = root / "Cu2_searches" / run_name
+    run_dir.mkdir(parents=True)
+    db_path = run_dir / "candidates.db"
+    db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
+
+    for confid, bond in enumerate(_CU2_TS_FIXTURE_BONDS_ANG[:n_minima], start=1):
+        atoms = Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [bond, 0.0, 0.0]])
+        atoms.center(vacuum=5.0)
+        atoms.calc = EMT()
+        set_tags(atoms, raw_score=-10.0)
+        atoms.info["confid"] = confid
+        db.add_unrelaxed_candidate(atoms, description=f"Cu2_{bond:.1f}")
+
+    da = DataConnection(str(db_path))
+    while da.get_number_of_unrelaxed_candidates() > 0:
+        a = da.get_an_unrelaxed_candidate()
+        a.calc = EMT()
+        set_tags(a, raw_score=-a.get_potential_energy())
+        da.add_relaxed_step(a)
+
+    mark_test_minima_as_final(db_path)
+    return root
+
+
 def create_ga_comparator(n_top: int):
     from scgo.algorithms.ga_common import create_structure_comparator
     from scgo.constants import DEFAULT_ENERGY_TOLERANCE

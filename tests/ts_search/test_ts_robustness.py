@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import tempfile
-from pathlib import Path
 
 import pytest
 import torch
 
 from scgo.ts_search.transition_state_run import run_transition_state_search
 from scgo.ts_search.ts_network import save_ts_network_metadata
-from tests.helpers import create_preparedb, mark_test_minima_as_final
+from tests.helpers import create_cu2_ts_searches_dir
 
 
 def test_save_ts_network_metadata_skips_malformed_success():
@@ -56,49 +55,9 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
     """Simulate a per-pair CUDA OOM and ensure the campaign continues and
     GPU cleanup is attempted. This test sets up a minimal mock DB locally.
     """
-
-    from ase import Atoms
-    from ase.calculators.emt import EMT
-    from ase_ga.data import DataConnection
-
-    from scgo.metadata.atoms import set_tags
-
-    # Create a minimal mock database directory with a few relaxed minima
     with tempfile.TemporaryDirectory() as tmpdir:
-        run_dir = Path(tmpdir) / "Cu2_searches" / "run_20260101_120000"
-        run_dir.mkdir(parents=True)
-        db_path = run_dir / "candidates.db"
+        create_cu2_ts_searches_dir(tmpdir, n_minima=2)
 
-        db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
-
-        # Minimum 1
-        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.0, 0, 0]])
-        atoms1.center(vacuum=5.0)
-        atoms1.calc = EMT()
-        set_tags(atoms1, raw_score=-10.0)
-        atoms1.info["confid"] = 1
-        db.add_unrelaxed_candidate(atoms1, description="Cu2_short")
-
-        # Minimum 2 (bond length distinct, EMT gap still under default
-        # energy_gap_threshold=2.0 eV so pairing can run)
-        atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        atoms2.center(vacuum=5.0)
-        atoms2.calc = EMT()
-        set_tags(atoms2, raw_score=-10.0)
-        atoms2.info["confid"] = 2
-        db.add_unrelaxed_candidate(atoms2, description="Cu2_mid")
-
-        # Finalize: move unrelaxed -> relaxed (use DataConnection so add_relaxed_step persists)
-        da = DataConnection(str(db_path))
-        while da.get_number_of_unrelaxed_candidates() > 0:
-            a = da.get_an_unrelaxed_candidate()
-            a.calc = EMT()
-            set_tags(a, raw_score=-a.get_potential_energy())
-            da.add_relaxed_step(a)
-
-        mark_test_minima_as_final(db_path)
-
-        # Now patch the TS-finding call to raise a CUDA OOM and patch cleanup
         def fake_find_transition_state(*args, **kwargs):
             raise RuntimeError(
                 "CUDA out of memory [scgo-simulated-failure]. Tried to allocate ..."
@@ -118,13 +77,11 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
             "scgo.ts_search.transition_state_run.cleanup_torch_cuda", fake_cleanup
         )
 
-        params = {"calculator": "EMT", "calculator_kwargs": {}}
-
         results = run_transition_state_search(
             composition=["Cu", "Cu"],
             system_type="gas_cluster",
             output_dir=tmpdir,
-            params=params,
+            params={"calculator": "EMT", "calculator_kwargs": {}},
             verbosity=0,
             max_pairs=1,
             neb_n_images=3,
@@ -132,12 +89,9 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
             neb_steps=10,
         )
 
-        # Should return a list and include at least one failed result (not crash)
         assert isinstance(results, list)
         assert any(r.get("status") == "failed" for r in results)
-        # cleanup should have been attempted
         assert cleaned["called"] is True
-        # ensure no TS structure still holds a calculator reference
         for r in results:
             ts = r.get("transition_state")
             if ts is not None:
@@ -152,42 +106,8 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
     guards against future edits that accidentally remove the unconditional
     cleanup added after prior regression investigations.
     """
-
-    from ase import Atoms
-    from ase.calculators.emt import EMT
-    from ase_ga.data import DataConnection
-
-    from scgo.metadata.atoms import set_tags
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        run_dir = Path(tmpdir) / "Cu2_searches" / "run_20260101_120000"
-        run_dir.mkdir(parents=True)
-        db_path = run_dir / "candidates.db"
-
-        db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
-
-        # Distinct bond lengths; EMT gap stays under default
-        # energy_gap_threshold=2.0 eV so pairing can run.
-        pairs = [
-            ([[0, 0, 0], [2.0, 0, 0]], 1),
-            ([[0, 0, 0], [2.5, 0, 0]], 2),
-        ]
-        for pos, confid in pairs:
-            atoms = Atoms("Cu2", positions=pos)
-            atoms.center(vacuum=5.0)
-            atoms.calc = EMT()
-            set_tags(atoms, raw_score=-10.0)
-            atoms.info["confid"] = confid
-            db.add_unrelaxed_candidate(atoms, description=f"Cu2_{confid}")
-
-        da = DataConnection(str(db_path))
-        while da.get_number_of_unrelaxed_candidates() > 0:
-            a = da.get_an_unrelaxed_candidate()
-            a.calc = EMT()
-            set_tags(a, raw_score=-a.get_potential_energy())
-            da.add_relaxed_step(a)
-
-        mark_test_minima_as_final(db_path)
+        create_cu2_ts_searches_dir(tmpdir, n_minima=2)
 
         calls = {"count": 0}
 
@@ -198,13 +118,11 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
             "scgo.ts_search.transition_state_run.cleanup_torch_cuda", fake_cleanup
         )
 
-        params = {"calculator": "EMT", "calculator_kwargs": {}}
-
         results = run_transition_state_search(
             composition=["Cu", "Cu"],
             system_type="gas_cluster",
             output_dir=tmpdir,
-            params=params,
+            params={"calculator": "EMT", "calculator_kwargs": {}},
             verbosity=0,
             max_pairs=2,
             neb_n_images=3,
@@ -213,7 +131,6 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
         )
 
         assert isinstance(results, list)
-        # at least two cleanup calls (one per pair)
         assert calls["count"] >= 2
 
 

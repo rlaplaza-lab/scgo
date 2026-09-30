@@ -9,7 +9,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.calculators.emt import EMT
 from ase_ga.data import DataConnection
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
@@ -24,70 +23,17 @@ from scgo.ts_search.transition_state_io import (
 from scgo.ts_search.transition_state_run import (
     run_transition_state_search,
 )
-from tests.helpers import create_preparedb, mark_test_minima_as_final
+from tests.helpers import (
+    create_cu2_ts_searches_dir,
+    create_preparedb,
+    mark_test_minima_as_final,
+)
 
 
 @pytest.fixture
 def mock_database_dir():
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create a searches directory with a run subdirectory
-        searches_dir = Path(tmpdir) / "Cu2_searches"
-        run_dir = searches_dir / "run_20260101_120000"
-        run_dir.mkdir(parents=True)
-
-        # Create database with Cu2 structures (EMT supports Cu)
-        # Use ASE-GA compatible format
-
-        db_path = run_dir / "candidates.db"
-
-        # Initialize database
-        db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
-
-        # Distinct Cu2 bond lengths so loosened uniqueness defaults (0.1 eV /
-        # comparator_tol=0.05) still keep multiple endpoints for pairing.
-        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.0, 0, 0]])
-        atoms1.center(vacuum=5.0)
-        atoms1.calc = EMT()
-        from scgo.metadata.atoms import set_tags
-
-        set_tags(atoms1, raw_score=-10.0)
-        atoms1.info["confid"] = 1
-        db.add_unrelaxed_candidate(atoms1, description="Cu2_short")
-
-        atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
-        atoms2.center(vacuum=5.0)
-        atoms2.calc = EMT()
-        from scgo.metadata.atoms import set_tags
-
-        set_tags(atoms2, raw_score=-10.0)
-        atoms2.info["confid"] = 2
-        db.add_unrelaxed_candidate(atoms2, description="Cu2_mid")
-
-        atoms3 = Atoms("Cu2", positions=[[0, 0, 0], [2.8, 0, 0]])
-        atoms3.center(vacuum=5.0)
-        atoms3.calc = EMT()
-        from scgo.metadata.atoms import set_tags
-
-        set_tags(atoms3, raw_score=-10.0)
-        atoms3.info["confid"] = 3
-        db.add_unrelaxed_candidate(atoms3, description="Cu2_long")
-
-        # Now retrieve and mark as relaxed (use DataConnection directly so
-        # add_relaxed_step correctly sets relaxed=1 in number_key_values)
-        from scgo.metadata.atoms import set_tags
-
-        da = DataConnection(str(db_path))
-        while da.get_number_of_unrelaxed_candidates() > 0:
-            a = da.get_an_unrelaxed_candidate()
-            a.calc = EMT()
-            set_tags(a, raw_score=-a.get_potential_energy())
-            da.add_relaxed_step(a)
-
-        # Tag relaxed minima as final_unique_minimum so TS can load them
-        # (TS requires final-tagged minima from GO runs)
-        mark_test_minima_as_final(db_path)
-
-        yield tmpdir
+        yield str(create_cu2_ts_searches_dir(tmpdir, n_minima=3))
 
 
 def test_load_minima_by_composition(mock_database_dir):
@@ -251,7 +197,7 @@ def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ts_run_mod,
         "load_minima_by_composition",
-        lambda *_a, **_k: {formula: [(0.0, atoms_a), (0.2, atoms_b)]},
+        lambda *_a, **_k: {formula: [(0.0, atoms_a), (0.1, atoms_b)]},
     )
     monkeypatch.setattr(
         ts_run_mod, "select_structure_pairs", lambda *_a, **_k: [(0, 1)]
@@ -276,6 +222,7 @@ def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
             use_parallel_neb=True,
             parallel_neb_max_bands=max_bands,
             neb_steps=2,
+            dedupe_minima=False,
         )
         assert serial_calls == []
         assert len(parallel_calls) == 1
