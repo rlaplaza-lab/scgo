@@ -72,20 +72,21 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
 
         # Minimum 1
-        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.0, 0, 0]])
         atoms1.center(vacuum=5.0)
         atoms1.calc = EMT()
         set_tags(atoms1, raw_score=-10.0)
         atoms1.info["confid"] = 1
-        db.add_unrelaxed_candidate(atoms1, description="Cu2_linear")
+        db.add_unrelaxed_candidate(atoms1, description="Cu2_short")
 
-        # Minimum 2
-        atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [1.8, 1.8, 0]])
+        # Minimum 2 (bond length distinct, EMT gap still under default
+        # energy_gap_threshold=2.0 eV so pairing can run)
+        atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
         atoms2.center(vacuum=5.0)
         atoms2.calc = EMT()
         set_tags(atoms2, raw_score=-10.0)
         atoms2.info["confid"] = 2
-        db.add_unrelaxed_candidate(atoms2, description="Cu2_rotated")
+        db.add_unrelaxed_candidate(atoms2, description="Cu2_mid")
 
         # Finalize: move unrelaxed -> relaxed (use DataConnection so add_relaxed_step persists)
         da = DataConnection(str(db_path))
@@ -129,10 +130,6 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
             neb_n_images=3,
             neb_fmax=0.5,
             neb_steps=10,
-            # Keep the two Cu2 geometries as distinct endpoints under the
-            # loosened uniqueness defaults (this test is about OOM handling).
-            minima_energy_tolerance=0.05,
-            similarity_tolerance=0.015,
         )
 
         # Should return a list and include at least one failed result (not crash)
@@ -169,10 +166,11 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
 
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
 
-        # add two minima (same as previous test setup)
+        # Distinct bond lengths; EMT gap stays under default
+        # energy_gap_threshold=2.0 eV so pairing can run.
         pairs = [
-            ([[0, 0, 0], [2.5, 0, 0]], 1),
-            ([[0, 0, 0], [1.8, 1.8, 0]], 2),
+            ([[0, 0, 0], [2.0, 0, 0]], 1),
+            ([[0, 0, 0], [2.5, 0, 0]], 2),
         ]
         for pos, confid in pairs:
             atoms = Atoms("Cu2", positions=pos)
@@ -212,8 +210,6 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
             neb_n_images=3,
             neb_fmax=0.5,
             neb_steps=10,
-            minima_energy_tolerance=0.05,
-            similarity_tolerance=0.015,
         )
 
         assert isinstance(results, list)

@@ -43,36 +43,34 @@ def mock_database_dir():
         # Initialize database
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=20)
 
-        # Add some mock minima using proper GA workflow
-        # Minimum 1: linear Cu2
-        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
+        # Distinct Cu2 bond lengths so loosened uniqueness defaults (0.1 eV /
+        # comparator_tol=0.05) still keep multiple endpoints for pairing.
+        atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.0, 0, 0]])
         atoms1.center(vacuum=5.0)
         atoms1.calc = EMT()
         from scgo.metadata.atoms import set_tags
 
         set_tags(atoms1, raw_score=-10.0)
         atoms1.info["confid"] = 1
-        db.add_unrelaxed_candidate(atoms1, description="Cu2_linear")
+        db.add_unrelaxed_candidate(atoms1, description="Cu2_short")
 
-        # Minimum 2: rotated Cu2
-        atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [1.8, 1.8, 0]])
+        atoms2 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
         atoms2.center(vacuum=5.0)
         atoms2.calc = EMT()
         from scgo.metadata.atoms import set_tags
 
         set_tags(atoms2, raw_score=-10.0)
         atoms2.info["confid"] = 2
-        db.add_unrelaxed_candidate(atoms2, description="Cu2_rotated")
+        db.add_unrelaxed_candidate(atoms2, description="Cu2_mid")
 
-        # Minimum 3: another configuration
-        atoms3 = Atoms("Cu2", positions=[[0, 0, 0], [1.2, 2.2, 0]])
+        atoms3 = Atoms("Cu2", positions=[[0, 0, 0], [2.8, 0, 0]])
         atoms3.center(vacuum=5.0)
         atoms3.calc = EMT()
         from scgo.metadata.atoms import set_tags
 
         set_tags(atoms3, raw_score=-10.0)
         atoms3.info["confid"] = 3
-        db.add_unrelaxed_candidate(atoms3, description="Cu2_other")
+        db.add_unrelaxed_candidate(atoms3, description="Cu2_long")
 
         # Now retrieve and mark as relaxed (use DataConnection directly so
         # add_relaxed_step correctly sets relaxed=1 in number_key_values)
