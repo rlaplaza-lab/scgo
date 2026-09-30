@@ -160,9 +160,14 @@ alignment (not gas Kabsch):
 
 - Lattice shifts / MIC snapping, then discrete slab-validated proper rotations
   when the cell metrics allow, scored alongside Kabsch when
-  ``neb_surface_lattice_rotation`` is on.
+  ``neb_surface_lattice_rotation`` is on. Policy defaults keep Kabsch off for
+  ``surface_cluster`` and adsorbate surface types; the runner AND-gates the
+  knob so an explicit ``True`` cannot re-enable it for those types.
 - Moiety-aware unwrap of intact mobile fragments so ASE ``mic=True``
   interpolation does not split a bonded adsorbate across a cell boundary.
+  Tiny bonded polishes keep ``mic=True``;
+  :func:`~scgo.ts_search.neb_surface.unwrap_breaks_mic` disables MIC only when
+  the unwrap exceeds half the shorter in-plane cell.
 - If a symmetry copy's product single-point drifts more than ``0.1`` eV from
   the stored GO minimum, the band is skipped.
 

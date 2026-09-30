@@ -648,8 +648,10 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
      - ``0.10`` (bare gas) / ``0.40`` (surface + adsorbate)
      - Minimum interior-max prominence (eV) above both endpoints for a band to pass the pre-NEB energy profile gate.
    * - ``neb_max_spurious_barrier``
-     - ``8.0``
-     - Maximum allowed IDPP barrier (eV) before a band is rejected as discontinuous.
+     - ``8.0`` / ``12.0`` (``surface_cluster``)
+     - Maximum allowed IDPP / final barrier (eV) before a band is rejected as
+       discontinuous. ``surface_cluster`` uses ``12.0`` so metal-deposit IDPP
+       false positives (~11 eV) can still reach a converged CI-NEB band.
    * - ``neb_align_endpoints``
      - ``True``
      - Align endpoints before interpolation
@@ -721,7 +723,8 @@ false positives (~11 eV) can still reach a converged CI-NEB band.
   ``max_endpoint_mismatch`` does not oversample)
 - Climbing NEB: two-stage only when the IDPP path has a clear interior maximum
   (barrier ``≥ 1.0`` eV); otherwise climb from step 0
-- Finalize also rejects barriers ``> 8`` eV
+- Finalize also rejects barriers above ``neb_max_spurious_barrier``
+  (adsorbate presets keep ``8.0`` eV)
 
 **Surface NEB (differences from gas):**
 
@@ -730,7 +733,10 @@ false positives (~11 eV) can still reach a converged CI-NEB band.
 - ``neb_surface_lattice_rotation=True`` for bare ``surface``;
   ``False`` for ``surface_cluster`` (metal islands drift off registry under
   free Kabsch) and for ``surface_cluster_adsorbate`` /
-  ``surface_adsorbate`` (keeps adsorbate-slab registry)
+  ``surface_adsorbate`` (keeps adsorbate-slab registry).
+  :class:`~scgo.system_types.policy.SystemPolicy` AND-gates this flag: when
+  the policy default is off, an explicit ``True`` override stays off (same
+  gate applies to GO slab final-write alignment).
 - ``neb_surface_max_lattice_shift=1``
 - ``parallel_neb_max_bands=4`` (bands chunked four at a time for large slab
   cells)

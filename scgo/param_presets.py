@@ -863,7 +863,10 @@ def get_ts_search_params(
     and ``neb_surface_max_lattice_shift`` (default ``1``). Free in-plane
     ``neb_surface_lattice_rotation`` is on for bare ``surface`` and off for
     ``surface_cluster`` (metal-island registry) plus the adsorbate surface
-    types (``surface_cluster_adsorbate``, ``surface_adsorbate``).
+    types (``surface_cluster_adsorbate``, ``surface_adsorbate``). The system
+    policy AND-gates that flag at resolve time, so an explicit ``True`` stays
+    off when the policy default is off. ``surface_cluster`` also raises
+    ``neb_max_spurious_barrier`` to ``12.0`` eV (others keep ``8.0``).
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):
