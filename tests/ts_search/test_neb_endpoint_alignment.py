@@ -40,11 +40,15 @@ from scgo.utils.helpers import get_cluster_formula
 def test_system_policy_surface_enables_remap_and_rotation():
     bare = get_system_policy("surface_cluster")
     assert bare.neb_surface_cell_remap is True
-    assert bare.neb_surface_lattice_rotation is True
+    # Metal islands on a fixed slab: free Kabsch drifts off registry.
+    assert bare.neb_surface_lattice_rotation is False
     # Free in-plane Kabsch breaks adsorbate–slab registry; remap/MIC stay on.
     ads = get_system_policy("surface_cluster_adsorbate")
     assert ads.neb_surface_cell_remap is True
     assert ads.neb_surface_lattice_rotation is False
+    # Bare slab-search may still use free in-plane Kabsch.
+    slab = get_system_policy("surface")
+    assert slab.neb_surface_lattice_rotation is True
 
 
 def test_validate_lattice_compatible_rotation_rejects_out_of_plane():
@@ -385,7 +389,7 @@ def test_get_ts_search_params_surface_keeps_alignment_defaults():
     assert ts["neb_align_endpoints"] is True
     assert ts["neb_interpolation_mic"] is True
     assert ts["neb_surface_cell_remap"] is True
-    assert ts["neb_surface_lattice_rotation"] is True
+    assert ts["neb_surface_lattice_rotation"] is False
     assert ts["neb_surface_max_lattice_shift"] == 1
 
 

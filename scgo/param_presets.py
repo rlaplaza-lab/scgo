@@ -193,9 +193,17 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
 # Supported clusters: Pt/metal rearrangements on graphite routinely exceed the
 # shared 1.25 Å * 3 cartesian gate (~6 Å). Widen the hard gate so near-minima
 # pairs are not discarded before NEB.
+# Free in-plane Kabsch (inherited from bare surface) shifts metal islands off
+# graphite registry and drifts endpoint energies by several eV; keep remap/MIC
+# but disable lattice rotation (same rationale as adsorbate surface presets).
+# Metal-deposit IDPP often overestimates the CI-NEB barrier (~11 eV IDPP →
+# ~3 eV converged); raise the spurious cap just above that false-positive
+# band while still rejecting discontinuous ~30 eV failures.
 _SURFACE_CLUSTER_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_SURFACE_TS_NEB_DEFAULTS,
     "max_endpoint_mismatch": 2.5,
+    "neb_surface_lattice_rotation": False,
+    "neb_max_spurious_barrier": 12.0,
 }
 
 # Bare-slab vacancy/rearrangement NEBs: softer clash floor than adsorbate
@@ -853,9 +861,9 @@ def get_ts_search_params(
     NEB endpoint alignment is on by default (``neb_align_endpoints=True``). Surface
     system types also enable ``neb_interpolation_mic``, ``neb_surface_cell_remap``,
     and ``neb_surface_max_lattice_shift`` (default ``1``). Free in-plane
-    ``neb_surface_lattice_rotation`` is on for the bare surface types
-    (``surface_cluster``, ``surface``) and off for the adsorbate surface types
-    (``surface_cluster_adsorbate``, ``surface_adsorbate``) to stay registry-safe.
+    ``neb_surface_lattice_rotation`` is on for bare ``surface`` and off for
+    ``surface_cluster`` (metal-island registry) plus the adsorbate surface
+    types (``surface_cluster_adsorbate``, ``surface_adsorbate``).
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):

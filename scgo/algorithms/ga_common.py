@@ -422,7 +422,11 @@ def core_adsorbate_partition_details(
     if counts is None:
         return None
     n_core, n_ads = counts
-    assert adsorbate_definition is not None
+    if adsorbate_definition is None:
+        raise SCGOValidationError(
+            "adsorbate_definition is required when resolving "
+            "core/adsorbate partition details."
+        )
     lengths = _require_fragment_lengths(adsorbate_definition, n_ads)
     return (n_core, lengths)
 

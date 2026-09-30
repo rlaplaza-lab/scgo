@@ -1,6 +1,83 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
+
+### Fixed
+
+- TS pre-pair minima dedupe is now **partition-aware** for slab-search types
+  (`surface`, `surface_adsorbate`): the comparison window is the mobile
+  partition `[fixed | top layers | adsorbate]` tail, matching the GO-phase
+  `search_mobile_count` contract. Distinct top-layer registries no longer
+  collapse because the frozen slab dominated (or diluted) the fingerprint, and
+  bare `surface` runs no longer compare the full frozen structure.
+- `layer_cluster_threshold_ang` is now actually applied on the TS path: NEB
+  endpoint `FixAtoms` attachment forwards the configured threshold instead of
+  silently using the module constant.
+- The IDPP priority screen honors the resolved per-system
+  `min_saddle_prominence` / `neb_max_spurious_barrier` knobs (previously
+  hardcoded screen defaults applied), and forwards
+  `neb_interpolation_bond_tolerance_a` to interpolation on both the IDPP
+  screen and the parallel NEB runner — matching the serial path.
+- Direct calls to `run_transition_state_search` that omit NEB knobs now resolve
+  them from the same per-system presets as `get_ts_search_params`
+  (adsorbates: spring `0.5`, steps `4000`, climb; surfaces: steps `2000`;
+  shared `neb_fmax=0.20`). High-level runner behavior is unchanged.
+- Surface TS runs warn when `comparator_use_mic=False`: the knob affects GO
+  comparators only; TS dedupe/pairing/NEB force MIC for surface types.
+- `run_trials` logs which value wins when a `comparator_n_top` override differs
+  from the resolved `search_mobile_count`.
+- Basin-hopping surface validation again raises `SCGOValidationError` (not
+  `AssertionError`) when `surface_config` is missing; core/adsorbate partition
+  details do the same for a missing `adsorbate_definition`.
+- IDPP wipeout and clash / barrier / prominence rejects name the knobs to
+  change (`neb_prescreen_clash_distance`, `neb_max_spurious_barrier`,
+  `min_saddle_prominence`). Seed-combiner soft failures report
+  `connectivity_factor` / distance scales.
+- Surface-cluster NEB no longer disables MIC for tiny moiety unwraps:
+  `unwrap_breaks_mic` keeps `mic=True` unless the unwrap exceeds half the
+  in-plane cell (sub-Å bonded polishes previously forced Cartesian
+  interpolation and produced 80–160 eV IDPP junk on Pt5/graphite).
+- `surface_cluster` presets disable `neb_surface_lattice_rotation` (Kabsch
+  lattice rotation drifted island registry by several eV) and raise
+  `neb_max_spurious_barrier` to 12.0 eV so metal-deposit IDPP false
+  positives (~11 eV) can still reach a converged CI-NEB band.
+- Kaggle GPU CI (full mode) is green again:
+  - `test_parallel_neb_relax_batch_keeps_distinct_ir4_interiors` relies on the
+    production ``perturb_sigma`` knob (crossed regular-tetrahedron labeling is
+    no longer a distinct pair after canonical endpoint alignment).
+  - The GO+TS example matrix carries an explicit ``pytest.mark.timeout(5400)``
+    so heavy bare-surface cases stay under the Kaggle kernel cap.
+
+### Added
+
+- Degenerate NEB paths are rejected before optimization:
+  ``validate_initial_neb_path`` enforces a minimum aligned endpoint mobile
+  displacement (``MIN_NEB_ENDPOINT_DISPLACEMENT_A = 0.30`` Å, all system
+  types). Endpoints closer than this are the same minimum up to
+  permutation/symmetry; their bands have zero length and previously burned
+  full NEB step budgets before being discarded as "converged but no usable
+  TS".
+- **Block-aware, component-weighted structure uniqueness.** De-duplication
+  partitions mobile atoms into role blocks — `mobile_slab` / `deposit` /
+  `adsorbate` — with per-role weights and cross-block element-pair distance
+  terms so binding geometry (adsorbate registry, deposit–support contact) is
+  visible to the comparator.
+  - New knobs on `ga` / `bh`: `comparator_component_weights` and
+    `comparator_cross_weight`. An explicit `comparator_n_top` still forces the
+    legacy trailing-window comparison.
+  - Type-aware defaults: `surface` / `surface_adsorbate` keep full weight on
+    mobile top layers; `surface_cluster*` with relaxed support includes those
+    layers at weight `0.2` (`0` restores the old exclusion).
+  - Same geometry drives GA/BH dedupe, end-of-campaign `filter_unique_minima`,
+    diversity-fitness scoring, and TS minima pre-pair filtering + saddle
+    clustering.
+- `tag_ts_in_db` is settable via `ts_params` (boolean, default `True`) and
+  flows through to the TS runner.
+- Strict `ts_params` key validation: unknown keys are rejected up front with an
+  error listing the offending and expected keys (mirrors GO behavior).
+- `DEFAULT_FMAX_THRESHOLD` constant replaces duplicated `0.05` literals;
+  dead `DEFAULT_PAIR_COR_CUM_DIFF` constant removed.
+- Monthly Modal H100 GPU CI workflow for full CUDA suites.
 
 ### Changed
 
@@ -13,12 +90,29 @@
   the simplest robust-interior barrier (ascending prominence) within the NEB
   budget. Bare-surface pre-screens use a 0.5 Å clash floor and the shared
   8.0 eV spurious-barrier cap.
+- **Surface NEB alignment shared with GO final write.** MIC-aware matching,
+  collective lattice shifts, and optional lattice rotation score only real slab
+  symmetries; GO slab final-write routes through the same entry point so
+  positions stay consistent with TS endpoints.
 - **Default uniqueness energy tolerance raised to 0.05 eV**
   (`DEFAULT_ENERGY_TOLERANCE`). Independently relaxed copies of the same
   isomer often differ by tens of meV at the default `fmax` of 0.05 eV/Å; the
   previous 0.02 eV gate left near-copies as "unique". Geometry gates are
   unchanged. Applies to GO `energy_tolerance` and TS
   `minima_energy_tolerance` / `ts_energy_tolerance`.
+- **Tighter default uniqueness gates for supported clusters**
+  (`surface_cluster`, `surface_cluster_adsorbate`): defaults move from
+  `comparator_tol=0.015` / `comparator_pair_cor_max=0.7 Å` to `0.010` /
+  `0.45 Å` in GO and in TS pre-pair minima filtering. Explicit user values
+  always win.
+- **TorchSim relaxer default dtype is `float32`** when unset (matching
+  presets). Pass `torch.float64` for ASE MACE wrapper parity at higher cost.
+- Geometric prefilter before expensive relax; skip redundant force evaluations
+  and pairwise geometry work where results are already cached (including IDPP
+  band reuse into NEB).
+- Trusted deposition / stamp / fragment paths fail loud instead of silent
+  skip; BH keeps legacy DB rows with unset `ga_eligible` (default True) while
+  GA population loading treats unset as False.
 - **Bounded genetic-operator retries cut parallel offspring walltime.** Batch
   offspring generation waits on the slowest job, so unbounded inner retry
   loops dominated generation time whenever a parent was hopeless (dense,
@@ -68,111 +162,6 @@
   NEB non-convergence warnings are no longer hidden below verbosity 2; the
   unused `log_v` helper was removed (use `log_debug_v` / `log_info_v` /
   `log_warning_v`).
-
-## 0.9.2
-
-### Added
-
-- **Block-aware, component-weighted structure uniqueness.** De-duplication no
-  longer treats every mobile atom identically. Structures are partitioned into
-  role blocks — `mobile_slab` / `deposit` / `adsorbate` — whose intra-block
-  fingerprints are combined with per-role weights, and new cross-block
-  element-pair distance terms make binding geometry (e.g. adsorbate registry
-  on relaxed slab layers, deposit–support contact) visible to the comparator.
-  Previously these differences were invisible: sorted intra-element lists
-  cannot see a monatomic adsorbate at all, and a same-element support swamped
-  the deposit's distances in one shared bucket.
-
-  - New knobs on `ga` / `bh`: `comparator_component_weights` (per-role weights;
-    `0` fully excludes a block, including its cross terms) and
-    `comparator_cross_weight`. An explicit `comparator_n_top` still forces the
-    legacy trailing-window comparison as an escape hatch.
-  - Type-aware defaults resolved from the system type:
-    `surface` / `surface_adsorbate` keep full weight on the mobile top layers
-    (they are the region of interest); `surface_cluster*` with relaxed support
-    includes those layers at weight `0.2` so near-rigid lattice motion cannot
-    dilute deposit/adsorbate discrimination (`0` restores the old exclusion).
-  - The same geometry drives GA population dedupe, BH dedupe, the end-of-
-    campaign `filter_unique_minima` pass, diversity-fitness scoring, and TS
-    minima pre-pair filtering + final saddle clustering.
-
-### Changed
-
-- **Tighter default uniqueness gates for supported clusters**
-  (`surface_cluster`, `surface_cluster_adsorbate`): block-aware fingerprints
-  keep deposit/adsorbate differences undiluted by slab padding, so the legacy
-  slack is unnecessary. Defaults move from `comparator_tol=0.015` /
-  `comparator_pair_cor_max=0.7 Å` to `0.010` / `0.45 Å` for these system types,
-  in GO and in TS pre-pair minima filtering. Explicit non-default user values
-  always win; set the old values explicitly to restore prior behavior.
-
-## 0.9.1
-
-### Fixed
-
-- Kaggle GPU CI (full mode) is green again:
-  - `test_parallel_neb_relax_batch_keeps_distinct_ir4_interiors` relied on
-    crossed endpoint labelings of a *regular* tetrahedron to bend IDPP away
-    from linear. Canonical endpoint alignment (fingerprint + Kabsch + spatial
-    rematch, 0.9.0) correctly removes that artifact — the pair is one minimum
-    up to atom permutation and every interpolation of it is identical. The test
-    now exercises distinct interiors via the production ``perturb_sigma`` knob,
-    and a new regression test pins the degenerate-pair rejection.
-  - The heavy bare-surface example cases straddle the suite-default 3600s
-    per-test timeout on a T4 (observed ~1100s–>3600s for the same seed across
-    runs: GPU-nondeterministic GA trajectories). The GO+TS example matrix now
-    carries an explicit ``pytest.mark.timeout(5400)``, keeping worst-case suite
-    wall time below the Kaggle kernel cap.
-
-### Added
-
-- Degenerate NEB paths are rejected before optimization:
-  ``validate_initial_neb_path`` now enforces a minimum aligned endpoint mobile
-  displacement (``MIN_NEB_ENDPOINT_DISPLACEMENT_A = 0.30`` Å, all system
-  types). Endpoints closer than this are the same minimum up to
-  permutation/symmetry; their bands have zero length, cannot develop an
-  interior saddle, and previously burned full NEB step budgets before being
-  discarded as "converged but no usable TS". Such pairs are now skipped at
-  setup with an explicit "degenerate interpolation" error.
-
-## 0.9.0
-
-### Fixed
-
-- TS pre-pair minima dedupe is now **partition-aware** for slab-search types
-  (`surface`, `surface_adsorbate`): the comparison window is the mobile
-  partition `[fixed | top layers | adsorbate]` tail, matching the GO-phase
-  `search_mobile_count` contract. Distinct top-layer registries no longer
-  collapse because the frozen slab dominated (or diluted) the fingerprint, and
-  bare `surface` runs no longer compare the full frozen structure.
-- `layer_cluster_threshold_ang` is now actually applied on the TS path: NEB
-  endpoint `FixAtoms` attachment forwards the configured threshold instead of
-  silently using the module constant.
-- The IDPP priority screen honors the resolved per-system
-  `min_saddle_prominence` / `neb_max_spurious_barrier` knobs (previously
-  hardcoded screen defaults applied), and forwards
-  `neb_interpolation_bond_tolerance_a` to interpolation on both the IDPP
-  screen and the parallel NEB runner — matching the serial path.
-- Direct calls to `run_transition_state_search` that omit NEB knobs now resolve
-  them from the same per-system presets as `get_ts_search_params`
-  (adsorbates: spring `0.5`, steps `4000`, climb; surfaces: steps `2000`;
-  shared `neb_fmax=0.20`). High-level runner behavior is unchanged.
-- Surface TS runs warn when `comparator_use_mic=False`: the knob affects GO
-  comparators only; TS dedupe/pairing/NEB force MIC for surface types.
-- `run_trials` logs which value wins when a `comparator_n_top` override differs
-  from the resolved `search_mobile_count`.
-
-### Added
-
-- `tag_ts_in_db` is settable via `ts_params` (boolean, default `True`) and
-  flows through to the TS runner.
-- Strict `ts_params` key validation: unknown keys are rejected up front with an
-  error listing the offending and expected keys (mirrors GO behavior).
-- `DEFAULT_FMAX_THRESHOLD` constant replaces duplicated `0.05` literals;
-  dead `DEFAULT_PAIR_COR_CUM_DIFF` constant removed.
-
-### Changed
-
 - Metal cores are rejected on slab-search adsorbate types
   (`validate_adsorbate_definition`): the slab top layers *are* the search core;
   pass adsorbates only.

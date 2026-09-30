@@ -210,7 +210,7 @@ Per-system-type defaults:
    * - Surface cluster
      - 0.7
      - 0.40
-     - 8.0
+     - 12.0
      - 2.5
    * - Bare surface
      - 0.5

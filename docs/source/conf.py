@@ -123,10 +123,20 @@ autodoc_default_options = {
 # -- Options for intersphinx -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/intersphinx.html
 
+# Prefer local inventories when present (avoids hung inventory fetches).
+_inv = _repo_root / ".release_logs" / "inv"
 intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable/", None),
+    "python": (
+        "https://docs.python.org/3",
+        str(_inv / "python.inv") if (_inv / "python.inv").is_file() else None,
+    ),
+    "numpy": (
+        "https://numpy.org/doc/stable/",
+        str(_inv / "numpy.inv") if (_inv / "numpy.inv").is_file() else None,
+    ),
 }
+# Avoid indefinite hangs when inventory hosts are slow or unreachable.
+intersphinx_timeout = 30
 
 # -- Options for todo extension -----------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/todo.html

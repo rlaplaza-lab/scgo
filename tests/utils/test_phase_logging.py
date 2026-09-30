@@ -23,7 +23,8 @@ def test_compact_neb_pair_reason():
     assert (
         compact_neb_pair_reason(
             "Initial NEB path rejected (energy profile): "
-            "IDPP barrier 47.438 eV exceeds 8.000 eV (likely discontinuous)"
+            "IDPP barrier 47.438 eV exceeds "
+            "neb_max_spurious_barrier=8.000 eV (likely discontinuous)"
         )
         == "IDPP barrier exceeds limit"
     )
@@ -42,7 +43,8 @@ def test_compact_neb_pair_reason():
     )
     assert (
         compact_neb_pair_reason(
-            "NEB barrier 12.000 eV exceeds 8.000 eV (likely discontinuous path)"
+            "NEB barrier 12.000 eV exceeds "
+            "neb_max_spurious_barrier=8.000 eV (likely discontinuous path)"
         )
         == "NEB barrier too high"
     )
@@ -74,7 +76,8 @@ def test_log_neb_search_summaries_verbosity(caplog, tmp_path):
             "status": "skipped",
             "error": (
                 "Initial NEB path rejected (energy profile): "
-                "IDPP barrier 47.438 eV exceeds 8.000 eV (likely discontinuous)"
+                "IDPP barrier 47.438 eV exceeds "
+                "neb_max_spurious_barrier=8.000 eV (likely discontinuous)"
             ),
         },
         {

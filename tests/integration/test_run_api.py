@@ -263,7 +263,7 @@ def test_system_policy_surface_neb_defaults():
     assert gas.neb_surface_lattice_rotation is False
     assert bare.neb_force_mic is True
     assert bare.neb_surface_cell_remap is True
-    assert bare.neb_surface_lattice_rotation is True
+    assert bare.neb_surface_lattice_rotation is False
     assert ads.neb_force_mic is True
     assert ads.neb_surface_cell_remap is True
     assert ads.neb_surface_lattice_rotation is False

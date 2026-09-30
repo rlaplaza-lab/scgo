@@ -31,9 +31,9 @@ SYSTEM_TYPE = "surface"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "results"
 OUTPUT_STEM = "defected_graphite"
 
-# GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
-# per-example knob (it is the dominant TS cost lever).
-MAX_PAIRS = 4
+# Bare-slab rearrangements are rare under low-effort budgets; oversample pairs
+# and climb so the demo still finds a usable band.
+MAX_PAIRS = 16
 
 
 def _resolve_output_stem() -> str:
@@ -66,6 +66,7 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
         seed=SEED,
     )
     ts_params["max_pairs"] = MAX_PAIRS
+    ts_params["neb_climb"] = True
     ts_params["connectivity_factor"] = 1.8
     ts_params["write_timing_json"] = True
     return ts_params

@@ -76,6 +76,37 @@ def _pbc_for_mic_alignment(pbc: np.ndarray | list[bool]) -> np.ndarray:
     return pbc_arr
 
 
+def half_inplane_cell_length(cell: Any, pbc: np.ndarray | list[bool]) -> float:
+    """Half the shorter in-plane lattice vector (MIC rewrap threshold)."""
+    cell_arr = _cell_array(cell)
+    axis_a, axis_b = _inplane_periodic_axes(_pbc_for_mic_alignment(pbc))
+    la = float(np.linalg.norm(cell_arr[axis_a]))
+    lb = float(np.linalg.norm(cell_arr[axis_b]))
+    return 0.5 * min(la, lb)
+
+
+def unwrap_breaks_mic(
+    pre_unwrap: np.ndarray,
+    unwrapped: np.ndarray,
+    *,
+    cell: Any,
+    pbc: np.ndarray | list[bool],
+) -> bool:
+    """True when a moiety unwrap is large enough that ASE ``mic=True`` would undo it.
+
+    Tiny bonded-fragment polishes (≪ half-cell) must keep MIC interpolation:
+    disabling MIC for sub-Å unwraps turns surface_cluster IDPP bands into
+    multi-tens-of-eV discontinuous paths (Pt5-on-graphite regression).
+    """
+    delta = np.asarray(unwrapped, dtype=float) - np.asarray(pre_unwrap, dtype=float)
+    if delta.size == 0:
+        return False
+    max_disp = float(np.max(np.linalg.norm(delta, axis=1)))
+    if max_disp <= 1e-8:
+        return False
+    return max_disp > half_inplane_cell_length(cell, pbc) - 1e-6
+
+
 def _bond_edge_set(
     atoms: Atoms,
     connectivity_factor: ConnectivityFactorInput | None,

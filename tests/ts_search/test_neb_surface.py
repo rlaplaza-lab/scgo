@@ -128,6 +128,51 @@ def test_consistent_product_positions_noop_for_gas_h2():
     np.testing.assert_allclose(out, prod)
 
 
+def test_unwrap_breaks_mic_only_for_half_cell_jumps():
+    """Sub-Å polishes must keep MIC; full-cell unwraps must disable it."""
+    from scgo.ts_search.neb_surface import unwrap_breaks_mic
+
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    pre = slab.get_positions().copy()
+    tiny = pre.copy()
+    tiny[-1, 0] += 0.05
+    assert unwrap_breaks_mic(pre, tiny, cell=slab.cell, pbc=slab.pbc) is False
+    jumped = pre.copy()
+    jumped[-1, 0] += float(slab.cell[0, 0])
+    assert unwrap_breaks_mic(pre, jumped, cell=slab.cell, pbc=slab.pbc) is True
+
+
+def test_interpolate_path_keeps_mic_after_tiny_moiety_polish():
+    """Tiny consistent_product polish must not flip interpolate_mic off."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.5
+    n_slab = len(slab)
+    # Compact dimer that stays bonded under MIC (no half-cell jump).
+    a = slab.copy() + Atoms(
+        "OH",
+        positions=[[0.5, 0.5, z0], [1.5, 0.5, z0]],
+    )
+    b = slab.copy() + Atoms(
+        "OH",
+        positions=[[1.2, 0.8, z0], [2.2, 0.8, z0]],
+    )
+    images = interpolate_path(
+        a,
+        b,
+        n_images=3,
+        method="linear",
+        mic=True,
+        align_endpoints=True,
+        n_slab=n_slab,
+        system_type="surface_cluster",
+    )
+    # If mic were wrongly disabled, mid-image OH can still look fine for this
+    # short hop; assert the band did not record a half-cell unwrap flag.
+    assert images[-1].info.get("scgo_moiety_breaks_mic") is not True
+
+
 # --- Symmetry -----------------------------------------------------------------
 
 

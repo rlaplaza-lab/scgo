@@ -1210,7 +1210,14 @@ def run_transition_state_search(
 
         if not screened:
             logger.error(
-                "No adsorbate pairs survived IDPP priority screening for TS search"
+                "No adsorbate pairs survived IDPP priority screening for TS search. "
+                "Relax neb_prescreen_clash_distance=%.3f Å, "
+                "neb_max_spurious_barrier=%.2f eV, and/or "
+                "min_saddle_prominence=%.2f eV "
+                "(or raise max_pairs / inspect pair debug logs).",
+                neb_prescreen_clash_distance,
+                neb_max_spurious_barrier,
+                min_saddle_prominence,
             )
             return []
         pairs = [(i, j) for i, j, _images in screened]

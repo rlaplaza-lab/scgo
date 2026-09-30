@@ -9,6 +9,8 @@ from scipy.spatial.distance import cdist
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    format_connectivity_factor,
+    normalize_connectivity_factor,
 )
 from scgo.utils.logging import get_logger
 
@@ -175,10 +177,19 @@ def combine_seeds(
                 placement_success = True
 
         if not placement_success:
+            cf_txt = format_connectivity_factor(
+                normalize_connectivity_factor(connectivity_factor)
+            )
             logger.warning(
                 "Failed to place seed %d on the largest facets or at a random "
-                "offset; discarding this seed combination",
+                "offset; discarding this seed combination "
+                "(connectivity_factor=%s, separation_scaling=%.3f, "
+                "min_distance_factor=%.3f). Try raising connectivity_factor if "
+                "seeds stay disconnected.",
                 i + 1,
+                cf_txt,
+                separation_scaling,
+                min_distance_factor,
             )
             return None
 
@@ -235,7 +246,15 @@ def combine_and_grow(
     )
 
     if combined_seed is None:
-        logger.warning("Initial seed combination failed")
+        logger.warning(
+            "Initial seed combination failed "
+            "(connectivity_factor=%s, vdw_scaling=%.3f, min_distance_factor=%.3f)",
+            format_connectivity_factor(
+                normalize_connectivity_factor(connectivity_factor)
+            ),
+            vdw_scaling,
+            min_distance_factor,
+        )
         return None
 
     # Check composition feasibility before attempting growth

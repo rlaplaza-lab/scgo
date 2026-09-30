@@ -51,9 +51,13 @@ class SystemPolicy:
 
     @property
     def neb_surface_lattice_rotation(self) -> bool:
-        # Continuous in-plane Kabsch breaks adsorbate–slab registry (multi-eV
-        # endpoint energy jumps); skip free rotation when an adsorbate is present.
-        return self.uses_surface and not self.has_adsorbate
+        # Continuous in-plane Kabsch breaks registry for supported metal clusters
+        # and adsorbates (multi-eV endpoint energy jumps). Keep it only for bare
+        # slab-search rearrangements (vacancies), where the whole mobile layer
+        # can rotate together.
+        return (
+            self.uses_surface and self.slab_is_search_target and not self.has_adsorbate
+        )
 
     @property
     def constrain_adsorbate_moves(self) -> bool:

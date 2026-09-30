@@ -12,9 +12,11 @@ Params come from the reduced-budget (~25% of production)
 :func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
 production calculator and NEB physics but shrink the GA and NEB step budgets.
 
-TS: bare surface presets keep no-climb NEB, shared ``neb_fmax=0.20``, spring
-``0.1``, 5 images, MIC + cell remap + lattice rotation, and parallel NEB.
-This example only sets ``max_pairs`` and ``connectivity_factor``.
+TS: ``surface_cluster`` presets keep no-climb NEB, shared ``neb_fmax=0.20``,
+spring ``0.1``, 5 images, MIC + cell remap (no lattice rotation), and
+parallel NEB. This example raises ``max_pairs`` and enables climb so
+low-effort demos still land at least one interior saddle under the
+12 eV ``surface_cluster`` spurious-barrier screen.
 
 Output: ``results/pt5_graphite_mace/`` with ``Pt5_graphite_searches/``,
 ``Pt5_graphite_ts_results/``, and optional ``go_ts_timing.json`` (see docs
@@ -48,9 +50,10 @@ def _resolve_output_stem() -> str:
     )
 
 
-# GA/NEB budgets come from the low-effort presets; only the TS pair cap is a
-# per-example knob (it is the dominant TS cost lever).
-MAX_PAIRS = 6
+# Graphite-supported clusters often need more IDPP-screened pairs than gas:
+# many near-copies fail the surface_cluster discontinuous-path gate. Use the
+# production NEB step budget so climb can finish on the survivors.
+MAX_PAIRS = 24
 
 
 def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
@@ -77,6 +80,8 @@ def _build_ts_params(surface_config: SurfaceSystemConfig) -> dict:
         seed=SEED,
     )
     ts_params["max_pairs"] = MAX_PAIRS
+    ts_params["neb_climb"] = True
+    ts_params["neb_steps"] = 2000
     ts_params["connectivity_factor"] = 1.8
     ts_params["write_timing_json"] = True
     return ts_params

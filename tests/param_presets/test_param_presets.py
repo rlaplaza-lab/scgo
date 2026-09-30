@@ -173,8 +173,9 @@ def test_ts_defaults_expose_promoted_thresholds():
             assert d["max_endpoint_mismatch"] == pytest.approx(3.0)
             assert d["neb_prescreen_clash_distance"] == pytest.approx(0.5)
         elif system_type == "surface_cluster":
-            assert d["neb_max_spurious_barrier"] == 8.0
+            assert d["neb_max_spurious_barrier"] == 12.0
             assert d["max_endpoint_mismatch"] == pytest.approx(2.5)
+            assert d["neb_surface_lattice_rotation"] is False
         else:
             assert d["neb_max_spurious_barrier"] == 8.0
 
@@ -227,7 +228,8 @@ def test_low_effort_surface_cluster_ts_defaults_match_example_path():
     )
     assert low["allow_cluster_fragmentation"] is True
     assert low["max_endpoint_mismatch"] == pytest.approx(2.5)
-    assert low["neb_max_spurious_barrier"] == pytest.approx(8.0)
+    assert low["neb_max_spurious_barrier"] == pytest.approx(12.0)
+    assert low["neb_surface_lattice_rotation"] is False
     assert (
         low["neb_prescreen_clash_distance"]
         == production["neb_prescreen_clash_distance"]
@@ -397,7 +399,7 @@ def test_ts_search_surface_regime_mic_and_fmax():
     assert kwargs["torchsim_params"]["max_steps"] == 2000
     assert kwargs["neb_align_endpoints"] is True
     assert kwargs["neb_surface_cell_remap"] is True
-    assert kwargs["neb_surface_lattice_rotation"] is True
+    assert kwargs["neb_surface_lattice_rotation"] is False
     assert kwargs["parallel_neb_max_batch_atoms"] == 4000
     # G3: the TS relaxer is sized for the largest fused NEB force batch, mirroring
     # the GO expected_max_atoms pattern so the memory-scaler cache bucket is stable.

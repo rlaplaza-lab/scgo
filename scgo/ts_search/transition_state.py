@@ -55,6 +55,7 @@ from scgo.ts_search.neb_surface import (
     inplane_symmetry_matrices,
     refresh_surface_neb_springs,
     symmetry_anchor_center,
+    unwrap_breaks_mic,
 )
 from scgo.utils.comparators import (
     ComparatorBlocks,
@@ -794,6 +795,45 @@ def _lattice_translation_candidates(
     return candidates
 
 
+def _collective_mobile_lattice_snap(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+    mobile_mask: np.ndarray,
+    *,
+    axis_a: int,
+    axis_b: int,
+    max_shift: int,
+    score_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Pick a uniform in-plane lattice image for mobile atoms before per-atom MIC.
+
+    Applying per-atom MIC first can scramble a compact deposit that straddles a
+    cell boundary; a collective image keeps the moiety intact for IDPP.
+    """
+    if not np.any(mobile_mask):
+        return prod_pos
+    rank_mask = mobile_mask if score_mask is None else score_mask
+
+    best_pos = prod_pos.copy()
+    best_score, _ = _score_mobile_endpoint_displacement(
+        ref_pos, best_pos, rank_mask, cell, pbc
+    )
+    for shift in _lattice_translation_candidates(
+        cell, axis_a, axis_b, max_shift=max_shift
+    ):
+        shifted = prod_pos.copy()
+        shifted[mobile_mask] = shifted[mobile_mask] + shift
+        score, _ = _score_mobile_endpoint_displacement(
+            ref_pos, shifted, rank_mask, cell, pbc
+        )
+        if score < best_score:
+            best_score = score
+            best_pos = shifted
+    return best_pos
+
+
 def _snap_to_reactant_mic_frame(
     ref_pos: np.ndarray,
     pos: np.ndarray,
@@ -929,9 +969,20 @@ def _align_product_surface_pbc(
     )
 
     prod = np.asarray(product_positions, dtype=float).copy()
-    # Per-shift candidate search below subsumes a collective uniform lattice
-    # image: each shift is scored after per-atom MIC snapping, jointly with the
-    # optional in-plane rotation / symmetry variant.
+    # Collective image first keeps compact deposits intact; per-atom MIC alone
+    # can scramble a moiety that straddles a cell boundary (Pt5-on-graphite).
+    if enable_cell_remap:
+        prod = _collective_mobile_lattice_snap(
+            ref_pos,
+            prod,
+            cell,
+            pbc_mic,
+            mobile_mask,
+            axis_a=axis_a,
+            axis_b=axis_b,
+            max_shift=max_lattice_shift,
+            score_mask=score_mask,
+        )
 
     prod = _snap_to_reactant_mic_frame(ref_pos, prod, cell, pbc_mic, anchor_mask)
 
@@ -1892,6 +1943,9 @@ def interpolate_path(
             a2_copy.pbc = a1_copy.pbc
 
         # Unwrap intact mobile fragments so ASE MIC interpolation cannot split them.
+        # Tiny bonded polishes (≪ half-cell) must keep mic=True: disabling MIC for
+        # any unwrap (1e-8 threshold) turned surface_cluster IDPP into 80–160 eV
+        # junk. Only full-cell unwraps set interpolate_mic=False.
         pre_unwrap = a2_copy.get_positions().copy()
         unwrapped = consistent_product_positions(
             a1_copy,
@@ -1901,13 +1955,23 @@ def interpolate_path(
             max_lattice_shift=int(neb_surface_max_lattice_shift),
         )
         moiety_unwrapped = bool(np.any(np.abs(unwrapped - pre_unwrap) > 1e-8))
+        moiety_breaks_mic = False
         if moiety_unwrapped:
             a2_copy.set_positions(unwrapped, apply_constraint=False)
             a2_copy.info["scgo_moiety_unwrapped"] = True
+            moiety_breaks_mic = unwrap_breaks_mic(
+                pre_unwrap,
+                unwrapped,
+                cell=a1_copy.cell,
+                pbc=a1_copy.pbc,
+            )
+            if moiety_breaks_mic:
+                a2_copy.info["scgo_moiety_breaks_mic"] = True
         if used_symmetry_copy:
             a2_copy.info["scgo_symmetry_copy"] = True
     else:
         moiety_unwrapped = False
+        moiety_breaks_mic = False
 
     # Build the band from aligned endpoints; ASE interpolation only fills interiors.
     # ``a1_copy``/``a2_copy`` are already de-aliased via ``copy_atoms`` above, but
@@ -1916,8 +1980,8 @@ def interpolate_path(
     # raw_score) on one image would then overwrite every other image, so isolate
     # each interior copy with ``copy_atoms``.
     images = [a1_copy] + [copy_atoms(a1_copy) for _ in range(n_images)] + [a2_copy]
-    # mic=True would undo a moiety unwrap longer than half a cell edge.
-    interpolate_mic = False if moiety_unwrapped else mic
+    # mic=True would undo a full-cell moiety unwrap; tiny polishes keep MIC.
+    interpolate_mic = False if moiety_breaks_mic else mic
     n_slab_i = int(n_slab)
     n_core_i = int(n_core_mobile) if n_core_mobile is not None else 0
     n_ads_i = int(n_adsorbate_mobile) if n_adsorbate_mobile is not None else 0
@@ -2111,7 +2175,8 @@ def validate_initial_neb_path(
         if min_d < float(clash_distance):
             raise SCGOValidationError(
                 "Initial NEB path rejected (clashing/discontinuous interpolation): "
-                f"image {i} min mobile distance {min_d:.3f} Å < {float(clash_distance):.3f} Å"
+                f"image {i} min mobile distance {min_d:.3f} Å < "
+                f"neb_prescreen_clash_distance={float(clash_distance):.3f} Å"
             )
 
 
@@ -2149,7 +2214,8 @@ def validate_initial_neb_energy_profile(
         raise SCGOValidationError(
             "Initial NEB path rejected (energy profile): "
             f"IDPP barrier {barrier:.3f} eV exceeds "
-            f"{float(max_spurious_barrier):.3f} eV (likely discontinuous)"
+            f"neb_max_spurious_barrier={float(max_spurious_barrier):.3f} eV "
+            "(likely discontinuous)"
         )
     drift_limit = float(max_endpoint_energy_drift)
     if reference_reactant_energy is not None:
@@ -2182,7 +2248,8 @@ def validate_initial_neb_energy_profile(
                 raise SCGOValidationError(
                     "Initial NEB path rejected (energy profile): "
                     f"interior max prominence {prominence:.3f} eV is below "
-                    f"{float(min_saddle_prominence):.3f} eV (one-sided slide)"
+                    f"min_saddle_prominence={float(min_saddle_prominence):.3f} eV "
+                    "(one-sided slide)"
                 )
 
 
@@ -2414,7 +2481,8 @@ def _finalize_neb_result(
         result["neb_converged"] = False
         result["error"] = (
             f"NEB barrier {barrier_height:.3f} eV exceeds "
-            f"{max_final_barrier:.3f} eV (likely discontinuous path)"
+            f"neb_max_spurious_barrier={max_final_barrier:.3f} eV "
+            "(likely discontinuous path)"
         )
         if logger is not None:
             logger.debug(

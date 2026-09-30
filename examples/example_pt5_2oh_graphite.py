@@ -53,9 +53,9 @@ def _resolve_output_stem() -> str:
     )
 
 
-# GA/NEB budgets come from the low-effort presets. Fewer close pairs here:
-# adsorbate bands are the most expensive (7 images, two-stage climb).
-MAX_PAIRS = 4
+# Adsorbate bands are expensive (7 images, two-stage climb); keep the cap
+# moderate but high enough that the 8 eV IDPP screen still leaves survivors.
+MAX_PAIRS = 8
 ADSORBATES = [
     Atoms(symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]]),
     Atoms(symbols=["O", "H"], positions=[[2.2, 0.0, 0.0], [2.2, 0.0, 0.96]]),

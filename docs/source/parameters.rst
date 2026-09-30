@@ -710,6 +710,8 @@ Per-type defaults are in :doc:`/validation_and_constraints`. Bare gas is
 looser (1.0 Å and 0.10 eV). Surface clusters and adsorbates are tighter
 (0.7 Å and 0.40 eV). Bare surface uses a 0.5 Å clash floor (matching the
 atomic-distance warning) and the shared 8.0 eV barrier cap.
+``surface_cluster`` raises the cap to 12.0 eV so metal-deposit IDPP
+false positives (~11 eV) can still reach a converged CI-NEB band.
 
 **Adsorbate NEB specifics** (beyond the gates above):
 
@@ -725,8 +727,9 @@ atomic-distance warning) and the shared 8.0 eV barrier cap.
 
 - ``neb_interpolation_mic=True`` (forced)
 - ``neb_surface_cell_remap=True``
-- ``neb_surface_lattice_rotation=True`` for bare ``surface_cluster`` /
-  ``surface``; ``False`` for ``surface_cluster_adsorbate`` /
+- ``neb_surface_lattice_rotation=True`` for bare ``surface``;
+  ``False`` for ``surface_cluster`` (metal islands drift off registry under
+  free Kabsch) and for ``surface_cluster_adsorbate`` /
   ``surface_adsorbate`` (keeps adsorbate-slab registry)
 - ``neb_surface_max_lattice_shift=1``
 - ``parallel_neb_max_bands=4`` (bands chunked four at a time for large slab
@@ -737,8 +740,10 @@ atomic-distance warning) and the shared 8.0 eV barrier cap.
 Surface path prep (always on for slab / 2D-PBC bands):
 
 - Intact mobile fragments are unwrapped before IDPP
-  (:func:`~scgo.ts_search.neb_surface.consistent_product_positions`); when a
-  correction runs, interpolation uses ``mic=False``.
+  (:func:`~scgo.ts_search.neb_surface.consistent_product_positions`);
+  interpolation keeps ``mic=True`` unless the unwrap exceeds half the
+  in-plane cell (:func:`~scgo.ts_search.neb_surface.unwrap_breaks_mic`).
+  Tiny bonded polishes must not disable MIC.
 - Discrete in-plane slab symmetries (proper rotations on hexagonal / square /
   orthogonal metrics, validated on slab atoms) compete with lattice shifts and,
   when ``neb_surface_lattice_rotation`` is on, with continuous Kabsch. A

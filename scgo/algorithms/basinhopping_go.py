@@ -387,10 +387,17 @@ def bh_go(
     # bottom prefix is the deposit boundary in structural gates.
     n_slab_deposit: int | None = None
     if surface_mode:
-        assert surface_config is not None
         if n_slab <= 0:
+            if surface_config is None:
+                raise SCGOValidationError(
+                    "Surface system type requires n_slab > 0 or surface_config."
+                )
             n_slab = len(surface_config.slab)
         if policy.slab_is_search_target:
+            if surface_config is None:
+                raise SCGOValidationError(
+                    f"system_type={system_type!r} requires surface_config."
+                )
             part = resolve_slab_search_partition(surface_config)
             movable_indices = list(range(part.n_fixed, len(atoms)))
             n_slab_deposit = int(part.n_fixed)

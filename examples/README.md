@@ -22,9 +22,9 @@ two-stage climb over 7 images.
 |--------|-------------|-------------|-------------|----------------------|
 | `example_pt5_gas.py` | `gas_cluster` | 6 | 1000 | no climb, shared `neb_fmax=0.20`, 5 images, parallel NEB |
 | `example_pt5_oh_gas.py` | `gas_cluster_adsorbate` | 6 | 1000 | climb, shared `neb_fmax=0.20`, 7 images, parallel NEB, `max_endpoint_mismatch=1.25` Å |
-| `example_pt5_graphite.py` | `surface_cluster` | 6 | 1000 | no climb, shared `neb_fmax=0.20`, MIC + lattice rotation, parallel NEB |
-| `example_pt5_2oh_graphite.py` | `surface_cluster_adsorbate` | 4 | 1000 | climb, shared `neb_fmax=0.20`, parallel NEB, no lattice rotation, `max_endpoint_mismatch=1.5` Å |
-| `example_defected_graphite.py` | `surface` | 4 | 1000 | top-layer slab search on vacancy-defected graphite |
+| `example_pt5_graphite.py` | `surface_cluster` | 24 | 2000 | climb + production `neb_steps` (example overrides); shared `neb_fmax=0.20`, MIC + lattice rotation, parallel NEB |
+| `example_pt5_2oh_graphite.py` | `surface_cluster_adsorbate` | 8 | 1000 | climb, shared `neb_fmax=0.20`, parallel NEB, no lattice rotation, `max_endpoint_mismatch=1.5` Å |
+| `example_defected_graphite.py` | `surface` | 16 | 1000 | climb (example override); top-layer slab search on vacancy-defected graphite |
 | `example_n_doped_graphite.py` | `surface_adsorbate` | 4 | 1000 | top-layer + OH on N-doped graphite |
 
 GO-only:
