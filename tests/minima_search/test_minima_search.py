@@ -520,7 +520,8 @@ class TestRunTrialsSurfaceAlignment:
         )
         assert kwargs is not None
         assert kwargs["enable_cell_remap"] is True
-        assert kwargs["enable_lattice_rotation"] is True
+        # Policy disables Kabsch for supported clusters (registry drift).
+        assert kwargs["enable_lattice_rotation"] is False
         assert kwargs["max_lattice_shift"] == 1
 
     def test_resolve_surface_alignment_gas_returns_none(self):
@@ -542,7 +543,8 @@ class TestRunTrialsSurfaceAlignment:
         )
         assert kwargs is not None
         assert kwargs["enable_cell_remap"] is False
-        assert kwargs["enable_lattice_rotation"] is True
+        # Policy gates lattice rotation off even when the GO knob is True.
+        assert kwargs["enable_lattice_rotation"] is False
         assert kwargs["max_lattice_shift"] == 3
 
     def test_resolve_n_core_mobile_from_metadata_and_definition(self):

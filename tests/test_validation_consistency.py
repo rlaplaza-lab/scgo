@@ -406,7 +406,7 @@ def test_run_transition_state_search_forwards_system_type_prescreen_defaults(
             None,
             0.7,
             0.40,
-            8.0,
+            12.0,
         ),
     ]
 
