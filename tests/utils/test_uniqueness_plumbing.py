@@ -56,14 +56,21 @@ def test_filter_unique_minima_block_aware_keeps_support_distinct_deposit() -> No
 
 def test_filter_unique_minima_resolved_geometry_supported_cluster() -> None:
     cfg = SurfaceSystemConfig(slab=fcc111("Pt", size=(2, 2, 2), vacuum=8.0))
+    n_slab = len(cfg.slab)
+    n_deposit = 2
     geo = resolve_uniqueness_geometry(
         system_type="surface_cluster",
-        n_atoms=len(cfg.slab) + 2,
+        n_atoms=n_slab + n_deposit,
         surface_config=cfg,
-        counts=(2, 0),
+        counts=(n_deposit, 0),
     )
+    # Frozen support → single deposit role → no blocks; compare the deposit
+    # window only (production search_mobile_count), not the fixed slab.
+    assert geo.blocks is None
     rng = np.random.default_rng(4)
-    base = np.vstack([cfg.slab.get_positions(), rng.uniform(0, 3, (2, 3)) + [0, 0, 10]])
+    base = np.vstack(
+        [cfg.slab.get_positions(), rng.uniform(0, 3, (n_deposit, 3)) + [0, 0, 10]]
+    )
     other = base.copy()
     other[-1] += [0.8, 0.0, 0.0]
     cell, pbc = cfg.slab.cell, cfg.slab.pbc
@@ -73,7 +80,7 @@ def test_filter_unique_minima_resolved_geometry_supported_cluster() -> None:
     kept = filter_unique_minima(
         [_tagged(-2.0, m1), _tagged(-2.005, m2)],
         energy_tolerance=0.02,
-        n_top=len(m1),
+        n_top=n_deposit,
         mic=True,
         blocks=geo.blocks,
         comparator_tol=geo.settings.comparator_tol,

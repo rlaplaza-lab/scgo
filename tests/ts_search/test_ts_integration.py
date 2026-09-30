@@ -253,7 +253,7 @@ def test_max_bands_still_uses_parallel_runner(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ts_run_mod,
         "load_minima_by_composition",
-        lambda *_a, **_k: {formula: [(0.0, atoms_a), (0.1, atoms_b)]},
+        lambda *_a, **_k: {formula: [(0.0, atoms_a), (0.2, atoms_b)]},
     )
     monkeypatch.setattr(
         ts_run_mod, "select_structure_pairs", lambda *_a, **_k: [(0, 1)]

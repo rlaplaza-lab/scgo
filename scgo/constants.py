@@ -11,15 +11,16 @@ MIN_ATOMIC_DISTANCE_WARNING: float = 0.5
 BOLTZMANN_K_EV_PER_K: float = 8.617e-5
 """Boltzmann constant (eV/K)."""
 
-DEFAULT_ENERGY_TOLERANCE: float = 0.05
+DEFAULT_ENERGY_TOLERANCE: float = 0.1
 """Default energy tolerance (eV) for uniqueness / deduplication.
 
-Matched to typical residual energy scatter at the default local-relaxation
-``fmax`` of :data:`DEFAULT_FMAX_THRESHOLD` (0.05 eV/Å); the units differ, but
-independently relaxed copies of the same isomer often differ by tens of meV.
+Independently relaxed copies of the same isomer often differ by tens of meV
+at the default local-relaxation ``fmax`` of :data:`DEFAULT_FMAX_THRESHOLD`
+(0.05 eV/Å); the wider 0.1 eV window collapses those near-copies without
+merging distinct isomers that usually sit farther apart.
 """
 
-DEFAULT_COMPARATOR_TOL: float = 0.015
+DEFAULT_COMPARATOR_TOL: float = 0.05
 """Cumulative structure-comparator difference tolerance (normalized, unitless)."""
 
 DEFAULT_PAIR_COR_MAX: float = 0.7
@@ -43,19 +44,13 @@ their near-constant distances must not dominate deposit/adsorbate uniqueness.
 Set ``comparator_component_weights={"mobile_slab": 0.0}`` to exclude them.
 """
 
-SUPPORTED_CLUSTER_COMPARATOR_TOL: float = 0.010
-"""Tighter cumulative tolerance for supported-deposit (``surface_cluster*``) types.
-
-Block-aware fingerprints keep deposit/adsorbate differences undiluted by slab
-padding, so the legacy ``DEFAULT_COMPARATOR_TOL`` slack is no longer needed.
-Applied only when the effective value still equals the generic default.
-"""
-
 SUPPORTED_CLUSTER_PAIR_COR_MAX: float = 0.45
 """Tighter max-distance gate for supported-deposit (``surface_cluster*``) types.
 
-See :data:`SUPPORTED_CLUSTER_COMPARATOR_TOL`. Applied only when the effective
-value still equals :data:`DEFAULT_PAIR_COR_MAX`.
+Block-aware fingerprints keep deposit/adsorbate differences undiluted by slab
+padding, so a tighter single-distance gate is useful. Applied only when the
+effective value still equals :data:`DEFAULT_PAIR_COR_MAX`. Cumulative
+tolerance uses the shared :data:`DEFAULT_COMPARATOR_TOL`.
 """
 
 DEFAULT_FMAX_THRESHOLD: float = 0.05

@@ -235,10 +235,10 @@ Uniqueness knobs are documented in :doc:`/uniqueness`.
      - ``"auto"``
      - Local relaxation budget
    * - ``energy_tolerance``
-     - ``0.05`` eV
+     - ``0.1`` eV
      - Energy window for campaign uniqueness (see :doc:`/uniqueness`)
    * - ``comparator_tol``
-     - ``0.015``
+     - ``0.05``
      - Overall shape mismatch still counted as the same isomer
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å
@@ -284,10 +284,10 @@ The TorchSim/UMA/UPET benchmark presets default to ``-2``.
      - ``10.0``
      - Vacuum around clusters (\ :math:`\AA`)
    * - ``energy_tolerance``
-     - ``0.05`` eV
+     - ``0.1`` eV
      - Energy window for in-search and campaign uniqueness (see :doc:`/uniqueness`)
    * - ``comparator_tol``
-     - ``0.015`` (``0.010`` for supported clusters)
+     - ``0.05``
      - Overall shape mismatch still counted as the same isomer
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å (``0.45`` for supported clusters)
@@ -363,13 +363,13 @@ The TorchSim/UMA/UPET benchmark presets default to ``-2``.
      - ``True``
      - BH end-of-run uniqueness pass (campaign filtering still runs)
    * - ``energy_tolerance``
-     - ``0.05`` eV
+     - ``0.1`` eV
      - Energy window for uniqueness (see :doc:`/uniqueness`)
    * - ``move_strategy``
      - ``"random"``
      - Atom move strategy
    * - ``comparator_tol``
-     - ``0.015`` (``0.010`` for supported clusters)
+     - ``0.05``
      - Overall shape mismatch still counted as the same isomer
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å (``0.45`` for supported clusters)
@@ -440,7 +440,7 @@ Pairing and NEB defaults are tuned per system type and rarely need edits.
      - Same connectivity spec as GO (float or per-element/pair dict); resolved
        with the same precedence for TS structural gates.
    * - ``similarity_tolerance``
-     - ``0.015``
+     - ``0.05``
      - Overall shape mismatch for TS uniqueness (same role as GO
        ``comparator_tol``; see :doc:`/uniqueness`)
    * - ``similarity_pair_cor_max``
@@ -457,14 +457,14 @@ Pairing and NEB defaults are tuned per system type and rarely need edits.
      - see **Pair selection** below
      - Soft ranking scales and weights (gap / distinct / mismatch / core)
    * - ``minima_energy_tolerance``
-     - ``0.05`` eV
+     - ``0.1`` eV
      - Energy window when dropping duplicate GO minima before pairing
        (see :doc:`/uniqueness`)
    * - ``dedupe_ts``
      - ``True``
      - Keep unique successful saddles in ``final_unique_ts/``
    * - ``ts_energy_tolerance``
-     - ``0.05`` eV
+     - ``0.1`` eV
      - Energy window for that TS uniqueness pass (geometry uses
        ``similarity_*``)
    * - ``write_timing_json``

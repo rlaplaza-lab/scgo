@@ -334,7 +334,7 @@ def test_run_transition_state_search_skips_tagging_when_no_db(
     ):
         a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
         a.info.setdefault("key_value_pairs", {})["source_db"] = "missing.db"
-        return {"Pt2": [(0.0, a.copy()), (0.1, a.copy())]}
+        return {"Pt2": [(0.0, a.copy()), (0.2, a.copy())]}
 
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
@@ -432,7 +432,7 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
         lambda ts_output_dir, composition, prefer_final_unique: {
-            "Pt2": [(0.0, a.copy()), (0.1, b.copy())]
+            "Pt2": [(0.0, a.copy()), (0.2, b.copy())]
         },
     )
 
@@ -529,7 +529,7 @@ def test_run_transition_state_search_resolves_neb_steps_auto(monkeypatch):
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
         lambda ts_output_dir, composition, prefer_final_unique: {
-            "Pt3": [(0.0, Atoms("Pt3")), (0.1, Atoms("Pt3"))]
+            "Pt3": [(0.0, Atoms("Pt3")), (0.2, Atoms("Pt3"))]
         },
     )
     monkeypatch.setattr(
@@ -579,7 +579,7 @@ def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
         lambda ts_output_dir, composition, prefer_final_unique: {
-            "Pt4": [(0.0, Atoms("Pt4")), (0.1, Atoms("Pt4"))]
+            "Pt4": [(0.0, Atoms("Pt4")), (0.2, Atoms("Pt4"))]
         },
     )
     monkeypatch.setattr(
@@ -649,7 +649,7 @@ def test_run_transition_state_search_rejects_buried_surface_ts(monkeypatch, tmp_
     ts_pos[len(slab) :, 2] = -0.6
     buried_ts.set_positions(ts_pos)
 
-    minima = [(0.0, react.copy()), (0.1, prod.copy())]
+    minima = [(0.0, react.copy()), (0.2, prod.copy())]
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.get_cluster_formula",
         lambda _comp: "X",

@@ -5,7 +5,7 @@ Global optimization will find the same isomer more than once. SCGO keeps a
 structure only if it is **new in energy and in shape**. Both must match before
 two results are treated as duplicates:
 
-1. Energies differ by at most ``0.05`` eV (``energy_tolerance``).
+1. Energies differ by at most ``0.1`` eV (``energy_tolerance``).
 2. The **moving** atoms have the same geometry: sorted interatomic distances
    agree closely (no single distance off by more than ``0.7`` Å; tighter gates
    apply to supported clusters — see below).
@@ -59,13 +59,14 @@ Type-aware defaults:
   set ``{"mobile_slab": 0.0}`` to exclude them entirely.
 - Gas-phase types: plain deposit/adsorbate blocks at weight ``1.0``.
 
-Tighter gates for supported clusters
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Tighter max-distance gate for supported clusters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Because block normalization keeps deposit/adsorbate differences undiluted,
-``surface_cluster`` and ``surface_cluster_adsorbate`` use tighter default
-gates: ``comparator_tol=0.010`` and ``comparator_pair_cor_max=0.45 Å`` instead
-of ``0.015`` / ``0.7 Å``. Explicit non-default user values always win.
+``surface_cluster`` and ``surface_cluster_adsorbate`` use a tighter default
+max single-distance gate: ``comparator_pair_cor_max=0.45 Å`` instead of
+``0.7 Å``. Cumulative tolerance stays at the shared ``0.05``. Explicit
+non-default user values always win.
 
 When it runs
 ------------
@@ -102,13 +103,13 @@ runs trivial gas clusters and always uses the plain window):
      - Default
      - Meaning
    * - ``energy_tolerance``
-     - ``0.05`` eV
+     - ``0.1`` eV
      - How close two energies must be to even compare shapes
    * - ``comparator_pair_cor_max``
      - ``0.7`` Å (``0.45`` for supported clusters)
      - Largest allowed difference in any one interatomic distance
    * - ``comparator_tol``
-     - ``0.015`` (``0.010`` for supported clusters)
+     - ``0.05``
      - How much overall mismatch is still "the same shape"
    * - ``comparator_n_top``
      - ``None``
@@ -152,7 +153,7 @@ cutoff (``0.1`` Å instead of ``0.7`` Å):
 
 - Minima loaded for pairing are first filtered with the **GO** rule
   (``minima_energy_tolerance`` plus the GO geometry cutoffs, including the
-  role-block weighting and the tighter supported-cluster gates).
+  role-block weighting and the tighter supported-cluster max-distance gate).
 - Successful saddles are filtered into ``final_unique_ts/``
   (``ts_energy_tolerance`` plus ``similarity_tolerance`` and
   ``similarity_pair_cor_max``, compared over the same role blocks).

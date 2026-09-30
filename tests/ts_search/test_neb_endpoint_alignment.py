@@ -273,7 +273,7 @@ def test_run_transition_state_search_forwards_alignment_kwargs(monkeypatch, tmp_
         lambda *_a, **_k: {
             formula: [
                 (0.0, react),
-                (0.1, prod),
+                (0.2, prod),
             ]
         },
     )
@@ -350,7 +350,7 @@ def test_run_transition_state_search_empty_core_sets_block_dims(
     monkeypatch.setattr(
         ts_run_mod,
         "load_minima_by_composition",
-        lambda *_a, **_k: {formula: [(0.0, react), (0.1, prod)]},
+        lambda *_a, **_k: {formula: [(0.0, react), (0.2, prod)]},
     )
     monkeypatch.setattr(ts_run_mod, "select_structure_pairs", _fake_select_pairs)
     monkeypatch.setattr(ts_run_mod, "get_calculator_class", lambda _n: object)

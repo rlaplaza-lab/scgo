@@ -10,7 +10,6 @@ from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_PAIR_COR_MAX,
     DEFAULT_SUPPORTED_SLAB_WEIGHT,
-    SUPPORTED_CLUSTER_COMPARATOR_TOL,
     SUPPORTED_CLUSTER_PAIR_COR_MAX,
 )
 from scgo.exceptions import SCGOValidationError
@@ -108,12 +107,12 @@ def test_supported_deposit_includes_relaxed_support_at_low_weight() -> None:
     assert geo.component_weights["mobile_slab"] == pytest.approx(
         DEFAULT_SUPPORTED_SLAB_WEIGHT
     )
-    # Tighter gates apply to supported clusters by default.
-    assert geo.settings.comparator_tol == SUPPORTED_CLUSTER_COMPARATOR_TOL
+    # Shared cumulative tolerance; tighter max-distance gate for supported clusters.
+    assert geo.settings.comparator_tol == DEFAULT_COMPARATOR_TOL
     assert geo.settings.comparator_pair_cor_max == SUPPORTED_CLUSTER_PAIR_COR_MAX
 
 
-def test_frozen_support_excluded_from_blocks_but_gates_still_tighten() -> None:
+def test_frozen_support_excluded_from_blocks_but_pair_cor_still_tightens() -> None:
     cfg = SurfaceSystemConfig(slab=_layered_slab())  # fix_all_slab_atoms=True
     n_total = len(cfg.slab) + 4 + 2
     geo = resolve_uniqueness_geometry(
@@ -124,7 +123,8 @@ def test_frozen_support_excluded_from_blocks_but_gates_still_tighten() -> None:
     )
     roles = [b.role for b in geo.blocks.blocks]
     assert roles == ["deposit", "adsorbate"]
-    assert geo.settings.comparator_tol == SUPPORTED_CLUSTER_COMPARATOR_TOL
+    assert geo.settings.comparator_tol == DEFAULT_COMPARATOR_TOL
+    assert geo.settings.comparator_pair_cor_max == SUPPORTED_CLUSTER_PAIR_COR_MAX
 
 
 def test_explicit_tolerance_disables_tightening() -> None:

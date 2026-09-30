@@ -129,6 +129,10 @@ def test_run_transition_state_search_handles_cuda_oom(monkeypatch):
             neb_n_images=3,
             neb_fmax=0.5,
             neb_steps=10,
+            # Keep the two Cu2 geometries as distinct endpoints under the
+            # loosened uniqueness defaults (this test is about OOM handling).
+            minima_energy_tolerance=0.05,
+            similarity_tolerance=0.015,
         )
 
         # Should return a list and include at least one failed result (not crash)
@@ -208,6 +212,8 @@ def test_pairwise_cleanup_even_without_errors(monkeypatch):
             neb_n_images=3,
             neb_fmax=0.5,
             neb_steps=10,
+            minima_energy_tolerance=0.05,
+            similarity_tolerance=0.015,
         )
 
         assert isinstance(results, list)

@@ -8,15 +8,17 @@ Resolves *what* to compare (role blocks) and *how strongly* each part counts
 - ``surface_cluster*`` (supported deposits): relaxed support layers are
   included in the fingerprint at a reduced default weight
   (:data:`scgo.constants.DEFAULT_SUPPORTED_SLAB_WEIGHT`) so near-rigid lattice
-  motion cannot dilute deposit/adsorbate discrimination, and the geometry
-  gates default to tighter values (:data:`SUPPORTED_CLUSTER_COMPARATOR_TOL`,
-  :data:`SUPPORTED_CLUSTER_PAIR_COR_MAX`) because block-aware fingerprints no
-  longer dilute genuine differences.
+  motion cannot dilute deposit/adsorbate discrimination, and the max
+  single-distance gate defaults to the tighter
+  :data:`SUPPORTED_CLUSTER_PAIR_COR_MAX` because block-aware fingerprints no
+  longer dilute genuine differences. Cumulative tolerance follows the shared
+  :data:`DEFAULT_COMPARATOR_TOL`.
 - Gas-phase clusters compare their deposit/adsorbate blocks directly.
 
 Explicit user knobs always win: ``comparator_component_weights`` /
-``comparator_cross_weight`` merge over the defaults, and tightened tolerances
-apply only while the effective value still equals the generic default.
+``comparator_cross_weight`` merge over the defaults, and the tightened
+max-distance gate applies only while the effective value still equals the
+generic default.
 """
 
 from __future__ import annotations
@@ -27,10 +29,8 @@ from typing import Any
 import numpy as np
 
 from scgo.constants import (
-    DEFAULT_COMPARATOR_TOL,
     DEFAULT_PAIR_COR_MAX,
     DEFAULT_SUPPORTED_SLAB_WEIGHT,
-    SUPPORTED_CLUSTER_COMPARATOR_TOL,
     SUPPORTED_CLUSTER_PAIR_COR_MAX,
 )
 from scgo.exceptions import SCGOValidationError
@@ -160,9 +160,9 @@ def resolve_uniqueness_geometry(
         counts: Optional ``(n_deposit, n_adsorbate)`` override for callers that
             already know the split (e.g. TS mobile dims).
         settings: User geometry settings; ``component_weights`` /
-            ``cross_weight`` override the type-aware defaults, and tightened
-            supported-cluster tolerances apply only when the tolerance values
-            still equal the generic defaults.
+            ``cross_weight`` override the type-aware defaults, and the
+            tightened supported-cluster max-distance gate applies only when
+            that value still equals the generic default.
 
     Returns:
         :class:`ResolvedUniquenessGeometry`. Its ``blocks`` is ``None`` when
@@ -212,19 +212,14 @@ def resolve_uniqueness_geometry(
     resolved_tol = float(user_settings.comparator_tol)
     resolved_pair_cor = float(user_settings.comparator_pair_cor_max)
     tightened = False
-    if tighten and blocks is not None:
-        if resolved_tol == DEFAULT_COMPARATOR_TOL:
-            resolved_tol = SUPPORTED_CLUSTER_COMPARATOR_TOL
-            tightened = True
-        if resolved_pair_cor == DEFAULT_PAIR_COR_MAX:
-            resolved_pair_cor = SUPPORTED_CLUSTER_PAIR_COR_MAX
-            tightened = True
+    if tighten and blocks is not None and resolved_pair_cor == DEFAULT_PAIR_COR_MAX:
+        resolved_pair_cor = SUPPORTED_CLUSTER_PAIR_COR_MAX
+        tightened = True
     if tightened:
         logger.info(
-            "Tighter %s uniqueness gates applied: tol=%.4g pair_cor_max=%.3g "
-            "(block-aware fingerprints)",
+            "Tighter %s uniqueness max-distance gate applied: "
+            "pair_cor_max=%.3g (block-aware fingerprints)",
             system_type,
-            resolved_tol,
             resolved_pair_cor,
         )
 

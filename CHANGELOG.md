@@ -94,6 +94,14 @@
   collective lattice shifts, and optional lattice rotation score only real slab
   symmetries; GO slab final-write routes through the same entry point so
   positions stay consistent with TS endpoints.
+- **Default uniqueness energy tolerance raised to 0.1 eV**
+  (`DEFAULT_ENERGY_TOLERANCE`) and **cumulative geometry tolerance to 0.05**
+  (`DEFAULT_COMPARATOR_TOL`). Applies to GO `energy_tolerance` /
+  `comparator_tol` and TS `minima_energy_tolerance` / `ts_energy_tolerance` /
+  `similarity_tolerance`. Supported clusters (`surface_cluster`,
+  `surface_cluster_adsorbate`) keep the tighter `comparator_pair_cor_max`
+  of `0.45` Å and now share the same cumulative tolerance as other types
+  (the previous `0.010` override is removed).
 - **Default uniqueness energy tolerance raised to 0.05 eV**
   (`DEFAULT_ENERGY_TOLERANCE`). Independently relaxed copies of the same
   isomer often differ by tens of meV at the default `fmax` of 0.05 eV/Å; the
