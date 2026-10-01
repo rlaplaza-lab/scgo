@@ -275,8 +275,8 @@ Combine surface and adsorbates.
 Slab as search target
 ---------------------
 
-Use ``surface`` / ``surface_adsorbate`` when the search should move the **top
-slab layers** rather than a deposited nanoparticle. Pass an empty composition
+Use ``surface`` / ``surface_adsorbate`` when the search should move the
+**top slab layers** rather than a deposited nanoparticle. Pass an empty composition
 ``[]`` for the nanoparticle core. Presets such as
 :func:`~scgo.make_defected_graphite_surface_config` and
 :func:`~scgo.make_n_doped_graphite_surface_config` set

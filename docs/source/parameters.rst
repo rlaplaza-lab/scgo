@@ -415,8 +415,8 @@ Pairing and NEB defaults are tuned per system type and rarely need edits.
      - ``None``
      - Maximum endpoint pairs that run NEB (``None`` = all survivors). Soft
        ``pair_score_*`` ranking only matters when this caps the pool. Adsorbate
-       searches may select more candidates first (see **Budget and
-       oversampling** below); the runner always truncates to this value before
+       searches may select more candidates first (see **Budget and oversampling**
+       below); the runner always truncates to this value before
        NEB.
    * - ``energy_gap_threshold``
      - ``2.0`` / ``0.75`` (adsorbate)
