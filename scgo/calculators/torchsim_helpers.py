@@ -792,7 +792,7 @@ class TorchSimBatchRelaxer:
         the ``init_kwargs`` argument of :func:`torch_sim.optimize`.
     optimizer_kwargs:
         Extra kwargs forwarded to the torch-sim optimizer step function via
-        ``**optimizer_kwargs`` of :func:`torch_sim.optimize`.
+        the ``optimizer_kwargs`` argument of :func:`torch_sim.optimize`.
     runner_kwargs:
         Extra keyword arguments forwarded directly to
         :func:`torch_sim.optimize` (overrides anything set above).

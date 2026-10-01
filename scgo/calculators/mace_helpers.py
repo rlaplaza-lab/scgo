@@ -97,7 +97,7 @@ class MACE(Calculator):
             default_dtype: The default floating-point precision for calculations.
                 "float64" is recommended for stable optimizations.
                 Defaults to "float64".
-            ``**kwargs``: Additional keyword arguments passed to the base ASE
+            kwargs: Additional keyword arguments passed to the base ASE
                 Calculator class.
         """
         ensure_mace_uma_not_both_installed()

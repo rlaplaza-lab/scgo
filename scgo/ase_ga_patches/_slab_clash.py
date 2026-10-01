@@ -8,7 +8,7 @@ the pairing inner loop.  The two key savings are:
    type-pair threshold table are built once (``SlabClashChecker.__init__``) and
    reused on every ``is_too_close`` call.
 
-2. **No per-call ``Atoms.copy``** – ``atoms_too_close`` copies the child on
+2. **No per-call** ``Atoms.copy`` – ``atoms_too_close`` copies the child on
    every call for tag-gathering; the mobile-mobile helper below operates
    directly on the position / number arrays that ``_get_pairing`` already
    produces.

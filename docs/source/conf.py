@@ -123,17 +123,26 @@ autodoc_default_options = {
 # -- Options for intersphinx -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/intersphinx.html
 
-# Prefer local inventories when present (avoids hung inventory fetches).
-_inv = _repo_root / ".release_logs" / "inv"
+# Prefer committed local inventories (docs/source/_inv) so CI does not depend on
+# docs.python.org / numpy.org being reachable. Optional refresh cache under
+# .release_logs/inv is used when present (e.g. after a local inventory update).
+_inv_candidates = (
+    _repo_root / "docs" / "source" / "_inv",
+    _repo_root / ".release_logs" / "inv",
+)
+
+
+def _local_inv(name: str) -> str | None:
+    for root in _inv_candidates:
+        path = root / name
+        if path.is_file():
+            return str(path)
+    return None
+
+
 intersphinx_mapping = {
-    "python": (
-        "https://docs.python.org/3",
-        str(_inv / "python.inv") if (_inv / "python.inv").is_file() else None,
-    ),
-    "numpy": (
-        "https://numpy.org/doc/stable/",
-        str(_inv / "numpy.inv") if (_inv / "numpy.inv").is_file() else None,
-    ),
+    "python": ("https://docs.python.org/3", _local_inv("python.inv")),
+    "numpy": ("https://numpy.org/doc/stable/", _local_inv("numpy.inv")),
 }
 # Avoid indefinite hangs when inventory hosts are slow or unreachable.
 intersphinx_timeout = 30
