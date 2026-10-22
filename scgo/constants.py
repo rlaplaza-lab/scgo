@@ -8,9 +8,6 @@ PENALTY_ENERGY: float = 1.0e6
 MIN_ATOMIC_DISTANCE_WARNING: float = 0.5
 """Minimum atomic distance (Å) for warnings."""
 
-BOLTZMANN_K_EV_PER_K: float = 8.617e-5
-"""Boltzmann constant (eV/K)."""
-
 DEFAULT_ENERGY_TOLERANCE: float = 0.1
 """Default energy tolerance (eV) for uniqueness / deduplication.
 

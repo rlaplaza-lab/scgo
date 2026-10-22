@@ -883,7 +883,6 @@ def ga_go(
     batch_size: int | None = None,
     torchsim_dtype: str | None = None,
     verbosity: int = 1,
-    elite_fraction: float = 0.1,
     run_id: str | None = None,
     clean: bool = False,
     fitness_strategy: str = "low_energy",
@@ -936,8 +935,6 @@ def ga_go(
                               strategies, energy for low_energy. If 0, no early stopping
                               is applied. Default 10.
         verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace). Defaults to 1.
-        elite_fraction: Fraction of population to preserve as elite candidates
-                         (top performers by fitness). Default 0.1 (top 10%).
         run_id: Optional run ID for tracking.
         clean: If True, remove an existing GA database and auxiliary files in the
             output directory.
@@ -1526,7 +1523,6 @@ def ga_go(
             comparator=comp,
             logfile=log_file,
             rng=rng,  # type: ignore[arg-type]
-            elite_fraction=elite_fraction,
             run_id=run_id,
             **population_kwargs,
         )

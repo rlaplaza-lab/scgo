@@ -16,10 +16,6 @@ from scgo.system_types import AdsorbateDefinition
 _SITE_COUNTER_KEYS = ("vertex", "edge", "facet", "directional_fallback")
 
 
-def _o_template() -> Atoms:
-    return Atoms("O", positions=[[0.0, 0.0, 0.0]], pbc=False)
-
-
 def _oh_template() -> Atoms:
     return Atoms(symbols=["O", "H"], positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0]])
 

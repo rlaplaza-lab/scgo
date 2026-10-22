@@ -9,7 +9,6 @@ Key features:
 - LRU eviction when max size reached
 - Namespace support for logical separation
 - Global singleton for easy access
-- Metrics tracking (hits, misses, evictions)
 
 Example:
     >>> from scgo.database.cache import get_global_cache
@@ -65,11 +64,6 @@ class UnifiedCache:
         self._lock = threading.Lock()
         self._max_size = max_size
 
-        # Metrics tracking
-        self._hits = 0
-        self._misses = 0
-        self._evictions = 0
-
         # Track keys currently being computed to avoid duplicate work
         self._inflight: dict[tuple[str, Any], threading.Event] = {}
 
@@ -89,9 +83,7 @@ class UnifiedCache:
             if cache_key in self._cache:
                 # Move to end (mark as recently used)
                 self._cache.move_to_end(cache_key)
-                self._hits += 1
                 return self._cache[cache_key]
-            self._misses += 1
             return default
 
     def set(self, namespace: str, key: Any, value: Any) -> None:
@@ -111,7 +103,6 @@ class UnifiedCache:
             # Evict oldest if over limit
             if len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
-                self._evictions += 1
 
     def get_or_compute(
         self, namespace: str, key: Any, compute_func: Callable[[], Any]
@@ -136,7 +127,6 @@ class UnifiedCache:
             with self._lock:
                 if cache_key in self._cache:
                     self._cache.move_to_end(cache_key)
-                    self._hits += 1
                     return self._cache[cache_key]
 
                 inflight_ev = self._inflight.get(cache_key)
@@ -150,7 +140,6 @@ class UnifiedCache:
             with self._lock:
                 if cache_key in self._cache:
                     self._cache.move_to_end(cache_key)
-                    self._hits += 1
                     return self._cache[cache_key]
                 if cache_key in self._inflight:
                     # Someone else raced in; loop and wait
@@ -166,8 +155,6 @@ class UnifiedCache:
                     self._cache.move_to_end(cache_key)
                     if len(self._cache) > self._max_size:
                         self._cache.popitem(last=False)
-                        self._evictions += 1
-                    self._misses += 1  # Track as miss since we had to compute
             finally:
                 # Signal waiters and clean up
                 ev.set()

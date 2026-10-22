@@ -93,10 +93,6 @@ class Population:
     rng: Random number generator
         Must be an instance of ``np.random.Generator`` or ``None``.
 
-    elite_fraction: float
-        Fraction of the population protected from replacement, counted
-        from the best raw_score downwards.
-
     run_id: str or None
         When given, only candidates tagged with this run_id are considered.
 
@@ -104,7 +100,7 @@ class Population:
 
     def __init__(self, data_connection, population_size,
                  comparator=None, logfile=None, use_extinct=False,
-                 rng=None, elite_fraction=0.1, run_id: str | None = None):
+                 rng=None, run_id: str | None = None):
         self.dc = data_connection
         self.population_size = population_size
         if comparator is None:
@@ -114,8 +110,6 @@ class Population:
         self.logfile = logfile
         self.use_extinct = use_extinct
         self.rng = ensure_rng_or_create(rng)
-        self.elite_fraction = elite_fraction
-        self.elite_size = max(1, int(self.population_size * self.elite_fraction))
         self.run_id = run_id
         self.pop = []
         self.pairs = None
@@ -279,7 +273,6 @@ class Population:
                 return
 
         # the new candidate needs to be added, so ensure we have room
-        # Always keep top elite_size candidates
         if len(self.pop) == self.population_size:
             # Remove the worst candidate to make room (the population is
             # kept sorted by raw_score, best first).
@@ -409,8 +402,6 @@ class FitnessStrategyPopulation(Population):
         Whether to use extinct flag for mass extinction.
     rng: Random number generator
         Random number generator for stochastic operations.
-    elite_fraction: float
-        Fraction of population to preserve as elite (top performers).
     run_id: str or None
         When given, only candidates tagged with this run_id are considered.
     """
@@ -426,7 +417,6 @@ class FitnessStrategyPopulation(Population):
         logfile=None,
         use_extinct=False,
         rng=None,
-        elite_fraction=0.1,
         run_id: str | None = None,
     ):
         """Initialize fitness strategy population."""
@@ -446,7 +436,6 @@ class FitnessStrategyPopulation(Population):
             logfile=logfile,
             use_extinct=use_extinct,
             rng=rng,
-            elite_fraction=elite_fraction,
             run_id=run_id,
         )
 

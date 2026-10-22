@@ -55,7 +55,6 @@ class SCGODataConnection:
 
     def __init__(self, da_obj: DataConnection, expected_atomic_numbers: list[int]):
         self._da = da_obj
-        self._expected_atomic_numbers = expected_atomic_numbers
         self._expected_counter = Counter(int(x) for x in expected_atomic_numbers)
 
     def __getattr__(self, name):

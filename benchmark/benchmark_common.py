@@ -168,7 +168,6 @@ class BenchmarkResult:
     total_ground_truth: int
     matched_indices: list[int] = field(default_factory=list)
     unmatched_indices: list[int] = field(default_factory=list)
-    match_details: dict[int, dict[str, float]] = field(default_factory=dict)
     relative_order_matches: bool | None = None
     recovery_rate: float = 0.0
     found_ground_state: bool = False
@@ -591,7 +590,6 @@ def evaluate_cluster(
     unmatched_indices = [i for i in range(len(ground_truth_minima)) if i not in matches]
     result.matched_indices = matched_indices
     result.unmatched_indices = unmatched_indices
-    result.match_details = matches
 
     num_matched = len(matched_indices)
     num_total = len(ground_truth_minima)

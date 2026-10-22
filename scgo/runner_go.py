@@ -10,7 +10,7 @@ import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from ase import Atoms
 from ase.calculators.calculator import Calculator
@@ -81,8 +81,6 @@ _EXTRA_ACCEPTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
 _EXPECTED_TOP_LEVEL_KEYS: frozenset[str] = (
     default_params_top_level_keys() | _EXTRA_ACCEPTED_TOP_LEVEL_KEYS
 )
-
-ScgoMinimaAlgorithm = Literal["simple", "bh", "ga"]
 
 # ``select_scgo_minima_algorithm`` lives in :mod:`scgo.system_types` (re-exported
 # here) so that :mod:`scgo.runner_params` can use it without importing this

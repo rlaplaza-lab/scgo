@@ -510,13 +510,6 @@ def create_cu2_ts_searches_dir(
     return root
 
 
-def create_ga_comparator(n_top: int):
-    from scgo.algorithms.ga_common import create_structure_comparator
-    from scgo.constants import DEFAULT_ENERGY_TOLERANCE
-
-    return create_structure_comparator(n_top, DEFAULT_ENERGY_TOLERANCE)
-
-
 def get_structure_signature(atoms: Atoms, *, precision: int = 6) -> tuple[float, ...]:
     """Geometry signature for tests (delegates to production helper)."""
     from scgo.initialization.candidate_discovery import get_structure_signature as _sig

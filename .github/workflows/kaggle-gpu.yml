@@ -88,7 +88,6 @@ jobs:
 
       - name: Render Kaggle runner script
         env:
-          GIT_REF: ${{ steps.cfg.outputs.ref }}
           MLIP_EXTRA: ${{ matrix.mlip_extra }}
           PYTEST_MARKER: ${{ steps.cfg.outputs.marker }}
         run: |
@@ -97,8 +96,7 @@ jobs:
           import os
           template = Path(".github/scripts/kaggle_gpu_runner.template.py").read_text()
           rendered = (
-              template.replace("__GIT_REF__", os.environ["GIT_REF"])
-              .replace("__PYTEST_MARKER__", os.environ["PYTEST_MARKER"])
+              template.replace("__PYTEST_MARKER__", os.environ["PYTEST_MARKER"])
               .replace("__MLIP_EXTRA__", os.environ["MLIP_EXTRA"])
           )
           out = Path(".github/scripts/kaggle_gpu_runner.py")

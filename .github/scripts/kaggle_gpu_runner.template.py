@@ -13,7 +13,6 @@ import tomllib
 import traceback
 from pathlib import Path
 
-GIT_REF = "__GIT_REF__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
 MLIP_EXTRA = "__MLIP_EXTRA__"
 CONDA_ENV = "scgo-gpu"
