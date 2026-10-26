@@ -247,9 +247,7 @@ def _mobile_clashes(
 
 
 def _component_groups(mobile, connectivity_factor, use_mic):
-    components, _parent = _find_connected_components(
-        mobile, connectivity_factor, use_mic
-    )
+    components = _find_connected_components(mobile, connectivity_factor, use_mic)
     return sorted(
         (np.asarray(idxs, dtype=int) for idxs in components.values() if idxs),
         key=len,
