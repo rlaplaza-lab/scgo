@@ -1633,9 +1633,10 @@ def draw_successful_mutation(
 ) -> tuple[Atoms | None, list[str]]:
     """Try up to ``max_tries`` operators, sampled without replacement.
 
-    Probabilities come from :func:`_mutation_draw_probabilities`, so a
-    low-weight operator stays reachable. ``overlap_relief`` on a clash-free
-    child does not consume a try. An unmoved mutant is a miss.
+    Probabilities come from ``_mutation_draw_probabilities`` (0.8 weight +
+    0.2/n floor), so a low-weight operator stays reachable.
+    ``overlap_relief`` on a clash-free child does not consume a try. An
+    unmoved mutant is a miss.
     """
     tried_names: list[str] = []
     n_ops = len(selector.oplist)

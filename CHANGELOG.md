@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.2
+
 ### Changed
 
 - **GA offspring reject near-identity operators and credit useful ones.**
@@ -26,6 +28,11 @@
   `AnisotropicRattleMutation` no longer anneal through a 1000-attempt budget
   with a `patience` cutoff; they use two strength tiers (8 + 8 attempts) and
   still track `last_attempt_count`.
+
+### Fixed
+
+- Docs build no longer treats a private-helper Sphinx `:func:` link in
+  `draw_successful_mutation` as a nitpicky error (use plain code markup).
 
 ## 0.9.1
 
