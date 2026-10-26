@@ -48,14 +48,15 @@ class InPlaneSlideMutation(OffspringCreator):
     """
 
     def __init__(self, blmin, n_top, system_type: SystemType, surface_normal_axis=2,
-                 max_displacement=2.0, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=1000):
+                 max_displacement=2.0, min_displacement=1.0, target_tags=None,
+                 rng=None, verbose=False, max_inner_attempts=1000):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
         self.n_top = n_top
         self.surface_normal_axis = surface_normal_axis
         self.max_displacement = max_displacement
+        self.min_displacement = min_displacement
         self.target_tags = target_tags
         self.system_type = system_type
         self._policy = get_system_policy(system_type)
@@ -114,16 +115,23 @@ class InPlaneSlideMutation(OffspringCreator):
             _append_unique_unit_vector(ordered_directions, direction)
             _append_unique_unit_vector(ordered_directions, -direction)
 
-        magnitudes = [
-            min(0.4, 0.05 * self.max_displacement),
-            0.1 * self.max_displacement,
-            0.25 * self.max_displacement,
-            0.5 * self.max_displacement,
+        raw_magnitudes = (
             self.max_displacement,
-        ]
+            0.5 * self.max_displacement,
+            self.min_displacement,
+        )
+        magnitudes = []
+        for value in raw_magnitudes:
+            if value < self.min_displacement - 1e-9:
+                continue
+            if value > self.max_displacement + 1e-9:
+                continue
+            if any(abs(value - existing) <= 1e-8 for existing in magnitudes):
+                continue
+            magnitudes.append(float(value))
         candidate_shifts = []
-        for direction in ordered_directions:
-            for magnitude in magnitudes:
+        for magnitude in magnitudes:
+            for direction in ordered_directions:
                 if magnitude <= 1e-12:
                     continue
                 shift_2d = magnitude * direction

@@ -8,15 +8,14 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
+    _accept_connected_candidate,
     _filter_unique_tags,
     _IDENTITY_ATOL,
     _ensure_rng,
     _geometry_candidate_directions,
     _pin_subset_contact_atom,
-    _preserves_mobile_connectivity,
     _reanchor_mobile_to_slab,
     _resolve_op_connectivity_factor,
 )
@@ -242,19 +241,19 @@ class FlatteningMutation(OffspringCreator):
             if not self._policy.uses_surface:
                 mutant.center()
 
-            too_close = atoms_too_close(mutant, self.blmin)
-            if not too_close and self.test_dist_to_slab:
-                too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
-            if too_close:
-                continue
-            if not _preserves_mobile_connectivity(
+            accepted = _accept_connected_candidate(
                 top,
                 mutant,
+                blmin=self.blmin,
+                slab=slab,
+                test_dist_to_slab=self.test_dist_to_slab,
+                use_tags=False,
                 use_mic=use_mic,
                 connectivity_factor=_resolve_op_connectivity_factor(self),
-            ):
+            )
+            if accepted is None:
                 continue
-            return slab + mutant
+            return slab + accepted
 
         if len(candidate_positions) == 0:
             self.last_attempt_count = 0

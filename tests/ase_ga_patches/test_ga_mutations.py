@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
+from ase.geometry import find_mic
+from ase_ga.offspring_creator import OperationSelector
 from ase_ga.utilities import (
     atoms_too_close,
     atoms_too_close_two_sets,
@@ -9,7 +11,12 @@ from ase_ga.utilities import (
     get_all_atom_types,
 )
 
-from scgo.algorithms.ga_common import create_mutation_operators
+from scgo.algorithms.ga_common import (
+    _mutation_draw_probabilities,
+    create_mutation_operators,
+    draw_successful_mutation,
+)
+from scgo.algorithms.geneticalgorithm_go_torchsim import _eligible_mutation_operator
 from scgo.ase_ga_patches.mutations import (
     AnisotropicRattleMutation,
     BreathingMutation,
@@ -22,6 +29,11 @@ from scgo.ase_ga_patches.mutations import (
     RotationalMutation,
     ShellSwapMutation,
 )
+from scgo.ase_ga_patches.mutations._common import (
+    _preserves_mobile_connectivity,
+    _reconnect_mobile_components,
+)
+from scgo.metadata.atoms import set_tags
 
 PERMISSIVE_BLMIN = {(z1, z2): 0.5 for z1 in (1, 8, 78, 79) for z2 in (1, 8, 78, 79)}
 
@@ -295,7 +307,7 @@ def test_flattening_mutation_moves_only_targeted_tag_group(rng):
 
 
 def test_overlap_relief_final_check_honours_use_tags(rng):
-    """G3: the final sweep must skip same-tag pairs when ``use_tags`` is set."""
+    """G3: same-tag pairs are not clashes, so a lone fragment is declined."""
     fragment = Atoms("O2", positions=[[0.0, 0.0, 0.0], [0.9, 0.0, 0.0]])
     fragment.set_tags([1, 1])
     fragment.center(vacuum=8.0)
@@ -312,11 +324,8 @@ def test_overlap_relief_final_check_honours_use_tags(rng):
     )
     out = mut.mutate(fragment.copy())
 
-    assert out is not None
-    assert len(out) == len(fragment)
-    # The rigid fragment keeps its (sub-blmin) internal distance.
-    internal = np.linalg.norm(out.get_positions()[1] - out.get_positions()[0])
-    assert internal == pytest.approx(0.9, abs=1e-6)
+    # Same-tag pairs are not clashes, so a fragment with no other overlap is declined.
+    assert out is None
 
 
 def _fail_until_call(n_calls):
@@ -330,13 +339,12 @@ def _fail_until_call(n_calls):
     return fake_atoms_too_close
 
 
-def test_rattle_accepts_late_success_before_patience(monkeypatch, pt3_atoms, rng):
-    """A valid geometry found late in the anneal must still be accepted."""
-    from scgo.ase_ga_patches.mutations import rattle as rattle_module
+def test_rattle_accepts_a_later_try(monkeypatch, pt3_atoms, rng):
+    """A valid geometry found after several clashes must still be accepted."""
+    from scgo.ase_ga_patches.mutations import _common as mutation_common
 
-    # Attempt 300 is still above the lowest strength tier (~334), so the
-    # lowest-tier patience budget has not started counting yet.
-    monkeypatch.setattr(rattle_module, "atoms_too_close", _fail_until_call(300))
+    # The tenth try is inside the 16-attempt schedule (half-strength tier).
+    monkeypatch.setattr(mutation_common, "atoms_too_close", _fail_until_call(10))
     mut = RattleMutation(
         {(78, 78): 0.5},
         3,
@@ -350,9 +358,9 @@ def test_rattle_accepts_late_success_before_patience(monkeypatch, pt3_atoms, rng
 
 
 def test_rattle_returns_none_when_never_valid(monkeypatch, pt3_atoms, rng):
-    from scgo.ase_ga_patches.mutations import rattle as rattle_module
+    from scgo.ase_ga_patches.mutations import _common as mutation_common
 
-    monkeypatch.setattr(rattle_module, "atoms_too_close", lambda *a, **k: True)
+    monkeypatch.setattr(mutation_common, "atoms_too_close", lambda *a, **k: True)
     mut = RattleMutation(
         {(78, 78): 0.5},
         3,
@@ -361,17 +369,13 @@ def test_rattle_returns_none_when_never_valid(monkeypatch, pt3_atoms, rng):
         rng=rng,
     )
     assert mut.mutate(pt3_atoms.copy()) is None
-    # Lowest-tier consecutive-failure patience stops the loop well before the
-    # absolute cap of 1000 attempts.
-    assert mut.last_attempt_count < 1000
+    assert mut.last_attempt_count == 16
 
 
-def test_anisotropic_rattle_accepts_late_success_before_patience(
-    monkeypatch, pt3_atoms, rng
-):
-    from scgo.ase_ga_patches.mutations import rattle as rattle_module
+def test_anisotropic_rattle_accepts_a_later_try(monkeypatch, pt3_atoms, rng):
+    from scgo.ase_ga_patches.mutations import _common as mutation_common
 
-    monkeypatch.setattr(rattle_module, "atoms_too_close", _fail_until_call(300))
+    monkeypatch.setattr(mutation_common, "atoms_too_close", _fail_until_call(10))
     mut = AnisotropicRattleMutation(
         {(78, 78): 0.5},
         3,
@@ -464,8 +468,8 @@ def test_operators_never_duplicate_atoms_with_zero_n_top(name, au2pt2_atoms, rng
     assert out is None or len(out) <= len(au2pt2_atoms)
 
 
-def test_rotational_mutation_skips_whole_gas_phase_cluster(rng):
-    """G6: rotating an untagged gas-phase cluster is a no-op, so bail out."""
+def test_rotational_mutation_twists_untagged_gas_phase_cluster(rng):
+    """G6: an untagged cluster is twisted about a plane instead of returned unchanged."""
     cluster = Atoms(
         "Pt4",
         positions=[
@@ -482,7 +486,12 @@ def test_rotational_mutation_skips_whole_gas_phase_cluster(rng):
         system_type="gas_cluster",
         rng=rng,
     )
-    assert mut.mutate(cluster.copy()) is None
+    mutated = mut.mutate(cluster.copy())
+    assert mutated is not None
+    assert not np.allclose(
+        cluster.get_all_distances(mic=False),
+        mutated.get_all_distances(mic=False),
+    )
 
 
 def test_rotational_mutation_rotates_cluster_on_slab(rng):
@@ -616,3 +625,325 @@ def test_mirror_mutation_still_mirrors_tagged_gas_phase_core(rng):
     displacement = out.get_positions() - atoms.get_positions()
     assert not np.allclose(displacement - displacement[0], 0.0, atol=1e-6)
     assert np.allclose(out.get_positions()[4:], atoms.get_positions()[4:], atol=1e-8)
+
+
+def test_in_plane_slide_steps_are_at_least_one_angstrom():
+    slab = Atoms(
+        "Pt2", positions=[[0, 0, 0], [2.8, 0, 0]], cell=[12, 12, 16], pbc=[1, 1, 0]
+    )
+    mobile = np.array([[1.4, 1.4, 2.4], [3.0, 1.4, 2.6]])
+    mutation = InPlaneSlideMutation(
+        {(78, 78): 1.0},
+        2,
+        system_type="surface_cluster",
+        min_displacement=1.0,
+        max_displacement=3.0,
+        rng=np.random.default_rng(0),
+    )
+    shifts = mutation._candidate_shift_vectors(slab, mobile, (0, 1))
+    assert shifts
+    assert min(np.linalg.norm(shift) for shift in shifts) >= 1.0 - 1e-8
+
+
+def test_shell_swap_on_a_slab_lifts_the_buried_heteroatom(rng):
+    slab = Atoms(
+        "Pt2", positions=[[0, 0, 0], [2.8, 0, 0]], cell=[12, 12, 18], pbc=[1, 1, 0]
+    )
+    cluster = Atoms(
+        ["Au", "Pt"],
+        positions=[[1.4, 1.4, 2.2], [1.4, 1.4, 6.0]],
+        cell=slab.cell,
+        pbc=slab.pbc,
+    )
+    mutation = ShellSwapMutation(
+        2,
+        system_type="surface_cluster",
+        blmin={(78, 78): 0.2, (78, 79): 0.2, (79, 79): 0.2},
+        test_dist_to_slab=False,
+        rng=rng,
+    )
+    child = mutation.mutate(slab + cluster)
+    assert child is not None
+    assert float(child.positions[child.symbols == "Au"][0, 2]) > 2.2
+
+
+def test_anisotropic_rattle_accepts_after_one_reconnect(monkeypatch, rng):
+    atoms = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 0.0], [2.6, 0.0, 0.0]],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    mut = AnisotropicRattleMutation(
+        {(78, 78): 0.5},
+        len(atoms),
+        system_type="gas_cluster",
+        in_plane_strength=0.3,
+        normal_strength=0.3,
+        rng=rng,
+    )
+    reconnects = {"n": 0}
+    real_reconnect = _reconnect_mobile_components
+
+    def _count_reconnect(mobile, **kwargs):
+        reconnects["n"] += 1
+        return real_reconnect(mobile, **kwargs)
+
+    monkeypatch.setattr(
+        "scgo.ase_ga_patches.mutations.rattle._preserves_mobile_connectivity",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "scgo.ase_ga_patches.mutations.rattle._reconnect_mobile_components",
+        _count_reconnect,
+    )
+    out = mut.mutate(atoms)
+    assert reconnects["n"] == 1
+    assert out is not None
+    assert not np.allclose(out.get_positions(), atoms.get_positions())
+
+
+def test_rattle_of_one_tagged_fragment_changes_internal_distances(rng):
+    atoms = Atoms(
+        "Pt3",
+        positions=[[0.0, 0.0, 0.0], [2.6, 0.0, 0.0], [1.3, 2.2, 0.0]],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    atoms.set_tags([1, 1, 1])
+    atoms.center()
+    blmin = closest_distances_generator(
+        get_all_atom_types(atoms, range(len(atoms))),
+        ratio_of_covalent_radii=0.5,
+    )
+    mut = RattleMutation(
+        blmin,
+        len(atoms),
+        system_type="gas_cluster",
+        use_tags=True,
+        rattle_strength=0.8,
+        rng=rng,
+    )
+    out = mut.mutate(atoms)
+    assert out is not None
+
+    def _distances(candidate):
+        positions = candidate.get_positions()
+        return np.sort(
+            [
+                np.linalg.norm(positions[i] - positions[j])
+                for i in range(len(positions))
+                for j in range(i + 1, len(positions))
+            ]
+        )
+
+    assert not np.allclose(_distances(out), _distances(atoms), atol=1e-6)
+
+
+def test_shell_swap_skips_coincident_centers(rng):
+    atoms = Atoms(
+        "Pt2Au2",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.0, 1.2, 0.0],
+            [1.0, -1.2, 0.0],
+        ],
+        cell=[20.0, 20.0, 20.0],
+        pbc=False,
+    )
+    atoms.set_tags([0, 0, 1, 1])
+    mut = ShellSwapMutation(
+        len(atoms),
+        system_type="gas_cluster",
+        use_tags=True,
+        blmin={(78, 78): 0.2, (78, 79): 0.2, (79, 79): 0.2},
+        rng=rng,
+    )
+    assert mut.mutate(atoms) is None
+
+
+def test_shell_swap_declines_a_swap_that_splits_the_cluster(rng):
+    """Fingers that bridge the two groups point away from each other after the swap."""
+    atoms = Atoms(
+        "Pt3Au3",
+        positions=[
+            [1.3, 0.0, 0.0],
+            [-0.65, 1.0, 0.0],
+            [-0.65, -1.0, 0.0],
+            [3.9, 0.0, 0.0],
+            [5.85, 1.0, 0.0],
+            [5.85, -1.0, 0.0],
+        ],
+        cell=[30.0, 30.0, 30.0],
+        pbc=False,
+    )
+    atoms.set_tags([0, 0, 0, 1, 1, 1])
+    blmin = {(78, 78): 0.2, (78, 79): 0.2, (79, 79): 0.2}
+    swapped = atoms.copy()
+    positions = swapped.get_positions()
+    left = np.array([0, 1, 2])
+    right = np.array([3, 4, 5])
+    left_center = positions[left].mean(axis=0)
+    right_center = positions[right].mean(axis=0)
+    positions[left] += right_center - left_center
+    positions[right] += left_center - right_center
+    swapped.set_positions(positions)
+    assert not atoms_too_close(swapped, blmin, use_tags=True)
+    assert not _preserves_mobile_connectivity(atoms, swapped, use_mic=False)
+    mut = ShellSwapMutation(
+        len(atoms),
+        system_type="gas_cluster",
+        use_tags=True,
+        blmin=blmin,
+        rng=rng,
+    )
+    assert mut.mutate(atoms) is None
+
+
+def test_overlap_relief_separates_atoms_across_a_periodic_boundary(rng):
+    atoms = Atoms(
+        "Pt2",
+        positions=[[0.2, 5.0, 8.0], [9.7, 5.0, 8.0]],
+        cell=[10.0, 10.0, 16.0],
+        pbc=[True, True, False],
+    )
+    blmin = {(78, 78): 2.2}
+    mut = OverlapReliefMutation(
+        blmin,
+        len(atoms),
+        system_type="surface_cluster",
+        jitter=0.0,
+        n_sweeps=4,
+        test_dist_to_slab=False,
+        rng=rng,
+    )
+
+    def _mic_distance(candidate):
+        delta = candidate.positions[1] - candidate.positions[0]
+        _vectors, distances = find_mic(
+            delta.reshape(1, 3), candidate.cell, candidate.pbc
+        )
+        return float(distances[0])
+
+    parent_distance = _mic_distance(atoms)
+    out = mut.mutate(atoms)
+    assert out is not None
+    assert _mic_distance(out) > parent_distance + 1.0
+
+
+def test_few_atom_kick_moves_a_packed_cluster(rng):
+    atoms = Atoms(
+        "Pt4", positions=[[0, 0, 0], [2.7, 0, 0], [1.3, 2.4, 0], [1.3, 0.8, 2.2]]
+    )
+    atoms.center(vacuum=8.0)
+    mutation = RattleMutation({(78, 78): 0.5}, 4, system_type="gas_cluster", rng=rng)
+    kicked = mutation.mutate_few_atom_kick(atoms, n_atoms=1, kick_strength=1.2)
+    assert kicked is not None
+    assert not np.allclose(kicked.positions, atoms.positions)
+
+
+def test_reconnect_pulls_the_smaller_fragment_closer():
+    separated = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [8.0, 0.0, 0.0]])
+    joined = _reconnect_mobile_components(separated, use_mic=False)
+    assert joined.get_distance(0, 1) < separated.get_distance(0, 1)
+
+
+def test_reconnect_follows_the_near_periodic_image():
+    separated = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 0.0], [22.0, 0.0, 0.0]],
+        cell=[30.0, 30.0, 30.0],
+        pbc=True,
+    )
+    joined = _reconnect_mobile_components(separated, use_mic=True)
+    shift = joined.get_positions() - separated.get_positions()
+    assert float(np.linalg.norm(shift)) < 10.0
+
+    def _mic_distance(atoms):
+        delta = atoms.positions[1] - atoms.positions[0]
+        _vectors, distances = find_mic(delta.reshape(1, 3), atoms.cell, atoms.pbc)
+        return float(distances[0])
+
+    assert _mic_distance(joined) < _mic_distance(separated)
+
+
+def test_draw_successful_mutation_retries_after_none():
+    class _FirstRemaining:
+        def choice(self, n, p=None):
+            return 0
+
+    class _Op:
+        def __init__(self, result):
+            self.result = result
+            self.calls = 0
+
+        def mutate(self, atoms):
+            self.calls += 1
+            return None if self.result is None else self.result.copy()
+
+    parent = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    moved = parent.copy()
+    moved.positions[0, 0] += 1.5
+    failing, succeeding = _Op(None), _Op(moved)
+    selector = OperationSelector(
+        [1.0, 1.0], [failing, succeeding], rng=_FirstRemaining()
+    )
+    mutant, tried = draw_successful_mutation(selector, parent, {0: "dead", 1: "live"})
+    assert mutant is not None
+    assert failing.calls == succeeding.calls == 1
+    assert tried == ["dead", "live"]
+
+
+def test_draw_can_select_a_low_weight_operator():
+    class _LastRemaining:
+        def choice(self, n, p=None):
+            return n - 1
+
+    class _Op:
+        def __init__(self):
+            self.calls = 0
+
+        def mutate(self, atoms):
+            self.calls += 1
+            moved = atoms.copy()
+            moved.positions[0, 0] += 1.0
+            return moved
+
+    heavy, light = _Op(), _Op()
+    selector = OperationSelector([0.99, 0.01], [heavy, light], rng=_LastRemaining())
+    parent = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    mutant, tried = draw_successful_mutation(
+        selector, parent, {0: "rattle", 1: "rotational"}
+    )
+    assert mutant is not None
+    assert tried == ["rotational"]
+    assert light.calls == 1
+    assert heavy.calls == 0
+
+
+def test_mutation_draw_probabilities_keep_a_uniform_floor():
+    probabilities = _mutation_draw_probabilities(np.array([1.0, 0.0, 0.0, 0.0]))
+    assert probabilities[0] == pytest.approx(0.8 + 0.2 / 4)
+    assert probabilities[1:] == pytest.approx(0.2 / 4)
+
+
+def test_validation_failure_is_not_an_operator_trial():
+    atoms = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    set_tags(atoms, mutation_operator="rotational")
+    assert _eligible_mutation_operator(atoms, "connectivity") is None
+    assert _eligible_mutation_operator(atoms) == "rotational"
+    untagged = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    assert _eligible_mutation_operator(untagged) is None
+
+
+def test_draw_successful_mutation_rejects_an_unchanged_copy():
+    class _Op:
+        def mutate(self, atoms):
+            return atoms.copy()
+
+    parent = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    selector = OperationSelector([1.0], [_Op()], rng=np.random.default_rng(0))
+    mutant, tried = draw_successful_mutation(selector, parent, {0: "rattle"})
+    assert mutant is None
+    assert tried == ["rattle"]

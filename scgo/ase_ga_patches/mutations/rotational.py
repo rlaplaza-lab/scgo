@@ -8,22 +8,20 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import (
-    atoms_too_close,
-    atoms_too_close_two_sets,
-    get_rotation_matrix,
-)
+from ase_ga.utilities import get_rotation_matrix
 
 from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
 from scgo.ase_ga_patches.mutations._common import (
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
+    _fails_only_slab_clash,
     _filter_unique_tags,
     _append_unique_unit_vector,
     _ensure_rng,
-    _preserves_mobile_connectivity,
-    _resolve_op_connectivity_factor,
+    _geometry_candidate_directions,
     _random_unit_vector,
     _reanchor_mobile_to_slab,
 )
@@ -200,6 +198,113 @@ class RotationalMutation(OffspringCreator):
             new_positions[indices[tag]] = np.dot(rotation, (moiety - center).T).T + center
         return new_positions
 
+    def _twist_angles(self):
+        angles = [np.pi, 2.0, 1.0, 0.5]
+        limit = max(1, min(len(angles), int(self.max_inner_attempts)))
+        return angles[:limit]
+
+    def _place_trial(self, mobile, positions, slab):
+        trial = mobile.copy()
+        trial.set_positions(positions)
+        if self._policy.uses_surface:
+            return _reanchor_mobile_to_slab(
+                mobile, trial, slab, self.surface_normal_axis
+            )
+        trial.center()
+        return trial
+
+    def _one_plane_shift(self, positions):
+        """Single in-plane nudge of half the smallest blmin."""
+        if not self.blmin:
+            return None
+        offset = 0.5 * min(self.blmin.values())
+        if offset <= 0.0:
+            return None
+        in_plane = [i for i in range(3) if i != self.surface_normal_axis]
+        shifted = np.array(positions, dtype=float, copy=True)
+        shifted[:, in_plane[0]] += offset
+        return shifted
+
+    def _twist_mobile(self, slab, mobile):
+        """Rotate a few outer atoms about the nearest core atom. Large angles first."""
+        positions = mobile.get_positions()
+        numbers = mobile.get_atomic_numbers()
+        if len(positions) < 3:
+            return None
+        center = np.mean(positions, axis=0)
+        angles = self._twist_angles()
+        n_normals = max(1, min(4, int(self.max_inner_attempts) // len(angles)))
+        normals = _geometry_candidate_directions(
+            positions, center, slab, self.rng, n_normals
+        )
+        accept_kwargs = _accept_connected_kwargs(self, slab)
+        self.last_attempt_count = 0
+        best_slab: tuple[float, np.ndarray] | None = None
+        # At least two atoms stay in the core, so this is not a rigid turn
+        # about a single vertex.
+        n_cap = min(4, len(positions) - 2)
+        if n_cap < 2:
+            n_cap = min(2, len(positions) - 1)
+        for normal in normals:
+            signed = np.dot(positions - center, normal)
+            if float(np.ptp(signed)) <= 1e-6:
+                continue
+            order = np.argsort(signed)
+            cap = order[-n_cap:]
+            core = order[:-n_cap]
+            delta = positions[core][:, None, :] - positions[cap][None, :, :]
+            distances = np.linalg.norm(delta, axis=2)
+            core_index, _cap_index = np.unravel_index(int(np.argmin(distances)), distances.shape)
+            pivot = positions[int(core[int(core_index)])]
+            for angle in angles:
+                newpos = positions.copy()
+                subset = newpos[cap]
+                rotation = get_rotation_matrix(normal, float(angle))
+                newpos[cap] = np.dot(rotation, (subset - pivot).T).T + pivot
+                self.last_attempt_count += 1
+                trial = self._place_trial(mobile, newpos, slab)
+                accepted = _accept_connected_candidate(
+                    mobile, trial, **accept_kwargs
+                )
+                if accepted is not None:
+                    return slab + accepted
+                if not self._policy.uses_surface:
+                    continue
+                if not _fails_only_slab_clash(
+                    mobile, trial, **accept_kwargs
+                ):
+                    continue
+                score = _steric_deficit(trial.get_positions(), numbers, self.blmin)
+                score += _steric_deficit_two_sets(
+                    trial.get_positions(),
+                    numbers,
+                    slab.get_positions(),
+                    slab.numbers,
+                    self.blmin,
+                )[0]
+                if best_slab is None or score < best_slab[0]:
+                    best_slab = (score, trial.get_positions().copy())
+
+        if best_slab is None:
+            return None
+        shifted = self._one_plane_shift(best_slab[1])
+        if shifted is None:
+            return None
+        self.last_attempt_count += 1
+        trial = mobile.copy()
+        trial.set_positions(shifted)
+        accepted = _accept_connected_candidate(mobile, trial, **accept_kwargs)
+        if accepted is not None:
+            return slab + accepted
+        return None
+
+    def mutate_twist(self, atoms):
+        """Twist the mobile cluster even when multi-atom tags are present."""
+        count = len(atoms) if self.n_top is None else self.n_top
+        slab = atoms[: len(atoms) - count]
+        mobile = atoms[len(atoms) - count :]
+        return self._twist_mobile(slab, mobile)
+
     def mutate(self, atoms):
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
@@ -231,14 +336,15 @@ class RotationalMutation(OffspringCreator):
 
         if len(slab) == 0:
             # Without a slab, rotating a group that spans the whole mobile region
-            # is a rigid-body move of the entire (re-centred) cluster and hence
-            # energy-identical to the parent; drop such groups.
+            # is a rigid-body move of the entire (re-centred) cluster. Untagged
+            # clusters have one such group, so twist a subset instead.
             n_mobile = len(mutant)
             indices = {
                 tag: hits for tag, hits in indices.items() if len(hits) < n_mobile
             }
-            if not indices:
-                return None
+
+        if not indices:
+            return self._twist_mobile(slab, atoms)
 
         n_rot = int(np.ceil(len(indices) * self.fraction))
         if n_rot > 0 and len(indices) > 0:
@@ -270,10 +376,9 @@ class RotationalMutation(OffspringCreator):
 
         ranked.sort(key=lambda item: item[0])
         self.last_attempt_count = 0
-        in_plane = [i for i in range(3) if i != self.surface_normal_axis]
-        rescue_offset = 0.5 * min(self.blmin.values())
-        use_mic = bool(self._policy.uses_surface)
-        for _score, newpos in ranked:
+        accept_kwargs = _accept_connected_kwargs(self, slab)
+        best_slab: tuple[float, np.ndarray] | None = None
+        for score, newpos in ranked:
             self.last_attempt_count += 1
             if self._policy.uses_surface:
                 newpos = _reanchor_mobile_to_slab(
@@ -286,46 +391,25 @@ class RotationalMutation(OffspringCreator):
             if not self._policy.uses_surface:
                 mutant.center()
 
-            too_close = atoms_too_close(mutant, self.blmin, use_tags=self.use_tags)
-            if not too_close and self.test_dist_to_slab:
-                too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
+            accepted = _accept_connected_candidate(atoms, mutant, **accept_kwargs)
+            if accepted is not None:
+                return slab + accepted
+            slab_only = self._policy.uses_surface and _fails_only_slab_clash(
+                atoms, mutant, **accept_kwargs
+            )
+            if slab_only and (best_slab is None or score < best_slab[0]):
+                best_slab = (score, mutant.get_positions().copy())
 
-            if not too_close and _preserves_mobile_connectivity(
-                atoms,
-                mutant,
-                use_mic=use_mic,
-                connectivity_factor=_resolve_op_connectivity_factor(self),
-            ):
-                return slab + mutant
-
-            if self._policy.uses_surface:
-                # Bounded in-plane rescue: the re-anchor already guarantees no
-                # vertical penetration, so any remaining slab clash must be a
-                # lateral blmin overlap that a small translation can clear.
-                for dx in (0.0, rescue_offset, -rescue_offset):
-                    for dy in (0.0, rescue_offset, -rescue_offset):
-                        if dx == 0.0 and dy == 0.0:
-                            continue
-                        rescue = newpos.copy()
-                        rescue[:, in_plane[0]] += dx
-                        rescue[:, in_plane[1]] += dy
-                        mutant.set_positions(rescue)
-                        too_close = atoms_too_close(
-                            mutant, self.blmin, use_tags=self.use_tags)
-                        if not too_close and self.test_dist_to_slab:
-                            too_close = atoms_too_close_two_sets(
-                                slab, mutant, self.blmin)
-                        if (
-                            not too_close
-                            and _preserves_mobile_connectivity(
-                                atoms,
-                                mutant,
-                                use_mic=use_mic,
-                                connectivity_factor=_resolve_op_connectivity_factor(self),
-                            )
-                        ):
-                            return slab + mutant
-
+        if best_slab is None:
+            return None
+        shifted = self._one_plane_shift(best_slab[1])
+        if shifted is None:
+            return None
+        self.last_attempt_count += 1
+        mutant.set_positions(shifted)
+        accepted = _accept_connected_candidate(atoms, mutant, **accept_kwargs)
+        if accepted is not None:
+            return slab + accepted
         return None
 
 # fmt: on

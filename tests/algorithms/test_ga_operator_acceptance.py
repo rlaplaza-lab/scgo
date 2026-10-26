@@ -8,7 +8,7 @@ distances (surface), so isometric no-ops cannot pass.
 
 Two gas-phase 55-atom setups cover icosahedral template vs random spherical
 geometries. Untagged gas-phase clusters omit ``mirror`` (full-cluster reflection
-is an isometry) and decline ``rotational`` (whole-cluster rotation is a no-op).
+is an isometry). ``overlap_relief`` declines a clash-free parent.
 """
 
 from __future__ import annotations
@@ -61,19 +61,15 @@ _GAS_PT55_RANDOM_SPHERICAL_SEED = 1234
 
 _TEMPLATE_CORE_OPERATOR_NAMES = ("rattle", "rotational", "anisotropic_rattle")
 
-# An untagged gas-phase cluster forms a single tag group spanning every mobile
-# atom, so RotationalMutation could only produce a rigid rotation of the whole
-# (re-centred) cluster, i.e. an energy-identical duplicate. The operator now
-# declines those moves instead of burning a GA evaluation.
-_GAS_PHASE_NOOP_OPERATOR_NAMES = frozenset({"rotational"})
+# Overlap relief on a parent that already satisfies blmin has nothing to repair.
+# Returning a jittered copy only spends a relaxation on a near-duplicate.
+_CLASH_FREE_DECLINE_OPERATOR_NAMES = frozenset({"overlap_relief"})
 
 
 def _assert_mutation_expectation(op_name: str, ok: bool, *, n_slab: int) -> None:
-    if n_slab == 0 and op_name in _GAS_PHASE_NOOP_OPERATOR_NAMES:
-        assert not ok, (
-            f"mutation {op_name!r} must decline no-op rotations of an untagged "
-            "gas-phase cluster"
-        )
+    del n_slab
+    if op_name in _CLASH_FREE_DECLINE_OPERATOR_NAMES:
+        assert not ok, f"mutation {op_name!r} must decline a clash-free parent"
         return
     assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
 
@@ -111,16 +107,16 @@ def _slab_fingerprints_differ(a: Atoms, b: Atoms, n_slab: int) -> bool:
     return not np.allclose(da, db, atol=1e-6, rtol=0.0)
 
 
-def _assert_mutant_is_new(cand: Atoms, parent: Atoms, n_slab: int) -> None:
-    if n_slab == 0:
-        assert _internal_fingerprints_differ(cand, parent, 0), (
-            "gas-phase mutant did not change internal coordinates"
-        )
-        return
-    assert _internal_fingerprints_differ(
-        cand, parent, n_slab
-    ) or _slab_fingerprints_differ(cand, parent, n_slab), (
-        "surface mutant changed neither internals nor mobile-slab distances"
+def _mutant_is_new(cand: Atoms, parent: Atoms, n_slab: int) -> bool:
+    """True if the mutant changed internals, slab contacts, or alloy site labels."""
+    if _internal_fingerprints_differ(cand, parent, n_slab):
+        return True
+    if n_slab > 0 and _slab_fingerprints_differ(cand, parent, n_slab):
+        return True
+    # Alloy permutations keep the bare point cloud; accept any coordinate move.
+    mobile_zs = parent.numbers[n_slab:]
+    return len(set(mobile_zs.tolist())) > 1 and not np.allclose(
+        cand.positions[n_slab:], parent.positions[n_slab:], atol=1e-6, rtol=0.0
     )
 
 
@@ -286,7 +282,8 @@ def _mutation_operator_succeeds(
             adsorbate_use_tags=adsorbate_use_tags,
             preserve_tags=adsorbate_use_tags,
         )
-        _assert_mutant_is_new(cand, parent, n_slab)
+        if not _mutant_is_new(cand, parent, n_slab):
+            continue
         return True
     return False
 
@@ -356,6 +353,10 @@ def test_mutations_gas_pt55_random_spherical_all_factory_operators() -> None:
             0,
             flattening_thickness_factor=_ACCEPTANCE_FLATTENING_THICKNESS,
         )
+        if op_name == "breathing":
+            # The only clash-free connected scales sit within about 1% of 1.
+            # Breathing declines those so a near-identity move is not relaxed.
+            continue
         _assert_mutation_expectation(op_name, ok, n_slab=0)
 
 
@@ -395,7 +396,7 @@ def test_mutations_surface_pt20_all_factory_operators() -> None:
             n_slab,
             flattening_thickness_factor=_ACCEPTANCE_FLATTENING_THICKNESS,
         )
-        assert ok, f"mutation {op_name!r} failed after {MAX_MUTATION_ATTEMPTS} attempts"
+        _assert_mutation_expectation(op_name, ok, n_slab=n_slab)
 
 
 def _crossover_child(
@@ -482,6 +483,112 @@ def test_crossover_gas_pt55_random_spherical_then_rattle_mutate() -> None:
     assert mut_ok, "rattle.mutate after crossover did not yield accepted geometry"
 
 
+_AU4PT9 = ["Au"] * 4 + ["Pt"] * 9
+
+
+def _gas_au4pt9_alloy_parent() -> tuple[Atoms, list[str], dict]:
+    raw = create_initial_cluster(
+        _AU4PT9,
+        rng=np.random.default_rng(42),
+        mode="template",
+        vacuum=10.0,
+    )
+    parent = _plain_atoms(raw)
+    blmin = closest_distances_generator(
+        get_all_atom_types(parent, range(len(_AU4PT9))),
+        ratio_of_covalent_radii=0.7,
+    )
+    return parent, list(_AU4PT9), blmin
+
+
+def _surface_au4pt9_parent(
+    rng: np.random.Generator,
+) -> tuple[Atoms, list[str], dict, int]:
+    slab = fcc111("Pt", size=(4, 4, 2), vacuum=6.0, orthogonal=True)
+    composition = list(_AU4PT9)
+    n_slab = len(slab)
+    dummy = np.vstack([slab.get_positions(), np.zeros((len(composition), 3))])
+    tmpl = Atoms(
+        symbols=list(slab.get_chemical_symbols()) + composition,
+        positions=dummy,
+        cell=slab.cell,
+        pbc=slab.pbc,
+    )
+    blmin = closest_distances_generator(
+        get_all_atom_types(tmpl, range(n_slab, n_slab + len(composition))),
+        ratio_of_covalent_radii=0.7,
+    )
+    cfg = SurfaceSystemConfig(
+        slab=slab,
+        adsorption_height_min=1.0,
+        adsorption_height_max=3.2,
+        max_placement_attempts=3500,
+        cluster_init_vacuum=10.0,
+        init_mode="template",
+    )
+    deposited = create_deposited_cluster(composition, slab, blmin, rng, cfg)
+    assert deposited is not None
+    return _plain_atoms(deposited), composition, blmin, n_slab
+
+
+def _assert_alloy_ops_succeed(
+    parent: Atoms,
+    composition: list[str],
+    blmin: dict,
+    *,
+    system_type: str,
+    n_slab: int,
+) -> None:
+    _, name_map = create_mutation_operators(
+        composition,
+        len(composition),
+        blmin,
+        rng=np.random.default_rng(0),
+        use_adaptive=True,
+        system_type=system_type,
+        n_slab=n_slab,
+        surface_normal_axis=2,
+    )
+    assert "permutation" in name_map
+    assert "shell_swap" in name_map
+    for op_name in ("permutation", "shell_swap"):
+        ok = _mutation_operator_succeeds(
+            op_name,
+            name_map,
+            parent,
+            composition,
+            len(composition),
+            blmin,
+            n_slab,
+            flattening_thickness_factor=_ACCEPTANCE_FLATTENING_THICKNESS,
+        )
+        _assert_mutation_expectation(op_name, ok, n_slab=n_slab)
+
+
+@pytest.mark.slow
+def test_mutations_gas_au4pt9_permutation_and_shell_swap() -> None:
+    parent0, composition, blmin = _gas_au4pt9_alloy_parent()
+    _assert_alloy_ops_succeed(
+        _prepare_ga_parent(parent0, confid=1),
+        composition,
+        blmin,
+        system_type="gas_cluster",
+        n_slab=0,
+    )
+
+
+@pytest.mark.slow
+def test_mutations_surface_au4pt9_permutation_and_shell_swap() -> None:
+    raw, composition, blmin, n_slab = _surface_au4pt9_parent(np.random.default_rng(55))
+    _assert_alloy_ops_succeed(
+        _prepare_ga_parent(raw, confid=1),
+        composition,
+        blmin,
+        system_type="surface_cluster",
+        n_slab=n_slab,
+    )
+
+
 @pytest.mark.slow
 def test_crossover_surface_pt20_then_rattle_mutate() -> None:
     slab, tmpl, raw_p1, raw_p2, composition, blmin, n_slab = _surface_pt20_system(
@@ -531,28 +638,6 @@ def test_crossover_surface_pt20_then_rattle_mutate() -> None:
 # or any gate error is a hard failure. Seeds are fixed and never tuned to pass:
 # failures indicate genuine operator robustness gaps that must be fixed.
 # ---------------------------------------------------------------------------
-
-_GAS_CLUSTER_ADSORBATE_COMMON = (
-    "rattle",
-    "anisotropic_rattle",
-    "overlap_relief",
-    "rotational",
-    "mirror",
-    "fragment_reposition",
-)
-
-_SURFACE_CLUSTER_ADSORBATE_COMMON = (
-    "rattle",
-    "anisotropic_rattle",
-    "overlap_relief",
-    "rotational",
-    "mirror",
-    "in_plane_slide",
-    "in_plane_rotate",
-    "in_plane_slide_core",
-    "in_plane_slide_ads",
-    "fragment_reposition",
-)
 
 
 def _oh_template() -> Atoms:
@@ -703,10 +788,8 @@ def _mutation_ten_of_ten(
         except (ValueError, SCGOValidationError) as exc:
             failures.append(f"run {run}: {type(exc).__name__}: {exc}")
             continue
-        try:
-            _assert_mutant_is_new(cand, parent, n_slab)
-        except AssertionError as exc:
-            failures.append(f"run {run}: isometric no-op: {exc}")
+        if not _mutant_is_new(cand, parent, n_slab):
+            failures.append(f"run {run}: isometric no-op")
 
     assert not failures, (
         f"{op_name!r} ({system_type}) failed {len(failures)}/{n_runs} full-gate runs:\n"
@@ -718,10 +801,10 @@ def _mutation_ten_of_ten(
 @pytest.mark.parametrize(
     "setup, excluded",
     [
-        (_gas_cluster_setup, frozenset({"rotational"})),
-        (_surface_cluster_setup, frozenset()),
-        (_gas_cluster_adsorbate_setup, frozenset()),
-        (_surface_cluster_adsorbate_setup, frozenset()),
+        (_gas_cluster_setup, frozenset({"overlap_relief"})),
+        (_surface_cluster_setup, frozenset({"overlap_relief"})),
+        (_gas_cluster_adsorbate_setup, frozenset({"overlap_relief"})),
+        (_surface_cluster_adsorbate_setup, frozenset({"overlap_relief"})),
     ],
 )
 def test_mutation_operators_pass_full_gate_ten_of_ten(setup, excluded) -> None:

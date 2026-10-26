@@ -78,10 +78,7 @@ def test_overlap_relief_does_not_return_unchanged_valid_parent(rng) -> None:
         rng=rng,
     )
     out = mut.mutate(atoms.copy())
-    if out is None:
-        return
-    assert not np.allclose(out.get_positions(), atoms.get_positions(), atol=1e-8)
-    assert not atoms_too_close(out, blmin)
+    assert out is None
 
 
 def test_flattening_skips_identity_and_changes_geometry(rng) -> None:

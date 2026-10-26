@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import find_mic
 from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
@@ -22,6 +23,21 @@ from scgo.initialization.steric_scoring import _blmin_matrix
 from scgo.system_types import SystemType, get_system_policy
 
 __all__ = ["OverlapReliefMutation"]
+
+
+def _separation_vectors(vectors, cell, pbc, use_mic):
+    """Pair vectors and distances. Surface cells use the nearest image."""
+    shape = vectors.shape
+    flat = np.reshape(np.asarray(vectors, dtype=float), (-1, 3))
+    if flat.size == 0:
+        return flat.reshape(shape), np.zeros(shape[:-1], dtype=float)
+    if use_mic:
+        mic, distances = find_mic(flat, cell, pbc)
+        return (
+            np.asarray(mic, dtype=float).reshape(shape),
+            np.asarray(distances, dtype=float).reshape(shape[:-1]),
+        )
+    return flat.reshape(shape), np.linalg.norm(flat, axis=1).reshape(shape[:-1])
 
 
 def _clash_unit_directions(vectors, distances, fallback):
@@ -101,6 +117,17 @@ class OverlapReliefMutation(OffspringCreator):
             slab.get_atomic_numbers() if len(slab) > 0 else np.array([], dtype=int)
         )
         req_cross = _blmin_matrix(numbers, self.blmin, slab_numbers)
+        slab_positions = (
+            slab.get_positions() if len(slab) > 0 else np.zeros((0, 3))
+        )
+        slab_clash = (
+            self.test_dist_to_slab
+            and len(slab) > 0
+            and atoms_too_close_two_sets(slab, top, self.blmin)
+        )
+        if not atoms_too_close(top, self.blmin, use_tags=self.use_tags) and not slab_clash:
+            return None
+        use_mic = bool(self._policy.uses_surface) and bool(np.any(pbc))
 
         for _ in range(self.n_sweeps):
             displacements = np.zeros_like(positions)
@@ -114,8 +141,12 @@ class OverlapReliefMutation(OffspringCreator):
                     iu = iu[keep]
                     ju = ju[keep]
                 if iu.size > 0:
-                    vectors = positions[ju] - positions[iu]
-                    distances = np.linalg.norm(vectors, axis=1)
+                    vectors, distances = _separation_vectors(
+                        positions[ju] - positions[iu],
+                        cell,
+                        pbc,
+                        use_mic,
+                    )
                     required = req_matrix[iu, ju]
                     clash = distances + 1e-12 < required
                     if np.any(clash):
@@ -136,9 +167,12 @@ class OverlapReliefMutation(OffspringCreator):
                         np.add.at(displacements, clash_j, shifts)
 
             if self.test_dist_to_slab and len(slab) > 0:
-                slab_positions = slab.get_positions()
-                vectors = positions[:, None, :] - slab_positions[None, :, :]
-                distances = np.linalg.norm(vectors, axis=2)
+                vectors, distances = _separation_vectors(
+                    positions[:, None, :] - slab_positions[None, :, :],
+                    cell,
+                    pbc,
+                    use_mic,
+                )
                 clash = distances + 1e-12 < req_cross
                 if np.any(clash):
                     moved = True
@@ -167,7 +201,6 @@ class OverlapReliefMutation(OffspringCreator):
         repair_changed = not np.allclose(
             repaired_positions, original_positions, atol=_IDENTITY_ATOL
         )
-        use_mic = bool(self._policy.uses_surface)
         n_jitter_tries = max(0, int(self.n_jitter_tries)) if self.jitter > 0.0 else 0
 
         def _accept(trial_positions):

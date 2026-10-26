@@ -12,7 +12,6 @@ from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
     _filter_unique_tags,
-    _IDENTITY_ATOL,
     _ensure_rng,
     _preserves_mobile_connectivity,
     _resolve_op_connectivity_factor,
@@ -52,7 +51,7 @@ class BreathingMutation(OffspringCreator):
 
     def __init__(self, blmin, n_top, system_type: SystemType, scale_min=0.9, scale_max=1.1,
                  test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=1000, surface_normal_axis=2):
+                 max_inner_attempts=1000, surface_normal_axis=2, min_scale_delta=0.05):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.blmin = blmin
@@ -65,6 +64,7 @@ class BreathingMutation(OffspringCreator):
         self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
         self.surface_normal_axis = surface_normal_axis
+        self.min_scale_delta = float(min_scale_delta)
         self.last_attempt_count = 0
         self.descriptor = "BreathingMutation"
         self.min_inputs = 1
@@ -182,7 +182,7 @@ class BreathingMutation(OffspringCreator):
         self.last_attempt_count = 0
         for scale in self._candidate_scales(pos[mask], num[mask], slab):
             self.last_attempt_count += 1
-            if abs(float(scale) - 1.0) <= _IDENTITY_ATOL:
+            if abs(float(scale) - 1.0) < self.min_scale_delta:
                 continue
             s = scale
             new_pos = pos.copy()

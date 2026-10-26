@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -9,6 +10,7 @@ from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
     _assert_offspring_integrity,
+    _pop_closest_to_plane,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.exceptions import SCGOValidationError
@@ -87,6 +89,53 @@ def test_dual_cut_and_splice_returns_offspring(pt3_atoms, rng):
     assert child is not None
     assert len(child) == n_top
     assert child.get_chemical_symbols() == pt3_atoms.get_chemical_symbols()
+
+
+def test_dual_pairing_falls_back_only_when_the_first_operator_fails():
+    parent = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+    child = parent.copy()
+    child.positions[0, 0] += 0.4
+
+    class _Operator:
+        def __init__(self, result):
+            self.result = result
+            self.calls = 0
+            self.last_attempt_count = 4
+
+        def get_new_individual(self, parents):
+            self.calls += 1
+            if self.result is None:
+                return None, "pairing failed"
+            return self.result.copy(), "pairing ok"
+
+    failing = _Operator(None)
+    succeeding = _Operator(child)
+    # Probability 1 selects the exploratory operator first.
+    dual = DualCutAndSplicePairing(
+        succeeding,
+        failing,
+        1.0,
+        rng=np.random.default_rng(0),
+    )
+    indi, _desc = dual.get_new_individual([parent, parent.copy()])
+    assert indi is not None
+    assert failing.calls == 1
+    assert succeeding.calls == 1
+    assert dual.last_attempt_count == 8
+
+    primary = _Operator(child)
+    exploratory = _Operator(child)
+    dual = DualCutAndSplicePairing(
+        primary,
+        exploratory,
+        0.0,
+        rng=np.random.default_rng(0),
+    )
+    indi, _desc = dual.get_new_individual([parent, parent.copy()])
+    assert indi is not None
+    assert primary.calls == 1
+    assert exploratory.calls == 0
+    assert dual.last_attempt_count == 4
 
 
 def test_create_ga_pairing_returns_single_operator_when_explore_probability_zero(
@@ -258,7 +307,8 @@ def test_cut_and_splice_all_moieties_can_mix_adsorbate_from_second_parent():
     p1, p2 = _tagged_parents_with_distinct_adsorbates()
     co, o, h = 27, 8, 1
     blmin = {(z1, z2): 0.01 for z1 in (co, o, h) for z2 in (co, o, h)}
-    parent2_vector = p2.get_positions()[4] - p2.get_positions()[3]
+    parent1_length = float(p1.get_distance(3, 4))
+    parent2_length = float(p2.get_distance(3, 4))
 
     saw_parent2_ads = False
     for seed in range(40):
@@ -276,8 +326,11 @@ def test_cut_and_splice_all_moieties_can_mix_adsorbate_from_second_parent():
         if child is None:
             continue
         _assert_preserves_atom_identity(child, p1)
-        child_vector = child.get_positions()[4] - child.get_positions()[3]
-        if np.allclose(child_vector, parent2_vector, atol=1e-8):
+        # Alignment rotates the inherited fragment, so the internal bond
+        # length identifies the parent rather than the world-frame vector.
+        child_length = float(child.get_distance(3, 4))
+        if abs(child_length - parent2_length) < 1e-6:
+            assert abs(child_length - parent1_length) > 0.2
             saw_parent2_ads = True
             break
     assert saw_parent2_ads
@@ -402,3 +455,111 @@ def test_cross_is_deterministic_with_caching():
     c2 = op2.cross(p1, p2)
     assert c1 is not None and c2 is not None
     assert np.allclose(c1.get_positions(), c2.get_positions())
+
+
+def _score_cut(prefer_unbalanced: bool, z1, z2, *, minfrac: float | None = None):
+    op = CutAndSplicePairing(
+        Atoms(cell=[20, 20, 20]),
+        n_top=len(z1),
+        blmin={(78, 78): 0.5},
+        system_type="gas_cluster",
+        rng=np.random.default_rng(0),
+        prefer_unbalanced=prefer_unbalanced,
+        minfrac=minfrac,
+    )
+
+    def centers(zs):
+        return np.array([[0.0, 0.0, z] for z in zs])
+
+    return op._estimate_cut_balance(
+        centers(z1),
+        centers(z2),
+        np.ones(len(z1)),
+        np.zeros(3),
+        np.array([0.0, 0.0, 1.0]),
+    )
+
+
+def test_exploratory_pairing_prefers_unbalanced_cuts():
+    even, uneven = ([-1.0, 1.0], [-1.0, 1.0]), ([1.0, 2.0], [-2.0, -1.0])
+    assert _score_cut(False, *even) < _score_cut(False, *uneven)
+    assert _score_cut(True, *uneven) < _score_cut(True, *even)
+
+
+def test_unbalanced_preference_still_rejects_an_illegal_cut():
+    # Legal but lopsided: parent 2 contributes only one atom.
+    legal = ([1.0, 2.0, 3.0, 4.0], [-1.0, 1.0, 2.0, 3.0])
+    # Parent 2 contributes nothing below the plane, so minfrac is missed.
+    illegal = ([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0])
+    assert _score_cut(True, *legal, minfrac=0.25) < _score_cut(
+        True, *illegal, minfrac=0.25
+    )
+
+
+def test_stoichiometry_repair_drops_group_nearest_the_plane():
+    far, near, other = (
+        SimpleNamespace(distance=2.5),
+        SimpleNamespace(distance=-0.2),
+        SimpleNamespace(distance=1.1),
+    )
+    items = [far, near, other]
+    assert _pop_closest_to_plane(items) is near
+    assert items == [far, other]
+
+
+def test_second_pass_jitters_the_aligned_cuts():
+    atoms = Atoms(
+        "Pt4",
+        positions=[[0, 0, 0], [2.5, 0, 0], [1.2, 2.2, 0.3], [1.2, 0.8, 2.1]],
+        cell=[20, 20, 20],
+        pbc=False,
+    )
+    atoms.center(vacuum=6.0)
+    other = atoms.copy()
+    op = CutAndSplicePairing(
+        Atoms(cell=atoms.cell),
+        n_top=4,
+        blmin={(78, 78): 0.5},
+        system_type="gas_cluster",
+        rng=np.random.default_rng(1),
+        fixed_cell_max_passes=2,
+    )
+    jitter_calls = {"n": 0}
+    original = op._jittered_cut_configurations
+
+    def _counting_jitter(*args, **kwargs):
+        jitter_calls["n"] += 1
+        return original(*args, **kwargs)
+
+    op._jittered_cut_configurations = _counting_jitter
+    op._get_pairing = lambda *args, **kwargs: None
+    assert op.cross(atoms, other) is None
+    assert jitter_calls["n"] == 1
+
+
+def test_parent_alignment_removes_a_rigid_offset():
+    reference = Atoms(
+        "Pt3",
+        positions=[[0.0, 0.0, 0.0], [2.6, 0.0, 0.2], [1.2, 2.3, 0.4]],
+        cell=[20, 20, 20],
+        pbc=False,
+    )
+    moving = reference.copy()
+    angle = np.deg2rad(70.0)
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    moving.positions[:] = moving.positions @ rotation.T + np.array([4.0, -2.0, 1.0])
+    op = CutAndSplicePairing(
+        Atoms(cell=reference.cell),
+        n_top=3,
+        blmin={(78, 78): 0.5},
+        system_type="gas_cluster",
+        rng=np.random.default_rng(2),
+    )
+    op._align_moving_to_reference(reference, moving)
+    assert np.linalg.norm(moving.positions - reference.positions) < 1e-6

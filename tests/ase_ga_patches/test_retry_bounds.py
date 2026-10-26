@@ -13,7 +13,6 @@ single parallel offspring job (batch walltime is bounded by the slowest job):
 """
 
 import numpy as np
-import pytest
 from ase import Atoms
 from ase_ga.utilities import atoms_too_close
 
@@ -66,6 +65,7 @@ class TestCutAndSpliceFixedCellBound:
             rng=np.random.default_rng(0),
         )
         assert pairing.fixed_cell_max_passes == 3
+        assert pairing.variable_cell_max_passes == 3
 
     def test_jittered_configs_keep_normals_and_re_rank(self, au2pt2_atoms):
         atoms1 = au2pt2_atoms.copy()
@@ -84,12 +84,10 @@ class TestCutAndSpliceFixedCellBound:
         assert len(jittered) == len(base)
 
         def group_by_normal(configs):
-            grouped: dict[tuple, list[tuple[float, np.ndarray]]] = {}
+            grouped: dict[tuple, list[tuple]] = {}
             for score, point, normal in configs:
                 key = tuple(np.round(normal, 10))
-                grouped.setdefault(key, []).append(
-                    (float(score), np.asarray(point).ravel())
-                )
+                grouped.setdefault(key, []).append((score, np.asarray(point).ravel()))
             return grouped
 
         base_by_normal = group_by_normal(base)
@@ -109,17 +107,16 @@ class TestCutAndSpliceFixedCellBound:
         assert some_moved
         scores = [score for score, _, _ in jittered]
         assert scores == sorted(scores)
-        assert all(np.isfinite(scores))
+        assert all(np.isfinite(part) for score in scores for part in score)
 
 
 # ---------------------------------------------------------------------------
-# 2. Rattle / anisotropic rattle: lowest-tier consecutive-failure exit
+# 2. Rattle / anisotropic rattle: fixed 8+8 attempt schedule
 # ---------------------------------------------------------------------------
-class TestRattleLowestTierPatience:
-    def test_hopeless_dense_parent_exits_before_maxcount(self, pt4_tetrahedron):
+class TestRattleAttemptCap:
+    def test_hopeless_dense_parent_stops_at_the_schedule(self, pt4_tetrahedron):
         atoms = pt4_tetrahedron.copy()
-        # Collapse the tetrahedron so no rattle of strength 0.05 can satisfy
-        # a 5 A minimum-interatomic-distance gate.
+        # Collapse the tetrahedron so no small rattle can satisfy a 5 A gate.
         atoms.set_positions(np.tile([0.0, 0.0, 0.0], (len(atoms), 1)))
         mut = RattleMutation(
             {(78, 78): 5.0},
@@ -130,26 +127,9 @@ class TestRattleLowestTierPatience:
             rng=np.random.default_rng(5),
         )
         assert mut.mutate(atoms) is None
-        # Lowest tier starts at ~maxcount/3; patience must stop the loop well
-        # before the absolute cap of 1000 attempts.
-        assert mut.last_attempt_count < 1000
+        assert mut.last_attempt_count == 16
 
-    def test_patience_zero_restores_full_budget(self, pt4_tetrahedron):
-        atoms = pt4_tetrahedron.copy()
-        atoms.set_positions(np.tile([0.0, 0.0, 0.0], (len(atoms), 1)))
-        mut = RattleMutation(
-            {(78, 78): 5.0},
-            len(atoms),
-            system_type="gas_cluster",
-            rattle_strength=0.05,
-            test_dist_to_slab=False,
-            patience=0,
-            rng=np.random.default_rng(5),
-        )
-        assert mut.mutate(atoms) is None
-        assert mut.last_attempt_count == 1000
-
-    def test_easy_parent_still_succeeds_with_default_patience(self, pt4_tetrahedron):
+    def test_easy_parent_still_succeeds(self, pt4_tetrahedron):
         atoms = pt4_tetrahedron.copy()
         mut = RattleMutation(
             _blmin(atoms),
@@ -163,8 +143,49 @@ class TestRattleLowestTierPatience:
         assert mut.last_attempt_count <= 10
 
 
-class TestAnisotropicRattleLowestTierPatience:
-    def test_hopeless_dense_parent_exits_before_maxcount(self, pt4_tetrahedron):
+class TestCutAndSpliceVariableCellBound:
+    def test_hopeless_parents_return_none_quickly(self, au2pt2_atoms):
+        atoms1 = au2pt2_atoms.copy()
+        atoms2 = au2pt2_atoms.copy()
+        atoms2.positions += 0.4
+        pairing = CutAndSplicePairing(
+            slab=Atoms(cell=atoms1.get_cell(), pbc=atoms1.get_pbc()),
+            n_top=len(atoms1),
+            blmin=_impossible_blmin(atoms1),
+            number_of_variable_cell_vectors=1,
+            rng=np.random.default_rng(3),
+        )
+        child = pairing.cross(atoms1, atoms2)
+        assert child is None
+        # 3 passes x at most 12 ranked axis-aligned cuts per pass.
+        assert pairing.last_attempt_count <= 3 * 12
+        assert pairing.last_attempt_count > 0
+
+    def test_ranked_cuts_still_return_a_child(self, au2pt2_atoms):
+        atoms1 = au2pt2_atoms.copy()
+        atoms2 = au2pt2_atoms.copy()
+        atoms2.positions += np.array([0.4, -0.2, 0.3])
+        cell = np.diag([14.0, 12.0, 12.0])
+        atoms2.set_cell(cell, scale_atoms=False)
+        atoms1.set_cell(np.diag([12.0, 12.0, 12.0]), scale_atoms=False)
+        pairing = CutAndSplicePairing(
+            slab=Atoms(cell=atoms1.get_cell(), pbc=False),
+            n_top=len(atoms1),
+            blmin=_blmin(atoms1, ratio=0.1),
+            number_of_variable_cell_vectors=1,
+            system_type="gas_cluster",
+            rng=np.random.default_rng(1),
+        )
+        child = pairing.cross(atoms1, atoms2)
+        assert child is not None
+        assert sorted(child.get_chemical_symbols()) == sorted(
+            atoms1.get_chemical_symbols()
+        )
+        assert pairing.last_attempt_count <= 3 * 12
+
+
+class TestAnisotropicRattleAttemptCap:
+    def test_hopeless_dense_parent_stops_at_the_schedule(self, pt4_tetrahedron):
         atoms = pt4_tetrahedron.copy()
         atoms.set_positions(np.tile([0.0, 0.0, 0.0], (len(atoms), 1)))
         mut = AnisotropicRattleMutation(
@@ -177,9 +198,9 @@ class TestAnisotropicRattleLowestTierPatience:
             rng=np.random.default_rng(9),
         )
         assert mut.mutate(atoms) is None
-        assert mut.last_attempt_count < 1000
+        assert mut.last_attempt_count == 16
 
-    def test_easy_parent_still_succeeds_with_default_patience(self, pt4_tetrahedron):
+    def test_easy_parent_still_succeeds(self, pt4_tetrahedron):
         atoms = pt4_tetrahedron.copy()
         mut = AnisotropicRattleMutation(
             _blmin(atoms),
@@ -271,13 +292,16 @@ class TestPermutationIncrementalApplication:
         assert mut.mutate(pt4_tetrahedron) is None
 
 
-@pytest.mark.parametrize("patience", [0, 60])
-def test_rattle_patience_attribute_round_trips(pt4_tetrahedron, patience):
+def test_rattle_schedule_is_sixteen_attempts(pt4_tetrahedron):
+    atoms = pt4_tetrahedron.copy()
+    atoms.set_positions(np.tile([0.0, 0.0, 0.0], (len(atoms), 1)))
     mut = RattleMutation(
-        _blmin(pt4_tetrahedron),
-        len(pt4_tetrahedron),
+        {(78, 78): 5.0},
+        len(atoms),
         system_type="gas_cluster",
-        patience=patience,
+        rattle_strength=0.05,
+        test_dist_to_slab=False,
         rng=np.random.default_rng(0),
     )
-    assert mut.patience == patience
+    assert mut.mutate(atoms) is None
+    assert mut.last_attempt_count < 50

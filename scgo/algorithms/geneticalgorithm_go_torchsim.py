@@ -31,8 +31,10 @@ from scgo.algorithms.ga_common import (
     EnergyAndStructureComparator,
     SurfaceClusterStartGenerator,
     SurfaceSlabStartGenerator,
+    apply_unary_exploration,
     create_ga_pairing,
     create_mutation_operators,
+    draw_successful_mutation,
     extract_constraint_index_lists,
     ga_run_metadata_extras,
     log_early_stopping_info,
@@ -110,7 +112,11 @@ from scgo.utils.logging import (
     log_info_v,
     should_show_progress,
 )
-from scgo.utils.mutation_weights import get_adaptive_mutation_config
+from scgo.utils.mutation_weights import (
+    decay_operator_credit,
+    get_adaptive_mutation_config,
+    snapshot_operator_credit,
+)
 from scgo.utils.parallel_workers import (
     resolve_n_jobs,
     resolve_n_jobs_for_tasks,
@@ -244,6 +250,7 @@ def _load_offspring_worker_state(ctx: OffspringBuildContext) -> None:
         system_type=ctx.system_type,
         composition=ctx.composition,
         adsorbate_definition=ctx.adsorbate_definition,
+        surface_normal_axis=ctx.surface_normal_axis,
     )
     _OFFSPRING_WORKER_STATE["operators_epoch"] = ctx.operators_epoch
     _OFFSPRING_WORKER_STATE["pairing"] = pairing
@@ -282,20 +289,8 @@ def _pairing_slab(pairing: Any) -> Atoms | None:
 
 
 def _pairing_last_attempt_count(pairing: Any) -> int:
-    """Return the inner cut-config attempt count from the last cross() call.
-
-    ``CutAndSplicePairing.last_attempt_count`` tracks how many (outer × cut)
-    combinations were tested.  For ``DualCutAndSplicePairing`` the active
-    variant's count is returned (max of both, since only one ran).
-    """
-    if isinstance(pairing, DualCutAndSplicePairing):
-        return max(
-            pairing.primary.last_attempt_count,
-            pairing.exploratory.last_attempt_count,
-        )
-    if isinstance(pairing, CutAndSplicePairing):
-        return pairing.last_attempt_count
-    return 0
+    """Cuts tested by the last ``cross`` call, including a dual-pairing fallback."""
+    return int(getattr(pairing, "last_attempt_count", 0))
 
 
 def _build_offspring_worker(
@@ -324,13 +319,20 @@ def _build_offspring_worker(
     _reseed_pairing_rng(local_pairing, pairing_rng)
     local_ops = _OFFSPRING_WORKER_STATE["operators"]
     reseed_mutation_operator_rngs(local_ops, operator_rng)
+    name_map = _OFFSPRING_WORKER_STATE["name_map"]
     local_mutations = update_mutation_weights(
         operators_list=local_ops,
-        name_map=_OFFSPRING_WORKER_STATE["name_map"],
+        name_map=name_map,
         adaptive_config=job["adaptive_config"],
         rng=decision_rng,
     )
+    expl_p = job["adaptive_config"].get("exploratory_crossover_probability")
+    if expl_p is not None and isinstance(local_pairing, DualCutAndSplicePairing):
+        local_pairing.exploratory_probability = float(expl_p)
     operator_setup_s = perf_counter() - setup_t0
+    index_to_name = {idx: name for name, idx in name_map.items()}
+    mutation_trials: list[str] = []
+    mutation_operator: str | None = None
 
     # Reconstruct full frames for surface runs where only mobile atoms were sent.
     if job.get("mobile_only"):
@@ -346,65 +348,111 @@ def _build_offspring_worker(
         a1_full = job["a1"]
         a2_full = job["a2"]
 
-    crossover_t0 = perf_counter()
-    child, desc = local_pairing.get_new_individual([a1_full, a2_full])
-    crossover_s = perf_counter() - crossover_t0
-    pairing_attempt_count = _pairing_last_attempt_count(local_pairing)
+    crossover_s = 0.0
+    pairing_attempt_count = 0
     mutation_s = 0.0
     mutation_applied = False
     mutation_requested = False
+    child = None
+    desc = None
 
-    def _prefilter_reject(*, applied: bool, requested: bool) -> dict[str, Any]:
-        return {
+    def _outcome(
+        outcome_child: Atoms | None,
+        outcome_desc: str | None,
+        failure_reason: str | None,
+        *,
+        applied: bool,
+        requested: bool,
+        validation_error: str | None = None,
+    ) -> dict[str, Any]:
+        result = {
             "index": job["index"],
-            "child": None,
-            "desc": desc,
-            "failure_reason": "too_close_prefilter",
+            "child": outcome_child,
+            "desc": outcome_desc,
+            "failure_reason": failure_reason,
             "mutation_applied": applied,
             "mutation_requested": requested,
             "operator_setup_s": operator_setup_s,
             "crossover_s": crossover_s,
             "mutation_s": mutation_s,
             "pairing_attempt_count": pairing_attempt_count,
+            "mutation_trials": mutation_trials,
+            "mutation_operator": mutation_operator,
         }
+        if validation_error is not None:
+            result["validation_error"] = validation_error
+        return result
 
-    if child is None:
-        return {
-            "index": job["index"],
-            "child": None,
-            "desc": None,
-            "failure_reason": "pairing_failed",
-            "mutation_applied": False,
-            "mutation_requested": False,
-            "operator_setup_s": operator_setup_s,
-            "crossover_s": crossover_s,
-            "mutation_s": mutation_s,
-            "pairing_attempt_count": pairing_attempt_count,
-        }
-    if fails_fast_geometric_prefilter(
-        child,
-        ctx.blmin,
-        n_slab=ctx.n_frozen_prefix,
-        use_mic=ctx.use_mic,
-    ):
-        return _prefilter_reject(applied=False, requested=False)
-    mutation_requested = bool(
-        decision_rng.random() < job["current_mutation_probability"]
-    )
-    if mutation_requested:
+    if job.get("mutation_only"):
+        child = a1_full.copy()
+        child.calc = None
+        mutation_requested = True
         mutation_t0 = perf_counter()
-        mutated = local_mutations.get_operator().mutate(child)
+        mutated, mutation_trials = apply_unary_exploration(
+            local_ops, name_map, child, decision_rng
+        )
         mutation_s = perf_counter() - mutation_t0
         if mutated is not None:
             child = mutated
             mutation_applied = True
+            mutation_operator = mutation_trials[-1]
+            desc = f"mutation: {mutation_operator}"
             if fails_fast_geometric_prefilter(
                 child,
                 ctx.blmin,
                 n_slab=ctx.n_frozen_prefix,
                 use_mic=ctx.use_mic,
             ):
-                return _prefilter_reject(applied=True, requested=True)
+                return _outcome(
+                    None, desc, "too_close_prefilter", applied=True, requested=True
+                )
+        else:
+            # A failed twist or kick falls through to ordinary crossover.
+            child = None
+            mutation_trials = []
+            mutation_requested = False
+    if not mutation_applied:
+        crossover_t0 = perf_counter()
+        child, desc = local_pairing.get_new_individual([a1_full, a2_full])
+        crossover_s = perf_counter() - crossover_t0
+        pairing_attempt_count = _pairing_last_attempt_count(local_pairing)
+        if child is None:
+            return _outcome(
+                None, None, "pairing_failed", applied=False, requested=False
+            )
+        if fails_fast_geometric_prefilter(
+            child,
+            ctx.blmin,
+            n_slab=ctx.n_frozen_prefix,
+            use_mic=ctx.use_mic,
+        ):
+            return _outcome(
+                None, desc, "too_close_prefilter", applied=False, requested=False
+            )
+        mutation_requested = bool(
+            decision_rng.random() < job["current_mutation_probability"]
+        )
+        if mutation_requested:
+            mutation_t0 = perf_counter()
+            mutated, mutation_trials = draw_successful_mutation(
+                local_mutations,
+                child,
+                index_to_name,
+            )
+            mutation_s = perf_counter() - mutation_t0
+            if mutated is not None:
+                child = mutated
+                mutation_applied = True
+                mutation_operator = mutation_trials[-1]
+                if fails_fast_geometric_prefilter(
+                    child,
+                    ctx.blmin,
+                    n_slab=ctx.n_frozen_prefix,
+                    use_mic=ctx.use_mic,
+                ):
+                    return _outcome(
+                        None, desc, "too_close_prefilter", applied=True, requested=True
+                    )
     if ctx.freeze_adsorbate_internal_geometry:
         enforce_frozen_adsorbate_geometry(
             child,
@@ -439,31 +487,21 @@ def _build_offspring_worker(
             enforce_adsorbate_subgraph_integrity=ctx.enforce_adsorbate_subgraph_integrity,
         )
     except (ValueError, SCGOValidationError) as exc:
-        return {
-            "index": job["index"],
-            "child": None,
-            "desc": desc,
-            "failure_reason": "validation_failed",
-            "validation_error": str(exc),
-            "mutation_applied": mutation_applied,
-            "mutation_requested": mutation_requested,
-            "operator_setup_s": operator_setup_s,
-            "crossover_s": crossover_s,
-            "mutation_s": mutation_s,
-            "pairing_attempt_count": pairing_attempt_count,
-        }
-    return {
-        "index": job["index"],
-        "child": child,
-        "desc": desc,
-        "failure_reason": None,
-        "mutation_applied": mutation_applied,
-        "mutation_requested": mutation_requested,
-        "operator_setup_s": operator_setup_s,
-        "crossover_s": crossover_s,
-        "mutation_s": mutation_s,
-        "pairing_attempt_count": pairing_attempt_count,
-    }
+        return _outcome(
+            None,
+            desc,
+            "validation_failed",
+            applied=mutation_applied,
+            requested=mutation_requested,
+            validation_error=str(exc),
+        )
+    return _outcome(
+        child,
+        desc,
+        None,
+        applied=mutation_applied,
+        requested=mutation_requested,
+    )
 
 
 def _record_relax_batch_steps(
@@ -686,6 +724,40 @@ def _read_candidate_batch(
         return out
 
 
+def _eligible_mutation_operator(
+    atoms: Atoms,
+    validation_error: str | None = None,
+) -> str | None:
+    """Operator to credit. Validation failures are not duplicate evidence."""
+    if validation_error is not None:
+        return None
+    operator_name = get_tag(atoms, "mutation_operator", default=None)
+    if isinstance(operator_name, str) and operator_name:
+        return operator_name
+    return None
+
+
+def _credit_unique_operators(
+    eligible: list[Atoms],
+    population: Population,
+    stats: dict[str, dict[str, int]],
+) -> None:
+    """Count relaxed mutants that entered the population as a new geometry."""
+    pop_members = {
+        member.info.get("confid"): member
+        for member in population.pop
+        if member.info.get("confid") is not None
+    }
+    for atoms in eligible:
+        name = get_tag(atoms, "mutation_operator", default=None)
+        if not isinstance(name, str) or not name:
+            continue
+        bucket = stats.setdefault(name, {"trials": 0, "unique": 0})
+        member = pop_members.get(atoms.info.get("confid"))
+        if member is not None and int(member.info.get("looks_like", 0)) == 0:
+            bucket["unique"] += 1
+
+
 def _relax_unrelaxed_candidates(
     da: DataConnection,
     relaxer: TorchSimBatchRelaxer,
@@ -712,6 +784,7 @@ def _relax_unrelaxed_candidates(
     enforce_adsorbate_subgraph_integrity: bool = True,
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
+    operator_credit: dict[str, dict[str, int]] | None = None,
 ) -> tuple[int, int, dict[str, int]]:
     """Relax unrelaxed candidates in batches and commit them to the database.
 
@@ -768,6 +841,7 @@ def _relax_unrelaxed_candidates(
     ineligible_count = 0
     ineligible_reasons: dict[str, int] = {}
     eligible_relaxed: list[Atoms] = []
+    relaxed_operator_names: list[str] = []
 
     def _write_batch_under_connection():
         """Write relaxed results under a single connection."""
@@ -775,11 +849,13 @@ def _relax_unrelaxed_candidates(
             ineligible_count, \
             successful_count, \
             ineligible_reasons, \
-            eligible_relaxed
+            eligible_relaxed, \
+            relaxed_operator_names
         successful_count = 0
         ineligible_count = 0
         ineligible_reasons = {}
         eligible_relaxed = []
+        relaxed_operator_names = []
         with da.c:
             for idx, (original, (energy, relaxed)) in enumerate(
                 zip(batch, relaxed_results, strict=True)
@@ -808,6 +884,9 @@ def _relax_unrelaxed_candidates(
                     generation=generation,
                     run_id=run_id,
                 )
+                operator_name = _eligible_mutation_operator(original, validation_error)
+                if operator_name is not None:
+                    relaxed_operator_names.append(operator_name)
                 if validation_error is not None:
                     ineligible_count += 1
                     reason = compact_ga_ineligible_reason(validation_error)
@@ -838,9 +917,17 @@ def _relax_unrelaxed_candidates(
             perf_counter() - t0
         )
 
+    if operator_credit is not None:
+        for operator_name in relaxed_operator_names:
+            bucket = operator_credit.setdefault(
+                operator_name, {"trials": 0, "unique": 0}
+            )
+            bucket["trials"] += 1
     if population is not None:
         t0 = perf_counter()
         population.update(new_cand=eligible_relaxed)
+        if operator_credit is not None:
+            _credit_unique_operators(eligible_relaxed, population, operator_credit)
         if profiling is not None:
             profiling["population_update_s"] = profiling.get(
                 "population_update_s", 0.0
@@ -1560,6 +1647,7 @@ def ga_go(
         best_value = None  # Energy for low_energy, fitness for others
         generations_without_improvement = 0
         recent_acceptance_ratios: list[float] = []
+        operator_credit: dict[str, dict[str, int]] = {}
 
         # The offspring ProcessPoolExecutor is hoisted above the `try` and created
         # lazily below, so it is forked + pickled once instead of every generation.
@@ -1594,6 +1682,10 @@ def ga_go(
                     rng=rng,
                 )
                 current_mutation_probability = adaptive_config["mutation_probability"]
+            decay_operator_credit(operator_credit)
+            adaptive_config["operator_credit"] = snapshot_operator_credit(
+                operator_credit
+            )
 
             # Create up to `n_offspring` unrelaxed candidates for this generation;
             # TorchSim will handle batching/relaxation later.
@@ -1727,12 +1819,19 @@ def ga_go(
                             _a1.calc = None
                             _a2 = a2.copy()
                             _a2.calc = None
+                        unary_fraction = float(
+                            offspring_ctx.adaptive_config.get(
+                                "unary_offspring_fraction", 0.0
+                            )
+                        )
                         jobs.append(
                             {
                                 "index": len(jobs),
                                 "a1": _a1,
                                 "a2": _a2,
                                 "mobile_only": _nfp > 0,
+                                "mutation_only": unary_fraction > 0.0
+                                and float(rng.random()) < unary_fraction,
                                 "task_seed": task_seed,
                                 "operators_epoch": offspring_ctx.operators_epoch,
                                 "adaptive_config": offspring_ctx.adaptive_config,
@@ -1842,6 +1941,9 @@ def ga_go(
                                 retry_failure_reasons_gen.get(reason, 0) + 1
                             )
                             continue
+                        operator_name = result.get("mutation_operator")
+                        if operator_name:
+                            set_tags(child, mutation_operator=str(operator_name))
                         pending_inserts.append((child, result["desc"]))
                     if pending_inserts:
                         t0 = perf_counter()
@@ -1957,8 +2059,23 @@ def ga_go(
                     enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
                     freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                     adsorbate_fragment_templates=adsorbate_fragment_template,
+                    operator_credit=operator_credit,
                 )
             )
+            if operator_credit:
+                credit_summary = ", ".join(
+                    f"{name} {record['unique']}/{record['trials']}"
+                    for name, record in sorted(operator_credit.items())
+                    if record["trials"]
+                )
+                if credit_summary:
+                    log_info_v(
+                        logger,
+                        "Mutation credit (unique relaxed / trials): %s",
+                        credit_summary,
+                        verbosity=verbosity,
+                        min_verbosity=1,
+                    )
             offspring_count = eligible_count
             relax_call_wall_s = perf_counter() - t0_relax_call
             post_db_read = float(profile_timings.get("db_read_s", 0.0))
@@ -2062,6 +2179,7 @@ def ga_go(
             enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
             freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
             adsorbate_fragment_templates=adsorbate_fragment_template,
+            operator_credit=operator_credit,
         )
 
         all_candidates = database_retry(

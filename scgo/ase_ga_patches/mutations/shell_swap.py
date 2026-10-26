@@ -8,16 +8,20 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import (
-    atoms_too_close,
-    atoms_too_close_two_sets,
-)
 
 from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
-from scgo.ase_ga_patches.mutations._common import _ensure_rng, _filter_unique_tags
+from scgo.ase_ga_patches.mutations._common import (
+    _IDENTITY_ATOL,
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
+    _ensure_rng,
+    _filter_unique_tags,
+    _preserves_mobile_connectivity,
+    _resolve_op_connectivity_factor,
+)
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.system_types import SystemType, get_system_policy
 
@@ -42,6 +46,7 @@ class ShellSwapMutation(OffspringCreator):
         target_tags=None,
         blmin=None,
         max_pair_trials=12,
+        surface_normal_axis=2,
         rng=None,
         verbose=False,
     ):
@@ -56,6 +61,7 @@ class ShellSwapMutation(OffspringCreator):
         self.blmin = blmin
         self.max_pair_trials = max_pair_trials
         self.system_type = system_type
+        self.surface_normal_axis = int(surface_normal_axis)
         self._policy = get_system_policy(system_type)
 
         self.descriptor = "ShellSwapMutation"
@@ -101,8 +107,11 @@ class ShellSwapMutation(OffspringCreator):
             return None
 
         centers = np.asarray(group_centers)
-        radial_center = np.mean(centers, axis=0)
-        radial_distances = np.linalg.norm(centers - radial_center, axis=1)
+        if len(slab) > 0:
+            radial_distances = centers[:, self.surface_normal_axis]
+        else:
+            radial_center = np.mean(centers, axis=0)
+            radial_distances = np.linalg.norm(centers - radial_center, axis=1)
         order = np.argsort(radial_distances)
         inner_count = max(1, min(len(order) - 1, int(np.ceil(len(order) * self.inner_fraction))))
         outer_count = max(1, min(len(order) - 1, int(np.ceil(len(order) * self.outer_fraction))))
@@ -141,6 +150,9 @@ class ShellSwapMutation(OffspringCreator):
             right_indices = group_indices[right]
             left_center = np.mean(new_positions[left_indices], axis=0)
             right_center = np.mean(new_positions[right_indices], axis=0)
+            # Coincident centers translate nothing. Try the next pair.
+            if float(np.linalg.norm(right_center - left_center)) <= _IDENTITY_ATOL:
+                continue
             new_positions[left_indices] += right_center - left_center
             new_positions[right_indices] += left_center - right_center
 
@@ -152,16 +164,22 @@ class ShellSwapMutation(OffspringCreator):
                 tags=tags,
             )
             if self.blmin is None:
+                if not _preserves_mobile_connectivity(
+                    top,
+                    candidate,
+                    use_mic=bool(self._policy.uses_surface),
+                    connectivity_factor=_resolve_op_connectivity_factor(self),
+                ):
+                    continue
                 return slab + candidate
-            if atoms_too_close(candidate, self.blmin, use_tags=self.use_tags):
+            accepted = _accept_connected_candidate(
+                top,
+                candidate,
+                **_accept_connected_kwargs(self, slab),
+            )
+            if accepted is None:
                 continue
-            if (
-                self.test_dist_to_slab
-                and len(slab) > 0
-                and atoms_too_close_two_sets(candidate, slab, self.blmin)
-            ):
-                continue
-            return slab + candidate
+            return slab + accepted
 
         return None
 

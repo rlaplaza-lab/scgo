@@ -8,7 +8,10 @@ from scgo.utils.mutation_weights import (
     calculate_generation_adjustment,
     calculate_size_adjustment,
     calculate_system_type_weights,
+    decay_operator_credit,
     get_adaptive_mutation_config,
+    scale_weights_by_operator_credit,
+    snapshot_operator_credit,
 )
 
 
@@ -316,3 +319,74 @@ def test_gas_alloy_table_lists_only_gas_registered_operators() -> None:
     total = sum(expected.values())
     for name, raw in expected.items():
         assert weights[name] == pytest.approx(raw / total)
+
+
+def test_early_generations_favor_global_operators() -> None:
+    early = get_adaptive_mutation_config(
+        ["Pt"] * 10, current_generation=0, total_generations=10
+    )
+    late = get_adaptive_mutation_config(
+        ["Pt"] * 10, current_generation=9, total_generations=10
+    )
+    assert (
+        early["operator_weights"]["flattening"] > late["operator_weights"]["flattening"]
+    )
+    assert early["operator_weights"]["rattle"] < late["operator_weights"]["rattle"]
+    assert (
+        early["exploratory_crossover_probability"]
+        > late["exploratory_crossover_probability"]
+    )
+    assert late["permutation_probability"] < early["permutation_probability"]
+
+
+def test_stagnation_raises_exploratory_crossover_and_unary_fraction() -> None:
+    calm = get_adaptive_mutation_config(
+        ["Pt", "Au"] * 5,
+        current_generation=3,
+        total_generations=10,
+        generations_without_improvement=0,
+    )
+    stagnant = get_adaptive_mutation_config(
+        ["Pt", "Au"] * 5,
+        current_generation=3,
+        total_generations=10,
+        generations_without_improvement=8,
+    )
+    assert (
+        stagnant["exploratory_crossover_probability"]
+        > calm["exploratory_crossover_probability"]
+    )
+    assert calm["unary_offspring_fraction"] == 0.0
+    assert stagnant["unary_offspring_fraction"] > 0.0
+
+
+def test_operator_credit_downweights_duplicates() -> None:
+    scaled = scale_weights_by_operator_credit(
+        [0.5, 0.5],
+        ["dead", "live"],
+        {
+            "dead": {"trials": 10, "unique": 0},
+            "live": {"trials": 10, "unique": 8},
+        },
+    )
+    assert scaled[0] < scaled[1]
+    assert sum(scaled) == pytest.approx(1.0)
+
+
+def test_credit_prior_keeps_a_short_losing_streak_above_the_floor() -> None:
+    scaled = scale_weights_by_operator_credit(
+        [0.5, 0.5],
+        ["cold", "idle"],
+        {"cold": {"trials": 4, "unique": 0}},
+    )
+    assert scaled[0] > 0.3
+    assert scaled[0] < scaled[1]
+
+
+def test_operator_credit_snapshot_is_independent_of_later_decay() -> None:
+    stats = {"rattle": {"trials": 8, "unique": 4}}
+    decay_operator_credit(stats)
+    assert stats["rattle"] == {"trials": 4, "unique": 2}
+    frozen = snapshot_operator_credit(stats)
+    stats["rattle"]["trials"] = 99
+    assert frozen["rattle"]["trials"] == 4

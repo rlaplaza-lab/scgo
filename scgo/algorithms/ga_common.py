@@ -38,6 +38,7 @@ from scgo.ase_ga_patches.mutations import (
     RotationalMutation,
     ShellSwapMutation,
 )
+from scgo.ase_ga_patches.mutations._common import _IDENTITY_ATOL, _mobile_clashes
 from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
@@ -92,6 +93,7 @@ from scgo.utils.fitness_strategies import (
 )
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
 from scgo.utils.logging import get_logger
+from scgo.utils.mutation_weights import scale_weights_by_operator_credit
 from scgo.utils.parallel_workers import resolve_n_jobs, validate_n_jobs
 from scgo.utils.phase_logging import (
     log_phase_header,
@@ -904,6 +906,7 @@ def create_ga_pairing(
     adsorbate_definition: AdsorbateDefinition | None = None,
     exploratory_crossover_probability: float = 0.2,
     exploratory_minfrac: float | None = None,
+    surface_normal_axis: int = 2,
 ) -> CutAndSplicePairing | DualCutAndSplicePairing:
     """Create a cut-and-splice pairing operator for GA evolution.
 
@@ -995,7 +998,10 @@ def create_ga_pairing(
                 pairing_target_tags = None
 
     def _cut_and_splice(
-        minfrac: float, *, pairing_rng: Generator | None
+        minfrac: float,
+        *,
+        pairing_rng: Generator | None,
+        prefer_unbalanced: bool = False,
     ) -> CutAndSplicePairing:
         return CutAndSplicePairing(  # type: ignore[arg-type]
             slab,
@@ -1006,6 +1012,8 @@ def create_ga_pairing(
             system_type=system_type,
             use_tags=use_partition_tags,
             target_tags=pairing_target_tags,
+            prefer_unbalanced=prefer_unbalanced,
+            surface_normal_axis=surface_normal_axis,
         )
 
     expl_minfrac = (
@@ -1019,7 +1027,11 @@ def create_ga_pairing(
         return _cut_and_splice(min_parent_fraction, pairing_rng=child_rng_primary)
 
     primary = _cut_and_splice(min_parent_fraction, pairing_rng=child_rng_primary)
-    exploratory = _cut_and_splice(expl_minfrac, pairing_rng=get_child_rng_or_none(rng))
+    exploratory = _cut_and_splice(
+        expl_minfrac,
+        pairing_rng=get_child_rng_or_none(rng),
+        prefer_unbalanced=True,
+    )
     return DualCutAndSplicePairing(
         primary,
         exploratory,
@@ -1289,6 +1301,7 @@ def create_mutation_operators(
                 blmin=blmin,
                 test_dist_to_slab=uses_surface(system_type),
                 system_type=system_type,
+                surface_normal_axis=surface_normal_axis,
             )
             operators.append(shell_swap)
             name_map["shell_swap"] = len(operators) - 1
@@ -1524,6 +1537,11 @@ def update_mutation_weights(
     s = float(sum(weights))
     if s > 0.0:
         weights = [w / s for w in weights]
+        weights = scale_weights_by_operator_credit(
+            weights,
+            [index_to_name.get(i) for i in range(len(operators_list))],
+            adaptive_config.get("operator_credit"),
+        )
     elif weights:
         # All-zero (or negative) weights make OperationSelector.__get_index__
         # return None -> ``oplist[None]`` TypeError. Fall back to uniform.
@@ -1554,7 +1572,117 @@ def update_mutation_weights(
         if "anisotropic_rattle_prop" in adaptive_config:
             anisotropic_op.rattle_prop = adaptive_config["anisotropic_rattle_prop"]
 
+    if "permutation" in name_map and "permutation_probability" in adaptive_config:
+        operators_list[name_map["permutation"]].probability = float(
+            adaptive_config["permutation_probability"]
+        )
+
     return OperationSelector(weights, operators_list, rng=rng)
+
+
+def _selector_weights(selector: OperationSelector) -> np.ndarray:
+    rho = np.asarray(selector.rho, dtype=float)
+    if len(rho) == 0:
+        return rho
+    previous = np.concatenate(([0.0], rho[:-1]))
+    return rho - previous
+
+
+def _mutation_draw_probabilities(weights: np.ndarray) -> np.ndarray:
+    """``0.8 * weight + 0.2 / n``, renormalized. A zero weight keeps ``0.2 / n``."""
+    values = np.asarray(weights, dtype=float)
+    n_ops = len(values)
+    if n_ops == 0:
+        return values
+    total = float(np.sum(values))
+    if total <= 0.0:
+        return np.full(n_ops, 1.0 / n_ops)
+    normalized = values / total
+    return 0.8 * normalized + 0.2 / n_ops
+
+
+def _moved_past_identity(parent: Atoms, mutant: Atoms) -> bool:
+    if len(parent) != len(mutant):
+        return True
+    delta = mutant.get_positions() - parent.get_positions()
+    return float(np.max(np.linalg.norm(delta, axis=1))) > _IDENTITY_ATOL
+
+
+def _mobile_region_clashes(operator, atoms: Atoms) -> bool:
+    """True when ``operator`` would see a blmin clash on ``atoms``."""
+    blmin = getattr(operator, "blmin", None)
+    if not blmin:
+        return False
+    n_top = getattr(operator, "n_top", None)
+    count = len(atoms) if n_top is None else int(n_top)
+    return _mobile_clashes(
+        atoms[len(atoms) - count :],
+        blmin=blmin,
+        slab=atoms[: len(atoms) - count],
+        test_dist_to_slab=bool(getattr(operator, "test_dist_to_slab", False)),
+        use_tags=bool(getattr(operator, "use_tags", False)),
+    )
+
+
+def draw_successful_mutation(
+    selector: OperationSelector,
+    atoms: Atoms,
+    index_to_name: dict[int, str],
+    *,
+    max_tries: int = 3,
+) -> tuple[Atoms | None, list[str]]:
+    """Try up to ``max_tries`` operators, sampled without replacement.
+
+    Probabilities come from :func:`_mutation_draw_probabilities`, so a
+    low-weight operator stays reachable. ``overlap_relief`` on a clash-free
+    child does not consume a try. An unmoved mutant is a miss.
+    """
+    tried_names: list[str] = []
+    n_ops = len(selector.oplist)
+    weights = _selector_weights(selector)
+    if n_ops == 0 or len(weights) == 0 or float(np.sum(weights)) <= 0.0:
+        return None, tried_names
+    probabilities = _mutation_draw_probabilities(weights)
+    remaining = list(range(n_ops))
+    while remaining and len(tried_names) < max_tries:
+        draw_weights = probabilities[remaining]
+        picked = int(
+            selector.rng.choice(len(remaining), p=draw_weights / np.sum(draw_weights))
+        )
+        chosen = remaining.pop(picked)
+        name = index_to_name[chosen]
+        operator = selector.oplist[chosen]
+        if name == "overlap_relief" and not _mobile_region_clashes(operator, atoms):
+            continue
+        tried_names.append(name)
+        mutant = operator.mutate(atoms)
+        if mutant is not None and _moved_past_identity(atoms, mutant):
+            return mutant, tried_names
+    return None, tried_names
+
+
+def apply_unary_exploration(
+    operators: list,
+    name_map: dict[str, int],
+    atoms: Atoms,
+    rng: Generator,
+) -> tuple[Atoms | None, list[str]]:
+    """One large unary move: a twist of the cluster, or a kick of a few atoms."""
+    tried_names: list[str] = []
+    order = ("rotational", "rattle") if rng.random() < 0.5 else ("rattle", "rotational")
+    for name in order:
+        if name not in name_map:
+            continue
+        operator = operators[name_map[name]]
+        mutant = (
+            operator.mutate_few_atom_kick(atoms)
+            if name == "rattle"
+            else operator.mutate_twist(atoms)
+        )
+        tried_names.append(name)
+        if mutant is not None and _moved_past_identity(atoms, mutant):
+            return mutant, tried_names
+    return None, tried_names
 
 
 def create_structure_comparator(

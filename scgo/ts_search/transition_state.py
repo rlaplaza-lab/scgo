@@ -26,6 +26,12 @@ from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import pdist
 from scipy.spatial.transform import Rotation, Slerp
 
+from scgo.ase_ga_patches._vector_utils import (
+    kabsch_rotation as _kabsch_rotation,
+)
+from scgo.ase_ga_patches._vector_utils import (
+    kabsch_rotation_in_plane as _kabsch_rotation_in_plane,
+)
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
@@ -686,30 +692,6 @@ def _align_endpoints_blockwise(
             mic_pbc=mic_pbc,
             adsorbate_fragment_lengths=adsorbate_fragment_lengths,
         )
-
-
-def _kabsch_rotation(P: np.ndarray, Q: np.ndarray) -> np.ndarray:
-    """Return rotation matrix R that minimizes ||P - Q @ R|| (P and Q are centered)."""
-    dim = int(P.shape[1])
-    U, _, Vt = np.linalg.svd(P.T @ Q)
-    d = np.ones(dim, dtype=float)
-    d[-1] = float(np.sign(np.linalg.det(U @ Vt)) or 1.0)
-    return U @ np.diag(d) @ Vt
-
-
-def _kabsch_rotation_in_plane(
-    P: np.ndarray, Q: np.ndarray, *, surface_normal_axis: int = 2
-) -> np.ndarray:
-    """Return 3x3 rotation that aligns Q to P using only in-plane degrees of freedom."""
-    if surface_normal_axis not in (0, 1, 2):
-        raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
-    plane_axes = [i for i in range(3) if i != surface_normal_axis]
-    r2 = _kabsch_rotation(P[:, plane_axes], Q[:, plane_axes])
-    rot = np.eye(3)
-    for i, ia in enumerate(plane_axes):
-        for j, ja in enumerate(plane_axes):
-            rot[ia, ja] = r2[i, j]
-    return rot
 
 
 def _fixed_atom_mask(atoms: Atoms) -> np.ndarray:

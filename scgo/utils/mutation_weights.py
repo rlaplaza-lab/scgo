@@ -84,6 +84,89 @@ def _apply_stagnation_boost(
     return _renormalize_weights(boosted)
 
 
+_EXPLORATORY_OPERATORS = frozenset(
+    {
+        "flattening",
+        "rotational",
+        "anisotropic_rattle",
+        "mirror",
+        "shell_swap",
+        "fragment_reposition",
+        "in_plane_slide",
+        "in_plane_rotate",
+    }
+)
+_LOCAL_OPERATORS = frozenset({"rattle", "breathing", "permutation"})
+
+
+def _apply_generation_mix(
+    base_weights: dict[str, float],
+    progress: float,
+) -> dict[str, float]:
+    """Favor global moves early and local moves late. Mid-run keeps the table."""
+    if progress < 0.3:
+        global_factor, local_factor = 1.35, 0.75
+    elif progress < 0.7:
+        return _renormalize_weights(base_weights)
+    else:
+        global_factor, local_factor = 0.55, 1.35
+    mixed = dict(base_weights)
+    for name, weight in mixed.items():
+        if name in _EXPLORATORY_OPERATORS:
+            mixed[name] = weight * global_factor
+        elif name in _LOCAL_OPERATORS:
+            mixed[name] = weight * local_factor
+    return _renormalize_weights(mixed)
+
+
+def scale_weights_by_operator_credit(
+    weights: list[float],
+    names: list[str | None],
+    stats: dict[str, dict[str, int]] | None,
+    *,
+    min_trials: int = 4,
+) -> list[float]:
+    """Down-weight operators that rarely yield a unique relaxed child."""
+    if not stats or not weights:
+        return weights
+    adjusted: list[float] = []
+    for weight, name in zip(weights, names, strict=True):
+        record = stats.get(name) if name else None
+        trials = int(record["trials"]) if record else 0
+        if record is None or trials < min_trials:
+            adjusted.append(weight)
+            continue
+        # A small prior keeps four early misses from pinning the weight at the floor.
+        unique = float(record.get("unique", 0))
+        rate = (unique + 2.0) / (float(trials) + 4.0)
+        factor = float(np.clip(0.35 + 1.25 * rate, 0.35, 1.6))
+        adjusted.append(weight * factor)
+    total = float(sum(adjusted))
+    if total <= 0.0:
+        return weights
+    return [weight / total for weight in adjusted]
+
+
+def decay_operator_credit(stats: dict[str, dict[str, int]]) -> None:
+    """Halve trial and unique counts so an early streak does not last the run."""
+    for record in stats.values():
+        record["trials"] = int(record.get("trials", 0)) // 2
+        record["unique"] = int(record.get("unique", 0)) // 2
+
+
+def snapshot_operator_credit(
+    stats: dict[str, dict[str, int]],
+) -> dict[str, dict[str, int]]:
+    """Copy counts so later updates in this generation do not change selection."""
+    return {
+        name: {
+            "trials": int(record.get("trials", 0)),
+            "unique": int(record.get("unique", 0)),
+        }
+        for name, record in stats.items()
+    }
+
+
 def _core_composition_for_weights(
     composition: list[str],
     system_type: SystemType,
@@ -542,6 +625,9 @@ def get_adaptive_mutation_config(
             "anisotropic_in_plane_strength": 1.0,
             "anisotropic_normal_strength": 0.2,
             "anisotropic_rattle_prop": 0.5,
+            "exploratory_crossover_probability": 0.2,
+            "unary_offspring_fraction": 0.0,
+            "permutation_probability": 0.4,
         }
 
     n_atoms = len(composition)
@@ -551,6 +637,8 @@ def get_adaptive_mutation_config(
         composition,
         adsorbate_definition=adsorbate_definition,
     )
+    progress = current_generation / max(total_generations, 1)
+    operator_weights = _apply_generation_mix(operator_weights, progress)
 
     size_params = calculate_size_adjustment(n_atoms)
     gen_adjustments = calculate_generation_adjustment(
@@ -613,6 +701,20 @@ def get_adaptive_mutation_config(
             0.95,
         )
 
+    if progress < 0.3:
+        explore_base = 0.35
+        permutation_probability = 0.4
+    elif progress < 0.7:
+        explore_base = 0.20
+        permutation_probability = 0.25
+    else:
+        explore_base = 0.12
+        permutation_probability = min(0.4, 2.0 / max(n_atoms, 1))
+    exploratory_crossover_probability = float(
+        np.clip(explore_base + level * (0.60 - explore_base), 0.05, 0.60)
+    )
+    unary_offspring_fraction = float(np.clip(0.40 * level, 0.0, 0.40))
+
     return {
         "operator_weights": operator_weights,
         "use_permutation": use_permutation,
@@ -622,4 +724,7 @@ def get_adaptive_mutation_config(
         "anisotropic_in_plane_strength": anisotropic_in_plane_strength,
         "anisotropic_normal_strength": anisotropic_normal_strength,
         "anisotropic_rattle_prop": anisotropic_rattle_prop,
+        "exploratory_crossover_probability": exploratory_crossover_probability,
+        "unary_offspring_fraction": unary_offspring_fraction,
+        "permutation_probability": permutation_probability,
     }

@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **GA offspring reject near-identity operators and credit useful ones.**
+  Mutations that leave geometry effectively unchanged (or that cannot improve
+  it) now fail closed so relaxations are not wasted on no-ops: clash-free
+  `overlap_relief` returns `None`; breathing / in-plane slide enforce minimum
+  scale and displacement; shared connected-acceptance can reconnect a near-
+  fragmented candidate once instead of rejecting it. Offspring workers draw
+  mutations with `draw_successful_mutation` (up to three distinct ops), can
+  emit unary exploration (`twist` / few-atom kick) under stagnation with
+  crossover fallback, and tag `mutation_operator` so post-relax uniqueness
+  updates operator credit. Generation mix shifts exploratory → local over the
+  run; credit scale / decay / snapshot adapt the selector weights.
+- **Smarter cut-and-splice before ranked cuts.** Pairing aligns the moving
+  parent to the reference (principal axes; surface keeps the normal fixed),
+  then runs align → jitter → random relative rotation passes on fixed-cell
+  cuts. Variable-cell pairing ranks axis-aligned cuts and rebuilds after
+  translation. Exploratory DualCut can prefer unbalanced cuts
+  (`prefer_unbalanced`); stoichiometry repair pops groups closest to the
+  plane. DualCut tries the alternate mode once if the first fails.
+- **Rattle attempt budget is a fixed 16-step schedule.** `RattleMutation` /
+  `AnisotropicRattleMutation` no longer anneal through a 1000-attempt budget
+  with a `patience` cutoff; they use two strength tiers (8 + 8 attempts) and
+  still track `last_attempt_count`.
+
 ## 0.9.1
 
 ### Changed

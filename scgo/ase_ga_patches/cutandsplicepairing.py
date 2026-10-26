@@ -12,6 +12,7 @@ import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
 from ase_ga.offspring_creator import OffspringCreator
+from ase_ga.utilities import get_rotation_matrix
 from scgo.ase_ga_patches._slab_clash import (
     SlabClashChecker,
     mobile_too_close_no_copy,
@@ -23,8 +24,8 @@ from scgo.ase_ga_patches._tag_gather import (
 )
 from scgo.ase_ga_patches._vector_utils import (
     append_unique_unit_vector as _append_unique_unit_vector,
+    random_unit_vector as _random_unit_vector,
 )
-from scgo.ase_ga_patches._vector_utils import random_unit_vector as _random_unit_vector
 from scgo.system_types import uses_surface
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
@@ -49,6 +50,54 @@ def _assert_offspring_integrity(child: Atoms, parent: Atoms) -> None:
             f"CutAndSplicePairing changed stoichiometry: "
             f"{dict(child_counts)} vs {dict(parent_counts)}."
         )
+
+
+def _plane_distance_magnitude(distance) -> float:
+    """Smallest absolute distance of a group to the cutting plane."""
+    values = np.atleast_1d(np.asarray(distance, dtype=float)).reshape(-1)
+    return float(np.min(np.abs(values)))
+
+
+def _rotation_matrix(axis, angle):
+    """Right-handed rotation. Row vectors transform as ``p @ R.T``."""
+    axis = np.asarray(axis, dtype=float)
+    norm = float(np.linalg.norm(axis))
+    if norm <= 1e-12:
+        return np.eye(3)
+    return get_rotation_matrix(axis / norm, angle)
+
+
+def _principal_axes(positions):
+    """Orthonormal axes, largest variance first, with a positive determinant."""
+    centered = np.asarray(positions, dtype=float)
+    centered = centered - centered.mean(axis=0)
+    _values, vectors = np.linalg.eigh(centered.T @ centered)
+    axes = vectors[:, np.argsort(_values)[::-1]]
+    if float(np.linalg.det(axes)) < 0.0:
+        axes = axes.copy()
+        axes[:, -1] *= -1.0
+    return axes
+
+
+def _proper_axis_signs(dimension):
+    """Sign patterns that keep a right-handed axis frame."""
+    if dimension == 2:
+        return (np.ones(2), np.array([-1.0, -1.0]))
+    return (
+        np.ones(3),
+        np.array([-1.0, -1.0, 1.0]),
+        np.array([-1.0, 1.0, -1.0]),
+        np.array([1.0, -1.0, -1.0]),
+    )
+
+
+def _pop_closest_to_plane(items):
+    """Remove and return the group whose center lies closest to the cut."""
+    index = min(
+        range(len(items)),
+        key=lambda i: (_plane_distance_magnitude(items[i].distance), i),
+    )
+    return items.pop(index)
 
 
 class Positions:
@@ -198,7 +247,10 @@ class CutAndSplicePairing(OffspringCreator):
                  test_dist_to_slab=True, use_tags=False, target_tags=None, rng=None,
                  verbose=False, system_type="gas_cluster",
                  max_pairing_attempts: int | None = None,
-                 fixed_cell_max_passes: int = 3):
+                 fixed_cell_max_passes: int = 3,
+                 variable_cell_max_passes: int = 3,
+                 prefer_unbalanced: bool = False,
+                 surface_normal_axis: int = 2):
 
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
@@ -228,11 +280,13 @@ class CutAndSplicePairing(OffspringCreator):
         if max_pairing_attempts is None:
             max_pairing_attempts = 150 if not uses_surface(system_type) else 1000
         self.max_pairing_attempts = int(max_pairing_attempts)
-        # For fixed-cell parents every pass over the cached cut configurations
-        # would otherwise see identical geometry (translations only exist along
-        # variable-cell vectors), so only a small number of jittered passes are
-        # run; ``max_pairing_attempts`` still caps the pass count.
+        # Both cell modes walk a short chain of ranked cuts. Fixed-cell passes
+        # jitter then reorient; variable-cell passes translate and re-rank.
+        # ``max_pairing_attempts`` still caps the pass count.
         self.fixed_cell_max_passes = max(1, int(fixed_cell_max_passes))
+        self.variable_cell_max_passes = max(1, int(variable_cell_max_passes))
+        self.prefer_unbalanced = bool(prefer_unbalanced)
+        self.surface_normal_axis = int(surface_normal_axis)
 
         self.scaling_volume = None
         self.descriptor = "CutAndSplicePairing"
@@ -313,25 +367,102 @@ class CutAndSplicePairing(OffspringCreator):
         count2 = int(np.sum(weights[distances_a2 < 0.0]))
         nmin = 1 if self.minfrac is None else max(1, int(np.ceil(self.minfrac * self.n_top)))
         target = 0.5 * self.n_top
+        balance = abs(count1 - target) + abs(count2 - target)
         deficit = max(0, nmin - count1) + max(0, nmin - count2)
-        return (
-            abs(count1 - target)
-            + abs(count2 - target)
-            + 10.0 * deficit
-        )
+        if self.prefer_unbalanced:
+            return (deficit, -balance)
+        return (deficit, balance)
+
+    def _break_score_ties(self, configs):
+        """Shuffle equal scores. A legal cut still stays ahead of an illegal one."""
+        if len(configs) < 2:
+            return configs
+        grouped = []
+        current = [configs[0]]
+        for item in configs[1:]:
+            if item[0] == current[0][0]:
+                current.append(item)
+            else:
+                grouped.append(current)
+                current = [item]
+        grouped.append(current)
+        ordered = []
+        for group in grouped:
+            if len(group) == 1:
+                ordered.extend(group)
+                continue
+            order = np.arange(len(group))
+            self.rng.shuffle(order)
+            ordered.extend(group[int(index)] for index in order)
+        return ordered
+
+    def _axis_cut_normal(self, cell_array, axis):
+        """Unit normal of the constant-fraction plane along ``axis``, or None."""
+        other = [index for index in range(3) if index != axis]
+        normal = np.cross(cell_array[other[0]], cell_array[other[1]])
+        norm = float(np.linalg.norm(normal))
+        if not np.isfinite(norm) or norm <= 1e-12:
+            return None
+        return normal / norm
+
+    def _variable_cell_cut_configurations(self, a1, a2, cell):
+        """Up to 12 axis-aligned cuts, best balance first.
+
+        Only the fractional coordinate along the cut axis matters: the plane
+        normal is perpendicular to the other two cell vectors. Callers rebuild
+        the list every pass because translations move the groups.
+        """
+        centers_a1, weights = self._group_centers_and_weights(a1)
+        centers_a2, _ = self._group_centers_and_weights(a2)
+        if centers_a1.ndim != 2 or centers_a2.shape != centers_a1.shape:
+            return []
+        cell_array = np.asarray(cell, dtype=float)
+        try:
+            scaled_a1 = np.linalg.solve(cell_array.T, centers_a1.T).T
+            scaled_a2 = np.linalg.solve(cell_array.T, centers_a2.T).T
+        except np.linalg.LinAlgError:
+            return []
+
+        candidates = []
+        for axis in range(self.number_of_variable_cell_vectors):
+            normal = self._axis_cut_normal(cell_array, axis)
+            if normal is None:
+                continue
+            projections = np.concatenate((scaled_a1[:, axis], scaled_a2[:, axis]))
+            fractions = [0.25, 0.5, 0.75]
+            if len(projections) > 1:
+                proj_sorted = np.sort(projections)
+                gaps = np.diff(proj_sorted)
+                midpoints = proj_sorted[:-1] + gaps / 2.0
+                largest = np.argsort(gaps)[-min(3, len(gaps)) :]
+                fractions.extend(float(midpoints[int(idx)]) for idx in largest)
+                fractions.append(float(np.median(projections)))
+
+            unique_fractions: list[float] = []
+            for value in fractions:
+                if any(abs(value - existing) <= 1e-6 for existing in unique_fractions):
+                    continue
+                unique_fractions.append(float(value))
+
+            for frac in unique_fractions:
+                cut_p = np.zeros((1, 3))
+                cut_p[0, axis] = frac
+                cut_point_cart = np.dot(cut_p, cell_array)[0]
+                score = self._estimate_cut_balance(
+                    centers_a1,
+                    centers_a2,
+                    weights,
+                    cut_point_cart,
+                    normal,
+                )
+                candidates.append((score, cut_p, axis))
+
+        candidates.sort(key=lambda item: item[0])
+        return self._break_score_ties(candidates[:12])
 
     def _candidate_cut_configurations(self, a1, a2, cell):
         if self.number_of_variable_cell_vectors != 0:
-            cosp1 = np.average(a1.get_scaled_positions(), axis=0)
-            cosp2 = np.average(a2.get_scaled_positions(), axis=0)
-            cut_p = np.zeros((1, 3))
-            for i in range(3):
-                if i < self.number_of_variable_cell_vectors:
-                    cut_p[0, i] = self.rng.random()
-                else:
-                    cut_p[0, i] = 0.5 * (cosp1[i] + cosp2[i])
-            cut_n = self.rng.choice(self.number_of_variable_cell_vectors)
-            return [(0.0, cut_p, cut_n)]
+            return self._variable_cell_cut_configurations(a1, a2, cell)
 
         centers_a1, weights = self._group_centers_and_weights(a1)
         centers_a2, _ = self._group_centers_and_weights(a2)
@@ -377,7 +508,7 @@ class CutAndSplicePairing(OffspringCreator):
                 cut_candidates.append((score, cut_point, cut_normal))
 
         cut_candidates.sort(key=lambda item: item[0])
-        return cut_candidates[:12]
+        return self._break_score_ties(cut_candidates[:12])
 
     def _jittered_cut_configurations(self, configs, a1, a2, cell):
         """Randomly offset cached cut points along their normals and re-rank.
@@ -396,7 +527,7 @@ class CutAndSplicePairing(OffspringCreator):
             cut_normal_cart = np.asarray(cut_normal, dtype=float) @ cell_array
             norm = float(np.linalg.norm(cut_normal_cart))
             if not np.isfinite(norm) or norm <= 1e-12:
-                jittered.append((float(score), cut_point, cut_normal))
+                jittered.append((score, cut_point, cut_normal))
                 continue
             unit = cut_normal_cart / norm
             projections = np.concatenate(
@@ -424,7 +555,68 @@ class CutAndSplicePairing(OffspringCreator):
             jittered.append((new_score, new_cut_point, cut_normal))
 
         jittered.sort(key=lambda item: item[0])
-        return jittered
+        return self._break_score_ties(jittered)
+
+    def _align_moving_to_reference(self, reference, moving):
+        """Align the moving parent's shape to the reference.
+
+        Principal axes, not atom indices. The sign pattern with the smaller
+        residual wins. On a surface the turn stays in the slab plane and the
+        height is left alone.
+        """
+        reference_positions = np.asarray(reference.get_positions(), dtype=float)
+        moving_positions = np.asarray(moving.get_positions(), dtype=float)
+        if len(reference_positions) < 2 or len(reference_positions) != len(moving_positions):
+            return
+        reference_center = reference_positions.mean(axis=0)
+        moving_center = moving_positions.mean(axis=0)
+        centered_reference = reference_positions - reference_center
+        centered_moving = moving_positions - moving_center
+        plane = None
+        if uses_surface(self.system_type):
+            plane = [i for i in range(3) if i != self.surface_normal_axis]
+        reference_frame = centered_reference if plane is None else centered_reference[:, plane]
+        moving_frame = centered_moving if plane is None else centered_moving[:, plane]
+        reference_axes = _principal_axes(reference_frame)
+        moving_axes = _principal_axes(moving_frame)
+        best_error = None
+        best_aligned = None
+        for signs in _proper_axis_signs(reference_axes.shape[1]):
+            minor = reference_axes @ np.diag(signs) @ moving_axes.T
+            if plane is None:
+                rotation = minor
+            else:
+                rotation = np.eye(3)
+                rotation[np.ix_(plane, plane)] = minor
+            aligned = centered_moving @ rotation.T
+            residual = aligned if plane is None else aligned[:, plane]
+            target = centered_reference if plane is None else centered_reference[:, plane]
+            error = float(np.linalg.norm(residual - target))
+            if best_error is None or error < best_error:
+                best_error = error
+                best_aligned = aligned
+        if plane is None:
+            moving.set_positions(best_aligned + reference_center)
+            return
+        placed = best_aligned + moving_center
+        shift = reference_center - placed.mean(axis=0)
+        shift[self.surface_normal_axis] = 0.0
+        moving.set_positions(placed + shift)
+
+    def _random_relative_rotation(self, moving):
+        """One large relative orientation. Surfaces rotate about the slab normal."""
+        positions = np.asarray(moving.get_positions(), dtype=float)
+        if len(positions) < 2:
+            return
+        center = positions.mean(axis=0)
+        if uses_surface(self.system_type):
+            axis = np.zeros(3)
+            axis[int(self.surface_normal_axis)] = 1.0
+        else:
+            axis = _random_unit_vector(self.rng)
+        angle = float(self.rng.uniform(0.5, np.pi))
+        rotation = _rotation_matrix(axis, angle)
+        moving.set_positions((positions - center) @ rotation.T + center)
 
     def update_scaling_volume(self, population, w_adapt=0.5, n_adapt=0):
         """Updates the scaling volume that is used in the pairing.
@@ -500,9 +692,13 @@ class CutAndSplicePairing(OffspringCreator):
         counter = 0
         maxcount = self.max_pairing_attempts
         if self.number_of_variable_cell_vectors == 0:
-            # Fixed-cell passes see identical geometry; jittered re-passes are
-            # bounded by fixed_cell_max_passes instead of max_pairing_attempts.
+            # Fixed-cell retries are a short chain: shape-aligned cuts, then
+            # jitter, then one new orientation. ``fixed_cell_max_passes`` caps it.
             maxcount = min(maxcount, self.fixed_cell_max_passes)
+        else:
+            # Variable-cell retries re-rank axis-aligned cuts after each
+            # translation. ``variable_cell_max_passes`` caps that chain.
+            maxcount = min(maxcount, self.variable_cell_max_passes)
         a1_copy = a1.copy()
         a2_copy = a2.copy()
         # Crossover builds cartesian coordinates. SHAKE/FixBondLengths belongs
@@ -511,34 +707,13 @@ class CutAndSplicePairing(OffspringCreator):
         a2_copy.set_constraint()
         self.last_attempt_count = 0
 
-        # The unit cell and the candidate cut configurations depend only on the
-        # parent cells / geometry, which are constant for the duration of one
-        # cross() call (the parents are never reassigned inside the loop). Compute
-        # each exactly once here instead of on every while-iteration, so repeated
-        # pairing attempts vary only by the random per-atom translation, not by
-        # re-drawing the cell / cut plane. For the fixed-cell branch the cell is
-        # just cell1 (deterministic); for the variable-cell branch the random
-        # draw now happens once, not once per attempt.
+        # The cell is drawn once. Fixed-cell passes then vary the cut and, on
+        # the last pass, the relative orientation.
         newcell = self.generate_unit_cell(cell1, cell2)
         if newcell is None:
             return None
 
-        if self.number_of_variable_cell_vectors == 0:
-            for a_copy, a in zip([a1_copy, a2_copy], [a1, a2], strict=False):
-                a_copy.set_positions(a.get_positions())
-                if self.use_tags:
-                    gather_atoms_by_tag(
-                        a_copy,
-                        skip_tag=periodic_sheet_tag_to_skip(self.system_type),
-                    )
-                elif not uses_surface(self.system_type):
-                    a_copy.center()
-
-        cached_cut_configs = self._candidate_cut_configurations(
-            a1_copy,
-            a2_copy,
-            newcell,
-        )
+        cached_cut_configs = None
 
         # Run until a valid pairing is made or maxcount pairings are tested.
         while counter < maxcount:
@@ -577,19 +752,31 @@ class CutAndSplicePairing(OffspringCreator):
                         a_copy.center()
 
             if self.number_of_variable_cell_vectors == 0:
-                # Fixed-cell parents are restored identically on every pass;
-                # only the jittered cut points differ between passes.
+                # Positions are reset above, so passes 1 and 2 align again.
+                # Pass 2 jitters the pass-1 cuts. Later passes turn once.
                 if counter == 1:
-                    cut_configurations = cached_cut_configs
-                else:
+                    self._align_moving_to_reference(a1_copy, a2_copy)
+                    cut_configurations = self._candidate_cut_configurations(
+                        a1_copy, a2_copy, newcell
+                    )
+                    cached_cut_configs = cut_configurations
+                elif counter == 2 and cached_cut_configs:
+                    self._align_moving_to_reference(a1_copy, a2_copy)
                     cut_configurations = self._jittered_cut_configurations(
-                        cached_cut_configs,
-                        a1_copy,
-                        a2_copy,
-                        newcell,
+                        cached_cut_configs, a1_copy, a2_copy, newcell
+                    )
+                else:
+                    self._random_relative_rotation(a2_copy)
+                    cut_configurations = self._candidate_cut_configurations(
+                        a1_copy, a2_copy, newcell
                     )
             else:
-                cut_configurations = cached_cut_configs
+                # Translations above move the groups, so the ranked cuts are
+                # rebuilt instead of replaying the first pass.
+                self._align_moving_to_reference(a1_copy, a2_copy)
+                cut_configurations = self._candidate_cut_configurations(
+                    a1_copy, a2_copy, newcell
+                )
 
             for _score, cut_p, cut_normal in cut_configurations:
                 self.last_attempt_count += 1
@@ -781,16 +968,13 @@ class CutAndSplicePairing(OffspringCreator):
                     f"Internal pairing bookkeeping mismatch for type {s}"
                 )
 
-            # While we have too few of the given atom type
+            # Too few or too many groups of this symbol: move the groups
+            # closest to the cutting plane so the geometric cut stays intact.
             while len(used) < types[s]:
-                index = self.rng.integers(len(not_used))
-                used.append(not_used.pop(index))
+                used.append(_pop_closest_to_plane(not_used))
 
-            # While we have too many of the given atom type
             while len(used) > types[s]:
-                # remove randomly:
-                index = self.rng.integers(len(used))
-                not_used.append(used.pop(index))
+                not_used.append(_pop_closest_to_plane(used))
 
             use_total[s] = used
 
@@ -886,15 +1070,23 @@ class DualCutAndSplicePairing:
         self.exploratory = exploratory
         self.exploratory_probability = exploratory_probability
         self.rng = _ensure_rng(rng)
+        self.last_attempt_count = 0
 
     def get_new_individual(self, parents):
         f, m = parents
         use_exploratory = self.rng.random() < self.exploratory_probability
-        indi, desc = (
-            self.exploratory.get_new_individual(parents)
+        first, second = (
+            (self.exploratory, self.primary)
             if use_exploratory
-            else self.primary.get_new_individual(parents)
+            else (self.primary, self.exploratory)
         )
+        indi, desc = first.get_new_individual(parents)
+        self.last_attempt_count = int(getattr(first, "last_attempt_count", 0))
+        # A failed exploratory (or primary) cut still gets one try of the other
+        # operator. A child from the first choice is kept.
+        if indi is None:
+            indi, desc = second.get_new_individual(parents)
+            self.last_attempt_count += int(getattr(second, "last_attempt_count", 0))
         if indi is not None and len(indi) != len(f):
             raise SCGOValidationError(
                 "DualCutAndSplicePairing produced "

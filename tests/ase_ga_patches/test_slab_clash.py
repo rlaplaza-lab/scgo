@@ -569,3 +569,90 @@ def test_pairing_attempt_count_in_worker_result():
         assert r["pairing_attempt_count"] > 0, (
             f"Successful pairing should have attempt_count > 0, got {r['pairing_attempt_count']}"
         )
+
+
+def test_unary_failure_falls_back_to_crossover(monkeypatch):
+    """A missed twist or kick still yields the ordinary cut-and-splice child."""
+    composition = ["Pt", "Pt", "Pt"]
+    atoms_template = Atoms(
+        symbols=composition,
+        positions=[[i * 2.5, 0, 0] for i in range(3)],
+        cell=[20, 20, 20],
+        pbc=False,
+    )
+    atoms_template.calc = EMT()
+    all_atom_types = get_all_atom_types(atoms_template, [78])
+    blmin = closest_distances_generator(all_atom_types, ratio_of_covalent_radii=0.7)
+    operators_list, name_map = create_mutation_operators(
+        composition=composition,
+        n_to_optimize=3,
+        blmin=blmin,
+        rng=np.random.default_rng(0),
+        use_adaptive=False,
+    )
+    adaptive_config = get_adaptive_mutation_config(
+        composition=composition,
+        current_generation=0,
+        total_generations=1,
+        use_adaptive=False,
+        generations_without_improvement=0,
+    )
+    ctx = OffspringBuildContext(
+        atoms_template=_picklable_atoms_copy(atoms_template),
+        n_to_optimize=3,
+        composition=composition,
+        blmin=blmin,
+        system_type="gas_cluster",
+        n_slab=0,
+        n_frozen_prefix=0,
+        use_mic=False,
+        slab_for_pairing=None,
+        surface_normal_axis=2,
+        adsorbate_definition=None,
+        connectivity_factor=None,
+        allow_cluster_fragmentation=False,
+        allow_adsorbate_surface_detachment=False,
+        enforce_adsorbate_subgraph_integrity=True,
+        freeze_adsorbate_internal_geometry=False,
+        adsorbate_fragment_templates=None,
+        surface_config=None,
+        adaptive_config=adaptive_config,
+        current_mutation_probability=0.0,
+        operators_list=operators_list,
+        name_map=name_map,
+        operators_epoch=1,
+    )
+    _OFFSPRING_WORKER_STATE.clear()
+    _load_offspring_worker_state(ctx)
+    monkeypatch.setattr(
+        "scgo.algorithms.geneticalgorithm_go_torchsim.apply_unary_exploration",
+        lambda *_args, **_kwargs: (None, ["rotational"]),
+    )
+    p1 = atoms_template.copy()
+    p1.calc = None
+    p1.info = {"confid": 1, "key_value_pairs": {}, "data": {}}
+    p2 = atoms_template.copy()
+    p2.positions = p2.positions + np.array([0.4, -0.2, 0.3])
+    p2.calc = None
+    p2.info = {"confid": 2, "key_value_pairs": {}, "data": {}}
+    children = []
+    for seed in range(8):
+        result = _build_offspring_worker(
+            {
+                "index": 0,
+                "a1": p1,
+                "a2": p2,
+                "mobile_only": False,
+                "mutation_only": True,
+                "task_seed": seed * 17 + 3,
+                "operators_epoch": 1,
+                "adaptive_config": adaptive_config,
+                "current_mutation_probability": 0.0,
+            }
+        )
+        assert result["failure_reason"] != "unary_failed"
+        if result["child"] is not None:
+            children.append(result)
+    _OFFSPRING_WORKER_STATE.clear()
+    assert children
+    assert all(child["mutation_applied"] is False for child in children)
