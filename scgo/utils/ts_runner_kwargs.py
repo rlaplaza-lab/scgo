@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from scgo.calculators.dispersion import dispersion_xc_for_mace_kwargs
 from scgo.exceptions import (
     SCGOValidationError,
 )
@@ -254,6 +255,9 @@ def coerce_ts_params_to_runner_kwargs(
                 "upet_non_conservative": bool(ck.get("non_conservative", False)),
             }
         )
+    elif str(ts_params.get("calculator", "")).strip().upper() == "MACE":
+        ck = ts_params.get("calculator_kwargs", {}) or {}
+        kwargs["torchsim_params"]["dispersion_xc"] = dispersion_xc_for_mace_kwargs(ck)
     user_torchsim = ts_params.get("torchsim_params")
     if isinstance(user_torchsim, dict):
         kwargs["torchsim_params"].update(user_torchsim)

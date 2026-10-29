@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 from ase.calculators.emt import EMT
 
+from scgo.calculators.dispersion import drop_mace_dispersion_unless_matpes
 from scgo.cluster_adsorbate.config import resolve_cluster_adsorbate_config
 from scgo.constants import SURFACE_GA_MIN_LOCAL_RELAX_STEPS
 from scgo.exceptions import (
@@ -168,6 +169,12 @@ def _calculator_kwargs_for_change(
     merged = default_calculator_kwargs(calculator)
     if user_kwargs:
         merged.update(dict(user_kwargs))
+    if str(calculator).strip().upper() == "MACE":
+        drop_mace_dispersion_unless_matpes(
+            merged,
+            str(merged.get("model_name", "")),
+            explicit=bool(user_kwargs) and "dispersion_xc" in user_kwargs,
+        )
     return merged
 
 

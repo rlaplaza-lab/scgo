@@ -443,8 +443,14 @@ def test_default_go_and_default_ts_presets_share_mace_model():
 
     assert go_params["calculator"] == "MACE"
     assert ts_params["calculator"] == "MACE"
-    assert go_params["calculator_kwargs"] == {"model_name": "mace_matpes_0"}
-    assert ts_params["calculator_kwargs"] == {"model_name": "mace_matpes_0"}
+    assert go_params["calculator_kwargs"] == {
+        "model_name": "mace_matpes_0",
+        "dispersion_xc": "r2scan",
+    }
+    assert ts_params["calculator_kwargs"] == {
+        "model_name": "mace_matpes_0",
+        "dispersion_xc": "r2scan",
+    }
 
 
 def test_loaders_default_to_final_unique_minima():
@@ -593,8 +599,10 @@ def test_get_torchsim_ga_params_relaxer_uses_calculator_mace_model_name():
     except Exception as exc:  # pragma: no cover - environment-dependent torch/mace load
         pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
     assert p["calculator_kwargs"]["model_name"] == "mace_mp_small"
+    assert "dispersion_xc" not in p["calculator_kwargs"]
     relaxer = p["optimizer_params"]["ga"]["relaxer"]
     assert relaxer.mace_model_name == "mace_mp_small"
+    assert relaxer.dispersion_xc is None
 
 
 @pytest.mark.slow
@@ -607,7 +615,10 @@ def test_get_torchsim_ga_params_default_relaxer_matches_default_model():
     except Exception as exc:  # pragma: no cover - environment-dependent torch/mace load
         pytest.skip(f"TorchSim model load unavailable in this env: {exc}")
     assert p["calculator_kwargs"].get("model_name") == "mace_matpes_0"
-    assert p["optimizer_params"]["ga"]["relaxer"].mace_model_name == "mace_matpes_0"
+    assert p["calculator_kwargs"].get("dispersion_xc") == "r2scan"
+    relaxer = p["optimizer_params"]["ga"]["relaxer"]
+    assert relaxer.mace_model_name == "mace_matpes_0"
+    assert relaxer.dispersion_xc == "r2scan"
 
 
 @pytest.mark.parametrize("system_type", sorted(TS_DEFAULTS_BY_SYSTEM_TYPE))

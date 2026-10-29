@@ -65,9 +65,9 @@ See :doc:`/parameters` for the full GO, TS, surface, and adsorbate parameter tab
 Available Models
 ----------------
 
-**MACE models:** ``"mace_matpes_0"``, ``"mace_mp_small"``, ``"mace_mpa_medium"``, ``"mace_off_small"``
+**MACE models:** ``"mace_matpes_0"`` (default, r²SCAN + DFT-D3(BJ)), ``"mace_mp_small"``, ``"mace_mpa_medium"``, ``"mace_off_small"``. ``dispersion_xc="r2scan"`` is valid only for ``mace_matpes_0``. MACE-OFF already includes dispersion. Set ``dispersion_xc=None`` when switching off the MatPES checkpoint.
 
-**UMA models:** ``"uma-s-1p2"``, ``"uma-s-1p1"``, ``"uma-m-1p1"``
+**UMA models:** ``"uma-s-1p2p1"`` (preset, task ``oc25``, RPBE+D3 already in the labels), ``"uma-s-1p2"``, ``"uma-s-1p1"``, ``"uma-m-1p1"``, ``"uma-s-1p2p1-ft-d4rev"`` (task ``omol`` only; dispersion is inside the checkpoint), ``"uma-s-1p2p1-ft-r2scan"`` (task ``omat`` only). The r²SCAN fine-tune is non-magnetic, and SCGO does not attach DFT-D3 to it. Do not use it for cohesive energies or magnetic systems.
 
 **UPET models:** ``"pet-mad-s"``, ``"pet-mad-xs"``, ``"pet-oam-xl"``, ``"pet-omat-s"``, ``"pet-spice-s"``
 
@@ -82,6 +82,7 @@ Usage Examples
 
    params = get_default_params()
    params["calculator_kwargs"]["model_name"] = "mace_mp_small"
+   params["calculator_kwargs"]["dispersion_xc"] = None
    params["optimizer_params"]["ga"]["population_size"] = 100
 
 **Build TS params:**

@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.9.3
+
+### Changed
+
+- **Default MACE is MatPES r²SCAN plus DFT-D3(BJ).** `mace_matpes_0` now
+  adds the simple-dftd3 r²SCAN correction (`dispersion_xc="r2scan"`) on both
+  the ASE calculator and the TorchSim relaxer, using one `D3DispersionModel`.
+  Pass `dispersion_xc=None` to recover the bare checkpoint. Other MACE
+  checkpoints reject that correction. Minima from earlier `mace_matpes_0`
+  runs are not comparable; output directory names are unchanged.
+- **UMA preset checkpoint is `uma-s-1p2p1` with task `oc25`.** That task
+  already includes RPBE+D3, so SCGO does not add a second correction.
+  `uma-s-1p2p1-ft-d4rev` (`omol` only) and `uma-s-1p2p1-ft-r2scan` (`omat`
+  only) are opt-in. The r²SCAN fine-tune is non-magnetic and is not wrapped
+  with DFT-D3. The `[uma]` extra now requires `fairchem-core>=2.25.0`.
 
 ## 0.9.2
 

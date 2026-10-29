@@ -31,6 +31,12 @@ try:
 except ImportError:
     torch = None  # TorchSim stack unavailable; module still importable.
 
+from scgo.calculators.dispersion import (
+    DISPERSION_UNSET,
+    DispersionXC,
+    resolve_relaxer_dispersion_xc,
+    wrap_model_with_r2scan_d3,
+)
 from scgo.calculators.torch_device import resolve_torch_device
 from scgo.exceptions import (
     SCGORuntimeError,
@@ -694,6 +700,7 @@ def build_torchsim_relaxer(
             {
                 "mace_model_name": str(mace_model_name),
                 "model": shared_model,
+                "dispersion_xc": getattr(calculator, "dispersion_xc", None),
             }
         )
 
@@ -802,6 +809,11 @@ class TorchSimBatchRelaxer:
         desync other Torch streams; deterministic algorithms are intentionally
         not forced (CuBLAS constraints). Callers that also drive Torch should
         treat this as a process-wide side effect.
+    dispersion_xc:
+        DFT-D3(BJ) functional summed onto the loaded model. Unset applies
+        ``"r2scan"`` when this relaxer loads ``mace_matpes_0`` itself.
+        ``None`` turns it off. A caller-supplied ``model`` stays bare unless
+        this is set explicitly.
 
     """
 
@@ -837,6 +849,7 @@ class TorchSimBatchRelaxer:
     optimizer_kwargs: dict | None = None  # forwarded as **optimizer_kwargs to step-fn
     runner_kwargs: dict | None = None
     seed: int | None = None
+    dispersion_xc: DispersionXC = DISPERSION_UNSET
 
     def __post_init__(self) -> None:
         # Lazy import: only require TorchSim when actually instantiating the relaxer.
@@ -875,6 +888,13 @@ class TorchSimBatchRelaxer:
         else:
             self.optimizer = self.optimizer_name
 
+        supplied_model = self.model is not None
+        self.dispersion_xc = resolve_relaxer_dispersion_xc(
+            model_kind=self.model_kind,
+            mace_model_name=self.mace_model_name,
+            dispersion_xc=self.dispersion_xc,
+            supplied_model=supplied_model,
+        )
         if self.model is None:
             self.model = _resolve_default_model(self)
         else:
@@ -884,6 +904,9 @@ class TorchSimBatchRelaxer:
         self._sync_device_dtype_from_model()
         self._patch_model_for_cuda()
         _apply_torchsim_workarounds(self.model)
+        if self.dispersion_xc is not None:
+            self.model = wrap_model_with_r2scan_d3(self.model)
+            _apply_torchsim_workarounds(self.model)
 
         device_type = torch.device(self.device).type
         self._on_cpu = device_type == "cpu"

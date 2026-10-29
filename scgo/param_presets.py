@@ -6,6 +6,12 @@ import copy
 from functools import cache
 from typing import Any
 
+from scgo.calculators.dispersion import (
+    MATPES_R2SCAN_MODEL,
+    R2SCAN_DISPERSION_XC,
+    dispersion_xc_for_mace_kwargs,
+    drop_mace_dispersion_unless_matpes,
+)
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_CROSS_WEIGHT,
@@ -37,9 +43,12 @@ AVAILABLE_MACE_MODELS = [
 
 # Common fairchem pretrained names (see fairchem.core.calculate.pretrained_mlip)
 AVAILABLE_UMA_MODELS = [
+    "uma-s-1p2p1",
     "uma-s-1p2",
     "uma-s-1p1",
     "uma-m-1p1",
+    "uma-s-1p2p1-ft-d4rev",  # omol only; dispersion is already in the labels
+    "uma-s-1p2p1-ft-r2scan",  # omat only; non-magnetic, no D3 in SCGO
 ]
 
 # Common UPET model identifiers (see upet.list_upet)
@@ -287,7 +296,10 @@ def _get_default_params_template() -> GLOptimizerParams:
         "validate_with_hessian": False,
         "calculator": "MACE",
         "seed": None,  # Will be overridden by function parameter
-        "calculator_kwargs": {"model_name": "mace_matpes_0"},
+        "calculator_kwargs": {
+            "model_name": MATPES_R2SCAN_MODEL,
+            "dispersion_xc": R2SCAN_DISPERSION_XC,
+        },
         "fmax_threshold": DEFAULT_FMAX_THRESHOLD,
         "check_hessian": True,
         "imag_freq_threshold": DEFAULT_IMAG_FREQ_THRESHOLD,
@@ -376,9 +388,12 @@ def default_calculator_kwargs(calculator: str) -> dict[str, Any]:
     """
     calc_u = str(calculator).strip().upper()
     if calc_u == "MACE":
-        return {"model_name": "mace_matpes_0"}
+        return {
+            "model_name": MATPES_R2SCAN_MODEL,
+            "dispersion_xc": R2SCAN_DISPERSION_XC,
+        }
     if calc_u == "UMA":
-        return {"model_name": "uma-s-1p2", "task_name": "oc25"}
+        return {"model_name": "uma-s-1p2p1", "task_name": "oc25"}
     if calc_u == "UPET":
         return {"model_name": "pet-mad-s", "version": "1.5.0"}
     return {}
@@ -470,9 +485,13 @@ def get_minimal_ga_params(
         }
     )
 
-    # Set model name if provided
     if model_name is not None:
         params["calculator_kwargs"]["model_name"] = model_name
+        drop_mace_dispersion_unless_matpes(
+            params["calculator_kwargs"],
+            model_name,
+            explicit=False,
+        )
 
     # Set seed if provided
     if seed is not None:
@@ -591,9 +610,10 @@ def _attach_torchsim_relaxer(
             **common_kwargs,
         )
     elif relaxer_kind == "mace":
-        mace_model = calculator_kwargs.get("model_name", "mace_matpes_0")
+        mace_model = calculator_kwargs.get("model_name", MATPES_R2SCAN_MODEL)
         ga["relaxer"] = TorchSimBatchRelaxer(
             mace_model_name=mace_model,
+            dispersion_xc=dispersion_xc_for_mace_kwargs(calculator_kwargs),
             seed=seed,
             **common_kwargs,
         )
@@ -635,6 +655,15 @@ def _build_ga_calculator_params(
         params["calculator_kwargs"] = dict(calculator_kwargs)
     if model_name is not None:
         params["calculator_kwargs"]["model_name"] = model_name
+        if relaxer_kind == "mace":
+            drop_mace_dispersion_unless_matpes(
+                params["calculator_kwargs"],
+                model_name,
+                explicit=(
+                    calculator_kwargs is not None
+                    and "dispersion_xc" in calculator_kwargs
+                ),
+            )
 
     ga = params["optimizer_params"]["ga"]
     if effort == "benchmark":
@@ -661,7 +690,7 @@ def _build_ga_calculator_params(
 def get_uma_ga_benchmark_params(
     seed: int,
     *,
-    model_name: str = "uma-s-1p2",
+    model_name: str = "uma-s-1p2p1",
     uma_task: str = "oc25",
 ) -> GLOptimizerParams:
     """GA benchmark parameters matching ``_get_base_ga_benchmark_params`` but with UMA.
@@ -696,8 +725,8 @@ def get_default_uma_params() -> GLOptimizerParams:
     return _build_ga_calculator_params(
         "UMA",
         effort="default",
-        model_name="uma-s-1p2",
-        calculator_kwargs={"model_name": "uma-s-1p2", "task_name": "oc25"},
+        model_name="uma-s-1p2p1",
+        calculator_kwargs={"model_name": "uma-s-1p2p1", "task_name": "oc25"},
         relaxer_kind="fairchem",
     )
 
@@ -1043,7 +1072,7 @@ def get_low_effort_uma_ga_params(
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None = None,
     seed: int | None = None,
-    model_name: str = "uma-s-1p2",
+    model_name: str = "uma-s-1p2p1",
     uma_task: str = "oc25",
 ) -> GLOptimizerParams:
     """Return reduced-budget GO params (~25%) for UMA demos and CI.

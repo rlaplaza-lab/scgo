@@ -7,7 +7,7 @@ standalone CLI for rapid regression checks while tweaking optimization knobs.
 
 Campaign outputs are written under
 ``benchmark/results/<formula>_<backend>_<model>/`` (for example:
-``pt5_mace_mace_matpes_0`` or ``pt5_uma_uma-s-1p2-oc25``).
+``pt5_mace_mace_matpes_0`` or ``pt5_uma_uma-s-1p2p1-oc25``).
 """
 
 from __future__ import annotations

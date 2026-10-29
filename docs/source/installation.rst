@@ -3,6 +3,8 @@ Installation
 
 SCGO is on `PyPI <https://pypi.org/project/scgo/>`_. Use **exactly one** MLIP
 extra per environment (``[mace]``, ``[uma]``, or ``[upet]``); the stacks conflict.
+``[uma]`` requires ``fairchem-core>=2.25.0``. The MACE default is MatPES
+r²SCAN plus DFT-D3(BJ) (``dispersion_xc="r2scan"``); see :doc:`/parameters`.
 
 Prerequisites
 -------------

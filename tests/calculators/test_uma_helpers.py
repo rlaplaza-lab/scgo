@@ -33,7 +33,7 @@ def test_get_default_uma_params():
     except Exception as e:
         pytest.skip(f"FairChem/TorchSim relaxer could not be built in this env: {e}")
     assert p["calculator"] == "UMA"
-    assert p["calculator_kwargs"]["model_name"] == "uma-s-1p2"
+    assert p["calculator_kwargs"]["model_name"] == "uma-s-1p2p1"
     assert p["calculator_kwargs"]["task_name"] == "oc25"
 
 

@@ -138,9 +138,14 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - ``"MACE"``
      - Calculator: ``"MACE"``, ``"UMA"``, ``"UPET"``, or ``"EMT"``
    * - ``calculator_kwargs``
-     - ``{"model_name": "mace_matpes_0"}``
+     - ``{"model_name": "mace_matpes_0", "dispersion_xc": "r2scan"}``
      - Calculator options. Changing ``calculator`` replaces this dict with that
        calculator's defaults (:func:`~scgo.param_presets.default_calculator_kwargs`).
+       ``dispersion_xc="r2scan"`` adds DFT-D3(BJ) on the MatPES r²SCAN MACE
+       checkpoint, on both the ASE calculator and the TorchSim relaxer.
+       ``dispersion_xc=None`` turns it off. Other MACE checkpoints reject
+       ``"r2scan"``. The UMA preset is ``uma-s-1p2p1`` with task ``oc25``
+       (RPBE+D3 is already in those labels; do not add another correction).
        Unsupported ``device`` values raise ``SCGOValidationError``.
    * - ``seed``
      - ``None``

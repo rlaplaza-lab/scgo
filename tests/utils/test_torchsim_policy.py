@@ -170,5 +170,5 @@ def test_coerce_ts_params_uma_sets_fairchem_model_fields(monkeypatch):
     assert kw["use_parallel_neb"] is True
     tsp = kw["torchsim_params"]
     assert tsp["model_kind"] == "fairchem"
-    assert tsp["fairchem_model_name"] == "uma-s-1p2"
+    assert tsp["fairchem_model_name"] == "uma-s-1p2p1"
     assert tsp["fairchem_task_name"] == "oc25"

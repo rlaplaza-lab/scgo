@@ -123,7 +123,7 @@ def add_common_benchmark_cli(parser: argparse.ArgumentParser) -> None:
         "--model-name",
         default=None,
         help=(
-            "Override calculator model_name (default UMA: uma-s-1p2; "
+            "Override calculator model_name (default UMA: uma-s-1p2p1; "
             "UPET: pet-mad-s; MACE: preset default)."
         ),
     )
@@ -412,7 +412,7 @@ def get_benchmark_params(
 ) -> dict:
     """Build benchmark params for TorchSim GA + MACE, UMA, or UPET."""
     if backend == "uma":
-        mn = model_name or "uma-s-1p2"
+        mn = model_name or "uma-s-1p2p1"
         return get_uma_ga_benchmark_params(seed, model_name=mn, uma_task=uma_task)
     if backend == "upet":
         mn = model_name or "pet-mad-s"

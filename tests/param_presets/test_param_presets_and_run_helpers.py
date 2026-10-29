@@ -207,7 +207,7 @@ def test_initialize_params_deep_merge_user_overrides():
 
     uma = initialize_params({"calculator": "UMA"})
     assert uma["calculator_kwargs"] == {
-        "model_name": "uma-s-1p2",
+        "model_name": "uma-s-1p2p1",
         "task_name": "oc25",
     }
 

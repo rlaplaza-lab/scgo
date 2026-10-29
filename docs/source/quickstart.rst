@@ -75,6 +75,8 @@ favoured during initialization while the population stays diverse. Details:
 
    params = get_default_params()
    params["calculator_kwargs"]["model_name"] = "mace_mp_small"
+   # r²SCAN-D3 is only valid on the MatPES default checkpoint.
+   params["calculator_kwargs"]["dispersion_xc"] = None
 
    results = run_go(
        "Pt5",

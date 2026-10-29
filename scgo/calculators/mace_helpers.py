@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any
 
+import numpy as np
 import torch
 
 from scgo.utils.mlip_extras import (
@@ -51,6 +52,13 @@ from ase.calculators.calculator import Calculator, all_changes
 with torch_load_weights_only_false():
     from mace.calculators import mace_mp
 
+from scgo.calculators.dispersion import (
+    DISPERSION_UNSET,
+    DispersionXC,
+    make_r2scan_d3_model,
+    r2scan_d3_energy_forces,
+    resolve_mace_dispersion_xc,
+)
 from scgo.calculators.torch_device import resolve_torch_device
 from scgo.utils.logging import get_logger
 
@@ -81,6 +89,7 @@ class MACE(Calculator):
         model_name: str = "mace_matpes_0",
         device: str | None = None,
         default_dtype: str = "float64",
+        dispersion_xc: DispersionXC = DISPERSION_UNSET,
         **kwargs,
     ):
         """Initializes the MACE calculator.
@@ -97,10 +106,14 @@ class MACE(Calculator):
             default_dtype: The default floating-point precision for calculations.
                 "float64" is recommended for stable optimizations.
                 Defaults to "float64".
+            dispersion_xc: ``"r2scan"`` adds DFT-D3(BJ) on ``mace_matpes_0``
+                (the default). ``None`` turns it off. Other checkpoints reject
+                ``"r2scan"``.
             kwargs: Additional keyword arguments passed to the base ASE
                 Calculator class.
         """
         ensure_mace_uma_not_both_installed()
+        self.dispersion_xc = resolve_mace_dispersion_xc(model_name, dispersion_xc)
         selected_device = resolve_torch_device(
             device, allow_mps=True, backend_name="MACE"
         )
@@ -113,6 +126,8 @@ class MACE(Calculator):
 
         super().__init__(**kwargs)
         self.model_name = model_name
+        self.default_dtype = default_dtype
+        self._d3_model: Any | None = None
         # Store the resolved device so downstream helpers (e.g. TorchSim model
         # extraction) can honour an explicit device="cpu" instead of guessing.
         self.device = selected_device
@@ -163,7 +178,32 @@ class MACE(Calculator):
             properties=properties,
             system_changes=system_changes,
         )
-        self.results = self._mace_calc.results
+        atoms = self.atoms
+        if self.dispersion_xc is None or atoms is None:
+            self.results = self._mace_calc.results
+            return
+
+        d3_energy, d3_forces = self._dispersion_energy_forces(atoms)
+        results = dict(self._mace_calc.results)
+        if results.get("energy") is not None:
+            results["energy"] = float(results["energy"]) + d3_energy
+        if results.get("free_energy") is not None:
+            results["free_energy"] = float(results["free_energy"]) + d3_energy
+        if results.get("forces") is not None:
+            forces = np.array(results["forces"], dtype=np.float64, copy=True)
+            forces += d3_forces
+            results["forces"] = forces
+        self.results = results
+
+    def _dispersion_energy_forces(self, atoms: Atoms) -> tuple[float, np.ndarray]:
+        """r²SCAN DFT-D3(BJ) energy and forces for one structure."""
+        if self._d3_model is None:
+            self._d3_model = make_r2scan_d3_model(
+                device=self.device,
+                dtype=self.default_dtype,
+                compute_stress=False,
+            )
+        return r2scan_d3_energy_forces(atoms, self._d3_model)
 
 
 def infer_mace_model_name_from_calculator(calculator: Calculator) -> str | None:

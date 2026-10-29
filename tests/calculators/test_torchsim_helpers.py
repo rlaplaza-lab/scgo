@@ -181,9 +181,11 @@ def test_try_extract_torchsim_model_from_upet_calculator():
 @pytest.mark.requires_mace
 def test_torchsim_basic_initialization():
     """Test basic TorchSimBatchRelaxer initialization."""
+    from torch_sim.models.interface import SumModel
+
+    from scgo.calculators.dispersion import R2SCAN_D3BJ_A1
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
-    # Since torch-sim-atomistic is now mandatory, this should work
     relaxer = TorchSimBatchRelaxer(
         device="cpu",
         mace_model_name="mace_matpes_0",
@@ -193,6 +195,19 @@ def test_torchsim_basic_initialization():
     assert relaxer.device is not None
     assert relaxer.force_tol == pytest.approx(0.05, rel=1e-6)
     assert relaxer.max_steps == 10
+    assert relaxer.dispersion_xc == "r2scan"
+    assert isinstance(relaxer.model, SumModel)
+    assert relaxer.model.models[1].a1 == pytest.approx(R2SCAN_D3BJ_A1)
+    assert relaxer.model.models[1].compute_stress is False
+
+    bare = TorchSimBatchRelaxer(
+        device="cpu",
+        mace_model_name="mace_matpes_0",
+        dispersion_xc=None,
+        max_steps=1,
+    )
+    assert bare.dispersion_xc is None
+    assert not isinstance(bare.model, SumModel)
 
 
 @pytest.mark.requires_mace
@@ -233,6 +248,10 @@ def test_torchsim_autobatcher_default_off_on_cpu():
         model=_StubModel(),
     )
     # On CPU the native batchers are never built; the runner gets a plain False.
+    # A caller-supplied model is not wrapped in DFT-D3 unless asked.
+    assert relaxer.dispersion_xc is None
+    assert relaxer.model is not None
+    assert type(relaxer.model).__name__ == "_StubModel"
     assert relaxer._on_cpu is True
     assert relaxer._runner_kwargs["autobatcher"] is False
     assert not hasattr(relaxer, "_optimize_batcher")

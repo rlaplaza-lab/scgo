@@ -17,6 +17,13 @@ from scgo.utils.mlip_extras import (
 
 logger = get_logger(__name__)
 
+# Fine-tunes each expose a single task. The base uma-s-1p2p1 checkpoint keeps
+# the full task list (oc25 is the SCGO preset: RPBE+D3 already in the labels).
+_UMA_REQUIRED_TASK: dict[str, str] = {
+    "uma-s-1p2p1-ft-d4rev": "omol",
+    "uma-s-1p2p1-ft-r2scan": "omat",
+}
+
 _MISSING_FAIRCHEM_MSG = (
     "fairchem-core is not installed. Install with: pip install 'scgo[uma]' "
     "(do not combine with the [mace] extra in the same environment)."
@@ -34,7 +41,7 @@ class UMA(Calculator):
 
     def __init__(
         self,
-        model_name: str = "uma-s-1p2",
+        model_name: str = "uma-s-1p2p1",
         task_name: str | None = "oc25",
         device: str | None = None,
         **kwargs: Any,
@@ -46,6 +53,7 @@ class UMA(Calculator):
             raise SCGONotImplementedError(_MISSING_FAIRCHEM_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
+        validate_uma_task(model_name, task_name)
 
         super().__init__(**kwargs)
 
@@ -80,6 +88,25 @@ class UMA(Calculator):
             system_changes=system_changes,
         )
         self.results = self._inner.results
+
+
+def validate_uma_task(model_name: str, task_name: str | None) -> None:
+    """Reject a fine-tune loaded with a task it does not have.
+
+    ``uma-s-1p2p1-ft-r2scan`` also warns: SCGO does not attach DFT-D3, and the
+    checkpoint is non-magnetic (unsuitable for cohesive energies).
+    """
+    required = _UMA_REQUIRED_TASK.get(model_name)
+    if required is not None and task_name != required:
+        raise SCGOValidationError(
+            f"UMA model {model_name!r} only supports task_name={required!r}, "
+            f"got {task_name!r}."
+        )
+    if model_name == "uma-s-1p2p1-ft-r2scan":
+        logger.warning(
+            "uma-s-1p2p1-ft-r2scan is non-magnetic r²SCAN and SCGO does not "
+            "attach DFT-D3. It is not for cohesive energies or magnetic systems."
+        )
 
 
 def infer_uma_model_name_from_calculator(calculator: Calculator) -> str | None:

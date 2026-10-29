@@ -50,7 +50,7 @@ mace = [
     "torch-sim-atomistic[mace]==0.6.1",
 ]
 uma = [
-    "fairchem-core>=2.20.0",
+    "fairchem-core>=2.25.0",
     "torch-sim-atomistic[fairchem]==0.6.1",
 ]
 upet = [
@@ -74,6 +74,9 @@ dev = [
 
 [tool.setuptools]
 packages = { find = {} }
+
+[tool.setuptools.package-data]
+"scgo.calculators" = ["data/dftd3_reference.npz"]
 
 [tool.setuptools.dynamic]
 version = { attr = "scgo._version.__version__" }
