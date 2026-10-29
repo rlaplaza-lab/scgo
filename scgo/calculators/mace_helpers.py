@@ -54,7 +54,6 @@ with torch_load_weights_only_false():
 
 from scgo.calculators.dispersion import (
     DISPERSION_UNSET,
-    DispersionXC,
     make_r2scan_d3_model,
     r2scan_d3_energy_forces,
     resolve_mace_dispersion_xc,
@@ -89,7 +88,7 @@ class MACE(Calculator):
         model_name: str = "mace_matpes_0",
         device: str | None = None,
         default_dtype: str = "float64",
-        dispersion_xc: DispersionXC = DISPERSION_UNSET,
+        dispersion_xc: str | None = DISPERSION_UNSET,
         **kwargs,
     ):
         """Initializes the MACE calculator.

@@ -33,7 +33,6 @@ except ImportError:
 
 from scgo.calculators.dispersion import (
     DISPERSION_UNSET,
-    DispersionXC,
     resolve_relaxer_dispersion_xc,
     wrap_model_with_r2scan_d3,
 )
@@ -849,7 +848,7 @@ class TorchSimBatchRelaxer:
     optimizer_kwargs: dict | None = None  # forwarded as **optimizer_kwargs to step-fn
     runner_kwargs: dict | None = None
     seed: int | None = None
-    dispersion_xc: DispersionXC = DISPERSION_UNSET
+    dispersion_xc: str | None = DISPERSION_UNSET
 
     def __post_init__(self) -> None:
         # Lazy import: only require TorchSim when actually instantiating the relaxer.

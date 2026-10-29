@@ -31,8 +31,14 @@ R2SCAN_D3BJ_S6 = 1.0
 class _DispersionUnset:
     """Marker: dispersion follows the MatPES r²SCAN default."""
 
+    def __repr__(self) -> str:
+        return "DISPERSION_UNSET"
+
 
 DISPERSION_UNSET: _DispersionUnset = _DispersionUnset()
+# Internal only. Public signatures use ``str | None`` so docs do not link
+# this private marker; ``None`` turns the correction off, and omitting the
+# argument (the marker) follows the MatPES default.
 DispersionXC = str | None | _DispersionUnset
 
 
