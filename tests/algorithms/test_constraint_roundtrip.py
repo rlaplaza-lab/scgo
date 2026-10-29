@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms, FixBondLengths
+from ase.io import write as ase_write
 
 from scgo.algorithms.ga_common import (
     extract_constraint_index_lists,
@@ -18,10 +19,12 @@ from scgo.algorithms.geneticalgorithm_go_torchsim import (
 from scgo.database import close_data_connection, setup_database
 from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.ts_search.transition_state import save_neb_result
 from scgo.ts_search.transition_state_io import (
     load_minima_by_composition,
     save_transition_state_results,
 )
+from scgo.utils.helpers import prepare_atoms_for_xyz_export
 
 
 def _make_combined() -> Atoms:
@@ -180,3 +183,72 @@ def test_ts_save_persists_constraint_index_lists(tmp_path) -> None:
     assert result_json["reactant_fix_bond_lengths_pairs_json"] == [[6, 7]]
     assert "product_fix_atoms_indices_json" in result_json
     assert "transition_state_fix_atoms_indices_json" in result_json
+
+
+def test_prepare_atoms_for_xyz_export_clears_fix_bond_lengths(tmp_path) -> None:
+    atoms = Atoms(
+        symbols=["C", "O"],
+        positions=[[0.0, 0.0, 0.0], [1.1, 0.0, 0.0]],
+    )
+    atoms.set_constraint(FixBondLengths([[0, 1]]))
+
+    exported = prepare_atoms_for_xyz_export(atoms)
+    assert exported is not atoms
+    assert not exported.constraints
+    assert len(atoms.constraints) == 1
+
+    out = tmp_path / "adsorbate.xyz"
+    ase_write(out, exported)
+    assert out.is_file() and out.stat().st_size > 0
+
+
+def test_save_neb_result_writes_fix_bond_lengths_only_endpoints(tmp_path) -> None:
+    endpoint = Atoms(
+        symbols=["C", "O"],
+        positions=[[0.0, 0.0, 0.0], [1.1, 0.0, 0.0]],
+    )
+    endpoint.set_constraint(FixBondLengths([[0, 1]]))
+    ts = endpoint.copy()
+    ts.positions[1, 0] = 1.15
+    ts.set_constraint(FixBondLengths([[0, 1]]))
+
+    result = {
+        "pair_id": "0_1",
+        "status": "success",
+        "neb_converged": True,
+        "n_images": 5,
+        "spring_constant": 1.0,
+        "fmax": 0.05,
+        "neb_steps": 10,
+        "interpolation_method": "idpp",
+        "reactant_energy": -2.0,
+        "product_energy": -1.5,
+        "ts_energy": -1.0,
+        "barrier_height": 1.0,
+        "ts_image_index": 2,
+        "error": None,
+        "reactant_structure": endpoint.copy(),
+        "product_structure": endpoint.copy(),
+        "transition_state": ts,
+        "use_torchsim": False,
+    }
+    save_neb_result(result, str(tmp_path), "0_1")
+    assert (tmp_path / "ts_0_1.xyz").is_file()
+    assert (tmp_path / "reactant_0_1.xyz").is_file()
+    assert (tmp_path / "product_0_1.xyz").is_file()
+    assert result["transition_state"].constraints
+    assert result["reactant_structure"].constraints
+
+
+def test_reconstruct_prepends_fix_atoms_before_existing_fix_bonds() -> None:
+    atoms = Atoms(symbols=["C"] * 6, positions=np.zeros((6, 3)))
+    atoms.set_constraint(FixBondLengths([(4, 5)]))
+    changed = reconstruct_constraints_from_index_lists(
+        atoms,
+        fix_atoms_indices=[0, 1],
+        fix_bond_lengths_pairs=[[4, 5]],
+    )
+    assert changed
+    assert isinstance(atoms.constraints[0], FixAtoms)
+    assert isinstance(atoms.constraints[1], FixBondLengths)
+    assert sorted(atoms.constraints[0].index) == [0, 1]

@@ -292,6 +292,16 @@ def extract_constraint_index_lists(atoms: Atoms) -> dict[str, typing.Any]:
     }
 
 
+def _ordered_ase_constraints(constraints: list) -> list:
+    """Order FixAtoms before FixBondLengths (ASE extxyz move_mask-safe)."""
+    fix_atoms = [c for c in constraints if isinstance(c, ASEFixAtoms)]
+    fix_bonds = [c for c in constraints if isinstance(c, ASEFixBondLengths)]
+    others = [
+        c for c in constraints if not isinstance(c, (ASEFixAtoms, ASEFixBondLengths))
+    ]
+    return [*fix_atoms, *fix_bonds, *others]
+
+
 def reconstruct_constraints_from_index_lists(
     atoms: Atoms,
     *,
@@ -306,20 +316,26 @@ def reconstruct_constraints_from_index_lists(
 
     ``FixBondLengths`` is rebuilt from the stored pairs; ASE recomputes the
     target bond lengths from the loaded (relaxed) positions, which is correct
-    for downstream reuse (e.g. TS NEB setups). Returns ``True`` when any
-    constraint was (re)built.
+    for downstream reuse (e.g. TS NEB setups). Resulting constraints are
+    ordered FixAtoms then FixBondLengths. Returns ``True`` when any constraint
+    was (re)built or reordered.
     """
     existing = list(atoms.constraints)
     has_fix_atoms = any(isinstance(c, ASEFixAtoms) for c in existing)
     has_fix_bonds = any(isinstance(c, ASEFixBondLengths) for c in existing)
     new: list = list(existing)
+    added = False
     if fix_atoms_indices and not has_fix_atoms:
         new.append(ASEFixAtoms(indices=list(fix_atoms_indices)))
+        added = True
     if fix_bond_lengths_pairs and not has_fix_bonds:
         pairs = [tuple(int(x) for x in p) for p in fix_bond_lengths_pairs]
         new.append(ASEFixBondLengths(pairs))
-    if len(new) != len(existing):
-        atoms.set_constraint(new)
+        added = True
+    ordered = _ordered_ase_constraints(new)
+    order_changed = [type(c) for c in ordered] != [type(c) for c in existing]
+    if added or order_changed:
+        atoms.set_constraint(ordered)
         return True
     return False
 

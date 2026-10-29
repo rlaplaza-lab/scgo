@@ -79,6 +79,7 @@ from scgo.utils.helpers import (
     filter_unique_minima,
     get_cluster_formula,
     is_true_minimum,
+    prepare_atoms_for_xyz_export,
 )
 from scgo.utils.logging import get_logger, log_debug_v, log_info_v
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
@@ -1302,10 +1303,8 @@ def run_trials(
                 )
             else:
                 canonicalize_storage_frame(atoms_clean)
-        if "tags" in atoms_clean.arrays:
-            del atoms_clean.arrays["tags"]
 
-        write(filepath, atoms_clean)
+        write(filepath, prepare_atoms_for_xyz_export(atoms_clean))
         written_xyz.add(Path(filepath))
 
         final_minima_info.append(

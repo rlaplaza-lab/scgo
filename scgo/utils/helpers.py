@@ -285,6 +285,24 @@ def copy_atoms(atoms: Atoms) -> Atoms:
     return out
 
 
+def prepare_atoms_for_xyz_export(atoms: Atoms) -> Atoms:
+    """Return a copy safe for ASE extended-XYZ write.
+
+    ASE ``extxyz`` builds ``move_mask`` from ``constraints``; if the first
+    entry is not ``FixAtoms`` / ``FixCartesian`` (e.g. adsorbate
+    ``FixBondLengths``), it assigns the constraint list and crashes on
+    ``.dtype``. Constraints are not encoded in XYZ anyway — SCGO persists
+    them via ``fix_*_json`` — so this copy clears them, detaches the
+    calculator, and drops the ASE ``tags`` array.
+    """
+    out = atoms.copy()
+    out.calc = None
+    if "tags" in out.arrays:
+        del out.arrays["tags"]
+    out.set_constraint([])
+    return out
+
+
 def extract_energy_from_atoms(atoms: Atoms) -> float | None:
     """Extract energy from atoms object, handling various formats.
 

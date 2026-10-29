@@ -69,7 +69,11 @@ from scgo.utils.comparators import (
     get_shared_mobile_atom_indices,
 )
 from scgo.utils.cuda import is_cuda_oom_error
-from scgo.utils.helpers import copy_atoms, extract_energy_from_atoms
+from scgo.utils.helpers import (
+    copy_atoms,
+    extract_energy_from_atoms,
+    prepare_atoms_for_xyz_export,
+)
 from scgo.utils.logging import (
     get_logger,
     log_debug_v,
@@ -3196,9 +3200,8 @@ def save_neb_result(
     os.makedirs(output_dir, exist_ok=True)
 
     if result["status"] == "success" and result["transition_state"] is not None:
-        _detach_calc(result["transition_state"])
         ts_path = os.path.join(output_dir, f"ts_{pair_id}.xyz")
-        write(ts_path, result["transition_state"])
+        write(ts_path, prepare_atoms_for_xyz_export(result["transition_state"]))
         log_debug_v(
             logger,
             "Saved TS structure to %s",
@@ -3212,10 +3215,8 @@ def save_neb_result(
     ):
         atoms = result.get(key)
         if atoms is not None:
-            ep = atoms.copy()
-            _detach_calc(ep)
             ep_path = os.path.join(output_dir, f"{label}_{pair_id}.xyz")
-            write(ep_path, ep)
+            write(ep_path, prepare_atoms_for_xyz_export(atoms))
             log_debug_v(
                 logger,
                 "Saved %s endpoint structure to %s",

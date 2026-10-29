@@ -35,7 +35,11 @@ from scgo.surface.validation import (
 )
 from scgo.ts_search.ts_statistics import compute_ts_statistics
 from scgo.utils.comparators import ComparatorBlocks, PureInteratomicDistanceComparator
-from scgo.utils.helpers import get_cluster_formula, validate_pair_id
+from scgo.utils.helpers import (
+    get_cluster_formula,
+    prepare_atoms_for_xyz_export,
+    validate_pair_id,
+)
 from scgo.utils.logging import get_logger
 
 from .transition_state import (
@@ -974,18 +978,15 @@ def write_final_unique_ts(
 
         rank += 1
         atoms_clean = atoms.copy()
-        atoms_clean.calc = None
         if not surface_aware:
             atoms_clean.center()
-        if "tags" in atoms_clean.arrays:
-            del atoms_clean.arrays["tags"]
 
         if len(connected_edges) > 1:
             filename = f"{formula}_ts_{rank:02d}.xyz"
         else:
             filename = f"{formula}_ts_{rank:02d}_pair_{first_edge['pair_id']}.xyz"
         filepath = os.path.join(final_dir, filename)
-        ase_write(filepath, atoms_clean)
+        ase_write(filepath, prepare_atoms_for_xyz_export(atoms_clean))
 
         item: dict[str, Any] = {
             "pair_id": pair_id,
