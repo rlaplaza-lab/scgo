@@ -50,7 +50,7 @@ def _emt_ts_params(*, system_type: str, surface_config=None) -> dict:
 
 def test_copy_params_isolates_optimizer_slots() -> None:
     class _NonCopyable:
-        def __deepcopy__(self, memo):
+        def __deepcopy__(self, _memo):
             raise RuntimeError("deepcopy should not clone the relaxer")
 
     relaxer = _NonCopyable()

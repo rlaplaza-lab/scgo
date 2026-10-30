@@ -24,7 +24,7 @@ class FakeDC:
         self._cands = candidates
         self.already_returned: set = set()
 
-    def get_all_relaxed_candidates(self, only_new=False, use_extinct=False):
+    def get_all_relaxed_candidates(self, **_kwargs):
         return list(self._cands)
 
     def get_participation_in_pairing(self):

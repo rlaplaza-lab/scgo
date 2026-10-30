@@ -463,7 +463,7 @@ def test_is_true_minimum_no_moments_of_inertia_for_periodic(tmp_path, monkeypatc
 
     moi_calls = {"n": 0}
 
-    def _moi(self, vectors=False):  # noqa: ARG001
+    def _moi(self, **_kwargs):
         moi_calls["n"] += 1
         return np.array([1.0, 1.0, 1.0])
 

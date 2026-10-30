@@ -1313,11 +1313,11 @@ class TestSeedGrowthFallbackChain:
 
         def fake_sample(
             candidates,
-            strategy,
-            tried_positions,
-            existing_geometries,
-            rng,
-            max_attempts=10,
+            _strategy,
+            _tried_positions,
+            _existing_geometries,
+            _rng,
+            _max_attempts=10,
         ):
             # First formula succeeds; second fails → previously caused a partial combine.
             if len(candidates) == 1 and len(candidates[0][1]) == 2:

@@ -1016,10 +1016,7 @@ def test_select_structure_pairs_physics_ranking_when_capped(monkeypatch):
     def _fake_similarity(
         a_i: Atoms,
         a_j: Atoms,
-        tolerance: float = 0.1,
-        pair_cor_max: float = 0.1,
-        use_mic: bool = False,
-        **kwargs: object,
+        **_kwargs: object,
     ) -> tuple[float, float, bool]:
         pair = tuple(
             sorted(
@@ -1083,10 +1080,7 @@ def test_select_structure_pairs_max_endpoint_mismatch_hard_gate(monkeypatch):
     def _fake_similarity(
         a_i: Atoms,
         a_j: Atoms,
-        tolerance: float = 0.1,
-        pair_cor_max: float = 0.1,
-        use_mic: bool = False,
-        **kwargs: object,
+        **_kwargs: object,
     ) -> tuple[float, float, bool]:
         xi = float(a_i.get_positions()[0, 0])
         xj = float(a_j.get_positions()[0, 0])
@@ -2021,7 +2015,7 @@ def test_serial_neb_shared_calculator_fallback_reaches_neb(
     from unittest.mock import patch
 
     class _NoDeepcopyEMT(EMT):
-        def __deepcopy__(self, memo):
+        def __deepcopy__(self, _memo):
             raise TypeError("this calculator cannot be deep-copied")
 
     reactant = cu3_triangle.copy()
@@ -2064,7 +2058,7 @@ def test_idpp_priority_screen_forwards_clash_distance(
 
     captured: dict[str, object] = {}
 
-    def _spy_validate(images, *, n_slab, mic, max_endpoint_mismatch, clash_distance):
+    def _spy_validate(images, *, clash_distance, **_unused):
         captured["clash_distance"] = clash_distance
         return None
 

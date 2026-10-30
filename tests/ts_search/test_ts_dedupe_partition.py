@@ -42,7 +42,7 @@ def _capture_pairing_minima(
     """Stub minima loading; capture the deduped minima reaching pair selection."""
     captured: dict[str, Any] = {}
 
-    def _fake_load(_minima_dir, composition, prefer_final_unique=True):
+    def _fake_load(_minima_dir, composition, **_kwargs):
         captured["loaded_composition"] = list(composition)
         return dict(minima_by_formula)
 

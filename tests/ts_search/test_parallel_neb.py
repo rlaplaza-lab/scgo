@@ -1070,7 +1070,7 @@ def test_parallel_neb_never_passes_forces_to_step(cu3_triangle, cu3_linear):
     class _RecordingOptimizer:
         instances: list[_RecordingOptimizer] = []
 
-        def __init__(self, neb, logfile=None, trajectory=None):
+        def __init__(self, neb, **_kwargs):
             self.neb = neb
             self.step_args: list[tuple] = []
             _RecordingOptimizer.instances.append(self)

@@ -27,7 +27,7 @@ def _stub_ts_pipeline(
     """Stub minima loading/pairing; capture the NebRunConfig reaching NEB."""
     captured: dict[str, Any] = {}
 
-    def _fake_load(_minima_dir, composition, prefer_final_unique=True):
+    def _fake_load(_minima_dir, _composition, **_kwargs):
         return dict(minima_by_formula)
 
     def _fake_select_pairs(_minima, **_kwargs):

@@ -329,9 +329,7 @@ def test_run_transition_state_search_skips_tagging_when_no_db(
     from scgo.ts_search.transition_state_run import run_transition_state_search
 
     # Fake minima loader: two minima with provenance that reference a missing DB
-    def fake_load_minima_by_composition(
-        _ts_output_dir, composition, prefer_final_unique: bool = False
-    ):
+    def fake_load_minima_by_composition(_ts_output_dir, _composition, **_kwargs):
         a = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2]])
         a.info.setdefault("key_value_pairs", {})["source_db"] = "missing.db"
         return {"Pt2": [(0.0, a.copy()), (0.1, a.copy())]}
@@ -432,7 +430,7 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
 
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
-        lambda _ts_output_dir, composition, prefer_final_unique: {
+        lambda _ts_output_dir, _composition, **_kwargs: {
             "Pt2": [(0.0, a.copy()), (0.1, b.copy())]
         },
     )
@@ -530,7 +528,7 @@ def test_run_transition_state_search_resolves_neb_steps_auto(monkeypatch):
     # Fake minima loader and pair selection
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
-        lambda _ts_output_dir, composition, prefer_final_unique: {
+        lambda _ts_output_dir, _composition, **_kwargs: {
             "Pt3": [(0.0, Atoms("Pt3")), (0.1, Atoms("Pt3"))]
         },
     )
@@ -590,7 +588,7 @@ def test_run_transition_state_search_resolves_torchsim_maxsteps_auto(monkeypatch
     )
     monkeypatch.setattr(
         "scgo.ts_search.transition_state_run.load_minima_by_composition",
-        lambda _ts_output_dir, composition, prefer_final_unique: {
+        lambda _ts_output_dir, _composition, **_kwargs: {
             "Pt4": [(0.0, Atoms("Pt4")), (0.1, Atoms("Pt4"))]
         },
     )
