@@ -305,6 +305,10 @@ def test_inductor_filelock_events_suppressed_and_summarized(capfd):
     from scgo.utils.logging import drain_inductor_filelock_summary
 
     configure_logging(2)
+    # Drop leftover TorchInductor lock events from earlier tests (xdist workers).
+    drain_inductor_filelock_summary(get_logger("test.inductor_filelock.preclear"))
+    capfd.readouterr()
+
     filelock_logger = logging.getLogger("filelock")
     lock_path = "/tmp/torchinductor_test/locks/abc.lock"
     for msg in (

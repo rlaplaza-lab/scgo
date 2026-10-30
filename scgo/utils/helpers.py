@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import re
@@ -285,6 +286,18 @@ def copy_atoms(atoms: Atoms) -> Atoms:
     return out
 
 
+def _extxyz_info_value_serializable(value: object) -> bool:
+    """True if ASE ``extxyz`` can JSON-encode ``value`` (after ndarray→list)."""
+    candidate: object = value
+    if isinstance(candidate, np.ndarray):
+        candidate = candidate.tolist()
+    try:
+        json.dumps(candidate)
+    except TypeError:
+        return False
+    return True
+
+
 def prepare_atoms_for_xyz_export(atoms: Atoms) -> Atoms:
     """Return a copy safe for ASE extended-XYZ write.
 
@@ -294,12 +307,19 @@ def prepare_atoms_for_xyz_export(atoms: Atoms) -> Atoms:
     ``.dtype``. Constraints are not encoded in XYZ anyway — SCGO persists
     them via ``fix_*_json`` — so this copy clears them, detaches the
     calculator, and drops the ASE ``tags`` array.
+
+    Also drops ``atoms.info`` entries ASE cannot serialize (notably surface
+    builder ``adsorbate_info`` with ndarray site metadata), which otherwise
+    emit ``Skipping unhashable information`` warnings on write.
     """
     out = atoms.copy()
     out.calc = None
     if "tags" in out.arrays:
         del out.arrays["tags"]
     out.set_constraint([])
+    for key, value in list(out.info.items()):
+        if not _extxyz_info_value_serializable(value):
+            del out.info[key]
     return out
 
 

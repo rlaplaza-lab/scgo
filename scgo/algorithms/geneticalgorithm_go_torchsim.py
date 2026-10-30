@@ -12,7 +12,7 @@ import math
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
@@ -48,6 +48,13 @@ from scgo.algorithms.ga_common import (
     update_mutation_weights,
     validate_ga_common_params,
     validate_structure_for_ga_storage,
+)
+from scgo.algorithms.ga_cpu_gpu_pipeline import (
+    GpuRelaxResult,
+    GpuRelaxWorker,
+    relaxer_supports_cpu_gpu_pipeline,
+    resolve_pipeline_chunk,
+    run_double_buffered_with_worker,
 )
 from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.ase_ga_patches.cutandsplicepairing import (
@@ -758,13 +765,38 @@ def _credit_unique_operators(
             bucket["unique"] += 1
 
 
-def _relax_unrelaxed_candidates(
+def _prepare_candidates_for_relax(
+    batch: list[Atoms],
+    *,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
+    n_slab: int,
+    freeze_adsorbate_internal_geometry: bool,
+    adsorbate_definition: AdsorbateDefinition | None,
+    adsorbate_fragment_templates: AdsorbateFragmentInput | None,
+) -> list[Atoms]:
+    """Map DB-linked candidates to frames ready for ``relaxer.relax_batch``."""
+    surface_mode = uses_surface(system_type)
+    return [
+        prepare_atoms_for_local_relax(
+            cand,
+            surface_mode=surface_mode,
+            surface_config=surface_config,
+            n_slab=n_slab,
+            freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+            adsorbate_definition=adsorbate_definition,
+            adsorbate_fragment_templates=adsorbate_fragment_templates,
+        )
+        for cand in batch
+    ]
+
+
+def _commit_relaxed_batch(
     da: DataConnection,
-    relaxer: TorchSimBatchRelaxer,
+    batch: list[Atoms],
+    relaxed_results: list[tuple[float, Atoms]],
     *,
     population: Population | None = None,
-    max_batch: int | None = None,
-    force: bool = False,
     generation: int | None = None,
     run_id: str | None = None,
     surface_config: SurfaceSystemConfig | None = None,
@@ -772,7 +804,6 @@ def _relax_unrelaxed_candidates(
     n_frozen_prefix: int = 0,
     system_type: SystemType = "gas_cluster",
     profiling: dict[str, float] | None = None,
-    counters: dict[str, int] | None = None,
     composition: list[str] | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     connectivity_factor: ConnectivityFactorInput
@@ -786,64 +817,22 @@ def _relax_unrelaxed_candidates(
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
     operator_credit: dict[str, dict[str, int]] | None = None,
 ) -> tuple[int, int, dict[str, int]]:
-    """Relax unrelaxed candidates in batches and commit them to the database.
+    """Write relaxed results to the DB and optionally update the population.
 
-    Returns:
-        Tuple of (GA-eligible count, ineligible count, compact ineligible
-        reason counts) for this relax call.
+    Must run on the main (SQLite-owning) thread. Structures that fail validation
+    are persisted but marked ineligible for GA evolution.
     """
-    # Avoid a separate get_number_of_unrelaxed_candidates call (three blob selects);
-    # _read_candidate_batch does the same three selects metadata-only.
-    batch_cap: int | None = None if (force or max_batch is None) else max_batch
-
-    # Batch read candidates under a single database connection
-    t0 = perf_counter()
-    batch = database_retry(
-        lambda: _read_candidate_batch(da, batch_cap),
-        config=PRESET_HPC,
-        operation_name="read_candidate_batch",
-    )
-    if profiling is not None:
-        profiling["db_read_s"] = profiling.get("db_read_s", 0.0) + (perf_counter() - t0)
-
-    if not batch:
-        return (0, 0, {})
-
-    t0 = perf_counter()
-    surface_mode = uses_surface(system_type)
-    relaxed_results = relaxer.relax_batch(
-        [
-            prepare_atoms_for_local_relax(
-                cand,
-                surface_mode=surface_mode,
-                surface_config=surface_config,
-                n_slab=n_slab,
-                freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
-                adsorbate_definition=adsorbate_definition,
-                adsorbate_fragment_templates=adsorbate_fragment_templates,
-            )
-            for cand in batch
-        ]
-    )
-    if profiling is not None:
-        profiling["relax_batch_s"] = profiling.get("relax_batch_s", 0.0) + (
-            perf_counter() - t0
-        )
-    _record_relax_batch_steps(relaxer, profiling, counters, len(batch))
     if len(relaxed_results) != len(batch):
         raise SCGORuntimeError("TorchSim relaxer returned mismatched batch size")
 
-    # Batch write results under a single database connection.
-    # Structures failing validation are persisted but marked ineligible for GA
-    # evolution. Reset counters each retry so a mid-batch SQLite rollback does
-    # not double-count.
+    surface_mode = uses_surface(system_type)
     successful_count = 0
     ineligible_count = 0
     ineligible_reasons: dict[str, int] = {}
     eligible_relaxed: list[Atoms] = []
     relaxed_operator_names: list[str] = []
 
-    def _write_batch_under_connection():
+    def _write_batch_under_connection() -> None:
         """Write relaxed results under a single connection."""
         nonlocal \
             ineligible_count, \
@@ -934,6 +923,487 @@ def _relax_unrelaxed_candidates(
             ) + (perf_counter() - t0)
 
     return (successful_count, ineligible_count, ineligible_reasons)
+
+
+def _relax_unrelaxed_candidates(
+    da: DataConnection,
+    relaxer: TorchSimBatchRelaxer,
+    *,
+    population: Population | None = None,
+    max_batch: int | None = None,
+    force: bool = False,
+    generation: int | None = None,
+    run_id: str | None = None,
+    surface_config: SurfaceSystemConfig | None = None,
+    n_slab: int = 0,
+    n_frozen_prefix: int = 0,
+    system_type: SystemType = "gas_cluster",
+    profiling: dict[str, float] | None = None,
+    counters: dict[str, int] | None = None,
+    composition: list[str] | None = None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
+    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
+    allow_cluster_fragmentation: bool = False,
+    allow_adsorbate_surface_detachment: bool = False,
+    enforce_adsorbate_subgraph_integrity: bool = True,
+    freeze_adsorbate_internal_geometry: bool = False,
+    adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
+    operator_credit: dict[str, dict[str, int]] | None = None,
+) -> tuple[int, int, dict[str, int]]:
+    """Relax unrelaxed candidates in batches and commit them to the database.
+
+    Returns:
+        Tuple of (GA-eligible count, ineligible count, compact ineligible
+        reason counts) for this relax call.
+    """
+    # Avoid a separate get_number_of_unrelaxed_candidates call (three blob selects);
+    # _read_candidate_batch does the same three selects metadata-only.
+    batch_cap: int | None = None if (force or max_batch is None) else max_batch
+
+    # Batch read candidates under a single database connection
+    t0 = perf_counter()
+    batch = database_retry(
+        lambda: _read_candidate_batch(da, batch_cap),
+        config=PRESET_HPC,
+        operation_name="read_candidate_batch",
+    )
+    if profiling is not None:
+        profiling["db_read_s"] = profiling.get("db_read_s", 0.0) + (perf_counter() - t0)
+
+    if not batch:
+        return (0, 0, {})
+
+    t0 = perf_counter()
+    prepared = _prepare_candidates_for_relax(
+        batch,
+        system_type=system_type,
+        surface_config=surface_config,
+        n_slab=n_slab,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+        adsorbate_definition=adsorbate_definition,
+        adsorbate_fragment_templates=adsorbate_fragment_templates,
+    )
+    relaxed_results = relaxer.relax_batch(prepared)
+    if profiling is not None:
+        profiling["relax_batch_s"] = profiling.get("relax_batch_s", 0.0) + (
+            perf_counter() - t0
+        )
+    _record_relax_batch_steps(relaxer, profiling, counters, len(batch))
+
+    return _commit_relaxed_batch(
+        da,
+        batch,
+        relaxed_results,
+        population=population,
+        generation=generation,
+        run_id=run_id,
+        surface_config=surface_config,
+        n_slab=n_slab,
+        n_frozen_prefix=n_frozen_prefix,
+        system_type=system_type,
+        profiling=profiling,
+        composition=composition,
+        adsorbate_definition=adsorbate_definition,
+        connectivity_factor=connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+        adsorbate_fragment_templates=adsorbate_fragment_templates,
+        operator_credit=operator_credit,
+    )
+
+
+@dataclass
+class _OffspringWaveState:
+    """Mutable counters shared across offspring waves within one generation."""
+
+    created: int = 0
+    attempts: int = 0
+    max_attempts: int = 0
+    n_offspring: int = 0
+    parents_exhausted: bool = False
+    parent_selection_misses: int = 0
+    max_parent_selection_misses: int = 0
+    t_parent_select_s: float = 0.0
+    t_operator_setup_s: float = 0.0
+    t_crossover_s: float = 0.0
+    t_mutation_s: float = 0.0
+    t_db_unrelaxed_s: float = 0.0
+    t_parallel_wall_s: float = 0.0
+    worker_failure_types: dict[str, int] = field(default_factory=dict)
+    retry_failure_reasons: dict[str, int] = field(default_factory=dict)
+    pairing_cuts: int = 0
+    all_job_results: list[dict[str, Any]] = field(default_factory=list)
+    total_crossover_jobs: int = 0
+
+    @property
+    def production_done(self) -> bool:
+        return (
+            self.created >= self.n_offspring
+            or self.attempts >= self.max_attempts
+            or self.parents_exhausted
+        )
+
+
+def _build_offspring_jobs_for_wave(
+    *,
+    state: _OffspringWaveState,
+    population: Population,
+    offspring_ctx: OffspringBuildContext,
+    rng: np.random.Generator,
+    jobs_target: int,
+    generation: int,
+) -> list[dict[str, Any]]:
+    """Select parents and assemble up to ``jobs_target`` offspring job payloads."""
+    jobs: list[dict[str, Any]] = []
+    for _ in range(jobs_target):
+        t0 = perf_counter()
+        candidates = population.get_two_candidates()
+        state.t_parent_select_s += perf_counter() - t0
+        if candidates is None:
+            state.parent_selection_misses += 1
+            if state.parent_selection_misses >= state.max_parent_selection_misses:
+                logger.warning(
+                    "Generation %s: %d consecutive empty parent "
+                    "selections; ending generation early",
+                    generation,
+                    state.parent_selection_misses,
+                )
+                state.parents_exhausted = True
+                break
+            continue
+        state.parent_selection_misses = 0
+        state.attempts += 1
+        a1, a2 = candidates
+        task_seed = int(rng.integers(0, 2**31 - 1))
+        nfp = offspring_ctx.n_frozen_prefix
+        if nfp > 0:
+            a1_job = _mobile_only_copy(a1, nfp)
+            a2_job = _mobile_only_copy(a2, nfp)
+        else:
+            a1_job = a1.copy()
+            a1_job.calc = None
+            a2_job = a2.copy()
+            a2_job.calc = None
+        unary_fraction = float(
+            offspring_ctx.adaptive_config.get("unary_offspring_fraction", 0.0)
+        )
+        jobs.append(
+            {
+                "index": len(jobs),
+                "a1": a1_job,
+                "a2": a2_job,
+                "mobile_only": nfp > 0,
+                "mutation_only": unary_fraction > 0.0
+                and float(rng.random()) < unary_fraction,
+                "task_seed": task_seed,
+                "operators_epoch": offspring_ctx.operators_epoch,
+                "adaptive_config": offspring_ctx.adaptive_config,
+                "current_mutation_probability": (
+                    offspring_ctx.current_mutation_probability
+                ),
+            }
+        )
+    return jobs
+
+
+def _record_offspring_worker_failure(
+    state: _OffspringWaveState,
+    exc: BaseException,
+    worker_exceptions: list[BaseException],
+) -> None:
+    err_name = type(exc).__name__
+    state.worker_failure_types[err_name] = (
+        state.worker_failure_types.get(err_name, 0) + 1
+    )
+    reason = f"worker_exception_{err_name}"
+    state.retry_failure_reasons[reason] = state.retry_failure_reasons.get(reason, 0) + 1
+    worker_exceptions.append(exc)
+    logger.exception(
+        "Offspring crossover/mutation worker failed (%s)",
+        err_name,
+    )
+
+
+def _execute_offspring_jobs(
+    *,
+    jobs: list[dict[str, Any]],
+    state: _OffspringWaveState,
+    n_jobs_offspring: int,
+    offspring_executor: ProcessPoolExecutor | None,
+    generation: int,
+    profile_counters: dict[str, int],
+) -> dict[int, dict[str, Any]]:
+    """Run offspring jobs in-process or via the ProcessPool; update ``state``."""
+    if not jobs:
+        return {}
+    n_workers = resolve_n_jobs_for_tasks(n_jobs_offspring, len(jobs))
+    t_parallel = perf_counter()
+    job_results: dict[int, dict[str, Any]] = {}
+    worker_exceptions: list[BaseException] = []
+    wave_failures = 0
+
+    def _consume_result(result: dict[str, Any]) -> None:
+        job_results[result["index"]] = result
+
+    def _handle_exc(exc: BaseException) -> None:
+        nonlocal wave_failures
+        wave_failures += 1
+        _record_offspring_worker_failure(state, exc, worker_exceptions)
+
+    if n_workers == 1:
+        for job in jobs:
+            try:
+                _consume_result(_build_offspring_worker(job))
+            except (RuntimeError, ValueError, TypeError) as exc:
+                _handle_exc(exc)
+    else:
+        if offspring_executor is None:
+            raise SCGORuntimeError(
+                "offspring_executor is None but n_jobs_offspring > 1"
+            )
+        futures = [
+            offspring_executor.submit(_build_offspring_worker, job) for job in jobs
+        ]
+        for future in as_completed(futures):
+            try:
+                _consume_result(future.result())
+            except (RuntimeError, ValueError, TypeError) as exc:
+                _handle_exc(exc)
+
+    state.total_crossover_jobs += len(job_results)
+    state.all_job_results.extend(job_results.values())
+    if jobs and not job_results and worker_exceptions:
+        first = worker_exceptions[0]
+        if not all(isinstance(e, ValueError) for e in worker_exceptions):
+            raise SCGORuntimeError(
+                f"All {len(jobs)} parallel offspring workers failed"
+            ) from first
+    state.t_parallel_wall_s += perf_counter() - t_parallel
+    if wave_failures:
+        profile_counters["offspring_worker_failures"] = (
+            profile_counters.get("offspring_worker_failures", 0) + wave_failures
+        )
+        if wave_failures >= max(3, len(jobs) // 2):
+            logger.warning(
+                "Generation %s offspring worker failures: %d/%d (%s)",
+                generation,
+                wave_failures,
+                len(jobs),
+                state.worker_failure_types,
+            )
+    return job_results
+
+
+def _collect_successful_children_from_jobs(
+    *,
+    jobs: list[dict[str, Any]],
+    job_results: dict[int, dict[str, Any]],
+    state: _OffspringWaveState,
+) -> list[tuple[Atoms, str]]:
+    """Accumulate timing and return ``(child, desc)`` pairs up to ``n_offspring``."""
+    pending_inserts: list[tuple[Atoms, str]] = []
+    for idx in range(len(jobs)):
+        if state.created + len(pending_inserts) >= state.n_offspring:
+            break
+        result = job_results.get(idx)
+        if result is None:
+            continue
+        state.t_operator_setup_s += float(result["operator_setup_s"])
+        state.t_crossover_s += float(result["crossover_s"])
+        state.t_mutation_s += float(result["mutation_s"])
+        state.pairing_cuts += int(result.get("pairing_attempt_count", 0))
+        child = result["child"]
+        if child is None:
+            reason = result.get("failure_reason") or "unknown"
+            state.retry_failure_reasons[reason] = (
+                state.retry_failure_reasons.get(reason, 0) + 1
+            )
+            continue
+        operator_name = result.get("mutation_operator")
+        if operator_name:
+            set_tags(child, mutation_operator=str(operator_name))
+        pending_inserts.append((child, result["desc"]))
+    return pending_inserts
+
+
+def _insert_unrelaxed_offspring(
+    da: DataConnection,
+    pending_inserts: list[tuple[Atoms, str]],
+    state: _OffspringWaveState,
+) -> list[Atoms]:
+    """Insert successful children as unrelaxed candidates; return DB-linked atoms."""
+    if not pending_inserts:
+        return []
+    inserted: list[Atoms] = []
+    t0 = perf_counter()
+    with da.c:
+        for child, desc in pending_inserts:
+            if state.created >= state.n_offspring:
+                break
+            database_retry(
+                lambda _a3=child, _desc=desc: (
+                    da.add_unrelaxed_candidate(_a3, description=_desc)
+                ),
+                config=PRESET_HPC,
+                operation_name="add_unrelaxed_offspring",
+            )
+            state.created += 1
+            inserted.append(child)
+    state.t_db_unrelaxed_s += perf_counter() - t0
+    return inserted
+
+
+def _run_offspring_wave(
+    *,
+    state: _OffspringWaveState,
+    population: Population,
+    offspring_ctx: OffspringBuildContext,
+    rng: np.random.Generator,
+    da: DataConnection,
+    n_jobs_offspring: int,
+    offspring_executor: ProcessPoolExecutor | None,
+    generation: int,
+    profile_counters: dict[str, int],
+    wave_target: int,
+) -> list[Atoms]:
+    """Build, filter, and insert one wave of offspring; return inserted atoms.
+
+    Continues submitting job batches until ``wave_target`` successes are
+    inserted, production limits are hit, or a job batch yields no parents.
+    """
+    inserted_total: list[Atoms] = []
+    while len(inserted_total) < wave_target and not state.production_done:
+        need = wave_target - len(inserted_total)
+        attempts_remaining = state.max_attempts - state.attempts
+        if attempts_remaining <= 0:
+            break
+        jobs_target = min(need, attempts_remaining, state.n_offspring - state.created)
+        if jobs_target <= 0:
+            break
+        jobs = _build_offspring_jobs_for_wave(
+            state=state,
+            population=population,
+            offspring_ctx=offspring_ctx,
+            rng=rng,
+            jobs_target=jobs_target,
+            generation=generation,
+        )
+        if not jobs:
+            if state.parents_exhausted or state.production_done:
+                break
+            if state.parent_selection_misses > 0:
+                continue
+            break
+        job_results = _execute_offspring_jobs(
+            jobs=jobs,
+            state=state,
+            n_jobs_offspring=n_jobs_offspring,
+            offspring_executor=offspring_executor,
+            generation=generation,
+            profile_counters=profile_counters,
+        )
+        pending = _collect_successful_children_from_jobs(
+            jobs=jobs,
+            job_results=job_results,
+            state=state,
+        )
+        remaining = min(
+            wave_target - len(inserted_total),
+            state.n_offspring - state.created,
+        )
+        inserted = _insert_unrelaxed_offspring(da, pending[:remaining], state)
+        inserted_total.extend(inserted)
+        if not pending and not job_results:
+            break
+    return inserted_total
+
+
+@dataclass
+class _PipelineGenerationHooks:
+    """Bound callbacks for :func:`run_double_buffered_with_worker`."""
+
+    wave_state: _OffspringWaveState
+    population: Population
+    offspring_ctx: OffspringBuildContext
+    rng: np.random.Generator
+    da: DataConnection
+    n_jobs_offspring: int
+    offspring_executor: ProcessPoolExecutor | None
+    generation: int
+    profile_counters: dict[str, int]
+    wave_target: int
+    relaxer: Any
+    profile_timings: dict[str, float]
+    commit_kwargs: dict[str, Any]
+    eligible_count: int = 0
+    ineligible_count: int = 0
+    ineligible_reasons: dict[str, int] = field(default_factory=dict)
+
+    def produce(self) -> list[Atoms] | None:
+        state = self.wave_state
+        if state.production_done:
+            return None
+        before_attempts = state.attempts
+        before_created = state.created
+        inserted = _run_offspring_wave(
+            state=state,
+            population=self.population,
+            offspring_ctx=self.offspring_ctx,
+            rng=self.rng,
+            da=self.da,
+            n_jobs_offspring=self.n_jobs_offspring,
+            offspring_executor=self.offspring_executor,
+            generation=self.generation,
+            profile_counters=self.profile_counters,
+            wave_target=self.wave_target,
+        )
+        if inserted:
+            return inserted
+        if state.production_done:
+            return None
+        if state.attempts == before_attempts and state.created == before_created:
+            return None
+        return []
+
+    def prepare(self, batch: list[Atoms]) -> list[Atoms]:
+        kw = self.commit_kwargs
+        return _prepare_candidates_for_relax(
+            batch,
+            system_type=kw["system_type"],
+            surface_config=kw["surface_config"],
+            n_slab=kw["n_slab"],
+            freeze_adsorbate_internal_geometry=kw["freeze_adsorbate_internal_geometry"],
+            adsorbate_definition=kw["adsorbate_definition"],
+            adsorbate_fragment_templates=kw["adsorbate_fragment_templates"],
+        )
+
+    def commit(self, result: GpuRelaxResult) -> None:
+        _record_relax_batch_steps(
+            self.relaxer,
+            self.profile_timings,
+            self.profile_counters,
+            len(result.originals),
+        )
+        ok, bad, reasons = _commit_relaxed_batch(
+            self.da,
+            result.originals,
+            result.relaxed_results,
+            profiling=self.profile_timings,
+            generation=self.generation,
+            **self.commit_kwargs,
+        )
+        self.eligible_count += ok
+        self.ineligible_count += bad
+        for reason, count in reasons.items():
+            self.ineligible_reasons[reason] = (
+                self.ineligible_reasons.get(reason, 0) + count
+            )
 
 
 def ga_go(
@@ -1654,6 +2124,16 @@ def ga_go(
         # Workers reload their pairing/operator state per generation via
         # `_build_offspring_worker` (keyed on `operators_epoch`), so reuse is
         # correctness-preserving.
+        use_pipeline = (
+            relaxer_supports_cpu_gpu_pipeline(relaxer) and batch_size is not None
+        )
+        if use_pipeline:
+            log_info_v(
+                logger,
+                "CPU/GPU offspring pipeline enabled (batch_size=%d)",
+                batch_size,
+                verbosity=verbosity,
+            )
 
         for generation in tqdm(
             range(niter),
@@ -1687,11 +2167,7 @@ def ga_go(
                 operator_credit
             )
 
-            # Create up to `n_offspring` unrelaxed candidates for this generation;
-            # TorchSim will handle batching/relaxation later.
             n_offspring = max(1, math.ceil(population_size * offspring_fraction))
-            created = 0
-            attempts = 0
             max_attempts = max(10, n_offspring * 10)
             if ga_adaptive_retry_enabled:
                 recent_ratio = (
@@ -1708,18 +2184,12 @@ def ga_go(
                 max_attempts = max(floor_attempts, min(estimated_needed, ceil_attempts))
 
             t_loop = perf_counter()
-            t_parent_select_gen = 0.0
-            t_operator_setup_gen = 0.0
-            t_crossover_gen = 0.0
-            t_mutation_gen = 0.0
-            t_db_unrelaxed_gen = 0.0
-            t_offspring_parallel_wall_gen = 0.0
-            worker_failures_gen = 0
-            worker_failure_types_gen: dict[str, int] = {}
-            retry_failure_reasons_gen: dict[str, int] = {}
-            pairing_cuts_gen = 0
-            generation_all_job_results: list[dict[str, Any]] = []
-            total_crossover_jobs_gen = 0
+            wave_state = _OffspringWaveState(
+                max_attempts=max_attempts,
+                n_offspring=n_offspring,
+                max_parent_selection_misses=max(20, 2 * n_offspring),
+            )
+            pipeline_chunk = resolve_pipeline_chunk(n_offspring, batch_size)
 
             log_phase_subheader(
                 logger,
@@ -1773,205 +2243,125 @@ def ga_go(
             # ``_build_offspring_worker`` here rather than in a pool worker.
             _ensure_offspring_worker_state(offspring_ctx)
 
+            pre_db_read = float(profile_timings.get("db_read_s", 0.0))
+            pre_relax = float(profile_timings.get("relax_batch_s", 0.0))
+            pre_db_write = float(profile_timings.get("db_write_s", 0.0))
+            pre_pop_update = float(profile_timings.get("population_update_s", 0.0))
+            relax_commit_kwargs: dict[str, Any] = {
+                "population": population,
+                "run_id": run_id,
+                "surface_config": surface_config,
+                "n_slab": n_slab,
+                "n_frozen_prefix": n_fixed,
+                "system_type": system_type,
+                "composition": composition,
+                "adsorbate_definition": adsorbate_definition,
+                "connectivity_factor": connectivity_factor,
+                "cluster_adsorbate_config": cluster_adsorbate_config,
+                "allow_cluster_fragmentation": allow_cluster_fragmentation,
+                "allow_adsorbate_surface_detachment": (
+                    allow_adsorbate_surface_detachment
+                ),
+                "enforce_adsorbate_subgraph_integrity": (
+                    enforce_adsorbate_subgraph_integrity
+                ),
+                "freeze_adsorbate_internal_geometry": (
+                    freeze_adsorbate_internal_geometry
+                ),
+                "adsorbate_fragment_templates": adsorbate_fragment_template,
+                "operator_credit": operator_credit,
+            }
+            eligible_count = 0
+            ineligible_count = 0
+            ineligible_reasons: dict[str, int] = {}
+            relax_call_wall_s = 0.0
+            gen_pipeline_overlapped_s = 0.0
+
             try:
-                parents_exhausted = False
-                parent_selection_misses = 0
-                max_parent_selection_misses = max(20, 2 * n_offspring)
-                while (
-                    created < n_offspring
-                    and attempts < max_attempts
-                    and not parents_exhausted
-                ):
-                    attempts_remaining = max_attempts - attempts
-                    if attempts_remaining <= 0:
-                        break
-                    jobs_target = min(n_offspring - created, attempts_remaining)
-                    jobs: list[dict[str, Any]] = []
-                    for _ in range(jobs_target):
-                        t0 = perf_counter()
-                        candidates = population.get_two_candidates()
-                        t_parent_select_gen += perf_counter() - t0
-                        if candidates is None:
-                            # Empty selections consume no adaptive attempt
-                            # budget; a sustained run of them means the
-                            # population cannot supply parents at all.
-                            parent_selection_misses += 1
-                            if parent_selection_misses >= max_parent_selection_misses:
-                                logger.warning(
-                                    "Generation %s: %d consecutive empty parent "
-                                    "selections; ending generation early",
-                                    generation,
-                                    parent_selection_misses,
-                                )
-                                parents_exhausted = True
-                                break
-                            continue
-                        parent_selection_misses = 0
-                        attempts += 1
-                        a1, a2 = candidates
-                        task_seed = int(rng.integers(0, 2**31 - 1))
-                        _nfp = offspring_ctx.n_frozen_prefix
-                        if _nfp > 0:
-                            _a1 = _mobile_only_copy(a1, _nfp)
-                            _a2 = _mobile_only_copy(a2, _nfp)
-                        else:
-                            _a1 = a1.copy()
-                            _a1.calc = None
-                            _a2 = a2.copy()
-                            _a2.calc = None
-                        unary_fraction = float(
-                            offspring_ctx.adaptive_config.get(
-                                "unary_offspring_fraction", 0.0
-                            )
+                if use_pipeline:
+                    hooks = _PipelineGenerationHooks(
+                        wave_state=wave_state,
+                        population=population,
+                        offspring_ctx=offspring_ctx,
+                        rng=rng,
+                        da=da,
+                        n_jobs_offspring=n_jobs_offspring,
+                        offspring_executor=offspring_executor,
+                        generation=generation,
+                        profile_counters=profile_counters,
+                        wave_target=pipeline_chunk,
+                        relaxer=relaxer,
+                        profile_timings=profile_timings,
+                        commit_kwargs=relax_commit_kwargs,
+                    )
+                    t0_relax_call = perf_counter()
+                    pipe_timings = run_double_buffered_with_worker(
+                        worker=GpuRelaxWorker(relaxer),
+                        produce_wave=hooks.produce,
+                        prepare_batch=hooks.prepare,
+                        commit_result=hooks.commit,
+                    )
+                    relax_call_wall_s = perf_counter() - t0_relax_call
+                    eligible_count = hooks.eligible_count
+                    ineligible_count = hooks.ineligible_count
+                    ineligible_reasons = hooks.ineligible_reasons
+                    profile_timings["relax_batch_s"] = profile_timings.get(
+                        "relax_batch_s", 0.0
+                    ) + float(pipe_timings["relax_s"])
+                    gen_pipeline_overlapped_s = float(pipe_timings["overlapped_s"])
+                    profile_timings["pipeline_overlapped_s"] = (
+                        profile_timings.get("pipeline_overlapped_s", 0.0)
+                        + gen_pipeline_overlapped_s
+                    )
+                else:
+                    _run_offspring_wave(
+                        state=wave_state,
+                        population=population,
+                        offspring_ctx=offspring_ctx,
+                        rng=rng,
+                        da=da,
+                        n_jobs_offspring=n_jobs_offspring,
+                        offspring_executor=offspring_executor,
+                        generation=generation,
+                        profile_counters=profile_counters,
+                        wave_target=n_offspring,
+                    )
+                    # ``batch_size is None`` → feed the full population so one
+                    # relax_batch keeps the InFlight reservoir full.
+                    per_gen_max = (
+                        batch_size
+                        if batch_size is not None
+                        else max(n_offspring, population_size)
+                    )
+                    t0_relax_call = perf_counter()
+                    eligible_count, ineligible_count, ineligible_reasons = (
+                        _relax_unrelaxed_candidates(
+                            da,
+                            relaxer,
+                            max_batch=per_gen_max,
+                            generation=generation,
+                            profiling=profile_timings,
+                            counters=profile_counters,
+                            **relax_commit_kwargs,
                         )
-                        jobs.append(
-                            {
-                                "index": len(jobs),
-                                "a1": _a1,
-                                "a2": _a2,
-                                "mobile_only": _nfp > 0,
-                                "mutation_only": unary_fraction > 0.0
-                                and float(rng.random()) < unary_fraction,
-                                "task_seed": task_seed,
-                                "operators_epoch": offspring_ctx.operators_epoch,
-                                "adaptive_config": offspring_ctx.adaptive_config,
-                                "current_mutation_probability": (
-                                    offspring_ctx.current_mutation_probability
-                                ),
-                            }
-                        )
-                    if not jobs:
-                        continue
-
-                    n_workers = resolve_n_jobs_for_tasks(n_jobs_offspring, len(jobs))
-
-                    t_parallel = perf_counter()
-                    job_results: dict[int, dict[str, Any]] = {}
-                    worker_exceptions: list[BaseException] = []
-                    if n_workers == 1:
-                        for job in jobs:
-                            try:
-                                result = _build_offspring_worker(job)
-                            except (RuntimeError, ValueError, TypeError) as exc:
-                                worker_failures_gen += 1
-                                err_name = type(exc).__name__
-                                worker_failure_types_gen[err_name] = (
-                                    worker_failure_types_gen.get(err_name, 0) + 1
-                                )
-                                reason = f"worker_exception_{err_name}"
-                                retry_failure_reasons_gen[reason] = (
-                                    retry_failure_reasons_gen.get(reason, 0) + 1
-                                )
-                                worker_exceptions.append(exc)
-                                logger.exception(
-                                    "Offspring crossover/mutation worker failed (%s)",
-                                    err_name,
-                                )
-                                continue
-                            job_results[result["index"]] = result
-                    else:
-                        if offspring_executor is None:
-                            raise SCGORuntimeError(
-                                "offspring_executor is None but n_jobs_offspring > 1"
-                            )
-                        futures = [
-                            offspring_executor.submit(_build_offspring_worker, job)
-                            for job in jobs
-                        ]
-                        for future in as_completed(futures):
-                            try:
-                                result = future.result()
-                            except (RuntimeError, ValueError, TypeError) as exc:
-                                worker_failures_gen += 1
-                                err_name = type(exc).__name__
-                                worker_failure_types_gen[err_name] = (
-                                    worker_failure_types_gen.get(err_name, 0) + 1
-                                )
-                                reason = f"worker_exception_{err_name}"
-                                retry_failure_reasons_gen[reason] = (
-                                    retry_failure_reasons_gen.get(reason, 0) + 1
-                                )
-                                worker_exceptions.append(exc)
-                                logger.exception(
-                                    "Offspring crossover/mutation worker failed (%s)",
-                                    err_name,
-                                )
-                                continue
-                            job_results[result["index"]] = result
-                    total_crossover_jobs_gen += len(job_results)
-                    generation_all_job_results.extend(job_results.values())
-                    if len(jobs) > 0 and len(job_results) == 0 and worker_exceptions:
-                        first = worker_exceptions[0]
-                        if not all(
-                            isinstance(e, ValueError) for e in worker_exceptions
-                        ):
-                            raise SCGORuntimeError(
-                                f"All {len(jobs)} parallel offspring workers failed"
-                            ) from first
-                    t_offspring_parallel_wall_gen += perf_counter() - t_parallel
-                    if worker_failures_gen:
-                        profile_counters["offspring_worker_failures"] += (
-                            worker_failures_gen
-                        )
-                        failure_limit = max(3, len(jobs) // 2)
-                        if worker_failures_gen >= failure_limit:
-                            logger.warning(
-                                "Generation %s offspring worker failures: %d/%d (%s)",
-                                generation,
-                                worker_failures_gen,
-                                len(jobs),
-                                worker_failure_types_gen,
-                            )
-
-                    pending_inserts: list[tuple[Atoms, str]] = []
-                    for idx in range(len(jobs)):
-                        if created >= n_offspring:
-                            break
-                        result = job_results.get(idx)
-                        if result is None:
-                            continue
-                        t_operator_setup_gen += float(result["operator_setup_s"])
-                        t_crossover_gen += float(result["crossover_s"])
-                        t_mutation_gen += float(result["mutation_s"])
-                        pairing_cuts_gen += int(result.get("pairing_attempt_count", 0))
-                        child = result["child"]
-                        if child is None:
-                            reason = result.get("failure_reason") or "unknown"
-                            retry_failure_reasons_gen[reason] = (
-                                retry_failure_reasons_gen.get(reason, 0) + 1
-                            )
-                            continue
-                        operator_name = result.get("mutation_operator")
-                        if operator_name:
-                            set_tags(child, mutation_operator=str(operator_name))
-                        pending_inserts.append((child, result["desc"]))
-                    if pending_inserts:
-                        t0 = perf_counter()
-                        with da.c:
-                            for child, desc in pending_inserts:
-                                database_retry(
-                                    lambda _a3=child, _desc=desc: (
-                                        da.add_unrelaxed_candidate(
-                                            _a3, description=_desc
-                                        )
-                                    ),
-                                    config=PRESET_HPC,
-                                    operation_name="add_unrelaxed_offspring",
-                                )
-                                created += 1
-                        t_db_unrelaxed_gen += perf_counter() - t0
+                    )
+                    relax_call_wall_s = perf_counter() - t0_relax_call
             finally:
-                # The pool is reused across generations; only clear the cached
-                # worker state. Shutdown happens once after the generational loop.
+                # Pool reused across generations; clear cached worker state only.
                 _OFFSPRING_WORKER_STATE.clear()
 
+            created = wave_state.created
+            attempts = wave_state.attempts
+            generation_all_job_results = wave_state.all_job_results
+            total_crossover_jobs_gen = wave_state.total_crossover_jobs
             generation_acceptance = created / max(attempts, 1)
             recent_acceptance_ratios.append(generation_acceptance)
             profile_counters["offspring_attempts_total"] += attempts
             profile_counters["pairing_cut_attempts_total"] = (
-                profile_counters.get("pairing_cut_attempts_total", 0) + pairing_cuts_gen
+                profile_counters.get("pairing_cut_attempts_total", 0)
+                + wave_state.pairing_cuts
             )
-            for reason, count in retry_failure_reasons_gen.items():
+            for reason, count in wave_state.retry_failure_reasons.items():
                 profile_retry_failures[reason] = (
                     profile_retry_failures.get(reason, 0) + count
                 )
@@ -1980,25 +2370,27 @@ def ga_go(
             ) + (perf_counter() - t_loop)
             profile_timings["offspring_parent_select_s"] = (
                 profile_timings.get("offspring_parent_select_s", 0.0)
-                + t_parent_select_gen
+                + wave_state.t_parent_select_s
             )
             profile_timings["offspring_operator_setup_s"] = (
                 profile_timings.get("offspring_operator_setup_s", 0.0)
-                + t_operator_setup_gen
+                + wave_state.t_operator_setup_s
             )
             profile_timings["offspring_crossover_s"] = (
-                profile_timings.get("offspring_crossover_s", 0.0) + t_crossover_gen
+                profile_timings.get("offspring_crossover_s", 0.0)
+                + wave_state.t_crossover_s
             )
             profile_timings["offspring_mutation_s"] = (
-                profile_timings.get("offspring_mutation_s", 0.0) + t_mutation_gen
+                profile_timings.get("offspring_mutation_s", 0.0)
+                + wave_state.t_mutation_s
             )
             profile_timings["offspring_unrelaxed_insert_s"] = (
                 profile_timings.get("offspring_unrelaxed_insert_s", 0.0)
-                + t_db_unrelaxed_gen
+                + wave_state.t_db_unrelaxed_s
             )
             profile_timings["offspring_parallel_wall_s"] = (
                 profile_timings.get("offspring_parallel_wall_s", 0.0)
-                + t_offspring_parallel_wall_gen
+                + wave_state.t_parallel_wall_s
             )
             profile_counters["offspring_created"] += created
             profile_counters["offspring_mutations_requested"] = profile_counters.get(
@@ -2019,49 +2411,6 @@ def ga_go(
                 n_offspring=n_offspring,
                 attempts=attempts,
             )
-
-            # Ask TorchSim relaxer to process available unrelaxed candidates now.
-            # Enforce a per-generation limit: when `batch_size` is None, target the
-            # full population so a single relax_batch submission keeps the autobatcher's
-            # in-flight swap reservoir full (its budget tracks the systems handed to
-            # one call). This maximizes GPU utilization; a user-set `batch_size`
-            # (non-None) still caps the call as before.
-            per_gen_max = (
-                batch_size
-                if batch_size is not None
-                else max(n_offspring, population_size)
-            )
-            pre_db_read = float(profile_timings.get("db_read_s", 0.0))
-            pre_relax = float(profile_timings.get("relax_batch_s", 0.0))
-            pre_db_write = float(profile_timings.get("db_write_s", 0.0))
-            pre_pop_update = float(profile_timings.get("population_update_s", 0.0))
-            t0_relax_call = perf_counter()
-            eligible_count, ineligible_count, ineligible_reasons = (
-                _relax_unrelaxed_candidates(
-                    da,
-                    relaxer,
-                    population=population,
-                    max_batch=per_gen_max,
-                    generation=generation,
-                    run_id=run_id,
-                    surface_config=surface_config,
-                    n_slab=n_slab,
-                    n_frozen_prefix=n_fixed,
-                    system_type=system_type,
-                    profiling=profile_timings,
-                    counters=profile_counters,
-                    composition=composition,
-                    adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                    cluster_adsorbate_config=cluster_adsorbate_config,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
-                    adsorbate_fragment_templates=adsorbate_fragment_template,
-                    operator_credit=operator_credit,
-                )
-            )
             if operator_credit:
                 credit_summary = ", ".join(
                     f"{name} {record['unique']}/{record['trials']}"
@@ -2077,7 +2426,6 @@ def ga_go(
                         min_verbosity=1,
                     )
             offspring_count = eligible_count
-            relax_call_wall_s = perf_counter() - t0_relax_call
             post_db_read = float(profile_timings.get("db_read_s", 0.0))
             post_relax = float(profile_timings.get("relax_batch_s", 0.0))
             post_db_write = float(profile_timings.get("db_write_s", 0.0))
@@ -2087,6 +2435,7 @@ def ga_go(
             gen_db_write_s = max(0.0, post_db_write - pre_db_write)
             gen_pop_update_s_from_relax = max(0.0, post_pop_update - pre_pop_update)
             pop_update_s = gen_pop_update_s_from_relax
+            generation_wall_s = perf_counter() - t_loop
             if verbosity >= 1 and (eligible_count + ineligible_count) > 0:
                 reason_detail = format_count_summary(ineligible_reasons)
                 reason_suffix = f" ({reason_detail})" if reason_detail else ""
@@ -2103,6 +2452,22 @@ def ga_go(
                 profile_counters["offspring_relaxed"] += int(offspring_count)
 
             if per_generation is not None:
+                gen_timings = {
+                    "parent_select_s": wave_state.t_parent_select_s,
+                    "operator_setup_s": wave_state.t_operator_setup_s,
+                    "crossover_s": wave_state.t_crossover_s,
+                    "mutation_s": wave_state.t_mutation_s,
+                    "db_unrelaxed_insert_s": wave_state.t_db_unrelaxed_s,
+                    "offspring_parallel_wall_s": wave_state.t_parallel_wall_s,
+                    "torchsim_db_read_s": gen_db_read_s,
+                    "torchsim_relax_s": gen_relax_s,
+                    "torchsim_db_write_s": gen_db_write_s,
+                    "torchsim_relax_call_wall_s": relax_call_wall_s,
+                    "population_update_s": pop_update_s,
+                    "population_update_s_from_relax": gen_pop_update_s_from_relax,
+                    "offspring_loop_wall_s": generation_wall_s,
+                    "pipeline_overlapped_s": gen_pipeline_overlapped_s,
+                }
                 per_generation.append(
                     {
                         "generation": int(generation),
@@ -2111,22 +2476,8 @@ def ga_go(
                         "attempts": int(attempts),
                         "acceptance_ratio": float(generation_acceptance),
                         "offspring_relaxed_this_call": int(offspring_count),
-                        "retry_failures": dict(retry_failure_reasons_gen),
-                        "timings_s": {
-                            "parent_select_s": t_parent_select_gen,
-                            "operator_setup_s": t_operator_setup_gen,
-                            "crossover_s": t_crossover_gen,
-                            "mutation_s": t_mutation_gen,
-                            "db_unrelaxed_insert_s": t_db_unrelaxed_gen,
-                            "offspring_parallel_wall_s": t_offspring_parallel_wall_gen,
-                            "torchsim_db_read_s": gen_db_read_s,
-                            "torchsim_relax_s": gen_relax_s,
-                            "torchsim_db_write_s": gen_db_write_s,
-                            "torchsim_relax_call_wall_s": relax_call_wall_s,
-                            "population_update_s": pop_update_s,
-                            "population_update_s_from_relax": gen_pop_update_s_from_relax,
-                            "offspring_loop_wall_s": perf_counter() - t_loop,
-                        },
+                        "retry_failures": dict(wave_state.retry_failure_reasons),
+                        "timings_s": gen_timings,
                     }
                 )
 

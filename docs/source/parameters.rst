@@ -670,8 +670,8 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
      - ``"idpp"``
      - Interpolation method
    * - ``neb_tangent_method``
-     - (default)
-     - NEB tangent method
+     - ``"improvedtangent"``
+     - ASE NEB tangent method (``improvedtangent`` preferred over ``aseneb``)
    * - ``neb_interpolation_bond_tolerance_a``
      - ``0.5``
      - Post-interpolation FixBondLengths stretch diagnostic (Å); warns, never
