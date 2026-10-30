@@ -415,17 +415,3 @@ def connectivity_factor_cache_key(spec: NormalizedConnectivityFactor) -> tuple:
         assert spec.global_factor is not None
         return ("global", float(spec.global_factor))
     return ("dict", spec.element_items, spec.pair_items)
-
-
-def connectivity_factor_for_json(
-    spec: ConnectivityFactorInput | NormalizedConnectivityFactor | None,
-) -> float | dict[str, float]:
-    """JSON-serializable form (pair keys as ``'A-B'``)."""
-    norm = normalize_connectivity_factor(spec)
-    if norm.is_global():
-        assert norm.global_factor is not None
-        return float(norm.global_factor)
-    out: dict[str, float] = {sym: float(v) for sym, v in norm.element_items}
-    for (a, b), v in norm.pair_items:
-        out[f"{a}-{b}"] = float(v)
-    return out

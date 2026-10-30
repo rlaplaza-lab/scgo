@@ -447,8 +447,8 @@ def _find_smaller_candidates(
     sorted by energy, deduplicated by geometry, and truncated to
     ``_MAX_CANDIDATES_PER_FORMULA`` entries per formula.
 
-    This is the historical seed tier; the exact-match tier is exposed separately
-    via :func:`_find_exact_candidates`.
+    This is the historical seed tier; the exact-match tier is the second
+    return value of :func:`_discover_all_candidates`.
 
     Args:
         target_composition: Target composition as a list of element symbols.
@@ -461,27 +461,3 @@ def _find_smaller_candidates(
     """
     sub, _exact = _discover_all_candidates(target_composition, db_glob_pattern)
     return sub
-
-
-def _find_exact_candidates(
-    target_composition: list[str],
-    db_glob_pattern: str,
-) -> dict[str, list[tuple[float, Atoms]]]:
-    """Find relaxed database candidates with the exact target composition.
-
-    Only entries tagged as ``final_unique_minimum`` whose element counts match
-    the target exactly (and have the same atom count) are kept. Results are
-    grouped by cluster formula, sorted by energy, deduplicated by geometry, and
-    truncated to ``_MAX_CANDIDATES_PER_FORMULA`` entries per formula.
-
-    Args:
-        target_composition: Target composition as a list of element symbols.
-        db_glob_pattern: Glob pattern (relative to the current working
-            directory) used to locate database files.
-
-    Returns:
-        Mapping of cluster formula to ``(energy, atoms)`` candidates, with the
-        atoms objects copied so callers can mutate them safely.
-    """
-    _sub, exact = _discover_all_candidates(target_composition, db_glob_pattern)
-    return exact

@@ -1073,7 +1073,7 @@ class DualCutAndSplicePairing:
         self.last_attempt_count = 0
 
     def get_new_individual(self, parents):
-        f, m = parents
+        f, _ = parents
         use_exploratory = self.rng.random() < self.exploratory_probability
         first, second = (
             (self.exploratory, self.primary)

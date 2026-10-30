@@ -27,6 +27,7 @@ from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs, get_covalent_radius
 from scgo.initialization.geometry_helpers import _should_check_connectivity
 from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_FLOOR,
     CONNECTIVITY_FACTOR,
     PLACEMENT_RELAXATION_FACTOR,
 )
@@ -37,8 +38,6 @@ logger = get_logger(__name__)
 
 _RANKED_CANDIDATES_PER_ATTEMPT = 12
 
-
-_BLMIN_RATIO_FLOOR = 0.55
 _MIN_DISTANCE_FACTOR_FLOOR = 0.3
 
 
@@ -84,7 +83,7 @@ def _compute_effective_placement_params(
         height_min,
         max(config.height_max, derived_max) * (1.0 + 0.25 * relax),
     )
-    blmin_ratio = max(config.blmin_ratio * (1.0 - 0.15 * relax), _BLMIN_RATIO_FLOOR)
+    blmin_ratio = max(config.blmin_ratio * (1.0 - 0.15 * relax), BLMIN_RATIO_FLOOR)
     min_dist_factor = max(
         config.structure_min_distance_factor * (1.0 - 0.1 * relax),
         _MIN_DISTANCE_FACTOR_FLOOR,

@@ -14,8 +14,6 @@ import pytest
 from ase import Atoms
 from ase.build import fcc111
 
-from scgo.algorithms.ga_common import create_structure_comparator
-from scgo.ase_ga_patches.population import count_looks_like
 from scgo.constants import DEFAULT_COMPARATOR_TOL, DEFAULT_PAIR_COR_MAX
 from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
@@ -23,9 +21,11 @@ from scgo.system_types import resolve_neb_mic, resolve_structure_mic
 from scgo.utils.comparators import (
     _SORTED_DIST_FP_ATTR_KEY,
     _SORTED_DIST_FP_INFO_KEY,
+    EnergyAndStructureComparator,
     PureInteratomicDistanceComparator,
     _compute_sorted_dist_list,
     _sorted_dist_cache_slot,
+    create_geometry_comparator,
     get_sorted_dist_list,
     uniqueness_settings_from_mapping,
 )
@@ -120,7 +120,7 @@ def test_same_composition_comparison_still_works():
 
 
 def test_ga_style_population_dedup_does_not_crash():
-    """GA dedup (count_looks_like) over a mixed-composition pool must not raise."""
+    """GA-style looks_like over a mixed-composition pool must not raise."""
     pool = [
         Atoms("Au2Pt", positions=POSITIONS),
         Atoms("AuPt2", positions=POSITIONS),
@@ -132,7 +132,16 @@ def test_ga_style_population_dedup_does_not_crash():
 
     comp = PureInteratomicDistanceComparator()
 
-    counts = [count_looks_like(a, pool, comp) for a in pool]
+    def _count_matches(a: Atoms) -> int:
+        n = 0
+        for b in pool:
+            if a.info.get("confid") == b.info.get("confid"):
+                continue
+            if comp.looks_like(a, b):
+                n += 1
+        return n
+
+    counts = [_count_matches(a) for a in pool]
 
     # Only the two identical Au2Pt entries match each other.
     assert counts == [1, 0, 0, 1]
@@ -301,7 +310,7 @@ def test_uniqueness_settings_from_mapping_defaults_and_overrides() -> None:
     assert overridden.comparator_pair_cor_max == pytest.approx(0.4)
 
 
-def test_create_structure_comparator_energy_and_geometry() -> None:
+def test_energy_and_structure_comparator_energy_and_geometry() -> None:
     same_geom = Atoms("Pt3", positions=POSITIONS)
     other_geom = Atoms(
         "Pt3", positions=[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [2.5, 4.3, 0.0]]
@@ -311,13 +320,13 @@ def test_create_structure_comparator_energy_and_geometry() -> None:
     far_same_geom = _with_raw_score(same_geom.copy(), 1.5)
     close_other = _with_raw_score(other_geom.copy(), 1.0)
 
-    comp = create_structure_comparator(3, 0.02)
+    comp = EnergyAndStructureComparator(0.02, create_geometry_comparator(n_top=3))
     assert bool(comp.looks_like(close, close_copy)) is True
     assert bool(comp.looks_like(close, close_other)) is False
     assert bool(comp.looks_like(close, far_same_geom)) is False
 
 
-def test_create_structure_comparator_ignores_prefix_atoms() -> None:
+def test_energy_and_structure_comparator_ignores_prefix_atoms() -> None:
     base = Atoms(
         "Pt4",
         positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.1, 0.0], [0.0, 0.0, 4.0]],
@@ -326,8 +335,10 @@ def test_create_structure_comparator_ignores_prefix_atoms() -> None:
     shifted.positions[0] += [0.8, 0.0, 0.0]
     _with_raw_score(base, 1.0)
     _with_raw_score(shifted, 1.0)
-    mobile_only = create_structure_comparator(3, 0.02)
-    full = create_structure_comparator(4, 0.02)
+    mobile_only = EnergyAndStructureComparator(
+        0.02, create_geometry_comparator(n_top=3)
+    )
+    full = EnergyAndStructureComparator(0.02, create_geometry_comparator(n_top=4))
     assert bool(mobile_only.looks_like(base, shifted)) is True
     assert bool(full.looks_like(base, shifted)) is False
 

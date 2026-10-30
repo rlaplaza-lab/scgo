@@ -495,7 +495,6 @@ def _apply_surface_ts_geometry_gate(
     allow_adsorbate_surface_detachment: bool = False,
     enforce_adsorbate_subgraph_integrity: bool = True,
     binding_penetration_tolerance_a: float = 0.1,
-    layer_cluster_threshold_ang: float = 0.4,
     n_slab_deposit: int | None = None,
     run_dir: Path | None = None,
     verbosity: int = 1,

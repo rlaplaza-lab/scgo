@@ -81,7 +81,6 @@ from scgo.system_types import (
 from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
 from scgo.utils.comparators import (
     ComparatorBlocks,
-    EnergyAndStructureComparator,
     PureInteratomicDistanceComparator,
     UniquenessSettings,
     create_geometry_comparator,
@@ -1700,24 +1699,6 @@ def apply_unary_exploration(
         if mutant is not None and _moved_past_identity(atoms, mutant):
             return mutant, tried_names
     return None, tried_names
-
-
-def create_structure_comparator(
-    n_atoms: int,
-    energy_tolerance: float,
-    settings: UniquenessSettings | None = None,
-    *,
-    mic: bool = False,
-    blocks: ComparatorBlocks | None = None,
-) -> EnergyAndStructureComparator:
-    resolved = settings if settings is not None else UniquenessSettings()
-    geometry = create_geometry_comparator(
-        n_top=n_atoms,
-        mic=mic,
-        settings=resolved,
-        blocks=blocks,
-    )
-    return EnergyAndStructureComparator(energy_tolerance, geometry)
 
 
 def _as_fitness_strategy(fitness_strategy: str | FitnessStrategy) -> FitnessStrategy:

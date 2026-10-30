@@ -793,7 +793,7 @@ def filter_unique_minima(
                           geometries also match). Defaults to `DEFAULT_ENERGY_TOLERANCE`.
         n_top: Trailing atoms to compare (system-type search-mobile count).
         mic: If True, use minimum-image convention for pairwise distances (slab PBC),
-             matching :func:`scgo.algorithms.ga_common.create_structure_comparator`.
+             matching GA geometry comparators (``create_geometry_comparator``).
         comparator_tol: Cumulative structural difference tolerance.
         comparator_pair_cor_max: Maximum single-distance difference tolerance.
         blocks: Optional role-block partition; when given it supersedes

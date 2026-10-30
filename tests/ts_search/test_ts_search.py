@@ -33,8 +33,7 @@ from scgo.ts_search.transition_state import (
     save_neb_result,
 )
 from scgo.ts_search.transition_state_io import (
-    _adsorbate_max_displacement,
-    _core_rms_displacement,
+    _pair_overlay_metrics,
     adsorbate_pair_select_cap,
     resolve_ts_pair_select_cap,
     select_structure_pairs,
@@ -1190,7 +1189,7 @@ def test_core_rms_displacement_is_permutation_invariant() -> None:
         "Pt2OH",
         positions=[[2.5, 0.0, 0.0], [0.0, 0.0, 0.0], [1.3, 0.0, 1.5], [1.3, 0.0, 2.5]],
     )
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=2, use_mic=False)
+    rms, _ = _pair_overlay_metrics(atoms_i, atoms_j, n_slab=0, n_core=2, use_mic=False)
     assert rms < 0.05
 
 
@@ -1200,7 +1199,7 @@ def test_core_rms_displacement_asymmetric_gas_core_is_rotation_invariant() -> No
     atoms_i = _attach_oh(core.copy(), core.positions[0] + np.array([0.0, 0.0, 1.8]))
     atoms_j = atoms_i.copy()
     atoms_j.positions = atoms_j.positions @ _cycle_axes_rotation().T
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=3, use_mic=False)
+    rms, _ = _pair_overlay_metrics(atoms_i, atoms_j, n_slab=0, n_core=3, use_mic=False)
     assert rms < 0.05
 
 
@@ -1214,8 +1213,7 @@ def test_core_rms_and_hop_after_translated_gas_pt_oh() -> None:
     atoms_j.positions[1] = [1.8, 0.0, 0.0]
     atoms_j.positions[2] = [1.8, 0.0, 0.96]
     atoms_j.positions += np.array([3.0, 1.2, -0.5])
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=0, n_core=1, use_mic=False)
-    hop = _adsorbate_max_displacement(
+    rms, hop = _pair_overlay_metrics(
         atoms_i, atoms_j, n_slab=0, n_core=1, use_mic=False
     )
     assert rms < 0.05
@@ -1255,7 +1253,7 @@ def _slab_rotated_core_oh_pair() -> tuple[Atoms, Atoms]:
 def test_core_rms_displacement_slab_keeps_lab_frame_rotation() -> None:
     """Supported cores are not 3D-Kabsch'd; lab-frame rotation stays large."""
     atoms_i, atoms_j = _slab_rotated_core_oh_pair()
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=2, n_core=3, use_mic=False)
+    rms, _ = _pair_overlay_metrics(atoms_i, atoms_j, n_slab=2, n_core=3, use_mic=False)
     assert rms > 1.0
 
 
@@ -1357,7 +1355,7 @@ def test_reflected_tbp_labels_pass_gas_pair_gate_and_match_neb_overlay() -> None
     equatorial = _with_reflected_tbp_labels(
         _attach_oh(core.copy(), core.positions[2] + np.array([1.8, 0.0, 0.0]))
     )
-    rms = _core_rms_displacement(axial, equatorial, n_slab=0, n_core=5, use_mic=False)
+    rms, _ = _pair_overlay_metrics(axial, equatorial, n_slab=0, n_core=5, use_mic=False)
     assert rms < 0.05
     assert rms < DEFAULT_PAIR_CORE_RMS_MAX_GAS
     pairs = select_structure_pairs(
@@ -1469,7 +1467,7 @@ def test_pair_core_rms_max_defaults_are_hard_gates(
     i0, i1 = n_slab, n_slab + n_core
     com = atoms_j.positions[i0:i1].mean(axis=0)
     atoms_j.positions[i0:i1] = com + (atoms_j.positions[i0:i1] - com) * scale
-    rms = _core_rms_displacement(
+    rms, _ = _pair_overlay_metrics(
         atoms_i, atoms_j, n_slab=n_slab, n_core=n_core, use_mic=False
     )
     if expect_pair:

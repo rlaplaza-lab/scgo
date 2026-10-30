@@ -230,7 +230,7 @@ def test_core_rms_displacement_uses_find_mic_for_skewed_cell():
     """
     from ase.geometry import find_mic
 
-    from scgo.ts_search.transition_state_io import _core_rms_displacement
+    from scgo.ts_search.transition_state_io import _pair_overlay_metrics
 
     cell = np.array(
         [
@@ -250,7 +250,7 @@ def test_core_rms_displacement_uses_find_mic_for_skewed_cell():
         numbers=[78, 29], positions=np.vstack([slab, pos_j]), cell=cell, pbc=pbc
     )
 
-    rms = _core_rms_displacement(atoms_i, atoms_j, n_slab=1, n_core=1, use_mic=True)
+    rms, _ = _pair_overlay_metrics(atoms_i, atoms_j, n_slab=1, n_core=1, use_mic=True)
 
     dlt_mic, _ = find_mic(pos_j - pos_i, cell, pbc)
     expected = float(np.sqrt(np.mean(np.sum(dlt_mic**2, axis=1))))

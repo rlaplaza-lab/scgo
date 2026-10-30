@@ -212,7 +212,7 @@ def _patch_torchsim_model_detach_outputs(model: object) -> None:
         return
 
     @functools.wraps(orig_forward)
-    def forward(state, **kwargs):  # noqa: ANN001
+    def forward(state, **kwargs):
         out = orig_forward(state, **kwargs)
         if getattr(model, "retain_graph", False):
             return out
@@ -232,7 +232,7 @@ _TORCHSIM_WARNINGS_REGISTERED = False
 
 def _register_torchsim_warning_filters() -> None:
     """Suppress known upstream TorchSim/warp warnings (not actionable in SCGO)."""
-    global _TORCHSIM_WARNINGS_REGISTERED  # noqa: PLW0603
+    global _TORCHSIM_WARNINGS_REGISTERED
     if _TORCHSIM_WARNINGS_REGISTERED:
         return
     warnings.filterwarnings(
@@ -1219,7 +1219,7 @@ class TorchSimBatchRelaxer:
         if max_steps_now == 0:
             return self._single_point_batch(atoms_list)
 
-        atoms_seq, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
+        _, reference_atoms, system_in = self._prepare_batch_atoms(atoms_list)
 
         def _optimize_once():
             return self._ts.optimize(  # type: ignore[call-arg]

@@ -28,7 +28,6 @@ from tqdm import tqdm
 
 from scgo.algorithms.ga_common import (
     ClusterStartGenerator,
-    EnergyAndStructureComparator,
     SurfaceClusterStartGenerator,
     SurfaceSlabStartGenerator,
     apply_unary_exploration,
@@ -102,6 +101,7 @@ from scgo.system_types import (
     uses_surface,
     validate_minimum_structure,
 )
+from scgo.utils.comparators import EnergyAndStructureComparator
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
 )
@@ -1247,8 +1247,8 @@ def _insert_unrelaxed_offspring(
             if state.created >= state.n_offspring:
                 break
             database_retry(
-                lambda _a3=child, _desc=desc: (
-                    da.add_unrelaxed_candidate(_a3, description=_desc)
+                lambda _a3=child, _desc=desc: da.add_unrelaxed_candidate(
+                    _a3, description=_desc
                 ),
                 config=PRESET_HPC,
                 operation_name="add_unrelaxed_offspring",

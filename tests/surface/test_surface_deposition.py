@@ -133,7 +133,7 @@ def test_near_surface_rotation_uses_independent_tilt_azimuth() -> None:
         def __init__(self, values: list[float]) -> None:
             self._it = iter(values)
 
-        def uniform(self, low: float, high: float) -> float:
+        def uniform(self, low: float, _high: float) -> float:
             return next(self._it)
 
     mat = _near_surface_rotation_matrix(_SeqRng([spin, tilt, tilt_az]), axis=2)

@@ -58,10 +58,13 @@ def ga_relax_seconds_from_timings(timings: dict[str, float]) -> float:
 _RELAX_SECONDS_EXTRACTORS: dict[str, Callable[[dict], float]] = {
     "ga": ga_relax_seconds_from_timings,
     "bh": ga_relax_seconds_from_timings,
-    "neb": lambda t: float(t.get("neb_optimization_s", 0.0))
-    or float(t.get("neb_optimization_avg_s", 0.0)),
-    "go_ts": lambda t: float(t.get("go_phase_s", 0.0))
-    + float(t.get("ts_neb_sum_s", 0.0)),
+    "neb": lambda t: (
+        float(t.get("neb_optimization_s", 0.0))
+        or float(t.get("neb_optimization_avg_s", 0.0))
+    ),
+    "go_ts": lambda t: (
+        float(t.get("go_phase_s", 0.0)) + float(t.get("ts_neb_sum_s", 0.0))
+    ),
 }
 
 

@@ -418,7 +418,7 @@ def test_count_looks_like_not_called_on_all_cand(rng):
     # At most pop_size comparisons (vs each pop member) for the duplicate check
     assert comp.call_count <= pop_size, (
         f"Expected <= {pop_size} comparisons, got {comp.call_count}. "
-        "count_looks_like must not scan all_cand."
+        "Population must not scan all_cand for looks_like."
     )
 
 

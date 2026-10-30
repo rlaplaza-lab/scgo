@@ -482,15 +482,6 @@ class ParallelNEBBatch:
                 atoms, energy, relaxed_atoms, require_forces=True
             )
 
-    def get_summary(self) -> dict[str, int]:
-        """Return counts of total, converged and failed NEBs."""
-        return {
-            "total_nebs": len(self.neb_instances),
-            "converged": len(self.converged_nebs),
-            "failed": len(self.failed_nebs),
-            "total_steps": self.step_count,
-        }
-
 
 def run_parallel_neb_search(
     pairs: list[tuple[int, int]],

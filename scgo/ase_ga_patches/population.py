@@ -47,17 +47,6 @@ def _population_candidate_sort_key(a):
     )
 
 
-def count_looks_like(a, all_cand, comp):
-    """Utility method for counting occurrences."""
-    n = 0
-    for b in all_cand:
-        if a.info.get("confid") == b.info.get("confid"):
-            continue
-        if comp.looks_like(a, b):
-            n += 1
-    return n
-
-
 from scgo.utils.rng_helpers import ensure_rng_or_create
 
 

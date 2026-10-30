@@ -107,19 +107,6 @@ class DatabaseRegistry:
 
         return matches
 
-    def get_all_databases(self) -> list[Path]:
-        """Get all registered databases.
-
-        Returns:
-            List of registered database paths that still exist on disk
-        """
-        paths = []
-        for entry in self._data["databases"].values():
-            db_path = self.base_dir / entry["path"]
-            if db_path.exists():
-                paths.append(db_path)
-        return paths
-
     def clear(self) -> None:
         """Clear all registry entries."""
         self._data["databases"] = {}

@@ -67,7 +67,7 @@ def test_ga_go_offspring_fraction_creates_expected_offspring(
     relaxer = MockRelaxer(max_steps=1)
     counter = {"i": 0}
 
-    def fake_create_pairing(atoms_template, n_to_optimize, rng_arg, **kwargs):
+    def fake_create_pairing(atoms_template, n_to_optimize, _rng_arg, **kwargs):
         class Pairing:
             def get_new_individual(self, parents):
                 i = counter["i"]

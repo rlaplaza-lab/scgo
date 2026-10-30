@@ -59,7 +59,7 @@ EMT_H2_BARRIER_EV = (2.0, 5.0)
 NN_DISTANCE_BAND = (0.9, 1.25)
 
 # Per-atom force tolerance a converged TS must satisfy. Pin the literal so a
-# production loosen of ``_TS_NEB_FMAX`` fails loudly (see drift test in
+# production loosen of ``TS_NEB_FMAX`` fails loudly (see drift test in
 # tests/param_presets/test_param_presets.py). 0.20 eV/A is the soft-MEP floor;
 # tighter values collapse interior saddles to endpoints.
 TS_FMAX_CONVERGED = 0.20

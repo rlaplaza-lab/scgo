@@ -7,7 +7,9 @@ from ase import Atoms
 from ase.geometry import get_distances
 from scipy.spatial.distance import cdist
 
-PREFILTER_BLMIN_FACTOR = 0.55
+from scgo.initialization.initialization_config import BLMIN_RATIO_FLOOR
+
+PREFILTER_BLMIN_FACTOR = BLMIN_RATIO_FLOOR
 
 # Cache by (unique Z, id(blmin)). Cleared by GA each generation so recycled ids
 # and per-generation empty ``{}`` (prefilter off) cannot accumulate stale entries.

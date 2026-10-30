@@ -194,11 +194,9 @@ class TestParallelNEBBatch:
         batch = ParallelNEBBatch([neb1, neb2], relaxer, max_total_steps=30)
         batch.run_optimization(fmax=1.0, max_steps=30)
 
-        summary = batch.get_summary()
-
-        assert summary["total_nebs"] == 2
-        assert summary["total_steps"] > 0
-        assert summary["converged"] + summary["failed"] <= 2
+        assert len(batch.neb_instances) == 2
+        assert batch.step_count > 0
+        assert len(batch.converged_nebs) + len(batch.failed_nebs) <= 2
 
     def test_parallel_neb_batching_efficiency(self, cu3_triangle, cu3_linear, cu3_bent):
         """Test that parallel NEB batches images from multiple NEBs together."""

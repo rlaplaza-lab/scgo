@@ -8,12 +8,12 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
-    _filter_unique_tags,
     _append_unique_unit_vector,
     _ensure_rng,
+    _filter_unique_tags,
+    _mobile_clashes,
     _preserves_mobile_connectivity,
     _resolve_op_connectivity_factor,
 )
@@ -184,9 +184,13 @@ class InPlaneSlideMutation(OffspringCreator):
             new_pos = pos.copy()
             new_pos[mask] += shift
             cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc, tags=tags)
-            if atoms_too_close(cand, self.blmin):
-                continue
-            if self.test_dist_to_slab and len(slab) > 0 and atoms_too_close_two_sets(slab, cand, self.blmin):
+            if _mobile_clashes(
+                cand,
+                blmin=self.blmin,
+                slab=slab,
+                test_dist_to_slab=self.test_dist_to_slab,
+                use_tags=False,
+            ):
                 continue
             if not _preserves_mobile_connectivity(
                 top,

@@ -96,9 +96,6 @@ __all__ = [
 # values often collapse interior saddles to endpoints before forces reach 0.05.
 TS_NEB_FMAX: float = 0.20
 
-# Backwards-compatible alias (pre-0.9.0 private name).
-_TS_NEB_FMAX = TS_NEB_FMAX
-
 # --- Low-effort ("~25% of production") preset knobs -------------------------
 # Consumed by `get_low_effort_torchsim_ga_params` / `get_low_effort_ts_search_params`.
 # These are the single tuning surface for the examples and the Kaggle GPU CI

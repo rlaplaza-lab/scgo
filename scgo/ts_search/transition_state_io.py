@@ -206,57 +206,6 @@ def _pair_mic_context(
     return None, None
 
 
-def _adsorbate_max_displacement(
-    atoms_i: Atoms,
-    atoms_j: Atoms,
-    *,
-    n_slab: int,
-    n_core: int,
-    use_mic: bool,
-    n_adsorbate: int | None = None,
-) -> float:
-    """Max adsorbate-atom displacement after one shared core overlay.
-
-    Thin view over :func:`_pair_overlay_metrics` (single overlay feeds both
-    this and :func:`_core_rms_displacement`, so pair gating and NEB endpoint
-    prep agree by construction).
-    """
-    _core_rms, ads_hop = _pair_overlay_metrics(
-        atoms_i,
-        atoms_j,
-        n_slab=n_slab,
-        n_core=n_core,
-        use_mic=use_mic,
-        n_adsorbate=n_adsorbate,
-    )
-    return ads_hop
-
-
-def _core_rms_displacement(
-    atoms_i: Atoms,
-    atoms_j: Atoms,
-    *,
-    n_slab: int,
-    n_core: int,
-    use_mic: bool,
-) -> float:
-    """RMS Cartesian displacement of the core after one shared core overlay.
-
-    Gas cores overlay by fingerprint + Kabsch + spatial rematch; slab cores
-    stay in the lab frame. See :func:`_pair_overlay_metrics`.
-    """
-    if n_core <= 0 or max(0, int(n_slab)) + int(n_core) > len(atoms_i):
-        return 0.0
-    core_rms, _ads_hop = _pair_overlay_metrics(
-        atoms_i,
-        atoms_j,
-        n_slab=n_slab,
-        n_core=n_core,
-        use_mic=use_mic,
-    )
-    return core_rms
-
-
 def _pair_overlay_metrics(
     atoms_i: Atoms,
     atoms_j: Atoms,

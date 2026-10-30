@@ -33,7 +33,6 @@ from scgo.initialization import (
 )
 from scgo.initialization.candidate_discovery import (
     _discover_all_candidates,
-    _find_exact_candidates,
     _load_candidates_from_file,
     _load_db_candidates,
 )
@@ -1724,7 +1723,7 @@ class TestExactMatchReuse:
     def test_find_exact_candidates(self, tmp_path, rng):
         """Exact candidates: only same-composition final minima; no smaller/larger."""
         glob = self._build_db(tmp_path, rng)
-        exact = _find_exact_candidates(["Pt"] * 5, glob)
+        _sub, exact = _discover_all_candidates(["Pt"] * 5, glob)
 
         assert "Pt5" in exact
         assert len(exact["Pt5"]) == 1  # non-final Pt5b excluded
@@ -1751,7 +1750,7 @@ class TestExactMatchReuse:
         self._write_minimum(tmp_path, "Pt5", pt5, 15.0)
         self._write_minimum(tmp_path, "Pt5", pt5.copy(), 15.0)
         glob = str(tmp_path / "**" / "*.db")
-        exact = _find_exact_candidates(["Pt"] * 5, glob)
+        _sub, exact = _discover_all_candidates(["Pt"] * 5, glob)
         assert "Pt5" in exact
         assert len(exact["Pt5"]) == 1
 
@@ -1793,7 +1792,7 @@ class TestExactMatchReuse:
     def test_try_exact_match_reuses_and_strips_tags(self, tmp_path, rng):
         """_try_exact_match returns a valid seed, stripping final_unique_minimum."""
         glob = self._build_db(tmp_path, rng)
-        exact = _find_exact_candidates(["Pt"] * 5, glob)
+        _sub, exact = _discover_all_candidates(["Pt"] * 5, glob)
         rng2 = np.random.default_rng(0)
         atoms = _try_exact_match(["Pt"] * 5, exact, rng2)
         assert atoms is not None

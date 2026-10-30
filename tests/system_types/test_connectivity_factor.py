@@ -15,7 +15,6 @@ from scgo.surface import make_surface_config
 from scgo.system_types import resolve_connectivity_factor
 from scgo.system_types.connectivity_factor import (
     bond_threshold_matrix,
-    connectivity_factor_for_json,
     format_connectivity_factor,
     max_connectivity_scale,
     min_connectivity_scale,
@@ -91,12 +90,13 @@ def test_min_max_scale() -> None:
     assert max_connectivity_scale(n) == pytest.approx(2.5)
 
 
-def test_json_roundtrip_pair_keys() -> None:
-    raw = {"Pt": 1.4, ("C", "Pt"): 1.8}
-    n = normalize_connectivity_factor(raw)
-    as_json = connectivity_factor_for_json(n)
-    assert as_json == {"C-Pt": 1.8, "Pt": 1.4}
-    assert normalize_connectivity_factor(as_json) == n
+def test_normalize_accepts_string_pair_keys() -> None:
+    """Pair keys may be tuple or ``'A-B'`` strings; both normalize equally."""
+    raw_tuple = {"Pt": 1.4, ("C", "Pt"): 1.8}
+    raw_str = {"Pt": 1.4, "C-Pt": 1.8}
+    assert normalize_connectivity_factor(raw_tuple) == normalize_connectivity_factor(
+        raw_str
+    )
 
 
 def test_resolve_prefers_explicit_dict_over_config() -> None:

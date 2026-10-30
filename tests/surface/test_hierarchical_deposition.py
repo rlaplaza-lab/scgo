@@ -258,8 +258,9 @@ def test_create_deposited_cluster_core_bearing_one_build_per_outer_attempt(
     calls: list[int] = []
     monkeypatch.setattr(
         "scgo.surface.deposition.build_hierarchical_core_fragment_cluster",
-        lambda *a, **kw: calls.append(int(kw.get("max_placement_attempts", -1)))
-        or None,
+        lambda *a, **kw: (
+            calls.append(int(kw.get("max_placement_attempts", -1))) or None
+        ),
     )
     assert (
         create_deposited_cluster(

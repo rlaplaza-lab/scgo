@@ -772,7 +772,7 @@ def test_assign_penalty_energy_attaches_single_point_calculator():
     """Penalty path must serve energy/forces via SPC without the old calc."""
 
     class _RaisingCalc:
-        def get_potential_energy(self, atoms=None, force_consistent=False):
+        def get_potential_energy(self, atoms=None, _force_consistent=False):
             raise RuntimeError("broken calculator")
 
         def get_forces(self, atoms=None):

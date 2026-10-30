@@ -1292,7 +1292,7 @@ def _try_exact_match(
     Args:
         composition: Target composition list.
         exact_candidates: Mapping of formula -> ``(energy, atoms)`` candidates as
-            produced by :func:`_find_exact_candidates` / :func:`_discover_all_candidates`.
+            produced by :func:`_discover_all_candidates` (exact bucket).
         rng: Random number generator for diverse candidate selection.
         min_distance_factor: Clash scale matching the rest of this run's init.
         connectivity_factor: Connectivity scale matching the rest of this run's init.

@@ -4,7 +4,6 @@ import pytest
 
 from scgo.system_types import AdsorbateDefinition
 from scgo.utils.mutation_weights import (
-    calculate_composition_weights,
     calculate_generation_adjustment,
     calculate_size_adjustment,
     calculate_system_type_weights,
@@ -13,46 +12,6 @@ from scgo.utils.mutation_weights import (
     scale_weights_by_operator_credit,
     snapshot_operator_credit,
 )
-
-
-def test_calculate_composition_weights_pure():
-    """Test composition weights for pure metallic cluster."""
-    composition = ["Pt", "Pt", "Pt", "Pt"]
-    weights, use_permutation = calculate_composition_weights(composition)
-
-    assert use_permutation is False
-    assert "rattle" in weights
-    assert "overlap_relief" in weights
-    assert "flattening" in weights
-    assert "rotational" in weights
-    assert "anisotropic_rattle" in weights
-    assert "breathing" in weights
-    assert "permutation" not in weights
-    assert abs(sum(weights.values()) - 1.0) < 1e-6
-
-
-def test_calculate_composition_weights_mixed():
-    """Test composition weights for well-mixed bimetallic cluster."""
-    composition = ["Au", "Au", "Pt", "Pt"]
-    weights, use_permutation = calculate_composition_weights(composition)
-
-    assert use_permutation is True
-    assert "permutation" in weights
-    assert "shell_swap" in weights
-    assert "overlap_relief" in weights
-    assert "anisotropic_rattle" in weights
-    assert weights["permutation"] > weights["rattle"]  # Should favor permutation
-    assert abs(sum(weights.values()) - 1.0) < 1e-6
-
-
-def test_calculate_composition_weights_core_shell():
-    """Test composition weights for core-shell biased cluster."""
-    composition = ["Au"] + ["Pt"] * 5  # Au1Pt5
-    weights, use_permutation = calculate_composition_weights(composition)
-
-    assert use_permutation is True
-    assert "permutation" in weights
-    assert abs(sum(weights.values()) - 1.0) < 1e-6
 
 
 def test_calculate_size_adjustment_small():

@@ -7,7 +7,7 @@ optimization stage (generation number).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 import numpy as np
 
@@ -370,27 +370,7 @@ def calculate_system_type_weights(
             False,
         )
 
-    # Fallback for unknown future types: legacy composition-only behavior.
-    return calculate_composition_weights(composition)
-
-
-def calculate_composition_weights(
-    composition: list[str],
-) -> tuple[dict[str, float], bool]:
-    """Calculate mutation operator weights based on cluster composition.
-
-    Deprecated for GA runs: prefer :func:`calculate_system_type_weights`.
-    """
-    element_counts = get_composition_counts(composition)
-    n_elements = len(element_counts)
-
-    if n_elements == 1:
-        weights = _pure_structural_weights(include_surface_slide=True)
-        use_permutation = False
-    else:
-        weights, use_permutation = _alloy_weights_from_core(composition)
-
-    return weights, use_permutation
+    assert_never(system_type)
 
 
 def _static_weights_for_system_type(
@@ -539,18 +519,7 @@ def _static_weights_for_system_type(
             False,
         )
 
-    return (
-        _renormalize_weights(
-            {
-                "rattle": 0.42,
-                "overlap_relief": 0.24,
-                "flattening": 0.10,
-                "anisotropic_rattle": 0.14,
-                "breathing": 0.07,
-            }
-        ),
-        False,
-    )
+    assert_never(system_type)
 
 
 def calculate_size_adjustment(n_atoms: int) -> dict[str, float]:

@@ -25,8 +25,8 @@ def test_database_registry_register_find_and_clear(tmp_path, single_atom):
     assert len(found) == 1
     assert Path(found[0]).resolve() == dbpath.resolve()
 
-    # get_all_databases should include it
-    all_db = reg.get_all_databases()
+    # Unfiltered find_databases should include it
+    all_db = reg.find_databases()
     assert any(Path(p).resolve() == dbpath.resolve() for p in all_db)
 
     # clear removes all entries
@@ -48,7 +48,7 @@ def test_setup_database_registers_registry(tmp_path, pt2_atoms):
     try:
         db_path = tmp_path / "auto_register.db"
 
-        entries = reg.get_all_databases()
+        entries = reg.find_databases()
         assert any(Path(p).resolve() == db_path.resolve() for p in entries)
     finally:
         close_data_connection(da)
@@ -77,11 +77,11 @@ def test_setup_database_registers_search_level_registry(tmp_path):
         db_path = run_dir / "ga_go.db"
 
         # No per-trial registry file when under *_searches
-        trial_entries = get_registry(run_dir).get_all_databases()
+        trial_entries = get_registry(run_dir).find_databases()
         assert trial_entries == []
 
         search_reg = get_registry(search_dir)
-        search_entries = search_reg.get_all_databases()
+        search_entries = search_reg.find_databases()
         assert any(Path(p).resolve() == db_path.resolve() for p in search_entries)
     finally:
         close_data_connection(da)
@@ -97,7 +97,7 @@ def test_create_preparedb_registers_registry(tmp_path, pt2_atoms):
     create_preparedb(pt2_atoms, tmp_path / "prepared.db", population_size=5)
     db_path = tmp_path / "prepared.db"
 
-    entries = reg.get_all_databases()
+    entries = reg.find_databases()
     assert any(Path(p).resolve() == db_path.resolve() for p in entries)
 
 
@@ -126,17 +126,17 @@ def test_register_database_best_effort_handles_bad_atoms_template(tmp_path):
         str(trial_dir), str(db_path), BadAtomsTemplate(), "run_1"
     )
 
-    # ``get_all_databases`` only returns entries whose file still exists on disk,
+    # ``find_databases`` only returns entries whose file still exists on disk,
     # so create the (empty) db file that the registration recorded.
     db_path.touch()
 
     # Trial-level registry should now contain the entry (composition may be None)
     trial_registry = get_registry(trial_dir)
-    entries = trial_registry.get_all_databases()
+    entries = trial_registry.find_databases()
     assert any(Path(p).resolve() == db_path.resolve() for p in entries)
 
     # Also ensure the registry under the base tmp_path did not accidentally gain it
-    base_entries = reg.get_all_databases()
+    base_entries = reg.find_databases()
     assert all(p.resolve().name != db_path.name for p in base_entries)
 
 

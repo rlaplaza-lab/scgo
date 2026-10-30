@@ -56,7 +56,6 @@ def _build(system_type, *, rng, cluster_cfg, slab_cfg, db_glob):
         )
     if system_type == "gas_cluster_adsorbate":
         return _create_gas_cluster_adsorbate_initial_atoms(
-            composition=["Pt", "Pt", "Pt"],
             rng=rng,
             adsorbate_definition=ADS_DEF,
             adsorbate_fragment_template=OH_TEMPLATE,

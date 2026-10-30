@@ -264,7 +264,6 @@ def _create_surface_initialized_atoms(
 
 def _create_gas_cluster_adsorbate_initial_atoms(
     *,
-    composition: list[str],
     rng: np.random.Generator,
     adsorbate_definition: Any,
     adsorbate_fragment_template: Atoms | None = None,
@@ -588,6 +587,7 @@ def _gate_structurally_valid_candidates(
             format_count_summary(
                 Counter(_compact_structural_gate_reason(msg) for _, msg in dropped)
             ),
+            verbosity=verbosity,
         )
         for energy, msg in dropped:
             log_debug_v(
@@ -595,6 +595,7 @@ def _gate_structurally_valid_candidates(
                 "Dropping dedup'd candidate (E=%.4f eV) failing final structural gate: %s",
                 energy,
                 msg,
+                verbosity=verbosity,
             )
     return valid
 
@@ -773,7 +774,6 @@ def scgo(
             max_h = int(optimizer_kwargs.get("max_hierarchical_attempts", 200))
             glb = str(optimizer_kwargs.get("previous_search_glob", "**/*.db"))
             atoms = _create_gas_cluster_adsorbate_initial_atoms(
-                composition=composition,
                 rng=rng,
                 adsorbate_definition=ads_def,
                 adsorbate_fragment_template=optimizer_kwargs.get(
