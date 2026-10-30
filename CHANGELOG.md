@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.4
+
+### Changed
+
+- **One GPU relax worker per GA run.** Offspring construction overlaps the
+  CUDA batch relax (double-buffered waves when `batch_size` is set; `None`
+  stays on the full in-flight path). The CPU/GPU pipeline is keyed on that
+  worker, not a separate flag.
+- **MLIP extras move to `mace-torch==0.3.17`, `torch-sim-atomistic==0.6.2`,
+  and `upet>=0.3.1`.**
+
+### Fixed
+
+- XYZ export no longer crashes when `FixBondLengths` leads ASE's `move_mask`.
+  Constraints are cleared on a write-only copy, and `FixAtoms` stays before
+  `FixBondLengths` on reconstruct.
+- ASE NEB and extxyz export warnings are silenced. `improvedtangent` stays
+  the default, and non-JSON `atoms.info` (`adsorbate_info`) is dropped before
+  XYZ write.
+
+### Docs
+
+- Lattice rotation, benchmark `--backend upet`, and `scgo.configure()` match
+  the code. Example scripts drop the repeated preset essay.
+
 ## 0.9.3
 
 ### Changed
