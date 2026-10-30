@@ -1335,12 +1335,12 @@ def test_torchsim_fixatoms_atom_does_not_move_during_relaxation():
     assert relaxed.get_distance(0, 1) > 1.5
 
 
-def test_torchsim_061_exposes_detach_state_graph():
-    """Pinned torch-sim 0.6.1 detaches FIRE states before the autobatcher split."""
+def test_torchsim_062_exposes_detach_state_graph():
+    """Pinned torch-sim 0.6.2 detaches FIRE states before the autobatcher split."""
     torch_sim = pytest.importorskip("torch_sim")
     from importlib.metadata import version
 
-    assert version("torch-sim-atomistic") == "0.6.1"
+    assert version("torch-sim-atomistic") == "0.6.2"
     assert hasattr(torch_sim, "detach_state_graph") or hasattr(
         torch_sim.state, "detach_state_graph"
     )
