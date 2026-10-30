@@ -32,7 +32,6 @@ MAX_CONSECUTIVE_FAILURES = 50
 #      X-H bonds are not spuriously broken).
 CONNECTIVITY_FACTOR = 1.4  # Connectivity threshold used consistently throughout
 BLMIN_RATIO_DEFAULT = 0.7  # Covalent-radius scale for GA/placement clash tables
-# Shared floor for adsorbate placement clash ratios and GA geometric prefilter.
 BLMIN_RATIO_FLOOR = 0.55
 # Validation fallback only. Every placement path clamps to
 # max(MIN_DISTANCE_FACTOR_DEFAULT, blmin_ratio=0.7) via resolve_steric_floor,

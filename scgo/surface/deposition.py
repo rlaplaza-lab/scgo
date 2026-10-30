@@ -813,8 +813,8 @@ def create_deposited_cluster_batch(
             idx = futures[future]
             try:
                 ordered_results[idx] = future.result()
-            # Failures are aggregated and re-raised as SCGORuntimeError below.
             except Exception as exc:
+                # Failures are aggregated and re-raised as SCGORuntimeError below.
                 failures[idx] = f"{type(exc).__name__}: {exc}"
                 if first_failure is None:
                     first_failure = exc

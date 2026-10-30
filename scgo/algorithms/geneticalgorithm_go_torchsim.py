@@ -2125,11 +2125,12 @@ def ga_go(
         # Workers reload their pairing/operator state per generation via
         # `_build_offspring_worker` (keyed on `operators_epoch`), so reuse is
         # correctness-preserving.
-        use_pipeline = (
-            relaxer_supports_cpu_gpu_pipeline(relaxer) and batch_size is not None
+        gpu_relax_worker = (
+            GpuRelaxWorker(relaxer)
+            if relaxer_supports_cpu_gpu_pipeline(relaxer) and batch_size is not None
+            else None
         )
-        if use_pipeline:
-            gpu_relax_worker = GpuRelaxWorker(relaxer)
+        if gpu_relax_worker is not None:
             gpu_relax_worker.start()
             log_info_v(
                 logger,
@@ -2280,8 +2281,7 @@ def ga_go(
             gen_pipeline_overlapped_s = 0.0
 
             try:
-                if use_pipeline:
-                    assert gpu_relax_worker is not None
+                if gpu_relax_worker is not None:
                     hooks = _PipelineGenerationHooks(
                         wave_state=wave_state,
                         population=population,
@@ -2597,9 +2597,7 @@ def ga_go(
         return all_minima
 
     finally:
-        # Shut down the hoisted GPU relax worker and offspring pool once (created
-        # lazily / at pipeline enable and reused across generations) before
-        # closing the data connection.
+        # Shut down the GPU relax worker and offspring pool before close_data_connection.
         if gpu_relax_worker is not None:
             gpu_relax_worker.shutdown()
         if offspring_executor is not None:
