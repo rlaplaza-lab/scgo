@@ -9,6 +9,7 @@ from ase.build import fcc111
 from ase.calculators.emt import EMT
 from ase.mep import NEB
 
+from scgo.constants import DEFAULT_NEB_TANGENT_METHOD
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import set_tags
 from scgo.ts_search import neb_surface as ns
@@ -83,7 +84,7 @@ def test_consistent_product_positions_unwraps_split_dimer():
 def test_per_atom_mic_interpolate_splits_dimer_bond():
     a, b, _n_slab = _oh_on_slab_split_by_mic()
     images = [a.copy(), a.copy(), b.copy()]
-    neb = NEB(images)
+    neb = NEB(images, method=DEFAULT_NEB_TANGENT_METHOD)
     neb.interpolate(method="linear", mic=True, apply_constraint=False)
     mid = neb.images[1]
     mid_oh = float(mid.get_distance(-2, -1, mic=False))
@@ -574,7 +575,7 @@ def test_neb_accepts_variable_spring_array():
     for img in images:
         img.calc = EMT()
     k = variable_spring_constants(np.array([0.0, 1.0, 0.0]), 0.1)
-    neb = NEB(images, k=k.tolist())
+    neb = NEB(images, k=k.tolist(), method=DEFAULT_NEB_TANGENT_METHOD)
     forces = neb.get_forces()
     assert np.all(np.isfinite(forces))
 

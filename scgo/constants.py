@@ -57,7 +57,13 @@ DEFAULT_IMAG_FREQ_THRESHOLD: float = 50.0
 """Default imaginary-frequency magnitude cutoff for Hessian validation (cm^-1)."""
 
 DEFAULT_NEB_TANGENT_METHOD: str = "improvedtangent"
-"""ASE :class:`ase.mep.neb.NEB` tangent method used by default."""
+"""ASE :class:`ase.mep.neb.NEB` tangent method used by default.
+
+Prefer ``improvedtangent`` over ``aseneb``: ASE's current default (MR !3952)
+avoids image clustering around the saddle that ``aseneb`` often produces.
+Pass ``method=`` / ``neb_tangent_method=`` explicitly whenever constructing
+an ASE ``NEB`` so newer ASE versions do not warn about the old default.
+"""
 
 NEB_RIGID_FRAGMENT_TOLERANCE_A: float = 0.05
 """Endpoint distance agreement (Å) for treating an adsorbate fragment as rigid.

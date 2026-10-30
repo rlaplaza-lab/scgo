@@ -1,10 +1,12 @@
 """GA/TS constraint persistence: FixAtoms / FixBondLengths survive DB and JSON IO."""
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
 from ase import Atoms
+from ase.build import fcc111
 from ase.constraints import FixAtoms, FixBondLengths
 from ase.io import write as ase_write
 
@@ -200,6 +202,23 @@ def test_prepare_atoms_for_xyz_export_clears_fix_bond_lengths(tmp_path) -> None:
     out = tmp_path / "adsorbate.xyz"
     ase_write(out, exported)
     assert out.is_file() and out.stat().st_size > 0
+
+
+def test_prepare_atoms_for_xyz_export_drops_ase_adsorbate_info(tmp_path) -> None:
+    """ASE surface builders stash ndarray site metadata that extxyz cannot encode."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    assert "adsorbate_info" in slab.info
+
+    exported = prepare_atoms_for_xyz_export(slab)
+    assert "adsorbate_info" not in exported.info
+    assert "adsorbate_info" in slab.info
+
+    out = tmp_path / "slab.xyz"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ase_write(out, exported)
+    assert out.is_file() and out.stat().st_size > 0
+    assert not any("adsorbate_info" in str(w.message) for w in caught)
 
 
 def test_save_neb_result_writes_fix_bond_lengths_only_endpoints(tmp_path) -> None:
