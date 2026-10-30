@@ -35,6 +35,11 @@ Parameter resolution
 .. autofunction:: scgo.get_ts_search_params
 .. autofunction:: scgo.get_system_path_key
 
+Runtime
+-------
+
+.. autofunction:: scgo.configure
+
 Logging
 -------
 

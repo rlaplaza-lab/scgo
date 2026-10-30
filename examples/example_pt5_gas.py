@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
-"""Pt5 gas-phase: GO + TS via ``run_go_ts``.
+"""Pt5 gas-phase GO + TS (``gas_cluster``).
 
-``system_type="gas_cluster"`` — gas-phase cluster only (no slab, no ``adsorbates``).
-
-Requires ``scgo[mace]`` (MACE + TorchSim). Start from
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` and
-:func:`~scgo.param_presets.get_low_effort_ts_search_params`, override keys, then
-pass the dicts as ``go_params`` / ``ts_params``. Those are the reduced-budget
-(~25% of production) variants of ``get_torchsim_ga_params`` /
-``get_ts_search_params``: identical calculator and NEB physics, smaller GA and
-NEB step budgets, so the script finishes quickly. Runners deep-merge partial
-dicts with preset defaults at call time. Pass ``system_type`` on the
-``run_go_ts`` call (not inside the param dicts).
-Keep ``seed`` consistent across
-``seed=``, ``go_params['seed']``, and ``ts_params['seed']``.
-
-TS: bare gas presets keep no-climb NEB, shared ``neb_fmax=0.20``, spring ``0.1``,
-5 images, and parallel TorchSim NEB. This example only sets ``max_pairs``.
-
-Output is written under ``results/pt5_gas_mace/``: sibling ``Pt5_searches/`` and
-``Pt5_ts_results/`` trees with datetime ``run_*`` directories, plus optional
-``go_ts_timing.json`` when timing export is enabled (as below). See the
-quickstart *On-disk layout* section in the docs.
+Presets keep no-climb NEB. This example only sets ``max_pairs``.
 """
 
 from __future__ import annotations
@@ -43,7 +23,6 @@ OUTPUT_STEM = "pt5_gas"
 
 
 def _resolve_output_stem() -> str:
-    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
     return (
         os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
     )
@@ -60,9 +39,7 @@ def _build_go_params() -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     return go_params
 
 

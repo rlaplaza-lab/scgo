@@ -96,8 +96,10 @@ NEB path defaults come from each system type's
   (``neb_disable_alignment=False``).
 - Surface types enable lattice-image remapping before NEB
   (``neb_surface_cell_remap``).
-- Bare ``surface_cluster`` and ``surface`` enable in-plane lattice rotation;
-  adsorbate surface types disable it so fragment-slab registry stays intact.
+- Bare ``surface`` enables in-plane lattice rotation. ``surface_cluster``
+  disables it (metal islands drift off registry under free Kabsch), as do
+  ``surface_cluster_adsorbate`` and ``surface_adsorbate`` (fragment-slab
+  registry).
 - Remap search span is set by ``neb_surface_max_lattice_shift`` in TS presets
   (default ``1`` cell in each in-plane direction).
 - Surface bands apply path prep: moiety unwrap, discrete proper slab

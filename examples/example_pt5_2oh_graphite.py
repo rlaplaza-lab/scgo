@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
-"""Pt5+2OH on graphite: GO + TS via ``run_go_ts``.
+"""Pt5+2OH on graphite GO + TS (``surface_cluster_adsorbate``).
 
-``system_type="surface_cluster_adsorbate"``: core-only ``COMPOSITION`` plus two
-``adsorbates`` OH fragments. Pass the same ``surface_config`` to ``run_go_ts``
-and the preset builders as a top-level value (must agree when both are set).
-
-Workflow: build Pt5 core, place each OH on distinct hull sites, deposit the
-combined cluster on graphite with surface-biased orientation, then run tag-aware
-GA (core crossover, ``fragment_reposition`` for adsorbate diversity). See
-``docs/source/api/system_types.rst`` for operator details.
-Params come from the reduced-budget (~25% of production)
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
-:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
-production calculator and NEB physics but shrink the GA and NEB step budgets.
-
-TS: surface-adsorbate presets supply climb, spring ``0.5``, shared
-``neb_fmax=0.20``, 7 images, parallel NEB, ``max_endpoint_mismatch=1.5`` Å,
-``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
-interior maxima). This example only tightens ``max_pairs``.
-
-Output: ``results/pt5_2oh_graphite_mace/`` with ``Pt5_OH_OH_graphite_searches/``,
-``Pt5_OH_OH_graphite_ts_results/``, and optional ``go_ts_timing.json`` (see docs
-quickstart, *On-disk layout*).
+Uses ``make_hopg_5x5_graphite_surface_config``.
 """
 
 from __future__ import annotations
@@ -47,7 +27,6 @@ OUTPUT_STEM = "pt5_2oh_graphite"
 
 
 def _resolve_output_stem() -> str:
-    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
     return (
         os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
     )
@@ -73,9 +52,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 

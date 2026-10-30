@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""OH on N-doped graphite via ``run_go_ts``.
+"""OH on N-doped graphite GO + TS (``surface_adsorbate``).
 
-``system_type="surface_adsorbate"`` — GA/BH search the top slab layer plus an OH
-adsorbate on an N-doped graphite slab (bottom layers fixed). Requires
-``scgo[mace]``. Pass the same ``surface_config`` to the preset builders and
-``run_go_ts``.
-Params come from the reduced-budget (~25% of production)
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
-:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
-production calculator and NEB physics but shrink the GA and NEB step budgets.
-
-Output: ``results/n_doped_graphite_oh_mace/`` with searches / TS result trees.
+Uses ``make_n_doped_graphite_surface_config``.
 """
 
 from __future__ import annotations
@@ -61,9 +52,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 

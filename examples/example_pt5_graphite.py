@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
-"""Pt5 on graphite: GO + TS via ``run_go_ts``.
+"""Pt5 on graphite GO + TS (``surface_cluster``).
 
-``system_type="surface_cluster"`` — supported Pt5 cluster on the preset graphite slab
-(no ``adsorbates``).
-
-Requires ``scgo[mace]``. Pass the same ``surface_config`` to the preset builders
-and ``run_go_ts`` as a top-level value (they must agree when both are set).
-See ``docs/source/parameters.rst`` (*Parameter resolution*) for merge rules.
-Params come from the reduced-budget (~25% of production)
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
-:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
-production calculator and NEB physics but shrink the GA and NEB step budgets.
-
-TS: ``surface_cluster`` presets keep no-climb NEB, shared ``neb_fmax=0.20``,
-spring ``0.1``, 5 images, MIC + cell remap (no lattice rotation), and
-parallel NEB. This example raises ``max_pairs`` and enables climb so
-low-effort demos still land at least one interior saddle under the
-12 eV ``surface_cluster`` spurious-barrier screen.
-
-Output: ``results/pt5_graphite_mace/`` with ``Pt5_graphite_searches/``,
-``Pt5_graphite_ts_results/``, and optional ``go_ts_timing.json`` (see docs
-quickstart, *On-disk layout*).
+Presets keep no-climb NEB and no lattice rotation. This example raises
+``max_pairs`` and enables climb so a low-effort run can still land an interior
+saddle under the 12 eV spurious-barrier screen.
 """
 
 from __future__ import annotations
@@ -44,7 +27,6 @@ OUTPUT_STEM = "pt5_graphite"
 
 
 def _resolve_output_stem() -> str:
-    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
     return (
         os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
     )
@@ -67,9 +49,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     return go_params
 
 

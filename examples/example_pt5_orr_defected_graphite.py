@@ -1,28 +1,8 @@
 #!/usr/bin/env python3
-"""Pt5 and ORR intermediates (O, OH, OOH) on vacancy graphite: GO via ``run_go``.
+"""Four separate ``run_go`` searches: bare Pt5, then Pt5+O, Pt5+OH, and Pt5+OOH.
 
-Four separate searches on a monovacancy graphite slab
-(:func:`~scgo.make_hopg_5x5_defected_graphite_surface_config`):
-
-- bare Pt5 (``system_type="surface_cluster"``, no ``adsorbates``)
-- Pt5+O, Pt5+OH, Pt5+OOH (``system_type="surface_cluster_adsorbate"``)
-
-That is the usual ORR protocol (clean cluster plus ``*O``, ``*OH``, ``*OOH``),
-not co-adsorption of all three fragments.
-
-Requires ``scgo[mace]``. Pass the same ``surface_config`` to the preset builder
-and ``run_go`` as a top-level value (they must agree when both are set).
-See ``docs/source/parameters.rst`` (*Parameter resolution*) for merge rules.
-Params come from the reduced-budget (~25% of production)
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params`, which keeps the
-production calculator but shrinks the GA budget. This example is GO-only
-(no ``run_go_ts`` / ``ts_params``). Swap in
-:func:`~scgo.param_presets.get_torchsim_ga_params` for a full-strength search.
-
-Output: ``results/pt5_orr_defected_graphite_mace/`` with sibling searches trees
-``Pt5_defected_graphite_searches/``, ``Pt5_O_defected_graphite_searches/``,
-``Pt5_OH_defected_graphite_searches/``, and
-``Pt5_O2H_defected_graphite_searches/`` (OOH path-key formula is ``O2H``).
+Usual ORR protocol on vacancy graphite, not co-adsorption of all three
+fragments. The OOH path key is ``O2H``.
 """
 
 from __future__ import annotations
@@ -51,7 +31,6 @@ OUTPUT_STEM = "pt5_orr_defected_graphite"
 
 
 def _resolve_output_stem() -> str:
-    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
     return (
         os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
     )
@@ -107,9 +86,7 @@ def _build_go_params(
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     if freeze_adsorbate:
         go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params

@@ -13,6 +13,10 @@ Prerequisites
 - SQLite with JSON1 (``pysqlite3-binary`` if your build lacks it)
 - CUDA for GPU MLIPs
 
+Every ``run_*`` entry point calls :func:`~scgo.configure`, which sets
+``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` unless that variable is
+already set or ``SCGO_SKIP_PYTORCH_CONFIG`` is set.
+
 PyPI
 ----
 

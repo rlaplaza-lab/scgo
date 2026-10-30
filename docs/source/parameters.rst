@@ -485,8 +485,9 @@ Direct calls to :func:`~scgo.ts_search.run_transition_state_search` that omit
 NEB knobs use the same per-system presets
 (:func:`~scgo.param_presets.get_ts_defaults`) as ``get_ts_search_params``.
 Adsorbate types default to spring ``0.5``, steps ``4000``, and climb. Bare
-surfaces default to steps ``2000``. MIC, cell remap, and lattice rotation
-follow the system policy.
+``surface`` and ``surface_cluster`` default to steps ``2000``. MIC and cell
+remap follow the system policy. Lattice rotation is on only for bare
+``surface``.
 
 .. note::
 

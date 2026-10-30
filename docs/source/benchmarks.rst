@@ -34,7 +34,7 @@ Entry points
 
 Shared CLI flags (see ``benchmark.benchmark_common.add_common_benchmark_cli``):
 
-- ``--backend {mace,uma}``: default from ``SCGO_BENCHMARK_BACKEND`` (``mace``)
+- ``--backend {mace,uma,upet}``: default from ``SCGO_BENCHMARK_BACKEND`` (``mace``)
 - ``--model-name``, ``--seed``, ``--uma-task``, ``--clusters``, ``--niter``,
   ``--population-size``
 
@@ -42,12 +42,12 @@ Pytest
 ------
 
 ``pytest.ini`` sets ``testpaths = tests``, so ``benchmark/`` is out of scope
-for the default run (a ``benchmark`` marker also exists for explicit runs). To
-run MLIP regression hooks:
+for the default run. ``benchmark_Pt.py`` is marked ``slow`` and
+``requires_cuda``. To run that hook explicitly:
 
 .. code-block:: bash
 
-   pytest benchmark/ -m slow
+   pytest benchmark/ -m "slow and requires_cuda"
 
 See also `benchmark/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/benchmark/README.md>`_
 in the repository for maintainer notes.

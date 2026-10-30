@@ -1,32 +1,7 @@
 #!/usr/bin/env python3
-"""Pt5+OH gas-phase: GO + TS via ``run_go_ts``.
+"""Pt5+OH gas-phase GO + TS (``gas_cluster_adsorbate``).
 
-``system_type="gas_cluster_adsorbate"``: core-only ``COMPOSITION`` plus one
-``adsorbates`` ASE ``Atoms`` fragment. Pass ``system_type`` / ``adsorbates`` on
-the ``run_go_ts`` call.
-
-Initialization places OH on convex-hull sites of the Pt core (ranked by steric
-deficit). The GA preserves intra-fragment bonds via tag-rigid operators; crossover
-splices the core only. Optional tuning in ``go_params``:
-
-- ``connectivity_factor`` — validation threshold (default 1.4 scale on covalent radii)
-- ``cluster_adsorbate_config`` — placement height range, retries, clash checks
-- ``freeze_adsorbate_internal_geometry=True`` — strict Kabsch restore (this example
-  enables it; default is ``False`` and still keeps fragments rigid as units)
-
-Params come from the reduced-budget (~25% of production)
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
-:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
-production calculator and NEB physics but shrink the GA and NEB step budgets.
-
-TS: adsorbate presets supply climb, spring ``0.5``, shared ``neb_fmax=0.20``,
-7 images, parallel NEB, ``max_endpoint_mismatch=1.25`` Å (core fingerprint
-gate), ``energy_gap_threshold=0.75``, and IDPP-profile pair ranking (prefer robust
-interior maxima). This example only tightens ``max_pairs``.
-
-Output: ``results/pt5_oh_gas_mace/`` with ``Pt5_OH_searches/``,
-``Pt5_OH_ts_results/``, and optional ``go_ts_timing.json`` (see docs quickstart,
-*On-disk layout*).
+Sets ``freeze_adsorbate_internal_geometry=True`` (the default is ``False``).
 """
 
 from __future__ import annotations
@@ -50,7 +25,6 @@ OUTPUT_STEM = "pt5_oh_gas"
 
 
 def _resolve_output_stem() -> str:
-    """Prefer ``SCGO_EXAMPLE_OUTPUT_STEM`` for clean end-to-end runs."""
     return (
         os.environ.get("SCGO_EXAMPLE_OUTPUT_STEM", OUTPUT_STEM).strip() or OUTPUT_STEM
     )
@@ -73,9 +47,7 @@ def _build_go_params() -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     go_params["freeze_adsorbate_internal_geometry"] = True
     return go_params
 

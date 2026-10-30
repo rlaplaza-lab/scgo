@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Defected graphite surface search via ``run_go_ts``.
+"""Vacancy-defected graphite GO + TS (``surface``).
 
-``system_type="surface"`` — GA/BH act on the top slab layer of a vacancy-defected
-graphite slab (bottom layers fixed). Requires ``scgo[mace]``. Pass the same
-``surface_config`` to the preset builders and ``run_go_ts``.
-Params come from the reduced-budget (~25% of production)
-:func:`~scgo.param_presets.get_low_effort_torchsim_ga_params` /
-:func:`~scgo.param_presets.get_low_effort_ts_search_params`, which keep the
-production calculator and NEB physics but shrink the GA and NEB step budgets.
-
-Output: ``results/defected_graphite_mace/`` with searches / TS result trees.
+Searches the top slab layer via ``make_hopg_5x5_defected_graphite_surface_config``.
 """
 
 from __future__ import annotations
@@ -53,9 +45,7 @@ def _build_go_params(surface_config: SurfaceSystemConfig) -> dict:
         write_timing_json=True,
         detailed_timing=True,
     )
-    go_params[
-        "n_jobs"
-    ] = -2  # one switch parallelizes population init, offspring, and validation
+    go_params["n_jobs"] = -2
     return go_params
 
 
