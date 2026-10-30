@@ -757,10 +757,11 @@ Surface path prep (always on for slab / 2D-PBC bands):
   in-plane cell (:func:`~scgo.ts_search.neb_surface.unwrap_breaks_mic`).
   Tiny bonded polishes must not disable MIC.
 - Discrete in-plane slab symmetries (proper rotations on hexagonal / square /
-  orthogonal metrics, validated on slab atoms) compete with lattice shifts and,
-  when ``neb_surface_lattice_rotation`` is on, with continuous Kabsch. A
-  symmetry copy whose product single-point drifts more than ``0.1`` eV from the
-  stored minimum is skipped.
+  orthogonal metrics, validated on slab atoms) compete with one shared lattice
+  image per bonded fragment (lone adatoms wrap by minimum image) and, when
+  ``neb_surface_lattice_rotation`` is on, with continuous Kabsch. A symmetry
+  copy whose product single-point drifts more than ``0.1`` eV from the stored
+  minimum is skipped.
 - Variable springs: every 40 FIRE steps, surface bands set ``neb.k`` from
   image energies (``neb_spring_constant`` up to ``4.0`` eV/Å² near the peak).
   Gas bands keep a scalar spring.

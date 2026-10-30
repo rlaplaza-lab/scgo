@@ -11,8 +11,9 @@ two results are treated as duplicates:
    apply to supported clusters — see below).
 
 A high-energy copy of a known isomer is dropped. Two different shapes at almost
-the same energy are both kept. Frozen atoms (the lower slab, for example) are
-ignored.
+the same energy are both kept. Atoms the search cannot move stay out of the
+comparison, except a fully frozen support under a deposit: that slab is kept
+at low weight so the adsorption site counts.
 
 What is compared
 ----------------
@@ -28,7 +29,8 @@ Only the atoms that the search is allowed to move go into the comparison:
    * - ``gas_cluster`` / ``gas_cluster_adsorbate``
      - The whole cluster, including adsorbates
    * - ``surface_cluster`` / ``surface_cluster_adsorbate``
-     - The deposited cluster (and adsorbates); the fixed slab is ignored
+     - Deposit and adsorbates, plus the support at weight ``0.2`` (mobile
+       layers, or the full slab when every slab atom is frozen)
    * - ``surface`` / ``surface_adsorbate``
      - Mobile top slab layers (and adsorbates); fixed bottom layers are ignored
 
@@ -54,9 +56,11 @@ Type-aware defaults:
 
 - ``surface`` / ``surface_adsorbate``: mobile top layers are the region of
   interest → weight ``1.0``.
-- ``surface_cluster*`` with relaxed support layers: those layers join the
-  comparison at weight ``0.2`` so lattice noise cannot drown the deposit;
-  set ``{"mobile_slab": 0.0}`` to exclude them entirely.
+- ``surface_cluster*``: the support joins at weight ``0.2``. Relaxed runs use
+  the mobile layers. A frozen slab is included in full, so identical intra-slab
+  pairs add nothing while slab–deposit distances keep the site. A copy shifted
+  by a lattice vector still matches when distances wrap through the cell.
+  Set ``{"mobile_slab": 0.0}`` to exclude the support.
 - Gas-phase types: plain deposit/adsorbate blocks at weight ``1.0``.
 
 Tighter max-distance gate for supported clusters
@@ -164,4 +168,7 @@ checks, and so on) is a different step, documented under **Pair selection** in
 :doc:`/parameters`.
 
 The geometry test follows Vilhelmsen and Hammer, *Phys. Rev. Lett.* **108**,
-126101 (2012). Knob tables for every optimizer live in :doc:`/parameters`.
+126101 (2012). The cumulative score is divided by the smaller of the two
+distance sums, so it does not depend on which structure is passed first. A
+structure collapsed to one point does not match a real cluster. Knob tables
+for every optimizer live in :doc:`/parameters`.

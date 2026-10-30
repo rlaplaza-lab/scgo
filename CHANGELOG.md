@@ -13,6 +13,18 @@
 
 ### Fixed
 
+- Surface NEB alignment ranks one shared Cartesian lattice image per bonded
+  mobile fragment. Minimum-image scores were blind to that shift, and a
+  per-atom wrap tore a deposit that straddled the cell. Lone adatoms still
+  wrap by minimum image. Bent-fragment placement uses the rotation that
+  reaches the product pose, and in-plane Kabsch overlays both centers of mass
+  in the surface plane.
+- A frozen support is included in GO and TS uniqueness at the low slab weight,
+  so two adsorption sites of the same cluster stay distinct while a lattice
+  translate still matches under minimum-image distances. Sorted-distance
+  scores no longer depend on argument order, a point-collapsed geometry does
+  not match a real cluster, and the fingerprint cache drops an in-place edit
+  that keeps the coordinate sum.
 - XYZ export no longer crashes when `FixBondLengths` leads ASE's `move_mask`.
   Constraints are cleared on a write-only copy, and `FixAtoms` stays before
   `FixBondLengths` on reconstruct.
@@ -24,6 +36,8 @@
 
 - Lattice rotation, benchmark `--backend upet`, and `scgo.configure()` match
   the code. Example scripts drop the repeated preset essay.
+- Uniqueness and surface NEB prep describe the frozen-support block and the
+  shared lattice image.
 
 ## 0.9.3
 

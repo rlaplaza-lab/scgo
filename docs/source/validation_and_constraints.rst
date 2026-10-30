@@ -158,11 +158,15 @@ For slab prefixes (``n_slab > 0``) or exactly two periodic axes,
 :func:`~scgo.ts_search.transition_state.interpolate_path` uses surface PBC
 alignment (not gas Kabsch):
 
-- Lattice shifts / MIC snapping, then discrete slab-validated proper rotations
-  when the cell metrics allow, scored alongside Kabsch when
+- One shared in-plane lattice image per bonded mobile fragment, ranked by
+  Cartesian displacement. Minimum-image scores cannot see that shift, and a
+  per-atom wrap would split a fragment that straddles the cell. Lone adatoms
+  still wrap by minimum image. Discrete slab-validated proper rotations then
+  compete when the cell metrics allow, scored alongside Kabsch when
   ``neb_surface_lattice_rotation`` is on. Policy defaults keep Kabsch off for
   ``surface_cluster`` and adsorbate surface types; the runner AND-gates the
-  knob so an explicit ``True`` cannot re-enable it for those types.
+  knob so an explicit ``True`` cannot re-enable it for those types. In-plane
+  Kabsch overlays both centers of mass and leaves the surface-normal offset.
 - Moiety-aware unwrap of intact mobile fragments so ASE ``mic=True``
   interpolation does not split a bonded adsorbate across a cell boundary.
   Tiny bonded polishes keep ``mic=True``;
