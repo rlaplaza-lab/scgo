@@ -3,9 +3,8 @@
 Double-buffers offspring construction with batched relaxation on a dedicated
 GPU-owning thread. SQLite / population updates stay on the caller thread.
 
-The GA enables this path only when ``batch_size`` is set (micro-batches that
-must be relaxed separately). With ``batch_size=None`` the generation keeps a
-single full ``relax_batch`` so TorchSim InFlight stays packed.
+Enabled from the GA only when ``batch_size`` is set; ``batch_size=None`` keeps
+one full ``relax_batch`` so TorchSim InFlight stays packed.
 """
 
 from __future__ import annotations
@@ -36,10 +35,9 @@ def relaxer_supports_cpu_gpu_pipeline(relaxer: Any) -> bool:
     """True for CUDA :class:`TorchSimBatchRelaxer` (not ASE / CPU)."""
     if not isinstance(relaxer, TorchSimBatchRelaxer):
         return False
-    device = getattr(relaxer, "device", None)
-    if device is None:
+    if relaxer.device is None:
         return False
-    return torch.device(device).type == "cuda"
+    return torch.device(relaxer.device).type == "cuda"
 
 
 @dataclass
@@ -95,7 +93,10 @@ class GpuRelaxWorker:
             job = self._jobs.get()
             if job is self._STOP:
                 break
-            assert isinstance(job, GpuRelaxJob)
+            if not isinstance(job, GpuRelaxJob):
+                raise SCGORuntimeError(
+                    f"GpuRelaxWorker got unexpected job type {type(job)!r}"
+                )
             t0 = perf_counter()
             try:
                 relaxed = self._relaxer.relax_batch(job.prepared)
@@ -110,7 +111,7 @@ class GpuRelaxWorker:
                         relax_s=perf_counter() - t0,
                     )
                 )
-            except BaseException as exc:
+            except Exception as exc:
                 self._results.put(
                     GpuRelaxResult(
                         originals=job.originals,
@@ -154,10 +155,11 @@ def run_double_buffered_with_worker(
                 timings["produce_s"] += perf_counter() - t0
                 continue
 
+            originals = list(current)
             worker.submit(
                 GpuRelaxJob(
-                    originals=list(current),
-                    prepared=prepare_batch(list(current)),
+                    originals=originals,
+                    prepared=prepare_batch(originals),
                 )
             )
             t0 = perf_counter()
@@ -166,8 +168,8 @@ def run_double_buffered_with_worker(
             timings["produce_s"] += produce_s
 
             result = worker.wait_result()
-            timings["relax_s"] += float(result.relax_s)
-            timings["overlapped_s"] += min(float(result.relax_s), produce_s)
+            timings["relax_s"] += result.relax_s
+            timings["overlapped_s"] += min(result.relax_s, produce_s)
             if result.error is not None:
                 raise result.error
             t0 = perf_counter()

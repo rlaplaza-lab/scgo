@@ -2124,6 +2124,16 @@ def ga_go(
         # Workers reload their pairing/operator state per generation via
         # `_build_offspring_worker` (keyed on `operators_epoch`), so reuse is
         # correctness-preserving.
+        use_pipeline = (
+            relaxer_supports_cpu_gpu_pipeline(relaxer) and batch_size is not None
+        )
+        if use_pipeline:
+            log_info_v(
+                logger,
+                "CPU/GPU offspring pipeline enabled (batch_size=%d)",
+                batch_size,
+                verbosity=verbosity,
+            )
 
         for generation in tqdm(
             range(niter),
@@ -2157,7 +2167,6 @@ def ga_go(
                 operator_credit
             )
 
-            # CUDA TorchSim: double-buffer offspring waves with GPU relax; else serial.
             n_offspring = max(1, math.ceil(population_size * offspring_fraction))
             max_attempts = max(10, n_offspring * 10)
             if ga_adaptive_retry_enabled:
@@ -2179,13 +2188,6 @@ def ga_go(
                 max_attempts=max_attempts,
                 n_offspring=n_offspring,
                 max_parent_selection_misses=max(20, 2 * n_offspring),
-            )
-            # Only double-buffer when batch_size is set. With batch_size=None
-            # (scaler / production default), one full relax_batch keeps TorchSim
-            # InFlight packed; half-wave splitting regresses GPU wall more than
-            # CPU overlap can recover.
-            use_pipeline = (
-                relaxer_supports_cpu_gpu_pipeline(relaxer) and batch_size is not None
             )
             pipeline_chunk = resolve_pipeline_chunk(n_offspring, batch_size)
 

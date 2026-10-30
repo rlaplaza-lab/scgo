@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from ase import Atoms
 from ase.calculators.emt import EMT
@@ -148,3 +150,32 @@ def test_ga_go_batch_size_none_reports_no_pipeline_overlap(tmp_path, rng):
     timing = json.loads(next(out.rglob("timing.json")).read_text())
     for gen in timing["per_generation"]:
         assert float(gen["timings_s"].get("pipeline_overlapped_s", 0.0)) == 0.0
+
+
+def test_ga_go_logs_pipeline_enabled_when_gated_on(tmp_path, rng, caplog):
+    """With batch_size set and CUDA gate true, log the pipeline enable once."""
+    with (
+        patch(
+            "scgo.algorithms.geneticalgorithm_go_torchsim.relaxer_supports_cpu_gpu_pipeline",
+            return_value=True,
+        ),
+        caplog.at_level(
+            logging.INFO,
+            logger="scgo.algorithms.geneticalgorithm_go_torchsim",
+        ),
+    ):
+        ga_go(
+            composition=["Pt", "Pt", "Pt"],
+            output_dir=str(tmp_path / "ga_pipe_log"),
+            calculator=EMT(),
+            relaxer=MockRelaxer(max_steps=1),
+            niter=1,
+            population_size=4,
+            offspring_fraction=0.5,
+            niter_local_relaxation=1,
+            batch_size=2,
+            n_jobs_offspring=1,
+            verbosity=1,
+            rng=rng,
+        )
+    assert caplog.text.count("CPU/GPU offspring pipeline enabled (batch_size=2)") == 1
