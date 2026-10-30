@@ -198,7 +198,7 @@ def _patch_torchsim_constraint_device_mismatch() -> None:
 def _patch_torchsim_model_detach_outputs(model: object) -> None:
     """Detach ``forward`` outputs unless ``retain_graph`` is set (ModelInterface).
 
-    TorchSim 0.6.1 detaches states in ``_chunked_apply`` before the autobatcher
+    TorchSim 0.6.2 detaches states in ``_chunked_apply`` before the autobatcher
     split (#590), but ``InFlightAutoBatcher.next_batch`` still ``pop``/splits
     *before* detaching completed states. Graph-carrying forces plus ``FixAtoms``
     then raise ``SplitWithSizesBackward0`` inplace. Honoring the documented
