@@ -63,7 +63,7 @@ class SCGODataConnection:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, *_):
+    def __exit__(self, _exc_type, *_):
         try:
             close_data_connection(self._da)
         except (OSError, RuntimeError, AttributeError) as e:
