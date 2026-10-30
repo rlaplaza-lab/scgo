@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.build import fcc111
 
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
@@ -112,7 +113,7 @@ def test_supported_deposit_includes_relaxed_support_at_low_weight() -> None:
     assert geo.settings.comparator_pair_cor_max == SUPPORTED_CLUSTER_PAIR_COR_MAX
 
 
-def test_frozen_support_excluded_from_blocks_but_pair_cor_still_tightens() -> None:
+def test_frozen_support_included_for_registry_and_pair_cor_tightens() -> None:
     cfg = SurfaceSystemConfig(slab=_layered_slab())  # fix_all_slab_atoms=True
     n_total = len(cfg.slab) + 4 + 2
     geo = resolve_uniqueness_geometry(
@@ -121,10 +122,54 @@ def test_frozen_support_excluded_from_blocks_but_pair_cor_still_tightens() -> No
         surface_config=cfg,
         adsorbate_definition=_ads(2),
     )
+    assert geo.blocks is not None
     roles = [b.role for b in geo.blocks.blocks]
-    assert roles == ["deposit", "adsorbate"]
+    assert roles == ["mobile_slab", "deposit", "adsorbate"]
+    assert len(geo.blocks.blocks[0].indices) == len(cfg.slab)
+    assert geo.component_weights["mobile_slab"] == pytest.approx(
+        DEFAULT_SUPPORTED_SLAB_WEIGHT
+    )
     assert geo.settings.comparator_tol == DEFAULT_COMPARATOR_TOL
     assert geo.settings.comparator_pair_cor_max == SUPPORTED_CLUSTER_PAIR_COR_MAX
+
+
+def test_frozen_slab_matches_lattice_shift_and_rejects_other_sites() -> None:
+    """Registry lives in slab–deposit distances, not in the deposit alone."""
+    slab = fcc111("Pt", size=(4, 4, 2), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z = float(slab.positions[:, 2].max()) + 2.2
+    # Pt–O, not Pt–Pt: sorted Pt–slab distances on a symmetric slab barely
+    # change under rotation, while the unique O atom's registry does.
+    dimer = np.array([[2.2, 1.5, z], [2.2, 3.4, z]], dtype=float)
+    symbols = ["Pt"] * n_slab + ["Pt", "O"]
+
+    def _placed(deposit: np.ndarray) -> Atoms:
+        pos = np.vstack([slab.get_positions(), deposit])
+        return Atoms(symbols=symbols, positions=pos, cell=slab.cell, pbc=slab.pbc)
+
+    geo = resolve_uniqueness_geometry(
+        system_type="surface_cluster",
+        n_atoms=n_slab + 2,
+        surface_config=SurfaceSystemConfig(slab=slab),
+        counts=(2, 0),
+    )
+    mic = geo.build_comparator(n_top=2, mic=True)
+    base = _placed(dimer)
+    other_site = _placed(dimer + np.array([1.8, -0.6, 0.5]))
+    lattice = _placed(dimer + np.asarray(slab.cell[0], dtype=float))
+    theta = np.deg2rad(80.0)
+    rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    center = dimer[:, :2].mean(axis=0)
+    rotated = dimer.copy()
+    rotated[:, :2] = (dimer[:, :2] - center) @ rot.T + center
+    turned = _placed(rotated)
+
+    assert mic.looks_like(base, lattice)
+    assert not mic.looks_like(base, other_site)
+    assert not mic.looks_like(base, turned)
+    cartesian = geo.build_comparator(n_top=2, mic=False)
+    assert not cartesian.looks_like(base, lattice)
 
 
 def test_explicit_tolerance_disables_tightening() -> None:

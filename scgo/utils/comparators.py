@@ -193,28 +193,6 @@ def _get_sorted_dist_cache_store(atoms: Atoms) -> dict[str, dict]:
     return existing
 
 
-def _array_dirty_token(arr: np.ndarray) -> tuple:
-    """Cheap identity/content token for an ndarray (pointer, shape, dtype, sum)."""
-    checksum = float(arr.flat[0] + arr.flat[-1] + float(arr.sum())) if arr.size else 0.0
-    return (arr.__array_interface__["data"][0], arr.shape, arr.dtype.str, checksum)
-
-
-def _atoms_geometry_dirty_token(atoms: Atoms, *, mic: bool) -> tuple:
-    """Fast dirty check for positions/numbers/(cell) without hashing bytes."""
-    pos = atoms.arrays["positions"]
-    numbers = atoms.arrays["numbers"]
-    token: tuple = (
-        _array_dirty_token(pos),
-        _array_dirty_token(numbers),
-        bool(mic),
-    )
-    if mic or np.any(atoms.pbc):
-        cell = np.asarray(atoms.cell.array, dtype=np.float64)
-        pbc = tuple(bool(x) for x in atoms.pbc)
-        token = (*token, _array_dirty_token(cell), pbc)
-    return token
-
-
 def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
     """Build a content key that invalidates when geometry/composition changes."""
     positions = np.ascontiguousarray(atoms.arrays["positions"], dtype=np.float64)
@@ -225,6 +203,46 @@ def _sorted_dist_content_key(atoms: Atoms, *, mic: bool) -> tuple:
         pbc = tuple(bool(x) for x in atoms.pbc)
         key = (*key, hash(cell.tobytes()), pbc)
     return key
+
+
+def _cached_fingerprint(
+    cached: Any,
+    *,
+    content_key: tuple,
+    payload_key: str,
+) -> dict | None:
+    """Return a cached fingerprint only when its byte content key matches."""
+    if not isinstance(cached, dict):
+        return None
+    payload = cached.get(payload_key)
+    if not isinstance(payload, dict) or cached.get("content_key") != content_key:
+        return None
+    return payload
+
+
+_DISTANCE_SUM_EPS = 1e-10
+
+
+def _distance_list_mismatch(
+    c1: np.ndarray,
+    c2: np.ndarray,
+) -> tuple[float, float] | None:
+    """``(sum|Δ| / min(sums), max|Δ|)`` for one distance list.
+
+    ``None`` when the list is empty or both sums are ~0. A one-sided collapse
+    is ``(1.0, max|Δ|)``.
+    """
+    if len(c1) == 0:
+        return None
+    sum1 = float(np.sum(c1))
+    sum2 = float(np.sum(c2))
+    if sum1 <= _DISTANCE_SUM_EPS and sum2 <= _DISTANCE_SUM_EPS:
+        return None
+    abs_d = np.abs(c1 - c2)
+    max_abs = float(np.max(abs_d))
+    if sum1 <= _DISTANCE_SUM_EPS or sum2 <= _DISTANCE_SUM_EPS:
+        return 1.0, max_abs
+    return float(np.sum(abs_d)) / min(sum1, sum2), max_abs
 
 
 def _compute_sorted_dist_list(
@@ -310,9 +328,8 @@ def get_sorted_dist_list(
     This utility method is used to generate a structural fingerprint of a cluster
     by calculating all interatomic distances for each element type and sorting them.
 
-    Results are cached on ``atoms.info`` under ``_scgo_sorted_dist_fp`` and
-    invalidated when positions, numbers, or (for MIC) cell/PBC change. Cache hits
-    use a cheap dirty token (array pointer/shape/sum) and skip byte hashing.
+    Results are cached on the Atoms object and invalidated when positions,
+    numbers, or (for MIC) cell/PBC change. A hit requires the geometry byte hash.
 
     The cache is keyed by ``(start:stop, mic)`` so different subsets of the same
     structure can coexist in the cache without evicting each other.
@@ -342,17 +359,14 @@ def get_sorted_dist_list(
 
     # Cache entries are keyed by slot so different windows don't collide.
     fp_store = _get_sorted_dist_cache_store(atoms)
-    cached = fp_store.get(cache_key)
-    if isinstance(cached, dict) and isinstance(cached.get("pair_cor"), dict):
-        dirty = _atoms_geometry_dirty_token(atoms, mic=mic_b)
-        if cached.get("dirty_token") == dirty:
-            return cached["pair_cor"]
-        content_key = _sorted_dist_content_key(atoms, mic=mic_b)
-        if cached.get("content_key") == content_key:
-            cached["dirty_token"] = dirty
-            return cached["pair_cor"]
-    else:
-        content_key = _sorted_dist_content_key(atoms, mic=mic_b)
+    content_key = _sorted_dist_content_key(atoms, mic=mic_b)
+    cached_fp = _cached_fingerprint(
+        fp_store.get(cache_key),
+        content_key=content_key,
+        payload_key="pair_cor",
+    )
+    if cached_fp is not None:
+        return cached_fp
 
     pair_cor = _compute_sorted_dist_list(
         atoms,
@@ -362,7 +376,6 @@ def get_sorted_dist_list(
     )
     fp_store[cache_key] = {
         "content_key": content_key,
-        "dirty_token": _atoms_geometry_dirty_token(atoms, mic=mic_b),
         "pair_cor": pair_cor,
     }
     return pair_cor
@@ -463,26 +476,23 @@ def get_block_distance_units(
     """Compute (and cache) block-aware distance fingerprint units for ``atoms``.
 
     Results are cached alongside the legacy fingerprints on ``atoms``, keyed by
-    the block signature and ``mic`` so different partitions can coexist.
+    the block signature and ``mic`` so different partitions can coexist. A hit
+    requires the geometry byte hash.
     """
     mic_b = bool(mic)
     slot = _block_units_cache_slot(blocks, mic_b)
     fp_store = _get_sorted_dist_cache_store(atoms)
-    cached = fp_store.get(slot)
-    if isinstance(cached, dict) and isinstance(cached.get("units"), dict):
-        dirty = _atoms_geometry_dirty_token(atoms, mic=mic_b)
-        if cached.get("dirty_token") == dirty:
-            return cached["units"]
-        content_key = _sorted_dist_content_key(atoms, mic=mic_b)
-        if cached.get("content_key") == content_key:
-            cached["dirty_token"] = dirty
-            return cached["units"]
-    else:
-        content_key = _sorted_dist_content_key(atoms, mic=mic_b)
+    content_key = _sorted_dist_content_key(atoms, mic=mic_b)
+    cached_units = _cached_fingerprint(
+        fp_store.get(slot),
+        content_key=content_key,
+        payload_key="units",
+    )
+    if cached_units is not None:
+        return cached_units
     units = _compute_block_distance_units(atoms, mic_b, blocks)
     fp_store[slot] = {
         "content_key": content_key,
-        "dirty_token": _atoms_geometry_dirty_token(atoms, mic=mic_b),
         "units": units,
     }
     return units
@@ -688,7 +698,8 @@ class PureInteratomicDistanceComparator:
     def get_differences(self, a1: Atoms, a2: Atoms) -> tuple[float, float]:
         """Compute cumulative and maximum structural differences between two Atoms.
 
-        Differences are based on their sorted interatomic distances.
+        Differences are based on their sorted interatomic distances and do not
+        depend on argument order.
 
         Args:
             a1: The first Atoms object.
@@ -751,11 +762,6 @@ class PureInteratomicDistanceComparator:
                 raise SCGOValidationError(
                     "Mismatch in number of distances being compared."
                 )
-            if len(c1) == 0:
-                continue
-
-            d = np.abs(c1 - c2)
-
             if key[0] == "intra":
                 _, bi, elem = key
                 weight = self._role_weight(self.blocks.blocks[bi].role)
@@ -774,10 +780,12 @@ class PureInteratomicDistanceComparator:
             if weight <= 0.0:
                 continue
 
-            denom = float(np.sum(c1))
-            normalized = float(np.sum(d)) / denom if denom > 1e-10 else 0.0
+            mismatch = _distance_list_mismatch(c1, c2)
+            if mismatch is None:
+                continue
+            normalized, max_abs = mismatch
             total_cum_diff += weight * normalized * frac
-            max_diff = max(max_diff, float(np.max(d)))
+            max_diff = max(max_diff, max_abs)
 
         return (total_cum_diff, max_diff)
 
@@ -839,26 +847,14 @@ class PureInteratomicDistanceComparator:
                     "Mismatch in number of distances being compared."
                 )
 
-            if len(c1) == 0:
+            mismatch = _distance_list_mismatch(c1, c2)
+            if mismatch is None:
                 continue
-
-            total_dist_sum = np.sum(c1)
-            if total_dist_sum <= 1e-10:  # Use epsilon for floating-point comparison
-                continue
-
-            d = np.abs(c1 - c2)
-            cum_diff_for_type = np.sum(d)
-            max_diff_for_type = np.max(d)
-
-            max_diff = max(max_diff, max_diff_for_type)
+            normalized, max_abs = mismatch
+            max_diff = max(max_diff, max_abs)
 
             num_atoms_of_type = float(np.sum(numbers == elem))  # Vectorized operation
-            total_cum_diff += (
-                cum_diff_for_type
-                / total_dist_sum
-                * num_atoms_of_type
-                / float(len(numbers))
-            )
+            total_cum_diff += normalized * num_atoms_of_type / float(len(numbers))
 
         return (total_cum_diff, max_diff)
 

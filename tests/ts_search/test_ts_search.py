@@ -2367,6 +2367,56 @@ def test_interpolate_path_rigid_pose_bent_fragment_exact_pairs() -> None:
         assert float(np.linalg.norm(img.get_positions()[8] - cluster_com)) > chord_d
 
 
+def test_interpolate_path_rigid_pose_bent_fragment_halfway_orientation() -> None:
+    """A 90° water reorientation slerps +45°, not the transposed rotation."""
+    core = Atoms(
+        "Pt8",
+        positions=[
+            [i, j, k] for i in (0.0, 2.5) for j in (0.0, 2.5) for k in (0.0, 2.5)
+        ],
+    )
+    water_r = Atoms(
+        "OHH",
+        positions=[
+            [1.25, 1.25, 2.5 + 1.8],
+            [1.25 + 0.76, 1.25, 2.5 + 1.8 + 0.59],
+            [1.25 - 0.76, 1.25, 2.5 + 1.8 + 0.59],
+        ],
+    )
+    water_p = water_r.copy()
+    pos = water_p.get_positions()
+    origin = pos[0].copy()
+    rel = pos - origin
+    rot90 = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    pos = origin + rel @ rot90.T
+    pos = pos + (np.array([2.5 + 1.8, 1.25, 1.25]) - pos[0])
+    water_p.set_positions(pos)
+    a1 = core.copy() + water_r
+    a2 = core.copy() + water_p
+    pairs = [(8, 9), (8, 10), (9, 10)]
+    for atoms in (a1, a2):
+        atoms.set_constraint(FixBondLengths(pairs))
+    images = interpolate_path(
+        a1,
+        a2,
+        n_images=1,
+        method="linear",
+        align_endpoints=False,
+        n_slab=0,
+        n_core_mobile=8,
+        n_adsorbate_mobile=3,
+        adsorbate_fragment_lengths=[3],
+        neb_interpolation_bond_tolerance_a=0.5,
+    )
+    mid = images[1]
+    half = np.sqrt(0.5)
+    # +45° about z on the reactant O–H vector (0.76, 0, 0.59). The inverse
+    # rotation would put the hydrogen at (0.537, -0.537, 0.59).
+    expected = np.array([0.76 * half, 0.76 * half, 0.59])
+    hydrogen = mid.get_positions()[9] - mid.get_positions()[8]
+    assert np.linalg.norm(hydrogen - expected) < 0.05
+
+
 def test_interpolate_path_nonrigid_fragment_stays_cartesian_and_warns(caplog) -> None:
     core = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
     a1 = core.copy() + Atoms("OH", positions=[[1.25, 0.0, 2.0], [1.25, 0.0, 2.97]])

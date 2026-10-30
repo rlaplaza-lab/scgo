@@ -21,11 +21,14 @@ from scgo.system_types import resolve_neb_mic, resolve_structure_mic
 from scgo.utils.comparators import (
     _SORTED_DIST_FP_ATTR_KEY,
     _SORTED_DIST_FP_INFO_KEY,
+    ComparatorBlocks,
     EnergyAndStructureComparator,
     PureInteratomicDistanceComparator,
+    _compute_block_distance_units,
     _compute_sorted_dist_list,
     _sorted_dist_cache_slot,
     create_geometry_comparator,
+    get_block_distance_units,
     get_sorted_dist_list,
     uniqueness_settings_from_mapping,
 )
@@ -407,3 +410,91 @@ def test_old_flat_cache_format_gracefully_replaced() -> None:
     result = get_sorted_dist_list(atoms, mic=False)
     assert isinstance(result, dict)
     assert 78 in result
+
+
+def _pt4_cluster() -> Atoms:
+    return Atoms(
+        "Pt4",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.5, 0.0, 0.0],
+            [1.25, 2.2, 0.0],
+            [1.25, 0.7, 2.0],
+        ],
+    )
+
+
+def test_get_differences_symmetric_at_uniform_scale() -> None:
+    """A 5% scale scores 0.05 in both argument orders and misses the gate."""
+    base = _pt4_cluster()
+    scaled = base.copy()
+    scaled.positions[:] = base.positions * 1.05
+    blocks = ComparatorBlocks.from_ranges([("deposit", 0, len(base))])
+    comparators = (
+        PureInteratomicDistanceComparator(),
+        PureInteratomicDistanceComparator(blocks=blocks),
+    )
+    for comp in comparators:
+        forward = comp.get_differences(base, scaled)
+        reverse = comp.get_differences(scaled, base)
+        assert forward == pytest.approx(reverse)
+        assert forward[0] == pytest.approx(0.05)
+        assert comp.looks_like(base, scaled) is False
+        assert comp.looks_like(scaled, base) is False
+
+
+def test_collapsed_geometry_does_not_match_a_real_cluster() -> None:
+    """A point-collapsed cluster is not a duplicate of a real one, either way."""
+    real = _pt4_cluster()
+    collapsed = real.copy()
+    collapsed.positions[:] = 0.0
+    longest = float(
+        np.max(np.linalg.norm(real.positions[:, None, :] - real.positions, axis=-1))
+    )
+    comp = PureInteratomicDistanceComparator()
+    assert comp.looks_like(collapsed, real) is False
+    assert comp.looks_like(real, collapsed) is False
+    for left, right in ((collapsed, real), (real, collapsed)):
+        _cum, max_diff = comp.get_differences(left, right)
+        assert max_diff == pytest.approx(longest)
+    collapsed_copy = collapsed.copy()
+    assert comp.looks_like(collapsed, collapsed_copy) is True
+    assert comp.get_differences(collapsed, collapsed_copy) == pytest.approx((0.0, 0.0))
+
+
+def _shift_middle_atom_zero_sum(atoms: Atoms) -> None:
+    """+1.5 Å in x and -1.5 Å in y on a middle atom; the coordinate sum stays put."""
+    pos = atoms.arrays["positions"]
+    flat0 = float(pos.flat[0])
+    flat_last = float(pos.flat[-1])
+    coord_sum = float(pos.sum())
+    pos[1, 0] += 1.5
+    pos[1, 1] -= 1.5
+    assert pos.flat[0] == flat0
+    assert pos.flat[-1] == flat_last
+    assert float(pos.sum()) == pytest.approx(coord_sum)
+
+
+def test_sorted_dist_cache_invalidates_zero_sum_inplace_edit() -> None:
+    atoms = _pt4_cluster()
+    first = get_sorted_dist_list(atoms)
+    _shift_middle_atom_zero_sum(atoms)
+    refreshed = get_sorted_dist_list(atoms)
+    assert refreshed is not first
+    forced = _compute_sorted_dist_list(atoms, mic=False)
+    assert set(refreshed) == set(forced)
+    for elem in forced:
+        assert np.allclose(refreshed[elem], forced[elem])
+
+
+def test_block_distance_cache_invalidates_zero_sum_inplace_edit() -> None:
+    atoms = _pt4_cluster()
+    blocks = ComparatorBlocks.from_ranges([("deposit", 0, len(atoms))])
+    first = get_block_distance_units(atoms, mic=False, blocks=blocks)
+    _shift_middle_atom_zero_sum(atoms)
+    refreshed = get_block_distance_units(atoms, mic=False, blocks=blocks)
+    assert refreshed is not first
+    forced = _compute_block_distance_units(atoms, False, blocks)
+    assert set(refreshed) == set(forced)
+    for key in forced:
+        assert np.allclose(refreshed[key], forced[key])

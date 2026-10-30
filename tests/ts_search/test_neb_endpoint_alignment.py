@@ -15,6 +15,7 @@ from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.system_types import AdsorbateDefinition, get_system_policy
 from scgo.ts_search import transition_state as ts_mod
+from scgo.ts_search.neb_surface import consistent_product_positions
 from scgo.ts_search.transition_state import (
     _align_endpoints_blockwise,
     _align_product_for_neb,
@@ -119,6 +120,136 @@ def test_surface_alignment_rotation_reduces_mobile_rms():
     assert rms < 0.15
     slab_disp = np.linalg.norm(aligned[:n_slab] - a.get_positions()[:n_slab], axis=1)
     assert float(np.max(slab_disp)) < 1e-6
+
+
+def test_inplane_kabsch_overlays_when_centers_of_mass_differ():
+    """In-plane Kabsch maps the product centroid onto the reactant centroid."""
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.8
+    mobile = np.array(
+        [
+            [0.2, 0.4, z0],
+            [1.6, 0.3, z0],
+            [0.7, 1.5, z0 + 0.2],
+        ]
+    )
+    theta = np.deg2rad(40.0)
+    rot2 = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    center = mobile[:, :2].mean(axis=0)
+    mobile_rot = mobile.copy()
+    mobile_rot[:, :2] = (mobile[:, :2] - center) @ rot2.T + center
+    mobile_rot[:, 0] += 1.3
+    mobile_rot[:, 1] -= 0.7
+
+    a = slab.copy() + Atoms("Pt3", positions=mobile)
+    b = slab.copy() + Atoms("Pt3", positions=mobile_rot)
+    aligned, used_symmetry = _align_product_surface_pbc(
+        a,
+        b.get_positions(),
+        n_slab=n_slab,
+        enable_cell_remap=True,
+        enable_lattice_rotation=True,
+        allow_symmetry_copies=False,
+    )
+    assert used_symmetry is False
+    rms = float(np.sqrt(np.mean((aligned[n_slab:] - a.get_positions()[n_slab:]) ** 2)))
+    assert rms < 0.05
+
+
+def test_wrapped_island_lattice_image_follows_max_shift():
+    """One shared cell image, then bond unwrap, restores a split island."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 2.0
+    mobile = np.array(
+        [
+            [0.4, 0.5, z0],
+            [2.3, 0.6, z0],
+            [0.9, 2.1, z0],
+        ]
+    )
+    a = slab.copy() + Atoms("Pt3", positions=mobile)
+    wrapped = mobile + np.asarray(slab.cell[0], dtype=float)
+    wrapped[2] = wrapped[2] - np.asarray(slab.cell[0], dtype=float)
+    product = np.vstack([slab.get_positions(), wrapped])
+
+    def _recover(max_shift: int) -> np.ndarray:
+        aligned, _used = _align_product_surface_pbc(
+            a,
+            product,
+            n_slab=n_slab,
+            enable_cell_remap=True,
+            enable_lattice_rotation=False,
+            max_lattice_shift=max_shift,
+            allow_symmetry_copies=False,
+        )
+        return consistent_product_positions(
+            a, aligned, n_slab=n_slab, max_lattice_shift=max_shift
+        )
+
+    ref = a.get_positions()[n_slab:]
+    far = np.linalg.norm(_recover(0)[n_slab:] - ref, axis=1)
+    near = np.linalg.norm(_recover(1)[n_slab:] - ref, axis=1)
+    assert float(np.max(far)) > 2.0
+    assert float(np.max(near)) < 0.2
+
+
+def test_lone_adatom_many_cell_shift_snaps_with_unit_window():
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 1.8
+    a = slab.copy() + Atoms("Pt", positions=[[0.4, 0.6, z0]])
+    shift = 3.0 * np.asarray(slab.cell[0], dtype=float) + 2.0 * np.asarray(
+        slab.cell[1], dtype=float
+    )
+    product = a.get_positions().copy()
+    product[-1] = product[-1] + shift
+    aligned, _used = _align_product_surface_pbc(
+        a,
+        product,
+        n_slab=n_slab,
+        enable_cell_remap=True,
+        enable_lattice_rotation=False,
+        max_lattice_shift=1,
+        allow_symmetry_copies=False,
+    )
+    assert float(np.linalg.norm(aligned[-1] - a.get_positions()[-1])) < 0.05
+
+
+def test_interpolate_path_wrapped_dimer_keeps_identity_and_bond():
+    """A half-cell translation with one wrapped atom must not cross the dimer."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 2.0
+    a_vec = np.asarray(slab.cell[0], dtype=float)
+    reactant_xy = np.array([[1.1, 0.8, z0], [3.1, 0.95, z0]])
+    product_xy = reactant_xy + 0.51 * a_vec
+    product_xy[1] = product_xy[1] - a_vec
+    a = slab.copy() + Atoms("Pt2", positions=reactant_xy)
+    b = slab.copy() + Atoms("Pt2", positions=product_xy)
+    images = interpolate_path(
+        a,
+        b,
+        n_images=3,
+        method="linear",
+        mic=True,
+        align_endpoints=True,
+        n_slab=n_slab,
+        system_type="surface_cluster",
+        allow_symmetry_copies=False,
+        neb_surface_lattice_rotation=False,
+    )
+    bond = float(np.linalg.norm(reactant_xy[1] - reactant_xy[0]))
+    for img in images:
+        length = float(img.get_distance(n_slab, n_slab + 1, mic=False))
+        assert length == pytest.approx(bond, abs=0.05)
+    disp = images[-1].get_positions()[n_slab:] - images[0].get_positions()[n_slab:]
+    assert float(np.linalg.norm(disp[0] - disp[1])) < 0.05
 
 
 def test_interpolate_path_surface_uses_pbc_align_entrypoint(monkeypatch):

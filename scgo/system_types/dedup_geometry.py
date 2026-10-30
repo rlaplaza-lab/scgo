@@ -5,14 +5,16 @@ Resolves *what* to compare (role blocks) and *how strongly* each part counts
 
 - ``surface`` / ``surface_adsorbate`` (slab-as-target): the mobile top layers
   are the region of interest and keep full weight.
-- ``surface_cluster*`` (supported deposits): relaxed support layers are
-  included in the fingerprint at a reduced default weight
-  (:data:`scgo.constants.DEFAULT_SUPPORTED_SLAB_WEIGHT`) so near-rigid lattice
-  motion cannot dilute deposit/adsorbate discrimination, and the max
-  single-distance gate defaults to the tighter
-  :data:`SUPPORTED_CLUSTER_PAIR_COR_MAX` because block-aware fingerprints no
-  longer dilute genuine differences. Cumulative tolerance follows the shared
-  :data:`DEFAULT_COMPARATOR_TOL`.
+- ``surface_cluster*`` (supported deposits): the support is included at a
+  reduced default weight (:data:`scgo.constants.DEFAULT_SUPPORTED_SLAB_WEIGHT`).
+  Relaxed runs use the mobile layers. A frozen slab is included in full so
+  slab–deposit distances carry the adsorption registry. Identical intra-slab
+  pairs add nothing, and a lattice translation still matches under MIC. A
+  different site does not. Sorted distances can still match a pure rotation of
+  a homonuclear adsorbate on a symmetric slab. The max single-distance gate
+  defaults to the tighter :data:`SUPPORTED_CLUSTER_PAIR_COR_MAX` because
+  block-aware fingerprints no longer dilute genuine differences. Cumulative
+  tolerance follows the shared :data:`DEFAULT_COMPARATOR_TOL`.
 - Gas-phase clusters compare their deposit/adsorbate blocks directly.
 
 Explicit user knobs always win: ``comparator_component_weights`` /
@@ -307,9 +309,12 @@ def _supported_ranges(
 
     if not bool(surface_config.fix_all_slab_atoms):
         support = _mobile_support_indices(surface_config)
-        if support:
-            ranges.insert(0, ("mobile_slab", support))
-            defaults["mobile_slab"] = DEFAULT_SUPPORTED_SLAB_WEIGHT
+    else:
+        # Intra-slab pairs add nothing; slab–deposit distances are the registry.
+        support = tuple(range(n_slab))
+    if support:
+        ranges.insert(0, ("mobile_slab", support))
+        defaults["mobile_slab"] = DEFAULT_SUPPORTED_SLAB_WEIGHT
     return ranges, defaults
 
 

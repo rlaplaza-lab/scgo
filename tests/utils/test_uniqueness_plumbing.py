@@ -64,9 +64,10 @@ def test_filter_unique_minima_resolved_geometry_supported_cluster() -> None:
         surface_config=cfg,
         counts=(n_deposit, 0),
     )
-    # Frozen support → single deposit role → no blocks; compare the deposit
-    # window only (production search_mobile_count), not the fixed slab.
-    assert geo.blocks is None
+    # Frozen support stays in the fingerprint as the registry block. Intra-slab
+    # pairs of an identical slab add nothing; a moved deposit atom does not match.
+    assert geo.blocks is not None
+    assert [b.role for b in geo.blocks.blocks] == ["mobile_slab", "deposit"]
     rng = np.random.default_rng(4)
     base = np.vstack(
         [cfg.slab.get_positions(), rng.uniform(0, 3, (n_deposit, 3)) + [0, 0, 10]]

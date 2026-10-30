@@ -128,6 +128,57 @@ def _fixed_atom_indices(atoms: Atoms) -> set[int]:
     return out
 
 
+def _unwrap_mic_component(
+    pos: np.ndarray,
+    members: list[int],
+    adjacency: dict[int, list[int]],
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    *,
+    root: int,
+) -> dict[int, np.ndarray] | None:
+    """Place ``members`` at ``parent + MIC(bond)`` from ``root``.
+
+    ``None`` when a second path disagrees by more than 0.5 Å. A finite
+    molecule closes; a slab layer bonded across the cell does not, and
+    unwrapping that layer pulls atoms out of the reactant cell.
+    """
+    member_set = set(members)
+    placed = {root: np.asarray(pos[root], dtype=float).copy()}
+    queue: deque[int] = deque([root])
+    while queue:
+        parent = queue.popleft()
+        for nb in adjacency.get(parent, []):
+            if nb not in member_set:
+                continue
+            delta = (pos[nb] - pos[parent]).reshape(1, 3)
+            target, _ = find_mic(delta, cell, pbc)
+            proposed = placed[parent] + np.asarray(target, dtype=float).reshape(3)
+            if nb in placed:
+                if float(np.linalg.norm(proposed - placed[nb])) > 0.5:
+                    return None
+                continue
+            placed[nb] = proposed
+            queue.append(nb)
+    return placed
+
+
+def _component_is_periodic(
+    pos: np.ndarray,
+    members: list[int],
+    adjacency: dict[int, list[int]],
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> bool:
+    """True when MIC bonds on ``members`` do not close (a periodic network)."""
+    if len(members) < 3:
+        return False
+    return (
+        _unwrap_mic_component(pos, members, adjacency, cell, pbc, root=min(members))
+        is None
+    )
+
+
 def consistent_product_positions(
     reactant: Atoms,
     product_positions: np.ndarray,
@@ -196,7 +247,16 @@ def consistent_product_positions(
         mobile_members = [m for m in members if m not in anchor]
         if len(mobile_members) < 2:
             continue
-        root = min(mobile_members)
+        if _component_is_periodic(ref_pos, mobile_members, adjacency, cell, pbc_mic):
+            continue
+        # Lowest index may be the wrapped atom; start from the closest image.
+        root = mobile_members[0]
+        best_d = float("inf")
+        for member in mobile_members:
+            dist = float(np.linalg.norm(out[member] - ref_pos[member]))
+            if dist < best_d - 1e-12 or (abs(dist - best_d) <= 1e-12 and member < root):
+                best_d = dist
+                root = member
         placed = {root}
         queue: deque[int] = deque([root])
         while queue:
@@ -204,7 +264,10 @@ def consistent_product_positions(
             for nb in adjacency[parent]:
                 if nb in anchor or nb in placed:
                     continue
-                target_vec = ref_pos[nb] - ref_pos[parent]
+                # Stored reactant vector can be a full cell; use the MIC bond.
+                delta = (ref_pos[nb] - ref_pos[parent]).reshape(1, 3)
+                target_mic, _ = find_mic(delta, cell, pbc_mic)
+                target_vec = np.asarray(target_mic, dtype=float).reshape(3)
                 best_pos = out[nb]
                 best_err = float("inf")
                 for shift in images:
@@ -217,6 +280,94 @@ def consistent_product_positions(
                 placed.add(nb)
                 queue.append(nb)
 
+    return out
+
+
+def _mobile_intact_components(
+    reactant: Atoms,
+    product_positions: np.ndarray,
+    *,
+    mobile_mask: np.ndarray,
+    connectivity_factor: ConnectivityFactorInput | None = None,
+) -> list[list[int]]:
+    """Group mobile atoms by covalent bonds present under MIC at both endpoints.
+
+    Multi-atom groups are the moieties that must share one lattice image.
+    Every other mobile atom is returned as its own group so the caller can
+    minimum-image it independently.
+    """
+    mobile_idx = [int(i) for i in np.flatnonzero(np.asarray(mobile_mask, dtype=bool))]
+    if not mobile_idx:
+        return []
+    prod = np.asarray(product_positions, dtype=float)
+    product = reactant.copy()
+    product.set_positions(prod, apply_constraint=False)
+    mobile_set = set(mobile_idx)
+    react_edges = _bond_edge_set(reactant, connectivity_factor, use_mic=True)
+    prod_edges = _bond_edge_set(product, connectivity_factor, use_mic=True)
+    intact = {
+        edge
+        for edge in (react_edges & prod_edges)
+        if edge[0] in mobile_set and edge[1] in mobile_set
+    }
+    grouped: list[list[int]] = []
+    seen: set[int] = set()
+    if intact:
+        i_list = np.array([edge[0] for edge in intact], dtype=int)
+        j_list = np.array([edge[1] for edge in intact], dtype=int)
+        components = _union_find_components(len(reactant), i_list, j_list)
+        for members in components.values():
+            mob = [m for m in members if m in mobile_set]
+            if len(mob) < 2:
+                continue
+            grouped.append(mob)
+            seen.update(mob)
+    for idx in mobile_idx:
+        if idx not in seen:
+            grouped.append([idx])
+    return grouped
+
+
+def _compact_bonded_positions(
+    atoms: Atoms,
+    *,
+    pbc: np.ndarray | list[bool],
+    connectivity_factor: ConnectivityFactorInput | None = None,
+) -> np.ndarray:
+    """Return positions with each multi-atom fragment made Cartesian-contiguous.
+
+    The lowest-index atom of a component stays on its stored image. Neighbors
+    are placed at ``parent + MIC(stored bond)``, which pulls a fragment split
+    across the cell back together without choosing a reactant registry.
+    Lone atoms are left where they are stored.
+    """
+    probe = atoms.copy()
+    probe.pbc = np.asarray(pbc, dtype=bool)
+    pos = probe.get_positions().copy()
+    edges = _bond_edge_set(probe, connectivity_factor, use_mic=True)
+    if not edges:
+        return pos
+    n_atoms = len(probe)
+    i_list = np.array([edge[0] for edge in edges], dtype=int)
+    j_list = np.array([edge[1] for edge in edges], dtype=int)
+    components = _union_find_components(n_atoms, i_list, j_list)
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for i, j in edges:
+        adjacency[i].append(j)
+        adjacency[j].append(i)
+    cell = _cell_array(probe.cell)
+    pbc_arr = np.asarray(probe.pbc, dtype=bool)
+    out = pos.copy()
+    for members in components.values():
+        if len(members) < 2:
+            continue
+        placed = _unwrap_mic_component(
+            pos, members, adjacency, cell, pbc_arr, root=min(members)
+        )
+        if placed is None:
+            continue
+        for idx, xyz in placed.items():
+            out[idx] = xyz
     return out
 
 

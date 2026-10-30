@@ -49,8 +49,10 @@ from scgo.ts_search.neb_surface import (
     HESSIAN_MAX_MOBILE,
     K_UPDATE_EVERY,
     _cell_array,
+    _compact_bonded_positions,
     _infer_surface_normal_axis,
     _inplane_periodic_axes,
+    _mobile_intact_components,
     _pbc_for_mic_alignment,
     _requires_surface_pbc_alignment,
     apply_inplane_symmetry,
@@ -111,6 +113,11 @@ MAX_SPURIOUS_NEB_BARRIER_EV: float = 8.0
 # interior saddle (all images coincide; IDPP and linear are identical). Such
 # pairs are rejected before any GPU NEB budget is spent on them.
 MIN_NEB_ENDPOINT_DISPLACEMENT_A: float = 0.30
+
+# Lattice-image ranking compares the max atom displacement first. RMS breaks
+# a tie only when the maxima agree inside this tolerance, so a 1e-15 Å
+# rounding difference cannot flip the chosen cell.
+_LATTICE_SCORE_TIE_A: float = 1e-8
 
 
 def _detach_calc(atoms: Atoms | None) -> None:
@@ -445,6 +452,44 @@ def _core_block_match_method(n_slab: int) -> str:
     return "spatial" if int(n_slab) > 0 else "fingerprint"
 
 
+def _hungarian_species_order(
+    pos1: np.ndarray,
+    pos2: np.ndarray,
+    nums1: np.ndarray,
+    nums2: np.ndarray,
+    *,
+    squared: bool,
+) -> tuple[np.ndarray, float]:
+    """Map each atom of ``pos1`` onto ``pos2`` within each element.
+
+    ``squared`` uses the sum of squared Cartesian distances, which makes a
+    rigid translation of identical atoms a unique optimum. The sum of bare
+    distances ties for a homonuclear dimer, and the solver may then swap the
+    endpoints.
+    """
+    if len(pos1) != len(pos2):
+        raise SCGOValidationError("spatial block match: length mismatch")
+    mapping = [-1] * len(pos1)
+    total = 0.0
+    for z in set(nums1.tolist()):
+        idx1 = [i for i, x in enumerate(nums1) if int(x) == int(z)]
+        idx2 = [i for i, x in enumerate(nums2) if int(x) == int(z)]
+        if len(idx1) != len(idx2):
+            raise SCGOValidationError("spatial block match: composition mismatch")
+        delta = pos1[idx1][:, None, :] - pos2[idx2][None, :, :]
+        if squared:
+            cost = np.sum(delta * delta, axis=-1)
+        else:
+            cost = np.linalg.norm(delta, axis=-1)
+        rows, cols = linear_sum_assignment(cost)
+        for ri, ci in zip(rows, cols, strict=True):
+            mapping[idx1[ri]] = idx2[ci]
+            total += float(cost[ri, ci])
+    if any(slot < 0 for slot in mapping):
+        raise SCGOValidationError("spatial block match: incomplete assignment")
+    return np.asarray(mapping, dtype=int), total
+
+
 def _permute_atoms_block_to_match(
     a1_block: Atoms,
     a2_block: Atoms,
@@ -452,17 +497,22 @@ def _permute_atoms_block_to_match(
     mic_cell: np.ndarray | None = None,
     mic_pbc: np.ndarray | list[bool] | None = None,
     method: str = "fingerprint",
+    max_lattice_shift: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (positions, atomic_numbers) for a2_block permuted to match a1_block.
 
     ``method``:
     - ``"fingerprint"``: local-distance fingerprints (rotation-robust).
-    - ``"spatial"``: Hungarian on Cartesian (MIC) distances — prefers minimal travel
-      for NEB cores that are already roughly aligned.
+    - ``"spatial"``: Hungarian on Cartesian distances. On a periodic cell the
+      whole block shares one lattice image, chosen jointly with the permutation.
     """
     if method == "spatial":
         return _permute_atoms_block_spatially(
-            a1_block, a2_block, mic_cell=mic_cell, mic_pbc=mic_pbc
+            a1_block,
+            a2_block,
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
+            max_lattice_shift=max_lattice_shift,
         )
     if method != "fingerprint":
         raise SCGOValidationError(f"Unknown block permute method: {method!r}")
@@ -480,33 +530,52 @@ def _permute_atoms_block_spatially(
     *,
     mic_cell: np.ndarray | None = None,
     mic_pbc: np.ndarray | list[bool] | None = None,
+    max_lattice_shift: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Permute a2 onto a1 by minimizing per-species Cartesian (MIC) travel."""
+    """Permute a2 onto a1 by one shared lattice image and a Cartesian assignment.
+
+    Independent minimum-image distances let a wrapped atom of a dimer look
+    closer to the wrong partner. The block is first made internally contiguous,
+    then each candidate lattice vector is applied to every atom and the
+    permutation is chosen from Cartesian distances. Gas matching (no MIC cell)
+    keeps the historical sum-of-distances assignment and does not translate.
+    """
     if len(a1_block) != len(a2_block):
         raise SCGOValidationError("spatial block match: length mismatch")
-    pos1 = a1_block.get_positions()
-    pos2 = a2_block.get_positions()
-    nums1 = a1_block.numbers
-    nums2 = a2_block.numbers
-    mapping = [-1] * len(a1_block)
+    pos1 = np.asarray(a1_block.get_positions(), dtype=float)
+    pos2 = np.asarray(a2_block.get_positions(), dtype=float)
+    nums1 = np.asarray(a1_block.numbers)
+    nums2 = np.asarray(a2_block.numbers)
     use_mic = mic_cell is not None and mic_pbc is not None and bool(np.any(mic_pbc))
-    for z in set(nums1.tolist()):
-        idx1 = [i for i, x in enumerate(nums1) if int(x) == int(z)]
-        idx2 = [i for i, x in enumerate(nums2) if int(x) == int(z)]
-        if len(idx1) != len(idx2):
-            raise SCGOValidationError("spatial block match: composition mismatch")
-        p1 = pos1[idx1]
-        p2 = pos2[idx2]
-        m = len(idx1) * len(idx2)
-        dlt = (p1[:, None, :] - p2[None, :, :]).reshape(m, 3)
-        if use_mic:
-            dlt, _ = find_mic(dlt, mic_cell, mic_pbc)
-        cost = np.linalg.norm(dlt, axis=1).reshape(len(idx1), len(idx2))
-        rows, cols = linear_sum_assignment(cost)
-        for ri, ci in zip(rows, cols, strict=True):
-            mapping[idx1[ri]] = idx2[ci]
-    order = np.asarray(mapping, dtype=int)
-    return pos2[order], nums2[order]
+    if not use_mic:
+        order, _cost = _hungarian_species_order(pos1, pos2, nums1, nums2, squared=False)
+        return pos2[order], nums2[order]
+
+    pos2 = _compact_bonded_positions(a2_block, pbc=mic_pbc)
+    axis_a, axis_b = _inplane_periodic_axes(mic_pbc)
+    shifts = _shared_image_candidates(
+        pos1,
+        pos2,
+        list(range(len(pos2))),
+        mic_cell,
+        mic_pbc,
+        axis_a=axis_a,
+        axis_b=axis_b,
+        max_shift=max(0, int(max_lattice_shift)),
+    )
+    best_cost = float("inf")
+    best_pos = pos2
+    best_order = np.arange(len(pos2))
+    for shift in shifts:
+        shifted = pos2 + shift
+        order, cost = _hungarian_species_order(
+            pos1, shifted, nums1, nums2, squared=True
+        )
+        if cost < best_cost - 1e-12:
+            best_cost = cost
+            best_pos = shifted
+            best_order = order
+    return best_pos[best_order], nums2[best_order]
 
 
 def _match_adsorbate_fragments_by_com(
@@ -613,6 +682,7 @@ def _match_core_block(
     *,
     mic_cell: np.ndarray | None = None,
     mic_pbc: np.ndarray | list[bool] | None = None,
+    max_lattice_shift: int = 1,
 ) -> None:
     """Permute product core atoms onto the reactant core (in-place)."""
     if n_core <= 0:
@@ -624,6 +694,7 @@ def _match_core_block(
         mic_cell=mic_cell,
         mic_pbc=mic_pbc,
         method=_core_block_match_method(n_slab),
+        max_lattice_shift=max_lattice_shift,
     )
     _assign_atom_block(a2, s1, s2, p_blk, n_blk)
 
@@ -670,6 +741,7 @@ def _align_endpoints_blockwise(
     mic_pbc: np.ndarray | list[bool] | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
     match_adsorbate: bool = True,
+    max_lattice_shift: int = 1,
 ) -> None:
     """Match product to reactant per block (slab indices unchanged).
 
@@ -684,7 +756,15 @@ def _align_endpoints_blockwise(
         raise SCGOValidationError(
             f"align blockwise: n_slab+n_core+n_ads={n_slab + n_core + n_ads} != len={n}"
         )
-    _match_core_block(a1, a2, n_slab, n_core, mic_cell=mic_cell, mic_pbc=mic_pbc)
+    _match_core_block(
+        a1,
+        a2,
+        n_slab,
+        n_core,
+        mic_cell=mic_cell,
+        mic_pbc=mic_pbc,
+        max_lattice_shift=max_lattice_shift,
+    )
     if match_adsorbate:
         _match_adsorbate_block(
             a1,
@@ -781,75 +861,161 @@ def _lattice_translation_candidates(
     return candidates
 
 
-def _collective_mobile_lattice_snap(
+def _unique_translation_vectors(
+    shifts: list[np.ndarray], *, tol: float = 1e-6
+) -> list[np.ndarray]:
+    """Drop duplicate Cartesian shifts (grid vectors and MIC wraps coincide)."""
+    kept: list[np.ndarray] = []
+    for shift in shifts:
+        vec = np.asarray(shift, dtype=float).reshape(3)
+        if any(float(np.linalg.norm(vec - prev)) <= tol for prev in kept):
+            continue
+        kept.append(vec)
+    return kept
+
+
+def _cartesian_displacement_score(
     ref_pos: np.ndarray,
     prod_pos: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray | list[bool],
-    mobile_mask: np.ndarray,
-    *,
-    axis_a: int,
-    axis_b: int,
-    max_shift: int,
-    score_mask: np.ndarray | None = None,
-) -> np.ndarray:
-    """Pick a uniform in-plane lattice image for mobile atoms before per-atom MIC.
+    mask: np.ndarray,
+) -> tuple[float, float]:
+    """Return ``(max, rms)`` Cartesian displacement norms on ``mask``.
 
-    Applying per-atom MIC first can scramble a compact deposit that straddles a
-    cell boundary; a collective image keeps the moiety intact for IDPP.
+    Minimum-image distances are invariant to a lattice translation, so they
+    cannot rank candidate cell images. The Cartesian norms can.
     """
-    if not np.any(mobile_mask):
-        return prod_pos
-    rank_mask = mobile_mask if score_mask is None else score_mask
-
-    best_pos = prod_pos.copy()
-    best_score, _ = _score_mobile_endpoint_displacement(
-        ref_pos, best_pos, rank_mask, cell, pbc
-    )
-    for shift in _lattice_translation_candidates(
-        cell, axis_a, axis_b, max_shift=max_shift
-    ):
-        shifted = prod_pos.copy()
-        shifted[mobile_mask] = shifted[mobile_mask] + shift
-        score, _ = _score_mobile_endpoint_displacement(
-            ref_pos, shifted, rank_mask, cell, pbc
-        )
-        if score < best_score:
-            best_score = score
-            best_pos = shifted
-    return best_pos
+    idx = np.flatnonzero(np.asarray(mask, dtype=bool))
+    if idx.size == 0:
+        return 0.0, 0.0
+    norms = np.linalg.norm(prod_pos[idx] - ref_pos[idx], axis=1)
+    return float(np.max(norms)), float(np.sqrt(np.mean(norms**2)))
 
 
-def _snap_to_reactant_mic_frame(
+def _displacement_score_improves(
+    challenger: tuple[float, float],
+    incumbent: tuple[float, float],
+) -> bool:
+    """True when ``challenger`` has a smaller max, or a tied max and smaller RMS."""
+    if challenger[0] < incumbent[0] - _LATTICE_SCORE_TIE_A:
+        return True
+    maxima_tie = abs(challenger[0] - incumbent[0]) <= _LATTICE_SCORE_TIE_A
+    return maxima_tie and challenger[1] < incumbent[1] - _LATTICE_SCORE_TIE_A
+
+
+def _remove_anchor_origin_shift(
     ref_pos: np.ndarray,
     pos: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray | list[bool],
     anchor_mask: np.ndarray,
 ) -> np.ndarray:
-    """Express ``pos`` in the reactant periodic image (Cartesian, MIC-short)."""
-    disp_mic, _ = find_mic(pos - ref_pos, cell=cell, pbc=pbc)
-    if np.any(anchor_mask):
-        disp_mic = disp_mic - np.mean(disp_mic[anchor_mask], axis=0)
-    snapped = ref_pos + disp_mic
-    if np.any(anchor_mask):
-        snapped[anchor_mask] = ref_pos[anchor_mask]
-    return snapped
+    """Subtract the mean anchor MIC displacement, then pin anchors.
+
+    The correction is one Cartesian shift of every atom, so a bonded deposit
+    is not torn. Anchors are then overwritten with the reactant coordinates.
+    """
+    out = np.asarray(pos, dtype=float).copy()
+    if not np.any(anchor_mask):
+        return out
+    disp_mic, _ = find_mic(out[anchor_mask] - ref_pos[anchor_mask], cell=cell, pbc=pbc)
+    origin = np.mean(np.asarray(disp_mic, dtype=float), axis=0)
+    out = out - origin
+    out[anchor_mask] = ref_pos[anchor_mask]
+    return out
 
 
-def _score_mobile_endpoint_displacement(
+def _shared_image_candidates(
     ref_pos: np.ndarray,
     prod_pos: np.ndarray,
-    mobile_mask: np.ndarray,
+    idx: list[int],
     cell: np.ndarray,
     pbc: np.ndarray | list[bool],
-) -> tuple[float, float]:
-    """Return (max, rms) mobile-atom displacement norms in the reactant MIC frame."""
-    if not np.any(mobile_mask):
-        return 0.0, 0.0
-    disp_mic, _ = find_mic(prod_pos - ref_pos, cell=cell, pbc=pbc)
-    norms = np.linalg.norm(disp_mic[mobile_mask], axis=1)
-    return float(np.max(norms)), float(np.sqrt(np.mean(norms**2)))
+    *,
+    axis_a: int,
+    axis_b: int,
+    max_shift: int,
+) -> list[np.ndarray]:
+    """In-plane lattice images, plus per-atom MIC wraps when ``max_shift >= 1``.
+
+    ``max_shift == 0`` is only the zero vector, so a one-cell island stays on
+    its stored image. With a wider grid, each atom's MIC wrap is also a shared
+    shift, so a uniform translation of many cells is still found.
+    """
+    shifts = _lattice_translation_candidates(cell, axis_a, axis_b, max_shift=max_shift)
+    if max_shift >= 1 and idx:
+        index = np.asarray(idx, dtype=int)
+        disp = prod_pos[index] - ref_pos[index]
+        mic, _ = find_mic(disp, cell=cell, pbc=pbc)
+        wrap = disp - np.asarray(mic, dtype=float)
+        for vector in wrap:
+            shifts.append(-np.asarray(vector, dtype=float))
+    return _unique_translation_vectors(shifts)
+
+
+def _collective_mobile_lattice_snap(
+    ref_pos: np.ndarray,
+    prod_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool],
+    components: list[list[int]],
+    *,
+    axis_a: int,
+    axis_b: int,
+    max_shift: int,
+    enable_cell_remap: bool,
+    score_mask: np.ndarray,
+    anchor_mask: np.ndarray,
+) -> np.ndarray:
+    """Place each mobile component on one Cartesian lattice image.
+
+    A bonded moiety shares one in-plane shift, ranked by Cartesian
+    ``(max, rms)`` displacement. Lone adatoms keep per-atom MIC.
+    """
+    out = np.asarray(prod_pos, dtype=float).copy()
+    if not components:
+        if np.any(anchor_mask):
+            out[anchor_mask] = ref_pos[anchor_mask]
+        return out
+
+    for comp in components:
+        if len(comp) < 2:
+            index = np.asarray(comp, dtype=int)
+            disp_mic, _ = find_mic(out[index] - ref_pos[index], cell=cell, pbc=pbc)
+            out[index] = ref_pos[index] + np.asarray(disp_mic, dtype=float)
+            continue
+        if not enable_cell_remap:
+            continue
+        rank_idx = [i for i in comp if bool(score_mask[i])]
+        if not rank_idx:
+            rank_idx = list(comp)
+        comp_index = np.asarray(comp, dtype=int)
+        base = out[comp_index].copy()
+        local = {int(atom): k for k, atom in enumerate(comp_index)}
+        rank_local = [local[i] for i in rank_idx]
+        ref_rank = ref_pos[np.asarray(rank_idx, dtype=int)]
+        shifts = _shared_image_candidates(
+            ref_pos,
+            out,
+            comp,
+            cell,
+            pbc,
+            axis_a=axis_a,
+            axis_b=axis_b,
+            max_shift=max_shift,
+        )
+        best_shift = np.zeros(3, dtype=float)
+        best_score = (float("inf"), float("inf"))
+        for shift in shifts:
+            norms = np.linalg.norm(base[rank_local] + shift - ref_rank, axis=1)
+            score = (float(np.max(norms)), float(np.sqrt(np.mean(np.square(norms)))))
+            if _displacement_score_improves(score, best_score):
+                best_score = score
+                best_shift = shift
+        out[comp_index] = base + best_shift
+
+    if np.any(anchor_mask):
+        out[anchor_mask] = ref_pos[anchor_mask]
+    return out
 
 
 def _core_alignment_mask(
@@ -890,15 +1056,19 @@ def _apply_global_inplane_kabsch(
     idx = np.where(fit_mask)[0]
     if idx.size < 2:
         return prod_pos
-    center = ref_pos[idx].mean(axis=0)
-    p_ref_c = ref_pos[idx] - center
-    p_prod_c = prod_pos[idx] - center
+    # Both centroids. The surface-normal part of the COM shift stays put.
+    center_ref = ref_pos[idx].mean(axis=0)
+    center_prod = prod_pos[idx].mean(axis=0)
+    p_ref_c = ref_pos[idx] - center_ref
+    p_prod_c = prod_pos[idx] - center_prod
     rot = _kabsch_rotation_in_plane(p_ref_c, p_prod_c, surface_normal_axis=normal_axis)
     _validate_lattice_compatible_rotation(rot, normal_axis)
     out = prod_pos.copy()
     move = apply_mask if apply_mask is not None else ~anchor_mask
     if np.any(move):
-        out[move] = (prod_pos[move] - center) @ rot.T + center
+        shift = np.asarray(center_ref - center_prod, dtype=float).copy()
+        shift[normal_axis] = 0.0
+        out[move] = (prod_pos[move] - center_prod) @ rot.T + center_prod + shift
     if np.any(anchor_mask):
         out[anchor_mask] = ref_pos[anchor_mask]
     return out
@@ -914,17 +1084,18 @@ def _align_product_surface_pbc(
     max_lattice_shift: int = 1,
     n_core_mobile: int | None = None,
     allow_symmetry_copies: bool = True,
+    connectivity_factor: ConnectivityFactorInput | None = None,
 ) -> tuple[np.ndarray, bool]:
-    """Align product to reactant using MIC, lattice shifts, and in-plane transforms.
+    """Align product to reactant using lattice images and in-plane transforms.
 
     **Single surface NEB alignment entry point.** Serial (:func:`find_transition_state`),
     parallel (:func:`run_parallel_neb_search`), and :func:`interpolate_path` all route
     slab/periodic endpoint prep through this helper (not mobile-only Kabsch).
 
     Only energy-equivalent transforms are considered:
-    - collective uniform in-plane lattice image for mobile atoms,
-    - per-atom minimum-image wrapping,
-    - integer in-plane lattice translations up to ``max_lattice_shift`` cells,
+    - one shared in-plane lattice image per bonded mobile component, ranked by
+      Cartesian displacement (minimum-image scores are blind to lattice shifts),
+    - per-atom minimum-image wrapping of lone adatoms,
     - discrete slab-validated proper rotations when available,
     - global in-plane Kabsch when ``enable_lattice_rotation`` is true
       (scored alongside discrete ops).
@@ -955,34 +1126,33 @@ def _align_product_surface_pbc(
     )
 
     prod = np.asarray(product_positions, dtype=float).copy()
-    # Collective image first keeps compact deposits intact; per-atom MIC alone
-    # can scramble a moiety that straddles a cell boundary (Pt5-on-graphite).
-    if enable_cell_remap:
-        prod = _collective_mobile_lattice_snap(
+    prod = _remove_anchor_origin_shift(ref_pos, prod, cell, pbc_mic, anchor_mask)
+    components = _mobile_intact_components(
+        reactant,
+        prod,
+        mobile_mask=mobile_mask,
+        connectivity_factor=connectivity_factor,
+    )
+
+    def _place(pos: np.ndarray) -> np.ndarray:
+        return _collective_mobile_lattice_snap(
             ref_pos,
-            prod,
+            pos,
             cell,
             pbc_mic,
-            mobile_mask,
+            components,
             axis_a=axis_a,
             axis_b=axis_b,
             max_shift=max_lattice_shift,
+            enable_cell_remap=enable_cell_remap,
             score_mask=score_mask,
+            anchor_mask=anchor_mask,
         )
 
-    prod = _snap_to_reactant_mic_frame(ref_pos, prod, cell, pbc_mic, anchor_mask)
-
+    prod = _place(prod)
     best_pos = prod.copy()
-    best_score, _ = _score_mobile_endpoint_displacement(
-        ref_pos, best_pos, score_mask, cell, pbc_mic
-    )
+    best_score = _cartesian_displacement_score(ref_pos, best_pos, score_mask)
     best_used_symmetry = False
-
-    shifts = _lattice_translation_candidates(
-        cell, axis_a, axis_b, max_shift=max_lattice_shift
-    )
-    if not enable_cell_remap:
-        shifts = [np.zeros(3, dtype=float)]
 
     sym_mats = (
         inplane_symmetry_matrices(reactant, n_slab=n_slab)
@@ -994,61 +1164,48 @@ def _align_product_surface_pbc(
         symmetry_anchor_center(reactant, n_slab=n_slab) if use_discrete else None
     )
 
-    for shift in shifts:
-        prod_shifted = prod + shift
-        prod_snapped = _snap_to_reactant_mic_frame(
-            ref_pos, prod_shifted, cell, pbc_mic, anchor_mask
-        )
-        candidates: list[tuple[float, np.ndarray, bool]] = []
-        score, _ = _score_mobile_endpoint_displacement(
-            ref_pos, prod_snapped, score_mask, cell, pbc_mic
-        )
-        candidates.append((score, prod_snapped, False))
-
-        if use_discrete and sym_center is not None:
-            for rot in sym_mats:
-                if np.allclose(rot, np.eye(3), atol=1e-12):
-                    continue
-                prod_sym = apply_inplane_symmetry(
-                    prod_snapped,
-                    rot,
-                    center=sym_center,
-                    mobile_mask=mobile_mask,
-                    anchor_mask=anchor_mask,
-                    ref_pos=ref_pos,
-                )
-                prod_sym_snapped = _snap_to_reactant_mic_frame(
-                    ref_pos, prod_sym, cell, pbc_mic, anchor_mask
-                )
-                score_sym, _ = _score_mobile_endpoint_displacement(
-                    ref_pos, prod_sym_snapped, score_mask, cell, pbc_mic
-                )
-                candidates.append((score_sym, prod_sym_snapped, True))
-        if enable_lattice_rotation:
-            prod_rot = _apply_global_inplane_kabsch(
-                ref_pos,
-                prod_snapped,
-                score_mask,
-                normal_axis=normal_axis,
+    if use_discrete and sym_center is not None:
+        for rot in sym_mats:
+            if np.allclose(rot, np.eye(3), atol=1e-12):
+                continue
+            prod_sym = apply_inplane_symmetry(
+                prod,
+                rot,
+                center=sym_center,
+                mobile_mask=mobile_mask,
                 anchor_mask=anchor_mask,
-                apply_mask=mobile_mask,
+                ref_pos=ref_pos,
             )
-            prod_rot_snapped = _snap_to_reactant_mic_frame(
-                ref_pos, prod_rot, cell, pbc_mic, anchor_mask
-            )
-            score_rot, _ = _score_mobile_endpoint_displacement(
-                ref_pos, prod_rot_snapped, score_mask, cell, pbc_mic
-            )
-            candidates.append((score_rot, prod_rot_snapped, False))
+            prod_sym = _place(prod_sym)
+            score_sym = _cartesian_displacement_score(ref_pos, prod_sym, score_mask)
+            if _displacement_score_improves(score_sym, best_score):
+                best_score = score_sym
+                best_pos = prod_sym
+                best_used_symmetry = True
+    if enable_lattice_rotation:
+        prod_rot = _apply_global_inplane_kabsch(
+            ref_pos,
+            prod,
+            score_mask,
+            normal_axis=normal_axis,
+            anchor_mask=anchor_mask,
+            apply_mask=mobile_mask,
+        )
+        prod_rot = _place(prod_rot)
+        score_rot = _cartesian_displacement_score(ref_pos, prod_rot, score_mask)
+        if _displacement_score_improves(score_rot, best_score):
+            best_pos = prod_rot
+            best_used_symmetry = False
 
-        for score_c, pos_c, used_sym in candidates:
-            if score_c < best_score:
-                best_score = score_c
-                best_pos = pos_c
-                best_used_symmetry = used_sym
-
-    aligned = _snap_to_reactant_mic_frame(ref_pos, best_pos, cell, pbc_mic, anchor_mask)
-    return aligned, best_used_symmetry
+    if enable_cell_remap:
+        best_pos = consistent_product_positions(
+            reactant,
+            best_pos,
+            n_slab=n_slab,
+            connectivity_factor=connectivity_factor,
+            max_lattice_shift=max_lattice_shift,
+        )
+    return best_pos, best_used_symmetry
 
 
 def _align_product_for_neb(
@@ -1061,6 +1218,7 @@ def _align_product_for_neb(
     surface_max_lattice_shift: int = 1,
     n_core_mobile: int | None = None,
     allow_symmetry_copies: bool = True,
+    connectivity_factor: ConnectivityFactorInput | None = None,
 ) -> tuple[np.ndarray, bool]:
     """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC).
 
@@ -1077,6 +1235,7 @@ def _align_product_for_neb(
             max_lattice_shift=surface_max_lattice_shift,
             n_core_mobile=n_core_mobile,
             allow_symmetry_copies=allow_symmetry_copies,
+            connectivity_factor=connectivity_factor,
         )
     return (
         _align_product_kabsch_to_reactant(
@@ -1216,6 +1375,7 @@ def _overlay_product_core(
     n_core: int,
     mic_cell: np.ndarray | None,
     mic_pbc: np.ndarray | None,
+    max_lattice_shift: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Permute product core onto reactant; Kabsch-overlay gas mobile atoms.
 
@@ -1252,6 +1412,7 @@ def _overlay_product_core(
         mic_cell=mic_cell,
         mic_pbc=mic_pbc,
         method=_core_block_match_method(n_slab),
+        max_lattice_shift=max_lattice_shift,
     )
     pos_j[i0:i1] = matched_core
     nums_j[i0:i1] = matched_nums
@@ -1272,6 +1433,7 @@ def _reorder_product_to_match_reactant(
     n_adsorbate_mobile: int | None,
     adsorbate_fragment_lengths: list[int] | None = None,
     match_adsorbate: bool = True,
+    max_lattice_shift: int = 1,
 ) -> np.ndarray:
     """Reorder product atoms (positions and species) to match reactant ordering.
 
@@ -1297,6 +1459,7 @@ def _reorder_product_to_match_reactant(
             mic_pbc=mic_pbc,
             adsorbate_fragment_lengths=adsorbate_fragment_lengths,
             match_adsorbate=match_adsorbate,
+            max_lattice_shift=max_lattice_shift,
         )
         return product.get_positions()
     if 0 < n_slab < n_atom:
@@ -1309,6 +1472,7 @@ def _reorder_product_to_match_reactant(
             mic_cell=mic_cell,
             mic_pbc=mic_pbc,
             method="spatial",
+            max_lattice_shift=max_lattice_shift,
         )
         pos = product.get_positions().copy()
         nums = product.numbers.copy()
@@ -1326,15 +1490,14 @@ def _reorder_product_to_match_reactant(
 
 
 def _kabsch_row_rotation(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
-    """Return ``R`` such that centered row-vectors satisfy ``src @ R ≈ dst``."""
-    h = np.asarray(src, dtype=float).T @ np.asarray(dst, dtype=float)
-    u, _, vt = np.linalg.svd(h)
-    rot = vt.T @ u.T
-    if np.linalg.det(rot) < 0.0:
-        vt = vt.copy()
-        vt[-1] *= -1.0
-        rot = vt.T @ u.T
-    return rot
+    """Return ``R`` such that centered row-vectors satisfy ``src @ R ≈ dst``.
+
+    :func:`kabsch_rotation` satisfies ``moving @ R.T ≈ reference``. Callers
+    here right-multiply, so the row-vector map is that matrix transposed.
+    """
+    src_a = np.asarray(src, dtype=float)
+    dst_a = np.asarray(dst, dtype=float)
+    return _kabsch_rotation(dst_a, src_a).T
 
 
 def _row_rotation_aligning_directions(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
@@ -1795,13 +1958,14 @@ def interpolate_path(
 
     ``align_endpoints`` (default True): reorder endpoint atoms to match reactant.
     For slab/surface workflows (``n_slab > 0`` or exactly two periodic axes),
-    alignment uses ``_align_product_surface_pbc``: MIC-aware matching, collective
-    mobile lattice-image selection, per-atom MIC snapping, optional integer
-    in-plane lattice shifts (``neb_surface_max_lattice_shift``), discrete
-    slab-validated proper rotations when available, and global in-plane Kabsch
-    when enabled (scored alongside discrete ops), with anchors reset to the
-    reactant slab frame. Intact mobile fragments are then unwrapped so ASE MIC
-    interpolation cannot split them.
+    alignment uses ``_align_product_surface_pbc``: one shared Cartesian lattice
+    image per bonded mobile component (lone adatoms stay on per-atom MIC),
+    optional integer in-plane shifts up to ``neb_surface_max_lattice_shift``,
+    discrete slab-validated proper rotations when available, and global
+    in-plane Kabsch when enabled (scored alongside discrete ops), with anchors
+    reset to the reactant slab frame. Intact mobile fragments are then
+    unwrapped along minimum-image reactant bonds so ASE MIC interpolation
+    cannot split them.
     Gas-phase clusters (no slab prefix, including a 3D vacuum box with
     ``pbc=True``) use the same core overlay as pair selection (fingerprint +
     Kabsch + spatial rematch). Adsorbate blocks are matched in that overlaid
@@ -1864,6 +2028,7 @@ def interpolate_path(
                 n_core=int(n_core_mobile),
                 mic_cell=mic_cell,
                 mic_pbc=mic_pbc,
+                max_lattice_shift=neb_surface_max_lattice_shift,
             )
             if surface_pbc:
                 pos_j, used_symmetry_copy = _align_product_for_neb(
@@ -1875,6 +2040,7 @@ def interpolate_path(
                     surface_max_lattice_shift=neb_surface_max_lattice_shift,
                     n_core_mobile=n_core_mobile,
                     allow_symmetry_copies=allow_symmetry_copies,
+                    connectivity_factor=connectivity_factor,
                 )
             a2_copy.set_positions(pos_j, apply_constraint=False)
             a2_copy.numbers = nums_j
@@ -1897,6 +2063,7 @@ def interpolate_path(
                 n_adsorbate_mobile=n_adsorbate_mobile,
                 adsorbate_fragment_lengths=adsorbate_fragment_lengths,
                 match_adsorbate=True,
+                max_lattice_shift=neb_surface_max_lattice_shift,
             )
             pos_j, used_symmetry_copy = _align_product_for_neb(
                 a1_copy,
@@ -1907,6 +2074,7 @@ def interpolate_path(
                 surface_max_lattice_shift=neb_surface_max_lattice_shift,
                 n_core_mobile=n_core_mobile,
                 allow_symmetry_copies=allow_symmetry_copies,
+                connectivity_factor=connectivity_factor,
             )
             if not surface_pbc:
                 n_fit = (
