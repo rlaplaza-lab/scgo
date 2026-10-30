@@ -7,19 +7,8 @@ from collections.abc import Sequence
 import numpy as np
 from ase import Atoms
 
-from scgo.cluster_adsorbate.sites import (
-    compute_surface_site_candidates,
-    count_site_candidates,
-)
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius, get_vdw_radius
-
-
-def count_adsorption_site_candidates(atoms: Atoms) -> int:
-    """Return a conservative count of distinct adsorption sites on a 3D structure."""
-    if len(atoms) == 0:
-        return 0
-    return count_site_candidates(compute_surface_site_candidates(atoms))
 
 
 def estimate_fragment_footprint_radius(fragment: Atoms) -> float:

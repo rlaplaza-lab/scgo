@@ -1869,6 +1869,7 @@ def ga_go(
     # UnboundLocalError (which would mask an earlier failure, e.g. one raised
     # during the initial population relaxation). Created lazily in the loop.
     offspring_executor: ProcessPoolExecutor | None = None
+    gpu_relax_worker: GpuRelaxWorker | None = None
 
     try:
         log_info_v(
@@ -2128,6 +2129,8 @@ def ga_go(
             relaxer_supports_cpu_gpu_pipeline(relaxer) and batch_size is not None
         )
         if use_pipeline:
+            gpu_relax_worker = GpuRelaxWorker(relaxer)
+            gpu_relax_worker.start()
             log_info_v(
                 logger,
                 "CPU/GPU offspring pipeline enabled (batch_size=%d)",
@@ -2189,7 +2192,6 @@ def ga_go(
                 n_offspring=n_offspring,
                 max_parent_selection_misses=max(20, 2 * n_offspring),
             )
-            pipeline_chunk = resolve_pipeline_chunk(n_offspring, batch_size)
 
             log_phase_subheader(
                 logger,
@@ -2279,6 +2281,7 @@ def ga_go(
 
             try:
                 if use_pipeline:
+                    assert gpu_relax_worker is not None
                     hooks = _PipelineGenerationHooks(
                         wave_state=wave_state,
                         population=population,
@@ -2289,14 +2292,14 @@ def ga_go(
                         offspring_executor=offspring_executor,
                         generation=generation,
                         profile_counters=profile_counters,
-                        wave_target=pipeline_chunk,
+                        wave_target=resolve_pipeline_chunk(n_offspring, batch_size),
                         relaxer=relaxer,
                         profile_timings=profile_timings,
                         commit_kwargs=relax_commit_kwargs,
                     )
                     t0_relax_call = perf_counter()
                     pipe_timings = run_double_buffered_with_worker(
-                        worker=GpuRelaxWorker(relaxer),
+                        worker=gpu_relax_worker,
                         produce_wave=hooks.produce,
                         prepare_batch=hooks.prepare,
                         commit_result=hooks.commit,
@@ -2594,8 +2597,11 @@ def ga_go(
         return all_minima
 
     finally:
-        # Shut down the hoisted offspring pool once (it was created lazily and
-        # reused across generations) before closing the data connection.
+        # Shut down the hoisted GPU relax worker and offspring pool once (created
+        # lazily / at pipeline enable and reused across generations) before
+        # closing the data connection.
+        if gpu_relax_worker is not None:
+            gpu_relax_worker.shutdown()
         if offspring_executor is not None:
             offspring_executor.shutdown(wait=True)
         close_data_connection(da, log_errors=False)

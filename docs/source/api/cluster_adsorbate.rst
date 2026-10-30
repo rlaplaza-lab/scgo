@@ -41,7 +41,6 @@ Pre-GO feasibility checks
 -------------------------
 
 .. autofunction:: scgo.cluster_adsorbate.feasibility.validate_adsorbate_placement_feasibility
-.. autofunction:: scgo.cluster_adsorbate.feasibility.count_adsorption_site_candidates
 .. autofunction:: scgo.cluster_adsorbate.feasibility.estimate_fragment_footprint_radius
 
 GA repositioning and rigid geometry

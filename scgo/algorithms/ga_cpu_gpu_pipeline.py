@@ -133,6 +133,9 @@ def run_double_buffered_with_worker(
 
     ``produce_wave`` returns inserted unrelaxed candidates, or ``None`` when
     production is finished. An empty list means no successes this wave.
+
+    Starts ``worker`` if needed; the caller owns shutdown so the same worker
+    can be reused across generations of one GA run.
     """
     timings = {
         "produce_s": 0.0,
@@ -143,41 +146,38 @@ def run_double_buffered_with_worker(
     }
     wall0 = perf_counter()
     worker.start()
-    try:
-        t0 = perf_counter()
-        current = produce_wave()
-        timings["produce_s"] += perf_counter() - t0
+    t0 = perf_counter()
+    current = produce_wave()
+    timings["produce_s"] += perf_counter() - t0
 
-        while current is not None:
-            if not current:
-                t0 = perf_counter()
-                current = produce_wave()
-                timings["produce_s"] += perf_counter() - t0
-                continue
+    while current is not None:
+        if not current:
+            t0 = perf_counter()
+            current = produce_wave()
+            timings["produce_s"] += perf_counter() - t0
+            continue
 
-            originals = list(current)
-            worker.submit(
-                GpuRelaxJob(
-                    originals=originals,
-                    prepared=prepare_batch(originals),
-                )
+        originals = list(current)
+        worker.submit(
+            GpuRelaxJob(
+                originals=originals,
+                prepared=prepare_batch(originals),
             )
-            t0 = perf_counter()
-            nxt = produce_wave()
-            produce_s = perf_counter() - t0
-            timings["produce_s"] += produce_s
+        )
+        t0 = perf_counter()
+        nxt = produce_wave()
+        produce_s = perf_counter() - t0
+        timings["produce_s"] += produce_s
 
-            result = worker.wait_result()
-            timings["relax_s"] += result.relax_s
-            timings["overlapped_s"] += min(result.relax_s, produce_s)
-            if result.error is not None:
-                raise result.error
-            t0 = perf_counter()
-            commit_result(result)
-            timings["commit_s"] += perf_counter() - t0
-            current = nxt
-    finally:
-        worker.shutdown()
+        result = worker.wait_result()
+        timings["relax_s"] += result.relax_s
+        timings["overlapped_s"] += min(result.relax_s, produce_s)
+        if result.error is not None:
+            raise result.error
+        t0 = perf_counter()
+        commit_result(result)
+        timings["commit_s"] += perf_counter() - t0
+        current = nxt
 
     timings["wall_s"] = perf_counter() - wall0
     return timings

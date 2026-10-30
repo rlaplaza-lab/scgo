@@ -80,12 +80,16 @@ def test_double_buffer_overlaps_produce_with_relax():
         produce_intervals.append((t0, time.perf_counter()))
         return waves[i]
 
-    timings = run_double_buffered_with_worker(
-        worker=GpuRelaxWorker(relaxer),
-        produce_wave=produce,
-        prepare_batch=lambda batch: [a.copy() for a in batch],
-        commit_result=lambda result: committed.append(len(result.originals)),
-    )
+    worker = GpuRelaxWorker(relaxer)
+    try:
+        timings = run_double_buffered_with_worker(
+            worker=worker,
+            produce_wave=produce,
+            prepare_batch=lambda batch: [a.copy() for a in batch],
+            commit_result=lambda result: committed.append(len(result.originals)),
+        )
+    finally:
+        worker.shutdown()
     assert committed == [2, 2]
     assert timings["overlapped_s"] > 0.04
     p1, r0 = produce_intervals[1], relaxer.intervals[0]
