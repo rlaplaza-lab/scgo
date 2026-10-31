@@ -41,6 +41,7 @@ from scgo.ase_ga_patches.mutations import (
 from scgo.ase_ga_patches.mutations._common import _IDENTITY_ATOL, _mobile_clashes
 from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.cluster_adsorbate.detach import FragmentDetachMutation
 from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
 from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
@@ -1188,6 +1189,7 @@ def create_mutation_operators(
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor
     | None = None,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[list, dict[str, int]]:
     """Create mutation operators once at start of GA.
 
@@ -1219,6 +1221,8 @@ def create_mutation_operators(
         breathing_scale_min: Lower bound for radial scale factors (about the fragment CoM).
         breathing_scale_max: Upper bound for radial scale factors.
         connectivity_factor: Stamped onto each operator for mutation connectivity gates.
+        allow_adsorbate_surface_detachment: When true on a supported cluster with
+            adsorbates, also register ``fragment_detach``.
 
     Returns:
         Tuple of (operators_list, operator_name_to_index_map).
@@ -1497,6 +1501,29 @@ def create_mutation_operators(
         )
         operators.append(reposition)
         name_map["fragment_reposition"] = len(operators) - 1
+
+    if (
+        allow_adsorbate_surface_detachment
+        and use_partition_tags
+        and adsorbate_definition is not None
+        and int(adsorbate_definition.n_core) > 0
+        and ads_tags
+        and n_slab > 0
+        and uses_surface(system_type)
+        and not policy.slab_is_search_target
+    ):
+        detach = FragmentDetachMutation(
+            blmin,
+            n_to_optimize,
+            system_type=system_type,
+            adsorbate_definition=adsorbate_definition,
+            fragment_templates=adsorbate_fragment_template,
+            cluster_adsorbate_config=cluster_adsorbate_config,
+            rng=get_child_rng_or_none(rng),  # type: ignore[arg-type]
+            surface_normal_axis=surface_normal_axis,
+        )
+        operators.append(detach)
+        name_map["fragment_detach"] = len(operators) - 1
 
     resolved_cf: ConnectivityFactorInput | NormalizedConnectivityFactor = (
         CONNECTIVITY_FACTOR if connectivity_factor is None else connectivity_factor

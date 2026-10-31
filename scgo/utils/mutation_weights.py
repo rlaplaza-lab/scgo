@@ -76,6 +76,8 @@ def _apply_stagnation_boost(
         boosted["shell_swap"] *= factor * 1.08
     if "fragment_reposition" in boosted:
         boosted["fragment_reposition"] *= factor * 1.15
+    if "fragment_detach" in boosted:
+        boosted["fragment_detach"] *= factor * 1.15
     if "in_plane_slide" in boosted:
         boosted["in_plane_slide"] *= factor * 1.12
     if "in_plane_rotate" in boosted:
@@ -92,11 +94,32 @@ _EXPLORATORY_OPERATORS = frozenset(
         "mirror",
         "shell_swap",
         "fragment_reposition",
+        "fragment_detach",
         "in_plane_slide",
         "in_plane_rotate",
     }
 )
 _LOCAL_OPERATORS = frozenset({"rattle", "breathing", "permutation"})
+
+# Carved from fragment_reposition before renormalizing (0.20 -> 0.12, 0.22 -> 0.14).
+_FRAGMENT_DETACH_WEIGHT = 0.08
+
+
+def _with_fragment_detach(
+    weights: dict[str, float],
+    *,
+    enabled: bool,
+) -> dict[str, float]:
+    """Give ``fragment_detach`` a share of ``fragment_reposition`` when enabled."""
+    if not enabled or "fragment_reposition" not in weights:
+        return weights
+    donor = float(weights["fragment_reposition"])
+    if donor <= 2.0 * _FRAGMENT_DETACH_WEIGHT:
+        return weights
+    updated = dict(weights)
+    updated["fragment_reposition"] = donor - _FRAGMENT_DETACH_WEIGHT
+    updated["fragment_detach"] = _FRAGMENT_DETACH_WEIGHT
+    return updated
 
 
 def _apply_generation_mix(
@@ -267,6 +290,8 @@ def calculate_system_type_weights(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None = None,
+    *,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[dict[str, float], bool]:
     """Calculate operator weights from system type and core composition."""
     from scgo.system_types import get_system_policy
@@ -334,18 +359,21 @@ def calculate_system_type_weights(
     if system_type == "surface_cluster_adsorbate":
         return (
             _renormalize_weights(
-                {
-                    "rattle": 0.12,
-                    "overlap_relief": 0.10,
-                    "fragment_reposition": 0.20,
-                    "flattening": 0.08,
-                    "rotational": 0.06,
-                    "mirror": 0.05,
-                    "anisotropic_rattle": 0.10,
-                    "breathing": 0.04,
-                    "in_plane_slide": 0.12,
-                    "in_plane_rotate": 0.08,
-                }
+                _with_fragment_detach(
+                    {
+                        "rattle": 0.12,
+                        "overlap_relief": 0.10,
+                        "fragment_reposition": 0.20,
+                        "flattening": 0.08,
+                        "rotational": 0.06,
+                        "mirror": 0.05,
+                        "anisotropic_rattle": 0.10,
+                        "breathing": 0.04,
+                        "in_plane_slide": 0.12,
+                        "in_plane_rotate": 0.08,
+                    },
+                    enabled=allow_adsorbate_surface_detachment,
+                )
             ),
             False,
         )
@@ -399,6 +427,8 @@ def _static_weights_for_system_type(
     system_type: SystemType,
     composition: list[str],
     adsorbate_definition: AdsorbateDefinition | None,
+    *,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[dict[str, float], bool]:
     """Non-adaptive operator weight tables keyed by system type."""
     from scgo.system_types import get_system_policy
@@ -490,15 +520,18 @@ def _static_weights_for_system_type(
     if system_type == "surface_cluster_adsorbate":
         return (
             _renormalize_weights(
-                {
-                    "rattle": 0.14,
-                    "overlap_relief": 0.12,
-                    "fragment_reposition": 0.22,
-                    "flattening": 0.08,
-                    "anisotropic_rattle": 0.12,
-                    "in_plane_slide": 0.14,
-                    "in_plane_rotate": 0.10,
-                }
+                _with_fragment_detach(
+                    {
+                        "rattle": 0.14,
+                        "overlap_relief": 0.12,
+                        "fragment_reposition": 0.22,
+                        "flattening": 0.08,
+                        "anisotropic_rattle": 0.12,
+                        "in_plane_slide": 0.14,
+                        "in_plane_rotate": 0.10,
+                    },
+                    enabled=allow_adsorbate_surface_detachment,
+                )
             ),
             False,
         )
@@ -601,11 +634,15 @@ def get_adaptive_mutation_config(
     max_mutation_probability: float = 0.65,
     system_type: SystemType = "gas_cluster",
     adsorbate_definition: AdsorbateDefinition | None = None,
+    allow_adsorbate_surface_detachment: bool = False,
 ) -> dict:
     """Get complete adaptive mutation configuration."""
     if not use_adaptive:
         operator_weights, use_permutation = _static_weights_for_system_type(
-            system_type, composition, adsorbate_definition
+            system_type,
+            composition,
+            adsorbate_definition,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
         )
         return {
             "operator_weights": operator_weights,
@@ -627,6 +664,7 @@ def get_adaptive_mutation_config(
         system_type,
         composition,
         adsorbate_definition=adsorbate_definition,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
     progress = current_generation / max(total_generations, 1)
     operator_weights = _apply_generation_mix(operator_weights, progress)

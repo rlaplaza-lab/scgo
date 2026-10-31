@@ -122,6 +122,9 @@ When a system has adsorbates, the GA partitions the mobile region with ASE tags
   whole-mobile variants on surfaces. Untagged gas-phase clusters omit ``mirror``.
 - ``fragment_reposition`` re-places one adsorbate on fresh surface sites (including
   ``surface_adsorbate`` slab-search runs).
+- ``fragment_detach`` moves one intact, core-bound adsorbate onto a nearby slab
+  site, and is registered only when ``allow_adsorbate_surface_detachment`` is
+  true.
 
 Operator clash checks use
 :func:`~scgo.initialization.atomic_radii.build_blmin`

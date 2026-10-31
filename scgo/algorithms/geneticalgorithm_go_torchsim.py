@@ -1710,6 +1710,7 @@ def ga_go(
         max_mutation_probability=max_mutation_probability,
         system_type=system_type,
         adsorbate_definition=adsorbate_definition,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
 
     idx_top = (
@@ -1735,6 +1736,7 @@ def ga_go(
         adsorbate_fragment_template=adsorbate_fragment_template,
         cluster_adsorbate_config=cluster_adsorbate_config,
         connectivity_factor=connectivity_factor,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
 
     _ = update_mutation_weights(
@@ -2155,6 +2157,7 @@ def ga_go(
                     max_mutation_probability=max_mutation_probability,
                     system_type=system_type,
                     adsorbate_definition=adsorbate_definition,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
                 )
                 _ = update_mutation_weights(
                     operators_list=operators_list,

@@ -78,6 +78,9 @@ Defaults come from :doc:`/parameters` and
    ``allow_cluster_fragmentation`` and ``allow_adsorbate_surface_detachment`` are
    surface-only. Gas paths ignore them because there is no slab. Surface
    defaults require a single connected mobile component touching the slab.
+   When ``allow_adsorbate_surface_detachment`` is true, the genetic algorithm
+   also registers ``fragment_detach``, which moves one intact fragment from the
+   cluster onto a nearby slab site; that operator is absent when the flag is false.
 
 How validation runs during global optimization
 ----------------------------------------------

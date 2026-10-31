@@ -29,7 +29,9 @@ def _finalize_mutant(creator, parent, mutant, description):
     A post-mutation atom-count + stoichiometry guard ensures no mutation silently
     drops, duplicates, or transmutes atoms. Identity geometry and a disconnected
     mobile region are declined (``None``) so the GA does not store no-ops or
-    fragments that the production storage gate would reject.
+    fragments that the production storage gate would reject. Set
+    ``allow_disconnected_mobile`` on the operator to skip that connectivity
+    decline.
     """
     if mutant is None:
         return mutant, description
@@ -56,7 +58,7 @@ def _finalize_mutant(creator, parent, mutant, description):
 
     n_top = getattr(creator, "n_top", None)
     n_mobile = len(mutant) if n_top is None else int(n_top)
-    if n_mobile > 0:
+    if n_mobile > 0 and not getattr(creator, "allow_disconnected_mobile", False):
         mobile = mutant[len(mutant) - n_mobile :]
         policy = getattr(creator, "_policy", None)
         use_mic = bool(getattr(policy, "uses_surface", False))
