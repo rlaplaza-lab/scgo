@@ -2240,8 +2240,8 @@ def test_seed_sampling_log_collector_groups_failures(caplog):
     _SeedSamplingLogCollector.emit_summary_if_any()
 
     assert caplog.text.count("no suitable seed") == 1
-    assert "Pt5x3 [unsuitable linear geometry]" in caplog.text
-    assert "Pt6x2 [need mixed seed geometries]" in caplog.text
+    assert "Pt5: 3 (unsuitable linear geometry)" in caplog.text
+    assert "Pt6: 2 (need mixed seed geometries)" in caplog.text
 
 
 def test_sample_suitable_seed_reports_specific_failure_reason(rng):

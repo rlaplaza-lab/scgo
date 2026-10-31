@@ -33,7 +33,7 @@ from scgo.utils.helpers import (
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
-from scgo.utils.phase_logging import InitDiagnosticsCollector
+from scgo.utils.phase_logging import InitDiagnosticsCollector, format_count_summary
 from scgo.utils.validation import validate_composition
 
 from .atomic_radii import get_vdw_radius
@@ -117,12 +117,9 @@ class _SeedSamplingLogCollector:
             total = sum(counter.values())
             if len(counter) == 1:
                 (reason,) = counter
-                parts.append(f"{formula}x{total} [{reason}]")
+                parts.append(f"{formula}: {total} ({reason})")
             else:
-                reason_detail = ", ".join(
-                    f"{reason}x{count}" for reason, count in counter.most_common()
-                )
-                parts.append(f"{formula}x{total} [{reason_detail}]")
+                parts.append(f"{formula}: {total} ({format_count_summary(counter)})")
 
         logger.info(
             "Seed+growth: no suitable seed (%d failures): %s",

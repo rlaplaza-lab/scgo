@@ -41,6 +41,7 @@ from scgo.utils.helpers import (
     validate_pair_id,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.phase_logging import format_count_of
 
 from .transition_state import (
     _overlay_product_core,
@@ -735,12 +736,18 @@ def save_transition_state_results(
         json.dump(summary, f, indent=2)
 
     logger.info(
-        "TS summary %s (success %s/%s, converged %s/%s)",
+        "TS summary %s: %s, %s",
         summary_path,
-        summary["num_successful"],
-        summary["num_total_pairs"],
-        summary["num_converged"],
-        summary["num_total_pairs"],
+        format_count_of(
+            summary["num_successful"],
+            summary["num_total_pairs"],
+            before="succeeded",
+        ),
+        format_count_of(
+            summary["num_converged"],
+            summary["num_total_pairs"],
+            before="converged",
+        ),
     )
 
     return summary_path

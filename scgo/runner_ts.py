@@ -64,6 +64,7 @@ from scgo.utils.output_paths import (
     resolve_campaign_root_from_args,
     resolve_go_ts_pipeline_paths,
 )
+from scgo.utils.phase_logging import format_count_of
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
@@ -260,10 +261,9 @@ def _run_go_ts_pipeline(
             filename=GO_TS_TIMING_JSON_FILENAME,
         )
     logger.info(
-        "Completed GO->TS pipeline for %s: successful NEBs=%d/%d, wall_time=%.2f s",
+        "Completed GO->TS pipeline for %s: %s succeeded, wall_time=%.2f s",
         formula,
-        ts_success,
-        len(ts_results),
+        format_count_of(ts_success, len(ts_results), after="NEBs"),
         elapsed_s,
     )
     return {
@@ -672,6 +672,9 @@ def log_go_ts_summary(
     """Log NEB success counts from a ``run_go_ts*`` summary dict."""
     ts_results = summary.get("ts_results") or []
     ok = sum(1 for r in ts_results if r.get("status") == "success")
-    logger.info("Successful NEBs: %d/%d", ok, len(ts_results))
+    logger.info(
+        "%s succeeded",
+        format_count_of(ok, len(ts_results), after="NEBs"),
+    )
     if wall_time_s is not None:
         logger.info("Total wall time: %.2f s", wall_time_s)

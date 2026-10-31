@@ -49,7 +49,7 @@ from scgo.utils.output_paths import (
 )
 from scgo.utils.parallel_workers import inherit_n_jobs
 from scgo.utils.path_keys import resolve_run_path_key
-from scgo.utils.phase_logging import log_phase_header
+from scgo.utils.phase_logging import format_count_of, log_phase_header
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
@@ -405,11 +405,10 @@ def _run_go_campaign_compositions(
             all_results[path_key] = []
             log_warning_v(
                 logger,
-                "Skipping %s (%s) and continuing campaign (%d/%d)",
+                "Skipping %s (%s) and continuing campaign (%s)",
                 path_key,
                 formula_str,
-                i + 1,
-                num_compositions,
+                format_count_of(i + 1, num_compositions, after="compositions"),
                 verbosity=verbosity,
             )
             continue

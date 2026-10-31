@@ -40,6 +40,7 @@ from scgo.utils.output_paths import (
     resolve_go_searches_dir,
 )
 from scgo.utils.path_keys import resolve_run_path_key
+from scgo.utils.phase_logging import format_count_of
 from scgo.utils.run_helpers import initialize_params, initialize_ts_params
 from scgo.utils.ts_runner_kwargs import coerce_ts_params_to_runner_kwargs
 
@@ -465,7 +466,7 @@ def format_completion_details(
         parts.append(f"minima={minima}")
     if successful_nebs is not None:
         ok, total = successful_nebs
-        parts.append(f"successful_nebs={ok}/{total}")
+        parts.append(f"successful_nebs={format_count_of(ok, total)}")
     if output_dir is not None:
         parts.append(f"output_dir={output_dir}")
     return " ".join(parts)

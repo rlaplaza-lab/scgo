@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
+
+from scgo.utils.logging import TRACE
+from scgo.utils.mutation_weights import operator_credit_weight_factor
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -40,13 +44,44 @@ def log_phase_subheader(
 
 
 def format_count_summary(counts: Mapping[str, int]) -> str:
-    """Format outcome counts as ``label x N, ...``."""
+    """Format outcome counts as ``N label, ...``.
+
+    Highest counts come first. Underscores in a label are written as spaces.
+    """
     parts = [
-        f"{label}x{count}"
+        f"{count} {str(label).replace('_', ' ')}"
         for label, count in sorted(counts.items(), key=lambda x: (-x[1], x[0]))
         if count > 0
     ]
     return ", ".join(parts) if parts else ""
+
+
+def format_count_of(
+    count: int,
+    total: int,
+    *,
+    before: str = "",
+    after: str = "",
+) -> str:
+    """Return ``8 succeeded of 10`` or ``0 of 12 pairs``."""
+    left = f"{count} {before}".rstrip()
+    right = f"{total} {after}".rstrip()
+    return f"{left} of {right}"
+
+
+def format_counted(count: int, singular: str, plural: str | None = None) -> str:
+    """Return ``1 seed`` or ``2 seeds``."""
+    word = (
+        singular if count == 1 else (plural if plural is not None else f"{singular}s")
+    )
+    return f"{count} {word}"
+
+
+def with_detail(text: str, detail: str) -> str:
+    """Append `` (detail)`` when ``detail`` is non-empty."""
+    if not detail:
+        return text
+    return f"{text} ({detail})"
 
 
 def compact_neb_pair_reason(message: str) -> str:
@@ -133,13 +168,15 @@ def log_neb_search_summaries(
 
     n_skipped = sum(skipped_reasons.values())
     n_failed = sum(failed_reasons.values())
-    parts = [f"{n_success}/{n_total} succeeded"]
+    parts = [format_count_of(n_success, n_total, before="succeeded")]
     if n_skipped:
-        detail = format_count_summary(skipped_reasons)
-        parts.append(f"skippedx{n_skipped}" + (f" ({detail})" if detail else ""))
+        parts.append(
+            with_detail(f"{n_skipped} skipped", format_count_summary(skipped_reasons))
+        )
     if n_failed:
-        detail = format_count_summary(failed_reasons)
-        parts.append(f"failedx{n_failed}" + (f" ({detail})" if detail else ""))
+        parts.append(
+            with_detail(f"{n_failed} failed", format_count_summary(failed_reasons))
+        )
     logger.info("NEB search: %s", "; ".join(parts))
     logger.info(
         "Saved NEB artifacts under %s: %s",
@@ -225,18 +262,25 @@ class InitDiagnosticsCollector:
             if used == "random_spherical" and fb == "seed+growth"
         )
 
-        parts: list[str] = [f"built {n_structures}/{n_structures} candidates"]
-        if template_to_random or seed_to_random:
-            parts.append(
-                f"fallbacks template→randomx{template_to_random}, "
-                f"seed→randomx{seed_to_random}"
+        extras: list[str] = []
+        if template_to_random:
+            extras.append(
+                f"{format_counted(template_to_random, 'template')} fell back to random"
+            )
+        if seed_to_random:
+            extras.append(
+                f"{format_counted(seed_to_random, 'seed')} fell back to random"
             )
         if placement_failures:
-            parts.append(f"placement failuresx{len(placement_failures)}")
+            extras.append(format_counted(len(placement_failures), "placement failure"))
         if extra:
-            parts.append(extra)
+            extras.append(extra)
 
-        logger.info("%s: %s", prefix, "; ".join(parts))
+        summary = with_detail(
+            f"built {format_count_of(n_structures, n_structures, after='candidates')}",
+            ", ".join(extras),
+        )
+        logger.info("%s: %s", prefix, summary)
 
         if verbosity < 2:
             return
@@ -272,20 +316,25 @@ def log_generation_offspring_summaries(
 
         if total_jobs > 0:
             succeeded = total_jobs - sum(failures.values())
-            detail = format_count_summary(failures)
-            crossover_msg = f"Crossover: {succeeded}/{total_jobs} succeeded"
-            if detail:
-                crossover_msg = f"{crossover_msg} ({detail})"
-            logger.info(crossover_msg)
             logger.info(
-                "Mutation: applied to %d/%d offspring",
-                mutation_applied,
-                total_jobs,
+                "Crossover: %s",
+                with_detail(
+                    format_count_of(succeeded, total_jobs, before="succeeded"),
+                    format_count_summary(failures),
+                ),
+            )
+            logger.info(
+                "Mutation: %s",
+                format_count_of(
+                    mutation_applied,
+                    total_jobs,
+                    before="applied",
+                    after="offspring",
+                ),
             )
         logger.info(
-            "Offspring: created %d/%d (attempts=%d)",
-            created,
-            n_offspring,
+            "Offspring: %s (%d attempts)",
+            format_count_of(created, n_offspring, before="created"),
             attempts,
         )
 
@@ -305,6 +354,121 @@ def log_generation_offspring_summaries(
         )
 
 
+def log_initial_population_summary(
+    logger: Logger,
+    *,
+    verbosity: int,
+    population_size: int,
+    eligible: int,
+    discarded: int,
+    ineligible: int,
+    reasons: Mapping[str, int],
+) -> None:
+    """Log the relaxed initial population as one info line."""
+    if verbosity < 1:
+        return
+    relaxed = eligible + ineligible
+    text = (
+        f"Initial population: {format_counted(population_size, 'structure')}, "
+        f"{format_count_of(eligible, relaxed, before='eligible', after='relaxed')}, "
+        f"{discarded} discarded before relaxation, "
+        f"{ineligible} ineligible after relaxation"
+    )
+    logger.info("%s", with_detail(text, format_count_summary(reasons)))
+
+
+def log_relaxation_summary(
+    logger: Logger,
+    *,
+    verbosity: int,
+    eligible: int,
+    ineligible: int,
+    reasons: Mapping[str, int],
+) -> None:
+    """Log how many relaxed offspring stayed eligible for the GA."""
+    if verbosity < 1 or eligible + ineligible <= 0:
+        return
+    total = eligible + ineligible
+    text = (
+        f"{format_count_of(eligible, total, before='eligible')}, "
+        f"{ineligible} ineligible"
+    )
+    logger.info(
+        "Relaxation: %s",
+        with_detail(text, format_count_summary(reasons)),
+    )
+
+
+def _mutation_yield_detail(
+    name: str,
+    unique: int,
+    trials: int,
+    *,
+    include_selection: bool,
+) -> str:
+    """One operator line: counts, percent new, and optional selection effect."""
+    percent = round(100.0 * unique / trials)
+    line = (
+        f"{name}: {format_count_of(unique, trials, before='new', after='relaxed')} "
+        f"({percent}% new)"
+    )
+    if not include_selection:
+        return line
+    factor = operator_credit_weight_factor(unique, trials)
+    if factor is None:
+        note = "too few relaxations to change how often it is picked"
+    elif factor < 1.0:
+        note = f"picked less often (weight x{factor:.2f})"
+    elif factor > 1.0:
+        note = f"picked more often (weight x{factor:.2f})"
+    else:
+        note = f"picked about as often (weight x{factor:.2f})"
+    return f"{line}; {note}"
+
+
+def log_mutation_structure_yield(
+    logger: Logger,
+    stats: Mapping[str, Mapping[str, int]],
+    *,
+    verbosity: int,
+) -> None:
+    """Log how many relaxed mutants of each operator were new structures.
+
+    Verbosity 1 prints one summary. Verbosity 2 adds each operator's share
+    of new structures. Verbosity 3 also reports whether that share changes
+    how often the operator is picked.
+    """
+    if verbosity < 1 or not stats:
+        return
+    active = [
+        (name, int(record.get("unique", 0)), int(record.get("trials", 0)))
+        for name, record in sorted(stats.items())
+        if int(record.get("trials", 0))
+    ]
+    if not active:
+        return
+    summary = "New structures by mutation: " + ", ".join(
+        f"{name} {format_count_of(unique, trials, before='new', after='relaxed')}"
+        for name, unique, trials in active
+    )
+    logger.info("%s", summary)
+    if verbosity < 2:
+        return
+    include_selection = verbosity >= 3
+    level = TRACE if include_selection else logging.DEBUG
+    for name, unique, trials in active:
+        logger.log(
+            level,
+            "%s",
+            _mutation_yield_detail(
+                name,
+                unique,
+                trials,
+                include_selection=include_selection,
+            ),
+        )
+
+
 def format_offspring_outcome_line(
     index: int,
     *,
@@ -317,13 +481,13 @@ def format_offspring_outcome_line(
     if failure_reason == "pairing_failed":
         return f"Offspring {index}: crossover failed"
     if failure_reason == "too_close_prefilter":
-        return f"Offspring {index}: rejected (atoms too close prefilter)"
+        return f"Offspring {index}: rejected (atoms too close before relaxation)"
     if failure_reason == "validation_failed":
         err = (validation_error or "validation failed").splitlines()[0]
-        return f"Offspring {index}: validation_failed — {err}"
+        return f"Offspring {index}: validation failed ({err})"
     if desc and "mutation:" in desc:
         op = desc.split("mutation:", 1)[1].strip().split()[0]
-        mutation = f"mutation={op}"
+        mutation = f"mutation {op}"
     else:
         mutation = "mutation applied" if mutation_applied else "no mutation"
-    return f"Offspring {index}: crossover ok, {mutation}, eligible"
+    return f"Offspring {index}: crossover succeeded, {mutation}, eligible"

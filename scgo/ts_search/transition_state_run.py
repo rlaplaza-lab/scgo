@@ -58,7 +58,7 @@ from scgo.utils.logging import (
 )
 from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.path_keys import resolve_run_path_key
-from scgo.utils.phase_logging import log_neb_search_summaries
+from scgo.utils.phase_logging import format_count_of, log_neb_search_summaries
 from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import cleanup_torch_cuda, get_calculator_class
 from scgo.utils.timing_report import (
@@ -198,8 +198,8 @@ def _prioritize_adsorbate_pairs_by_idpp(
 
     if not valid_pairs:
         logger.info(
-            "Adsorbate IDPP priority screen: 0/%d pairs passed geometry screening",
-            len(pairs),
+            "Adsorbate IDPP priority screen: %s passed geometry screening",
+            format_count_of(0, len(pairs), after="pairs"),
         )
         return []
 
@@ -254,10 +254,9 @@ def _prioritize_adsorbate_pairs_by_idpp(
     chosen = robust if robust else ranked
     kept = [(i, j, images) for _priority, i, j, images in chosen[: int(max_pairs)]]
     logger.info(
-        "Adsorbate IDPP priority screen: %d/%d pairs kept "
+        "Adsorbate IDPP priority screen: %s kept "
         "(%d robust-interior candidates in pool)",
-        len(kept),
-        len(pairs),
+        format_count_of(len(kept), len(pairs), after="pairs"),
         len(robust),
     )
     return kept
@@ -314,9 +313,8 @@ def _run_serial_neb_search(
         if resumed is not None:
             log_info_v(
                 logger,
-                "[%d/%d] Skipping pair %s (resumed success)",
-                idx,
-                len(pairs),
+                "Pair %s: skipping %s (already completed)",
+                format_count_of(idx, len(pairs)),
                 pair_id,
                 verbosity=verbosity,
             )
@@ -328,9 +326,8 @@ def _run_serial_neb_search(
 
         log_debug_v(
             logger,
-            "[%d/%d] Finding TS for pair %s",
-            idx,
-            len(pairs),
+            "Pair %s: finding transition state for %s",
+            format_count_of(idx, len(pairs)),
             pair_id,
             verbosity=verbosity,
         )

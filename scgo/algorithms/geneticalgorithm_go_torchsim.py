@@ -130,9 +130,12 @@ from scgo.utils.parallel_workers import (
 )
 from scgo.utils.phase_logging import (
     compact_ga_ineligible_reason,
-    format_count_summary,
+    format_count_of,
     log_generation_offspring_summaries,
+    log_initial_population_summary,
+    log_mutation_structure_yield,
     log_phase_subheader,
+    log_relaxation_summary,
 )
 from scgo.utils.rng_helpers import (
     create_child_rng,
@@ -884,11 +887,10 @@ def _commit_relaxed_batch(
                         "Offspring" if generation is not None else "Initial candidate"
                     )
                     logger.debug(
-                        "%s %d/%d failed validation after relaxation; storing "
+                        "%s %s failed validation after relaxation; storing "
                         "but excluding from GA population: %s",
                         label,
-                        idx + 1,
-                        len(batch),
+                        format_count_of(idx + 1, len(batch)),
                         validation_error,
                     )
                 else:
@@ -1191,10 +1193,9 @@ def _execute_offspring_jobs(
         )
         if wave_failures >= max(3, len(jobs) // 2):
             logger.warning(
-                "Generation %s offspring worker failures: %d/%d (%s)",
+                "Generation %s offspring worker failures: %s (%s)",
                 generation,
-                wave_failures,
-                len(jobs),
+                format_count_of(wave_failures, len(jobs)),
                 state.worker_failure_types,
             )
     return job_results
@@ -2086,18 +2087,14 @@ def ga_go(
         )
         population._write_log()
         eligible_initial = initial_pop_count - initial_ineligible_relaxed_count
-        ineligible_detail = format_count_summary(initial_ineligible_reasons)
-        ineligible_suffix = f" ({ineligible_detail})" if ineligible_detail else ""
-        log_info_v(
+        log_initial_population_summary(
             logger,
-            "Initial population: size=%d, %d GA-eligible, %d discarded "
-            "pre-relax, %d ineligible post-relax%s",
-            len(population.pop),
-            eligible_initial,
-            initial_discarded_count,
-            initial_ineligible_relaxed_count,
-            ineligible_suffix,
             verbosity=verbosity,
+            population_size=len(population.pop),
+            eligible=eligible_initial,
+            discarded=initial_discarded_count,
+            ineligible=initial_ineligible_relaxed_count,
+            reasons=initial_ineligible_reasons,
         )
         log_debug_v(
             logger,
@@ -2414,20 +2411,11 @@ def ga_go(
                 n_offspring=n_offspring,
                 attempts=attempts,
             )
-            if operator_credit:
-                credit_summary = ", ".join(
-                    f"{name} {record['unique']}/{record['trials']}"
-                    for name, record in sorted(operator_credit.items())
-                    if record["trials"]
-                )
-                if credit_summary:
-                    log_info_v(
-                        logger,
-                        "Mutation credit (unique relaxed / trials): %s",
-                        credit_summary,
-                        verbosity=verbosity,
-                        min_verbosity=1,
-                    )
+            log_mutation_structure_yield(
+                logger,
+                operator_credit,
+                verbosity=verbosity,
+            )
             offspring_count = eligible_count
             post_db_read = float(profile_timings.get("db_read_s", 0.0))
             post_relax = float(profile_timings.get("relax_batch_s", 0.0))
@@ -2439,18 +2427,13 @@ def ga_go(
             gen_pop_update_s_from_relax = max(0.0, post_pop_update - pre_pop_update)
             pop_update_s = gen_pop_update_s_from_relax
             generation_wall_s = perf_counter() - t_loop
-            if verbosity >= 1 and (eligible_count + ineligible_count) > 0:
-                reason_detail = format_count_summary(ineligible_reasons)
-                reason_suffix = f" ({reason_detail})" if reason_detail else ""
-                log_info_v(
-                    logger,
-                    "Relaxation: %d/%d GA-eligible, %d ineligible%s",
-                    eligible_count,
-                    eligible_count + ineligible_count,
-                    ineligible_count,
-                    reason_suffix,
-                    verbosity=verbosity,
-                )
+            log_relaxation_summary(
+                logger,
+                verbosity=verbosity,
+                eligible=eligible_count,
+                ineligible=ineligible_count,
+                reasons=ineligible_reasons,
+            )
             if offspring_count > 0:
                 profile_counters["offspring_relaxed"] += int(offspring_count)
 

@@ -104,7 +104,7 @@ def test_format_completion_details_order_and_omission() -> None:
     )
     assert (
         format_completion_details(successful_nebs=(3, 8), minima=1)
-        == "minima=1 successful_nebs=3/8"
+        == "minima=1 successful_nebs=3 of 8"
     )
 
 

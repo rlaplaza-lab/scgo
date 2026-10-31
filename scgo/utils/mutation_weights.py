@@ -119,6 +119,24 @@ def _apply_generation_mix(
     return _renormalize_weights(mixed)
 
 
+def operator_credit_weight_factor(
+    unique: int,
+    trials: int,
+    *,
+    min_trials: int = 4,
+) -> float | None:
+    """Selection-weight multiplier for one operator, before renormalizing.
+
+    Returns ``None`` when the operator has fewer than ``min_trials`` relaxed
+    children, so a short sample does not change how often it is picked.
+    """
+    if trials < min_trials:
+        return None
+    # A small prior keeps four early misses from pinning the weight at the floor.
+    rate = (float(unique) + 2.0) / (float(trials) + 4.0)
+    return float(np.clip(0.35 + 1.25 * rate, 0.35, 1.6))
+
+
 def scale_weights_by_operator_credit(
     weights: list[float],
     names: list[str | None],
@@ -133,13 +151,17 @@ def scale_weights_by_operator_credit(
     for weight, name in zip(weights, names, strict=True):
         record = stats.get(name) if name else None
         trials = int(record["trials"]) if record else 0
-        if record is None or trials < min_trials:
+        if record is None:
             adjusted.append(weight)
             continue
-        # A small prior keeps four early misses from pinning the weight at the floor.
-        unique = float(record.get("unique", 0))
-        rate = (unique + 2.0) / (float(trials) + 4.0)
-        factor = float(np.clip(0.35 + 1.25 * rate, 0.35, 1.6))
+        factor = operator_credit_weight_factor(
+            int(record.get("unique", 0)),
+            trials,
+            min_trials=min_trials,
+        )
+        if factor is None:
+            adjusted.append(weight)
+            continue
         adjusted.append(weight * factor)
     total = float(sum(adjusted))
     if total <= 0.0:

@@ -81,6 +81,7 @@ from scgo.utils.logging import (
     log_debug_v,
     log_warning_v,
 )
+from scgo.utils.phase_logging import format_count_of
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.timing_report import (
     build_timing_payload,
@@ -3148,9 +3149,8 @@ def find_transition_state(
         if result["status"] == "success":
             log_debug_v(
                 logger,
-                "TS found at image %d/%d",
-                result["ts_image_index"],
-                len(neb.images) - 1,
+                "Transition state found at image %s",
+                format_count_of(result["ts_image_index"], len(neb.images) - 1),
                 verbosity=verbosity,
             )
             log_debug_v(

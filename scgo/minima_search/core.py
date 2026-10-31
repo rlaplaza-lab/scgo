@@ -84,7 +84,12 @@ from scgo.utils.helpers import (
 from scgo.utils.logging import get_logger, log_debug_v, log_info_v
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.path_keys import resolve_run_path_key
-from scgo.utils.phase_logging import format_count_summary
+from scgo.utils.phase_logging import (
+    format_count_of,
+    format_count_summary,
+    format_counted,
+    with_detail,
+)
 from scgo.utils.rng_helpers import create_child_rng
 from scgo.utils.validation import validate_composition
 
@@ -581,11 +586,12 @@ def _gate_structurally_valid_candidates(
     if dropped:
         log_info_v(
             logger,
-            "Final structural gate: kept %d/%d candidates (%s)",
-            len(valid),
-            len(candidates),
-            format_count_summary(
-                Counter(_compact_structural_gate_reason(msg) for _, msg in dropped)
+            "Final structural gate: %s",
+            with_detail(
+                f"kept {format_count_of(len(valid), len(candidates), after='candidates')}",
+                format_count_summary(
+                    Counter(_compact_structural_gate_reason(msg) for _, msg in dropped)
+                ),
             ),
             verbosity=verbosity,
         )
@@ -1333,12 +1339,12 @@ def run_trials(
             log_fn = (
                 logger.warning if rows_updated == 0 and n_final > 0 else logger.info
             )
+            n_db = int(tag_summary.get("dbs_touched", 0))
             log_fn(
-                "Tagged %d/%d final minima in DB under %s (dbs_touched=%d)",
-                rows_updated,
-                n_final,
+                "Tagged %s in DB under %s (%s touched)",
+                format_count_of(rows_updated, n_final, after="final minima"),
                 output_dir,
-                int(tag_summary.get("dbs_touched", 0)),
+                format_counted(n_db, "database"),
             )
         except (
             sqlite3.DatabaseError,
