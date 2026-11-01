@@ -4,6 +4,19 @@
 
 ### Changed
 
+- **Automatic GA and basin-hopping budgets follow a lattice-animal count.**
+  The slot count is that arrangement count relative to a unary 10-atom vacuum
+  cluster, tempered by a growth factor of 0.03. The factor is the shared slope
+  of log(effort) against log(arrangements) for gas-phase MACE first-hit runs
+  of Pt4–Pt11 and published Lennard-Jones waiting times. Generations follow
+  how many atoms are moving (offset 3, slope 35, clipped to 3–1000). Extra
+  slots widen the population, up to 1000. A supported cluster uses the same
+  growth and only the four rotations about the surface normal, so it asks for
+  slightly more slots than the vacuum cluster of the same size. The atom-count
+  floor keeps that increment small until the population widens. A three-atom
+  basin-hopping run uses the hop count set by that atom count. Local
+  relaxation and NEB step counts stay on their own curves.
+  See the search-effort page in the docs.
 - **One GPU relax worker per GA run.** Offspring construction overlaps the
   CUDA batch relax (double-buffered waves when `batch_size` is set; `None`
   stays on the full in-flight path). The CPU/GPU pipeline is keyed on that

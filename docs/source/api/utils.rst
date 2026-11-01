@@ -68,6 +68,15 @@ Path keys
    :show-inheritance:
    :exclude-members: _*
 
+Search budget
+-------------
+
+.. automodule:: scgo.utils.search_budget
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: _*
+
 Helpers
 -------
 

@@ -272,10 +272,14 @@ The TorchSim/UMA/UPET benchmark presets default to ``-2``.
 
    * - ``population_size``
      - ``"auto"``
-     - Number of structures in population
+     - Number of structures in each generation. ``"auto"`` widens this when
+       the arrangement count asks for more slots than the atom-count square,
+       and never goes below the count set by how many atoms are moving.
+       See :doc:`/search_effort`.
    * - ``niter``
      - ``"auto"``
-     - Number of generations
+     - Number of generations. ``"auto"`` follows how many atoms are moving,
+       until the population would pass 1000. See :doc:`/search_effort`.
    * - ``mutation_probability``
      - ``0.4``
      - Probability of mutating each structure
@@ -355,6 +359,11 @@ The TorchSim/UMA/UPET benchmark presets default to ``-2``.
 .. list-table::
    :widths: 25 10 65
 
+   * - ``niter``
+     - ``"auto"``
+     - Number of basin-hopping moves. ``"auto"`` grows with the same arrangement
+       count as a genetic algorithm, never goes below the hop count set by how
+       many atoms are moving, and stays at most 1000. See :doc:`/search_effort`.
    * - ``temperature``
      - ``1.0`` eV
      - Metropolis energy scale for accepting uphill moves (eV; not a physical temperature)

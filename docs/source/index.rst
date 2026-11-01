@@ -43,6 +43,7 @@ Contents
    validation_and_constraints
    output_layout
    parameters
+   search_effort
    benchmarks
 
 .. toctree::

@@ -850,13 +850,37 @@ def filter_unique_minima(
     return unique_minima
 
 
+# Population, generations, and basin-hopping hops share this curve in the
+# number of moving atoms. Local relaxation and NEB pass their own arguments.
+#   M = clip(floor(offset + slope * ln(1 + N)), minimum, maximum)
+# See the search-effort page.
+POPULATION_OFFSET = 3
+POPULATION_SLOPE = 35.0
+POPULATION_MIN = 3
+POPULATION_MAX = 1000
+
+
+def _scale_by_atom_count(
+    n_atoms: int,
+    *,
+    base: int = POPULATION_OFFSET,
+    scaling: float = POPULATION_SLOPE,
+    min_val: int = POPULATION_MIN,
+    max_val: int = POPULATION_MAX,
+) -> int:
+    """Scale a budget with ``log(1 + n_atoms)``."""
+    count = max(int(n_atoms), 1)
+    scaled = base + scaling * np.log1p(count)
+    return int(np.clip(scaled, min_val, max_val))
+
+
 def _auto_scale_parameter(
     composition: list[str],
     *,
-    base: int = 3,
-    scaling: float = 35.0,
-    min_val: int = 3,
-    max_val: int = 1000,
+    base: int = POPULATION_OFFSET,
+    scaling: float = POPULATION_SLOPE,
+    min_val: int = POPULATION_MIN,
+    max_val: int = POPULATION_MAX,
 ) -> int:
     """Common scaling logic for auto parameters.
 
@@ -872,20 +896,30 @@ def _auto_scale_parameter(
     Returns:
         Scaled integer parameter value.
     """
-    n_atoms: int = max(len(composition), 1)
-    scaled = base + scaling * np.log1p(n_atoms)
-    return int(np.clip(scaled, min_val, max_val))
+    return _scale_by_atom_count(
+        len(composition),
+        base=base,
+        scaling=scaling,
+        min_val=min_val,
+        max_val=max_val,
+    )
 
 
 def auto_niter(
     composition: list[str],
     *,
-    base: int = 3,
-    scaling: float = 35.0,
-    min_niter: int = 3,
-    max_niter: int = 1000,
+    base: int = POPULATION_OFFSET,
+    scaling: float = POPULATION_SLOPE,
+    min_niter: int = POPULATION_MIN,
+    max_niter: int = POPULATION_MAX,
 ) -> int:
-    """Heuristic iteration budget scaled by cluster size."""
+    """Iteration count from the number of atoms.
+
+    Simple-optimizer runs use this count. Genetic-algorithm generations use
+    :mod:`scgo.utils.search_budget` and follow this same count. Basin-hopping
+    hops are at least this count. Local relaxation and transition-state step
+    counts use their own atom-count helpers.
+    """
     return _auto_scale_parameter(
         composition, base=base, scaling=scaling, min_val=min_niter, max_val=max_niter
     )
@@ -894,12 +928,16 @@ def auto_niter(
 def auto_population_size(
     composition: list[str],
     *,
-    base: int = 3,
-    scaling: float = 35.0,
-    min_population: int = 3,
-    max_population: int = 1000,
+    base: int = POPULATION_OFFSET,
+    scaling: float = POPULATION_SLOPE,
+    min_population: int = POPULATION_MIN,
+    max_population: int = POPULATION_MAX,
 ) -> int:
-    """Heuristic GA population size scaled by cluster size."""
+    """Population size from the number of atoms.
+
+    Automatic GA runs use :func:`scgo.utils.search_budget.ga_auto_budget`.
+    That population is at least this count. Extra search slots widen it.
+    """
     return _auto_scale_parameter(
         composition,
         base=base,

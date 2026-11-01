@@ -25,7 +25,9 @@ from scgo.param_presets import (
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
+    AdsorbateDefinition,
     SystemType,
+    extract_adsorbate_definition_from_params,
     get_system_policy,
     validate_system_type_settings,
 )
@@ -34,12 +36,12 @@ from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
     auto_niter,
     auto_niter_local_relaxation,
-    auto_population_size,
     deep_merge_dicts,
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
 from scgo.utils.parallel_workers import inherit_n_jobs
+from scgo.utils.search_budget import bh_auto_budget, ga_auto_budget
 
 logger = get_logger(__name__)
 
@@ -383,41 +385,75 @@ def validate_algorithm_params(
             )
 
 
+def _is_auto(value: Any) -> bool:
+    return value in ("auto", None)
+
+
 def resolve_auto_params(
     algo_params: dict[str, Any],
     composition: list[str],
     chosen_go: str,
+    *,
+    system_type: SystemType = "gas_cluster",
+    surface_config: SurfaceSystemConfig | None = None,
+    adsorbate_definition: AdsorbateDefinition | None = None,
 ) -> dict[str, Any]:
     """Resolve 'auto' parameter values.
+
+    Genetic algorithm and basin hopping automatic budgets come from
+    :mod:`scgo.utils.search_budget`. Local-relaxation and simple-optimizer
+    iteration counts follow how many atoms move.
 
     Args:
         algo_params: Dictionary of algorithm-specific parameters.
         composition: List of atomic symbols.
         chosen_go: Name of chosen algorithm.
+        system_type: Resolved system type. Defaults to a vacuum cluster.
+        surface_config: Slab settings, required for slab-as-target searches.
+        adsorbate_definition: Core versus adsorbate partition, when present.
 
     Returns:
         Dictionary with resolved values to merge into global_optimizer_kwargs.
     """
     niter_val = algo_params.get("niter")
-    resolved = {
-        "niter": auto_niter(composition) if niter_val in ("auto", None) else niter_val
+    budget_kwargs = {
+        "system_type": system_type,
+        "surface_config": surface_config,
+        "adsorbate_definition": adsorbate_definition,
     }
+    if chosen_go == "ga":
+        pop_size_val = algo_params.get("population_size")
+        if _is_auto(niter_val) or _is_auto(pop_size_val):
+            population, generations = ga_auto_budget(composition, **budget_kwargs)
+        else:
+            population, generations = pop_size_val, niter_val
+        resolved: dict[str, Any] = {
+            "niter": generations if _is_auto(niter_val) else niter_val
+        }
+        if _is_auto(pop_size_val):
+            resolved["population_size"] = population
+        elif pop_size_val is not None:
+            resolved["population_size"] = pop_size_val
+    elif chosen_go == "bh":
+        resolved = {
+            "niter": (
+                bh_auto_budget(composition, **budget_kwargs)
+                if _is_auto(niter_val)
+                else niter_val
+            )
+        }
+    else:
+        resolved = {
+            "niter": auto_niter(composition) if _is_auto(niter_val) else niter_val
+        }
 
-    # Resolve niter_local_relaxation for all algorithms
+    # Resolve niter_local_relaxation for all algorithms.
     niter_local_val = algo_params.get("niter_local_relaxation")
     resolved["niter_local_relaxation"] = (
         auto_niter_local_relaxation(composition)
-        if niter_local_val in ("auto", None)
+        if _is_auto(niter_local_val)
         else niter_local_val
     )
-    if chosen_go == "ga":
-        pop_size_val = algo_params.get("population_size")
-        resolved["population_size"] = (
-            auto_population_size(composition)
-            if pop_size_val in ("auto", None)
-            else pop_size_val
-        )
-
     return resolved
 
 
@@ -546,8 +582,18 @@ def prepare_algorithm_kwargs(
     Returns:
         Dictionary ready for direct algorithm execution.
     """
-    resolved = resolve_auto_params(algo_params, composition, chosen_go)
     surface_config = params.get("surface_config")
+    slab_config = (
+        surface_config if isinstance(surface_config, SurfaceSystemConfig) else None
+    )
+    resolved = resolve_auto_params(
+        algo_params,
+        composition,
+        chosen_go,
+        system_type=system_type,
+        surface_config=slab_config,
+        adsorbate_definition=extract_adsorbate_definition_from_params(params),
+    )
     if system_type == "gas_cluster" and surface_config is not None:
         raise SCGOValidationError(
             "system_type='gas_cluster' does not allow surface_config. "
