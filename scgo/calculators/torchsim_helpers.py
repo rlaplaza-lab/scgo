@@ -42,14 +42,13 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.metadata.atoms import set_tags
-from scgo.utils.cuda import is_cuda_oom_error
+from scgo.utils.cuda import is_cuda_oom_error, release_gpu_memory
 from scgo.utils.helpers import copy_atoms, ensure_float64_forces
 from scgo.utils.logging import (
     drain_inductor_filelock_summary,
     get_logger,
     suppress_matching_stdout,
 )
-from scgo.utils.run_helpers import cleanup_torch_cuda
 
 logger = get_logger(__name__)
 
@@ -970,7 +969,64 @@ class TorchSimBatchRelaxer:
         if not atoms_list:
             return []
 
-        return self._relax_batch_once(atoms_list, steps=steps)
+        return self._relax_batch_recovering(
+            list(atoms_list), steps=steps, same_batch_retry=True
+        )
+
+    def _relax_batch_recovering(
+        self,
+        atoms_list: list[Atoms],
+        *,
+        steps: int | None,
+        same_batch_retry: bool,
+    ) -> list[tuple[float, Atoms]]:
+        """Relax ``atoms_list``, releasing GPU caches once if the device is full.
+
+        Warp's neighbor-list pool and PyTorch's cache share the card. A long
+        run can leave PyTorch holding nearly all of it, so the next pool
+        allocation fails even when it only needs the inverse cells of a few
+        systems. Dropping the cache and retrying the same batch recovers that
+        case. A batch that still does not fit is split in half.
+        """
+        try:
+            return self._relax_batch_once(atoms_list, steps=steps)
+        except (MemoryError, RuntimeError) as exc:
+            if not is_cuda_oom_error(exc):
+                raise
+            report = release_gpu_memory(logger=logger)
+            if same_batch_retry:
+                logger.warning(
+                    "TorchSim batch of %d structures ran out of GPU memory (%s). "
+                    "%s. Retrying the same batch.",
+                    len(atoms_list),
+                    exc,
+                    report,
+                )
+                return self._relax_batch_recovering(
+                    atoms_list, steps=steps, same_batch_retry=False
+                )
+            if len(atoms_list) == 1:
+                raise SCGORuntimeError(
+                    "TorchSim ran out of GPU memory while relaxing one structure "
+                    f"({exc}). {report}."
+                ) from exc
+            mid = len(atoms_list) // 2
+            logger.warning(
+                "TorchSim batch of %d structures still does not fit after "
+                "releasing GPU caches (%s). %s. Retrying as %d and %d.",
+                len(atoms_list),
+                exc,
+                report,
+                mid,
+                len(atoms_list) - mid,
+            )
+            left = self._relax_batch_recovering(
+                atoms_list[:mid], steps=steps, same_batch_retry=True
+            )
+            right = self._relax_batch_recovering(
+                atoms_list[mid:], steps=steps, same_batch_retry=True
+            )
+            return left + right
 
     def _prepare_batch_atoms(
         self, atoms_list: Sequence[Atoms]
@@ -1084,16 +1140,6 @@ class TorchSimBatchRelaxer:
         props = self._run_with_max_metric_retry(
             "single-point",
             _static_once,
-            oom_msg=(
-                "TorchSim ran out of GPU memory during a NEB single-point force "
-                "evaluation (ts.static). Reduce expected_max_atoms / "
-                "max_atoms_to_try or the batch size."
-            ),
-            retry_oom_msg=(
-                "TorchSim ran out of GPU memory during a NEB single-point "
-                "force evaluation after re-probing the autobatcher. Reduce "
-                "expected_max_atoms / max_atoms_to_try or the batch size."
-            ),
             max_metric_warning=(
                 "Cached/sticky max_memory_scaler too tight for this single-point "
                 "batch (%s); resetting batchers and re-probing GPU memory"
@@ -1108,38 +1154,26 @@ class TorchSimBatchRelaxer:
         kind: str,
         fn: Any,
         *,
-        oom_msg: str,
-        retry_oom_msg: str,
         max_metric_warning: str,
     ) -> Any:
-        """Run ``fn``; on sticky max_metric, reprobe once. Map CUDA OOM to SCGORuntimeError."""
+        """Run ``fn``; on sticky max_metric, release GPU memory and reprobe once.
+
+        A device OOM is not handled here. ``_relax_batch_recovering`` classifies
+        it once, releases memory once, and retries or splits the batch.
+        """
         try:
             return self._call_torchsim_quiet(kind, fn)
-        except (ValueError, torch.cuda.OutOfMemoryError, RuntimeError) as exc:
-            if isinstance(exc, ValueError) and self._is_max_metric_value_error(exc):
-                logger.warning(max_metric_warning, exc)
-                self._reset_and_reprobe()
-                try:
-                    return self._call_torchsim_quiet(kind, fn)
-                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_exc:
-                    if self._is_cuda_oom_error(retry_exc):
-                        cleanup_torch_cuda(logger=logger)
-                        raise SCGORuntimeError(retry_oom_msg) from retry_exc
-                    raise
-            if self._is_cuda_oom_error(exc):
-                cleanup_torch_cuda(logger=logger)
-                raise SCGORuntimeError(oom_msg) from exc
-            raise
+        except ValueError as exc:
+            if not self._is_max_metric_value_error(exc):
+                raise
+            logger.warning(max_metric_warning, exc)
+            self._reset_and_reprobe()
+            return self._call_torchsim_quiet(kind, fn)
 
     @staticmethod
     def _is_max_metric_value_error(exc: BaseException) -> bool:
         """True for torch-sim's sticky-scaler overflow (``"max_metric"`` ValueError)."""
         return isinstance(exc, ValueError) and "max_metric" in str(exc)
-
-    @staticmethod
-    def _is_cuda_oom_error(exc: BaseException) -> bool:
-        """True for a genuine GPU OOM."""
-        return is_cuda_oom_error(exc)
 
     def _autobatcher_probe_cap(self) -> int:
         """Atom count cap passed to the native InFlight/Binning probe."""
@@ -1197,7 +1231,7 @@ class TorchSimBatchRelaxer:
             if batcher is not None:
                 batcher.max_memory_scaler = None
         self.__dict__.setdefault("_announced_autobatcher_kinds", set()).clear()
-        cleanup_torch_cuda(logger=logger)
+        release_gpu_memory(logger=logger)
 
     def _relax_batch_once(
         self,
@@ -1232,18 +1266,6 @@ class TorchSimBatchRelaxer:
         state = self._run_with_max_metric_retry(
             "relax",
             _optimize_once,
-            oom_msg=(
-                "TorchSim relaxation ran out of GPU memory during optimization. "
-                "The sticky max_memory_scaler may be too tight, or the batch is "
-                "larger than the GPU can hold: reduce expected_max_atoms / "
-                "max_atoms_to_try or the batch size."
-            ),
-            retry_oom_msg=(
-                "TorchSim relaxation ran out of GPU memory during "
-                "optimization after re-probing the autobatcher. The batch "
-                "is larger than the GPU can hold: reduce expected_max_atoms / "
-                "max_atoms_to_try or the batch size."
-            ),
             max_metric_warning=(
                 "Cached/sticky max_memory_scaler too tight for this batch (%s); "
                 "resetting batchers and re-probing GPU memory"

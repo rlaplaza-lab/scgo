@@ -1096,11 +1096,29 @@ def test_relax_batch_retries_on_max_metric_sticky_scaler(monkeypatch):
 
     relaxer._optimize_batcher = _Batcher()
     relaxer._static_batcher = _Batcher()
+    releases: list[str] = []
+    oom_seen: list[BaseException] = []
+
+    def _release(logger=None):
+        releases.append("release")
+        return "before -> after"
+
+    def _oom(exc):
+        oom_seen.append(exc)
+        return False
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.release_gpu_memory",
+        _release,
+    )
+    monkeypatch.setattr("scgo.calculators.torchsim_helpers.is_cuda_oom_error", _oom)
 
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
     results = relaxer.relax_batch([atoms])
     assert calls["count"] == 2
     assert len(results) == 1
+    assert releases == ["release"]
+    assert oom_seen == []
     assert relaxer._optimize_batcher.max_memory_scaler is None
     assert relaxer._static_batcher.max_memory_scaler is None
     assert relaxer.max_memory_scaler is None
@@ -1157,10 +1175,28 @@ def test_single_point_retries_on_max_metric_sticky_scaler(monkeypatch):
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+    releases: list[str] = []
+    oom_seen: list[BaseException] = []
+
+    def _release(logger=None):
+        releases.append("release")
+        return "before -> after"
+
+    def _oom(exc):
+        oom_seen.append(exc)
+        return False
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.release_gpu_memory",
+        _release,
+    )
+    monkeypatch.setattr("scgo.calculators.torchsim_helpers.is_cuda_oom_error", _oom)
 
     results = relaxer.relax_batch([Atoms("H", positions=[[0.0, 0.0, 0.0]])], steps=0)
     assert calls["count"] == 2
     assert len(results) == 1
+    assert releases == ["release"]
+    assert oom_seen == []
     assert relaxer._static_batcher.max_memory_scaler is None
 
 
@@ -1466,8 +1502,8 @@ def test_autobatcher_memory_estimation_prints_suppressed_with_summary(
     )
     monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
     monkeypatch.setattr(
-        "scgo.calculators.torchsim_helpers.cleanup_torch_cuda",
-        lambda **_k: None,
+        "scgo.calculators.torchsim_helpers.release_gpu_memory",
+        lambda **_k: "before -> after",
     )
 
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
@@ -1491,3 +1527,211 @@ def test_autobatcher_memory_estimation_prints_suppressed_with_summary(
     out = capfd.readouterr().out
     assert "Model Memory Estimation" not in out
     assert out.count("TorchSim autobatcher (single-point)") == 1
+
+
+def _relaxer_with_scripted_batch(script):
+    """Build a relaxer whose ``_relax_batch_once`` follows ``script``."""
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    calls: list[int] = []
+
+    def _once(atoms_list, *, steps):
+        calls.append(len(atoms_list))
+        action = script.pop(0)
+        if isinstance(action, BaseException):
+            raise action
+        return action
+
+    relaxer._relax_batch_once = _once
+    return relaxer, calls
+
+
+def _silence_oom_release(monkeypatch) -> list[str]:
+    """Stub the one GPU release and record each call."""
+    calls: list[str] = []
+
+    def _release(logger=None):
+        calls.append("release")
+        return "before -> after"
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.release_gpu_memory",
+        _release,
+    )
+    return calls
+
+
+def test_relax_batch_retries_warp_pool_oom_on_the_same_batch(monkeypatch):
+    """A 108-byte Warp pool failure is retried after the caches are released."""
+    from ase import Atoms
+
+    from scgo.utils.cuda import is_cuda_oom_error as real_is_oom
+
+    warp_oom = RuntimeError("Failed to allocate 108 bytes on device 'cuda:0'")
+    atoms = [
+        Atoms("H", positions=[[0.0, 0.0, 0.0]]),
+        Atoms("H", positions=[[1.0, 0.0, 0.0]]),
+    ]
+    ok = [(1.0, atoms[0]), (2.0, atoms[1])]
+    relaxer, calls = _relaxer_with_scripted_batch([warp_oom, ok])
+    order: list[str] = []
+    inner = relaxer._relax_batch_once
+
+    def _once(atoms_list, *, steps):
+        order.append(f"once:{len(atoms_list)}")
+        return inner(atoms_list, steps=steps)
+
+    relaxer._relax_batch_once = _once
+
+    def _release(logger=None):
+        order.append("release")
+        return "before -> after"
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.release_gpu_memory",
+        _release,
+    )
+    classified: list[type[BaseException]] = []
+
+    def _spy(exc):
+        classified.append(type(exc))
+        return real_is_oom(exc)
+
+    monkeypatch.setattr("scgo.calculators.torchsim_helpers.is_cuda_oom_error", _spy)
+
+    assert relaxer.relax_batch(atoms) == ok
+    assert calls == [2, 2]
+    assert order == ["once:2", "release", "once:2"]
+    assert classified == [RuntimeError]
+
+
+def test_optimize_warp_oom_retries_after_one_release(monkeypatch):
+    """A Warp pool error from ``optimize`` is released once, then retried.
+
+    ``_run_with_max_metric_retry`` does not wrap the error. The original
+    ``RuntimeError`` reaches ``_relax_batch_recovering``.
+    """
+    import torch
+    from ase import Atoms
+
+    from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+    from scgo.utils.cuda import is_cuda_oom_error as real_is_oom
+
+    relaxer = TorchSimBatchRelaxer.__new__(TorchSimBatchRelaxer)
+    relaxer._on_cpu = True
+    relaxer.max_memory_scaler = 10.0
+    relaxer._runner_kwargs = {"max_steps": 10}
+    relaxer.max_steps = 10
+    relaxer.device = torch.device("cpu")
+    relaxer.dtype = torch.float64
+    relaxer.model = object()
+    relaxer.optimizer = object()
+    relaxer.model_kind = "mace"
+    relaxer.last_batch_relax_steps = []
+    relaxer.max_atoms_to_try = None
+    relaxer.expected_max_atoms = None
+    relaxer._announced_autobatcher_kinds = set()
+
+    class _Batcher:
+        def __init__(self) -> None:
+            self.max_memory_scaler = 10.0
+
+    class _FakeState:
+        energy = torch.tensor([1.0])
+
+        @staticmethod
+        def to_atoms():
+            return [Atoms("H", positions=[[0.0, 0.0, 0.0]])]
+
+    events: list[str] = []
+
+    class _FakeTS:
+        def optimize(self, **kwargs):
+            events.append("optimize")
+            if events.count("optimize") == 1:
+                raise RuntimeError("Failed to allocate 108 bytes on device 'cuda:0'")
+            return _FakeState()
+
+    relaxer._ts = _FakeTS()
+    relaxer._optimize_batcher = _Batcher()
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.build_torchsim_fixatoms_from_ase_batch",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(relaxer, "_uses_metatomic_model", lambda: False)
+
+    def _release(logger=None):
+        events.append("release")
+        return "before -> after"
+
+    classified: list[type[BaseException]] = []
+
+    def _spy(exc):
+        classified.append(type(exc))
+        return real_is_oom(exc)
+
+    monkeypatch.setattr(
+        "scgo.calculators.torchsim_helpers.release_gpu_memory",
+        _release,
+    )
+    monkeypatch.setattr("scgo.calculators.torchsim_helpers.is_cuda_oom_error", _spy)
+
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    results = relaxer.relax_batch([atoms])
+    assert [energy for energy, _atoms in results] == [1.0]
+    assert events == ["optimize", "release", "optimize"]
+    assert classified == [RuntimeError]
+    assert relaxer._optimize_batcher.max_memory_scaler == 10.0
+    assert relaxer.max_memory_scaler == 10.0
+
+
+def test_relax_batch_splits_when_the_same_batch_still_does_not_fit(monkeypatch):
+    from ase import Atoms
+
+    warp_oom = RuntimeError("Failed to allocate 108 bytes on device 'cuda:0'")
+    atoms = [
+        Atoms("H", positions=[[0.0, 0.0, 0.0]]),
+        Atoms("He", positions=[[1.0, 0.0, 0.0]]),
+    ]
+    relaxer, calls = _relaxer_with_scripted_batch(
+        [
+            warp_oom,
+            warp_oom,
+            [(1.0, atoms[0])],
+            [(2.0, atoms[1])],
+        ]
+    )
+    _silence_oom_release(monkeypatch)
+
+    results = relaxer.relax_batch(atoms)
+    assert [energy for energy, _atoms in results] == [1.0, 2.0]
+    assert calls == [2, 2, 1, 1]
+
+
+def test_relax_batch_raises_when_one_structure_still_does_not_fit(monkeypatch):
+    from ase import Atoms
+
+    from scgo.exceptions import SCGORuntimeError
+
+    warp_oom = RuntimeError("Failed to allocate 108 bytes on device 'cuda:0'")
+    atoms = [Atoms("H", positions=[[0.0, 0.0, 0.0]])]
+    relaxer, calls = _relaxer_with_scripted_batch([warp_oom, warp_oom])
+    _silence_oom_release(monkeypatch)
+
+    with pytest.raises(SCGORuntimeError, match="one structure"):
+        relaxer.relax_batch(atoms)
+    assert calls == [1, 1]
+
+
+def test_relax_batch_does_not_retry_a_non_oom_runtime_error(monkeypatch):
+    from ase import Atoms
+
+    relaxer, calls = _relaxer_with_scripted_batch(
+        [RuntimeError("neighbor list failed")]
+    )
+    _silence_oom_release(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="neighbor list failed"):
+        relaxer.relax_batch([Atoms("H", positions=[[0.0, 0.0, 0.0]])])
+    assert calls == [1]

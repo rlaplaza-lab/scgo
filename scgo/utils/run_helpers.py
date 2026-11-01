@@ -7,8 +7,6 @@ to eliminate code duplication and improve maintainability.
 
 from __future__ import annotations
 
-import contextlib
-import gc
 from typing import Any
 
 import numpy as np
@@ -31,6 +29,7 @@ from scgo.system_types import (
     get_system_policy,
     validate_system_type_settings,
 )
+from scgo.utils.cuda import release_gpu_memory
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
     auto_niter,
@@ -792,30 +791,5 @@ def log_configuration(
 
 
 def cleanup_torch_cuda(logger: Any | None = None) -> None:
-    """Release PyTorch CUDA caches when available, then run GC."""
-    try:
-        import torch
-    except ImportError:
-        gc.collect()
-        return
-
-    if torch.cuda.is_available():
-        with contextlib.suppress(RuntimeError):
-            torch.cuda.synchronize()
-        with contextlib.suppress(RuntimeError):
-            torch.cuda.empty_cache()
-        if logger is not None:
-            allocated = torch.cuda.memory_allocated()
-            reserved = torch.cuda.memory_reserved()
-            logger.debug(
-                "Post-cleanup CUDA memory: allocated=%s reserved=%s",
-                allocated,
-                reserved,
-            )
-            if reserved - allocated > 100_000_000:
-                logger.debug(
-                    "CUDA fragmentation detected: reserved-allocated=%s bytes",
-                    reserved - allocated,
-                )
-
-    gc.collect()
+    """Release the Warp pool and the PyTorch CUDA cache, then run GC."""
+    release_gpu_memory(logger=logger)
