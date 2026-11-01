@@ -1130,6 +1130,7 @@ def run_transition_state_search(
         pair_score_w_distinct=pair_score_w_distinct,
         pair_score_w_mismatch=pair_score_w_mismatch,
         pair_score_w_core=pair_score_w_core,
+        max_lattice_shift=neb_surface_max_lattice_shift,
     )
 
     if not pairs:

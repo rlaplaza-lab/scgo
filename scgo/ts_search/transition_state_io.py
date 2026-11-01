@@ -215,12 +215,14 @@ def _pair_overlay_metrics(
     n_core: int,
     use_mic: bool,
     n_adsorbate: int | None = None,
+    max_lattice_shift: int = 1,
 ) -> tuple[float, float]:
     """``(core_rms, ads_hop)`` from ONE shared product-core overlay.
 
     Layout is ``[slab | core | adsorbate]``. Overlay uses the same operator as
-    NEB endpoint prep (:func:`_overlay_product_core`), so pair gating and NEB
-    alignment agree by construction. Minima are not mutated.
+    NEB endpoint prep (:func:`_overlay_product_core`), including
+    ``max_lattice_shift``, so pair gating and NEB alignment agree by
+    construction. Minima are not mutated.
 
     ``core_rms`` is RMS Cartesian core displacement after the overlay (0.0 when
     there is no core block). ``ads_hop`` is the max adsorbate-atom displacement
@@ -262,6 +264,7 @@ def _pair_overlay_metrics(
         n_core=n_core,
         mic_cell=mic_cell,
         mic_pbc=mic_pbc,
+        max_lattice_shift=max_lattice_shift,
     )
 
     def _mic_norms(dlt: np.ndarray) -> np.ndarray:
@@ -327,6 +330,7 @@ def select_structure_pairs(
     pair_score_w_distinct: float | None = None,
     pair_score_w_mismatch: float | None = None,
     pair_score_w_core: float | None = None,
+    max_lattice_shift: int = 1,
 ) -> list[tuple[int, int]]:
     """Select pairs of minima likely connected by a transition state.
 
@@ -376,6 +380,8 @@ def select_structure_pairs(
         pair_score_w_distinct: Ranking weight for distinctness / adsorbate hop.
         pair_score_w_mismatch: Ranking weight for fingerprint mismatch.
         pair_score_w_core: Ranking weight for core RMS (adsorbate+core only).
+        max_lattice_shift: In-plane images for the slab-core overlay. Match
+            the NEB window.
 
     Returns:
         List of ``(index1, index2)`` with ``index1 < index2``.
@@ -544,6 +550,7 @@ def select_structure_pairs(
                     n_core=n_core,
                     use_mic=mic,
                     n_adsorbate=n_adsorbate_mobile,
+                    max_lattice_shift=max_lattice_shift,
                 )
                 if fingerprint_core:
                     core_rms = core_rms_c

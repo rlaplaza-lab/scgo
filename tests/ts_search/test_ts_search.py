@@ -1251,6 +1251,57 @@ def test_core_rms_displacement_slab_keeps_lab_frame_rotation() -> None:
     assert rms > 1.0
 
 
+def test_pair_overlay_two_cell_core_translation_follows_lattice_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shift 2 places a two-cell core on the reactant; shift 1 leaves one cell."""
+    slab = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]],
+        cell=[20.0, 20.0, 15.0],
+        pbc=[True, True, False],
+    )
+    core = np.array([[1.0, 2.0, 4.0], [13.0, 2.2, 4.0]])
+    atoms_i = slab + Atoms("Pt2", positions=core)
+    atoms_j = slab.copy() + Atoms(
+        "Pt2", positions=(core + 2.0 * np.asarray(slab.cell[0]))[::-1]
+    )
+    n_slab = len(slab)
+    ref = atoms_i.get_positions()[n_slab:]
+    placed: dict[str, np.ndarray] = {}
+    real = _overlay_product_core
+
+    def _spy(atoms, pos_j, nums_j, **kwargs):
+        pos, nums = real(atoms, pos_j, nums_j, **kwargs)
+        placed["core"] = np.asarray(pos[n_slab : n_slab + 2], dtype=float)
+        return pos, nums
+
+    monkeypatch.setattr(
+        "scgo.ts_search.transition_state_io._overlay_product_core", _spy
+    )
+
+    def _scores(shift: int) -> tuple[float, float]:
+        periodic, _hop = _pair_overlay_metrics(
+            atoms_i,
+            atoms_j,
+            n_slab=n_slab,
+            n_core=2,
+            use_mic=True,
+            max_lattice_shift=shift,
+        )
+        delta = placed["core"] - ref
+        cartesian = float(np.sqrt(np.mean(np.sum(delta * delta, axis=1))))
+        return cartesian, periodic
+
+    wide_cart, wide_periodic = _scores(2)
+    narrow_cart, narrow_periodic = _scores(1)
+    assert wide_cart < 0.05
+    assert narrow_cart > 10.0
+    # A leftover cell is the same registry under minimum image.
+    assert wide_periodic < 0.05
+    assert narrow_periodic < 0.05
+
+
 def test_select_structure_pairs_keeps_rotated_asymmetric_core_oh_site_hop() -> None:
     """Rotated scalene cores with an OH site hop must remain pairable."""
     core = _asymmetric_pt3_core()
