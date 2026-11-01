@@ -220,29 +220,6 @@ def test_ga_minimum_population_size(tmp_path, rng):
     assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
 
 
-def test_ga_pairing_failure_handling(tmp_path, rng):
-    """Test GA handling when pairing fails (cutandsplice returns None)."""
-    # This is harder to test directly, but we can test with incompatible structures
-    # that might cause pairing failures
-    comp = ["Pt", "Pt", "Pt"]
-    calc = EMT()
-
-    # Use very strict parameters that might cause pairing failures
-    minima = ga_go(
-        composition=comp,
-        output_dir=str(tmp_path / "ga_pairing_test"),
-        calculator=calc,
-        niter=2,
-        population_size=4,
-        niter_local_relaxation=2,
-        rng=rng,
-    )
-
-    # Should handle pairing failures gracefully and still return results
-    assert isinstance(minima, list)
-    assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
-
-
 def test_very_close_atoms(tmp_path):
     """Test optimization with atoms initially very close together."""
     # Create atoms that are too close (should cause high forces)

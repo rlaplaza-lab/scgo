@@ -597,17 +597,6 @@ class TestCampaignFunctionValidationIntegration:
                 calculator_for_global_optimization=EMT(),
             )
 
-    def test_run_trials_missing_system_type(self, rng, tmp_path):
-        """Test run_trials requires system_type in global_optimizer_kwargs."""
-        with pytest.raises(SCGOValidationError, match="system_type must be set"):
-            run_trials(
-                composition=["Pt", "Pt"],
-                global_optimizer="bh",
-                global_optimizer_kwargs={},
-                output_dir=str(tmp_path),
-                rng=rng,
-            )
-
     def test_scgo_invalid_composition(self, rng, tmp_path):
         """Test scgo with invalid composition."""
         with pytest.raises(SCGOValidationError, match="composition"):

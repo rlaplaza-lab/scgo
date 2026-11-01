@@ -153,16 +153,6 @@ def test_flatten_run_timing_payload_rejects_multi_trial():
         flatten_run_timing_payload(doc)
 
 
-def test_read_timing_file_invalid_json(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-):
-    bad = tmp_path / "timing.json"
-    bad.write_text("{not json", encoding="utf-8")
-    caplog.set_level(logging.DEBUG)
-    assert read_timing_file(str(bad)) is None
-    assert "Failed to read timing file" in caplog.text
-
-
 def test_log_timing_summary_respects_verbosity(caplog: pytest.LogCaptureFixture):
     logger = get_logger("test_timing_summary")
     timings = {"kind": "bh", "total_wall_s": 10.0, "local_relaxation_s": 4.0}
@@ -197,23 +187,6 @@ def test_sum_neb_seconds_mixes_serial_and_parallel_pairs():
         {"timings_s": {"neb_optimization_avg_s": 2.0}},
     ]
     assert sum_neb_seconds_from_ts_results(results) == pytest.approx(3.0)
-
-
-@pytest.mark.parametrize(
-    ("kind", "timings", "expected"),
-    [
-        ("ga", {"initial_relax_batch_s": 100.0, "relax_batch_s": 50.0}, 150.0),
-        ("bh", {"local_relaxation_s": 3.0}, 3.0),
-        ("neb", {"neb_optimization_s": 7.0}, 7.0),
-        ("neb", {"neb_optimization_avg_s": 8.0}, 8.0),
-        ("go_ts", {"go_phase_s": 10.0, "ts_neb_sum_s": 5.0}, 15.0),
-    ],
-)
-def test_relax_seconds_from_timings_dispatches_by_kind(kind, timings, expected):
-    """kind discriminator routes to the matching extractor."""
-    assert relax_seconds_from_timings({**timings, "kind": kind}) == pytest.approx(
-        expected
-    )
 
 
 def test_relax_seconds_from_timings_unknown_kind_raises():

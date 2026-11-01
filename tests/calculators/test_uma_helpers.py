@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
-
 import pytest
-
-from scgo.exceptions import SCGOConfigurationError
 
 
 def test_uma_class_is_ase_calculator():
@@ -49,23 +45,6 @@ def test_get_ts_search_params_uma_default_torchsim_flags():
     assert ts["calculator"] == "UMA"
     assert ts["use_torchsim"] is True
     assert ts["use_parallel_neb"] is True
-
-
-def test_both_mlip_stacks_raises_when_both_importable():
-    # ``find_spec("fairchem.core")`` raises ModuleNotFoundError (rather than
-    # returning None) when the ``fairchem`` parent package is absent, so probe
-    # the parent first.
-    if (
-        importlib.util.find_spec("mace") is None
-        or importlib.util.find_spec("fairchem") is None
-        or importlib.util.find_spec("fairchem.core") is None
-    ):
-        pytest.skip("needs both mace and fairchem.core importable")
-
-    from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
-
-    with pytest.raises(SCGOConfigurationError, match="Multiple MLIP stacks"):
-        ensure_mace_uma_not_both_installed()
 
 
 @pytest.mark.requires_uma

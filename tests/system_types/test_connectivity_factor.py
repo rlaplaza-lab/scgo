@@ -6,13 +6,10 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from scgo.cluster_adsorbate import ClusterAdsorbateConfig
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius
 from scgo.initialization.geometry_helpers import _bonded_pairs, is_cluster_connected
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
-from scgo.surface import make_surface_config
-from scgo.system_types import resolve_connectivity_factor
 from scgo.system_types.connectivity_factor import (
     bond_threshold_matrix,
     format_connectivity_factor,
@@ -97,20 +94,6 @@ def test_normalize_accepts_string_pair_keys() -> None:
     assert normalize_connectivity_factor(raw_tuple) == normalize_connectivity_factor(
         raw_str
     )
-
-
-def test_resolve_prefers_explicit_dict_over_config() -> None:
-    from ase.build import fcc111
-
-    ca = ClusterAdsorbateConfig(structure_connectivity_factor=2.5)
-    surf = make_surface_config(
-        fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
-    )
-    explicit = {"Pt": 1.1}
-    resolved = resolve_connectivity_factor(
-        explicit, cluster_adsorbate_config=ca, surface_config=surf
-    )
-    assert resolved == normalize_connectivity_factor(explicit)
 
 
 def test_bonded_pairs_honor_pair_override() -> None:

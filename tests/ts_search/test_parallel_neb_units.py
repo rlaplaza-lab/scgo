@@ -2,8 +2,9 @@
 
 The companion ``test_parallel_neb.py`` is module-marked ``requires_cuda`` /
 ``requires_mace`` because most of its cases build a real ``TorchSimBatchRelaxer``.
-The helpers exercised here (`_stage1_band_climb_eligible`, `_evaluate_bands_in_chunks`)
-are pure Python and are tested with fake relaxers so they run in the fast suite.
+The helpers exercised here (`_stage1_band_climb_eligible`, `_evaluate_bands_in_chunks`,
+`chunk_band_indices_by_atom_budget`) are pure Python and are tested with fake
+relaxers so they run in the fast suite.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from scgo.ts_search.parallel_neb import (
     ParallelNEBBatch,
     _evaluate_bands_in_chunks,
     _stage1_band_climb_eligible,
+    chunk_band_indices_by_atom_budget,
 )
 from scgo.ts_search.transition_state import (
     TorchSimNEB,
@@ -363,3 +365,33 @@ def test_run_parallel_neb_forwards_bond_tolerance_to_interpolate(
 
     assert results
     assert captured["neb_interpolation_bond_tolerance_a"] == pytest.approx(0.37)
+
+
+def test_chunk_band_indices_by_atom_budget_splits_as_expected():
+    """Greedy bin-packing preserves order and respects the atom budget."""
+    costs = [1000, 1000, 1000, 1000, 1000]
+    indices = list(range(5))
+
+    assert chunk_band_indices_by_atom_budget(indices, costs, 2000) == [
+        [0, 1],
+        [2, 3],
+        [4],
+    ]
+    assert chunk_band_indices_by_atom_budget(indices, costs, 3000) == [
+        [0, 1, 2],
+        [3, 4],
+    ]
+    assert chunk_band_indices_by_atom_budget(indices, costs, 5000) == [indices]
+    assert chunk_band_indices_by_atom_budget(indices, costs, None) == [indices]
+    assert chunk_band_indices_by_atom_budget(indices, costs, 0) == [indices]
+    assert chunk_band_indices_by_atom_budget([], costs, 1000) == []
+
+
+def test_chunk_band_indices_by_atom_budget_keeps_oversized_band():
+    """A band larger than the whole budget still gets its own chunk."""
+    costs = [500, 9000, 500]
+    assert chunk_band_indices_by_atom_budget([0, 1, 2], costs, 1000) == [
+        [0],
+        [1],
+        [2],
+    ]

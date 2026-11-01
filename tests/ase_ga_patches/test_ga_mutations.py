@@ -85,8 +85,6 @@ def test_breathing_mutation_succeeds_on_loose_pt3(pt3_atoms, rng):
     assert len(out) == len(pt3_atoms), "Atom count must be preserved"
     assert out.get_chemical_symbols() == pt3_atoms.get_chemical_symbols()
 
-    import numpy as np
-
     displacement = np.linalg.norm(out.get_positions() - pt3_atoms.get_positions())
     assert displacement > 1e-6, f"Mutation must displace atoms, got {displacement}"
     assert mut.last_attempt_count <= 5, "Should complete within max attempts"
@@ -233,8 +231,6 @@ def test_anisotropic_rattle_mutation_runs_on_small_cluster(pt3_atoms, rng):
     mutated = mut.mutate(pt3_atoms.copy())
     assert mutated is not None, "Mutation must return a result"
     assert len(mutated) == len(pt3_atoms), "Atom count must be preserved"
-
-    import numpy as np
 
     displacement = np.linalg.norm(mutated.get_positions() - pt3_atoms.get_positions())
     assert displacement > 1e-6, f"Mutation must displace atoms, got {displacement}"

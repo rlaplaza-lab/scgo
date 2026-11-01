@@ -14,59 +14,9 @@ from scgo.ts_search.transition_state import (
     interpolate_path,
     validate_initial_neb_path,
 )
-from scgo.utils.ts_runner_kwargs import NebRunConfig
+from tests.ts_search.neb_fixtures import _gas_neb_cfg
 
 pytestmark = [pytest.mark.requires_cuda, pytest.mark.requires_mace]
-
-
-def _gas_neb_cfg(**overrides) -> NebRunConfig:
-    """Minimal gas-cluster NebRunConfig for parallel NEB unit tests."""
-    kwargs: dict = {
-        "neb_n_images": 3,
-        "neb_spring_constant": 0.1,
-        "neb_fmax": 0.05,
-        "neb_steps": 2,
-        "neb_climb": False,
-        "neb_interpolation_method": "linear",
-        "neb_align_endpoints": False,
-        "neb_perturb_sigma": 0.0,
-        "neb_interpolation_mic": False,
-        "neb_tangent_method": "aseneb",
-        "neb_surface_cell_remap": True,
-        "neb_surface_lattice_rotation": True,
-        "neb_surface_max_lattice_shift": 1,
-        "n_slab": 0,
-        "n_core_mobile": None,
-        "n_adsorbate_mobile": None,
-        "adsorbate_fragment_lengths": None,
-        "max_endpoint_mismatch": None,
-        "adsorbate_definition": None,
-        "connectivity_factor": None,
-        "allow_cluster_fragmentation": False,
-        "allow_adsorbate_surface_detachment": False,
-        "enforce_adsorbate_subgraph_integrity": True,
-        "system_type": "gas_cluster",
-        "surface_config": None,
-        "torchsim_params": {},
-    }
-    # Per-system-type required fields (mirrors TS_DEFAULTS_BY_SYSTEM_TYPE). Set
-    # here, before kwargs.update(overrides), so individual tests can still
-    # override them. Must stay in sync with NebRunConfig's required fields.
-    _surface_defaults = ("surface_cluster", "surface", "surface_adsorbate")
-    _is_surface = overrides.get("system_type", "gas_cluster") in _surface_defaults
-    if _is_surface:
-        _clash, _prom, _spurious = 0.7, 0.40, 8.0
-    else:
-        _clash, _prom, _spurious = 1.0, 0.10, 8.0
-    kwargs.update(
-        neb_prescreen_clash_distance=_clash,
-        min_saddle_prominence=_prom,
-        neb_max_spurious_barrier=_spurious,
-        layer_cluster_threshold_ang=0.4,
-        neb_interpolation_bond_tolerance_a=0.5,
-    )
-    kwargs.update(overrides)
-    return NebRunConfig(**kwargs)
 
 
 def _unique_neb_image_count(*image_lists: list) -> int:
@@ -1180,47 +1130,6 @@ def test_parallel_neb_does_not_dedup_across_different_cells(cu3_triangle, cu3_li
 
     # 5 + 5 distinct images: positions match but cells do not, so no collapse.
     assert relaxer.batch_sizes[0] == 10, relaxer.batch_sizes
-
-
-# ---------------------------------------------------------------------------
-# T5: atom-budget chunking
-# ---------------------------------------------------------------------------
-
-
-def test_chunk_band_indices_by_atom_budget_splits_as_expected():
-    """Greedy bin-packing preserves order and respects the atom budget."""
-    from scgo.ts_search.parallel_neb import chunk_band_indices_by_atom_budget
-
-    costs = [1000, 1000, 1000, 1000, 1000]
-    indices = list(range(5))
-
-    assert chunk_band_indices_by_atom_budget(indices, costs, 2000) == [
-        [0, 1],
-        [2, 3],
-        [4],
-    ]
-    assert chunk_band_indices_by_atom_budget(indices, costs, 3000) == [
-        [0, 1, 2],
-        [3, 4],
-    ]
-    # Budget >= total -> a single chunk.
-    assert chunk_band_indices_by_atom_budget(indices, costs, 5000) == [indices]
-    # No budget -> a single chunk.
-    assert chunk_band_indices_by_atom_budget(indices, costs, None) == [indices]
-    assert chunk_band_indices_by_atom_budget(indices, costs, 0) == [indices]
-    assert chunk_band_indices_by_atom_budget([], costs, 1000) == []
-
-
-def test_chunk_band_indices_by_atom_budget_keeps_oversized_band():
-    """A band larger than the whole budget still gets its own chunk."""
-    from scgo.ts_search.parallel_neb import chunk_band_indices_by_atom_budget
-
-    costs = [500, 9000, 500]
-    assert chunk_band_indices_by_atom_budget([0, 1, 2], costs, 1000) == [
-        [0],
-        [1],
-        [2],
-    ]
 
 
 def _record_chunk_sizes(tmp_path, minima, pairs, neb_cfg, **run_kwargs):

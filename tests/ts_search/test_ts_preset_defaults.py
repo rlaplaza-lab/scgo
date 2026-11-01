@@ -15,7 +15,7 @@ from ase import Atoms
 from scgo.system_types import AdsorbateDefinition
 from scgo.ts_search import transition_state_run as ts_run_mod
 from scgo.utils.helpers import get_cluster_formula
-from tests.ts_search.test_ts_dedupe_partition import _prepared_search_config
+from tests.ts_search.neb_fixtures import _prepared_search_config
 
 
 def _stub_ts_pipeline(

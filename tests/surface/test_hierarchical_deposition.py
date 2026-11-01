@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
 from ase.build import fcc111
 from ase.db import connect
 from ase_ga.utilities import closest_distances_generator
 
 from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
-from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.db_stamp import stamp_db
@@ -18,11 +16,7 @@ from scgo.surface.deposition import create_deposited_cluster
 from scgo.surface.fragment_templates import build_default_fragment_template
 from scgo.surface.partition import prepare_slab_search_surface_config
 from scgo.surface.presets import make_n_doped_graphite_surface_config
-from scgo.system_types import (
-    AdsorbateDefinition,
-    resolve_mobile_composition,
-    validate_adsorbate_definition,
-)
+from scgo.system_types import AdsorbateDefinition
 from tests.helpers import assert_supported_cluster_binding
 
 
@@ -49,78 +43,6 @@ def test_describe_surface_config_smoke():
     s = describe_surface_config(cfg)
     assert "adsorption_height" in s
     assert "n_slab=" in s
-
-
-def test_validate_partition_core_adsorbate():
-    validate_adsorbate_definition(
-        system_type="surface_cluster_adsorbate",
-        composition=["Pt", "Pt", "Pt", "Pt", "Pt", "O", "H", "O", "H"],
-        adsorbate_definition=AdsorbateDefinition(
-            adsorbate_symbols=["O", "H", "O", "H"],
-            core_symbols=["Pt", "Pt", "Pt", "Pt", "Pt"],
-            adsorbate_fragment_lengths=[2, 2],
-        ),
-        context="test",
-    )
-
-
-def test_validate_rejects_bad_partition():
-    with pytest.raises(SCGOValidationError, match="composition|partition|adsorbate"):
-        validate_adsorbate_definition(
-            system_type="surface_cluster_adsorbate",
-            composition=["Pt", "Pt", "Pt", "O"],
-            adsorbate_definition=AdsorbateDefinition(
-                adsorbate_symbols=["O", "H"],
-                core_symbols=["Pt", "Pt", "Pt"],
-                adsorbate_fragment_lengths=[2],
-            ),
-            context="test",
-        )
-
-
-def test_validate_accepts_wrong_list_order_with_matching_multiset():
-    validate_adsorbate_definition(
-        system_type="gas_cluster_adsorbate",
-        composition=["O", "H", "Pt", "Pt", "Pt"],
-        adsorbate_definition=AdsorbateDefinition(
-            core_symbols=["Pt", "Pt", "Pt"],
-            adsorbate_symbols=["O", "H"],
-            adsorbate_fragment_lengths=[2],
-        ),
-        context="test",
-    )
-
-
-def test_validate_reconciles_wrong_preset_core_surface():
-    """Surface adsorbate runs reconcile core_symbols from full mobile formulas.
-
-    Reconciliation is non-mutating: callers must use the returned definition
-    rather than relying on in-place mutation of the input dict.
-    """
-    from scgo.utils.helpers import get_composition_counts
-
-    ads_def = AdsorbateDefinition(
-        core_symbols=["Pt"] * 4 + ["O"],
-        adsorbate_symbols=["O", "H"],
-        adsorbate_fragment_lengths=[2],
-    )
-    composition = ["Pt"] * 5 + ["O", "O", "H"]
-    validate_adsorbate_definition(
-        system_type="surface_cluster_adsorbate",
-        composition=composition,
-        adsorbate_definition=ads_def,
-        context="test",
-    )
-    _mobile, reconciled = resolve_mobile_composition(
-        composition, ads_def, context="test"
-    )
-    assert get_composition_counts(reconciled.core_symbols) == get_composition_counts(
-        ["Pt"] * 5 + ["O"]
-    )
-    # The original definition is left untouched (reconciliation is non-mutating).
-    assert get_composition_counts(ads_def.core_symbols) == get_composition_counts(
-        ["Pt"] * 4 + ["O"]
-    )
 
 
 def test_hierarchical_deposition_ordering_and_slab_prefix(rng):

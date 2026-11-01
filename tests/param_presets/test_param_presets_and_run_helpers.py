@@ -708,15 +708,6 @@ class TestLogConfiguration:
         assert "VERY_LONG_MODEL_DUMP" not in log_output
 
 
-def test_cleanup_torch_cuda_runs_safely():
-    """cleanup_torch_cuda should be callable and not raise if torch absent."""
-    from scgo.utils.run_helpers import cleanup_torch_cuda
-
-    # Should not raise in environments without torch; if torch is available
-    # it should still be safe to call.
-    cleanup_torch_cuda()
-
-
 class TestGetCalculatorClass:
     """Tests for get_calculator_class function."""
 

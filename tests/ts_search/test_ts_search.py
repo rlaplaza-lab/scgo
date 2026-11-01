@@ -39,6 +39,7 @@ from scgo.ts_search.transition_state_io import (
     select_structure_pairs,
 )
 from scgo.utils.ts_runner_kwargs import NebRunConfig
+from tests.ts_search.neb_fixtures import _gas_neb_cfg
 
 
 def test_neb_max_atom_force_uses_per_atom_norm():
@@ -244,8 +245,6 @@ def test_find_transition_state_records_align_and_perturb(
 
     # The same metadata must be recorded when the flat kwargs arrive bundled in
     # a single NebRunConfig (the serial runner's call path).
-    from tests.ts_search.test_parallel_neb import _gas_neb_cfg
-
     cfg = _gas_neb_cfg(
         neb_n_images=3,
         neb_fmax=0.1,
@@ -1974,28 +1973,6 @@ def test_interpolate_path_many_images(h2_reactant, h2_product):
     assert len(images) == n_images + 2
 
 
-@pytest.mark.slow
-def test_full_neb_convergence(cu3_triangle, cu3_linear, temp_output_dir):
-    """Full NEB convergence test with Cu3 (slow)."""
-    result = find_transition_state(
-        cu3_triangle,
-        cu3_linear,
-        calculator=EMT(),
-        output_dir=temp_output_dir,
-        pair_id="cu3_full",
-        n_images=7,
-        spring_constant=0.1,
-        fmax=0.05,
-        neb_steps=200,
-        climb=False,
-        verbosity=1,
-    )
-
-    # Should converge for Cu3 with EMT
-    # (though TS might not be meaningful for EMT)
-    assert "status" in result
-
-
 # ---------------------------------------------------------------------------
 # T1: interior NEB images must not share the reactant's key_value_pairs dict
 # ---------------------------------------------------------------------------
@@ -2200,7 +2177,6 @@ def test_find_transition_state_skips_energy_profile_when_mismatch_unset(
 
 def test_neb_run_config_carries_promoted_thresholds():
     from scgo.param_presets import TS_DEFAULTS_BY_SYSTEM_TYPE
-    from tests.ts_search.test_parallel_neb import _gas_neb_cfg
 
     for system_type in TS_DEFAULTS_BY_SYSTEM_TYPE:
         cfg = _gas_neb_cfg(system_type=system_type)

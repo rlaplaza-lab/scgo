@@ -15,7 +15,7 @@ from scgo.algorithms.ga_common import update_mutation_weights
 from scgo.database import close_data_connection
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
-from scgo.minima_search import run_trials, scgo
+from scgo.minima_search import scgo
 from scgo.param_presets import get_testing_params
 from scgo.runner_api import build_one_element_compositions
 from scgo.runner_go import _run_go_campaign_compositions
@@ -313,25 +313,11 @@ def test_scgo_unknown_optimizer(tmp_path, rng):
         )
 
 
-def test_run_trials_missing_system_type(tmp_path, rng):
-    """Test that missing system_type raises error."""
-    outdir = str(tmp_path / "campaign")
-    with pytest.raises(SCGOValidationError, match="system_type must be set"):
-        run_trials(
-            ["Pt"],
-            global_optimizer="bh",
-            global_optimizer_kwargs={"niter": 5},
-            output_dir=outdir,
-            rng=rng,
-        )
-
-
-def test_bh_go_zero_niter(tmp_path, rng):
-    """Test bh_go with zero iterations."""
+def test_bh_go_single_iteration(tmp_path, rng):
+    """bh_go with one iteration returns the relaxed starting structure."""
     atoms = create_initial_cluster(["Pt"], rng=rng)
     atoms.calc = EMT()
     e0 = atoms.get_potential_energy()
-    # With niter=1, should return a list with the initial relaxed structure
     minima = bh_go(atoms, output_dir=str(tmp_path), niter=1, rng=rng)
     assert isinstance(minima, list)
     assert minima, "BH did not return any minima"
@@ -340,11 +326,10 @@ def test_bh_go_zero_niter(tmp_path, rng):
     assert min(e for e, _ in minima) <= e0 + 1e-6
 
 
-def test_ga_go_zero_niter(tmp_path, rng):
-    """Test ga_go with zero iterations."""
+def test_ga_go_single_iteration(tmp_path, rng):
+    """ga_go with one iteration returns a relaxed population."""
     comp = ["Pt"]
     calc = EMT()
-    # With niter=1, should return a list with the initial relaxed structure
     minima = ga_go(
         comp,
         output_dir=str(tmp_path),

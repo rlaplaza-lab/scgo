@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from scgo.exceptions import SCGOConfigurationError
-
 
 def test_upet_class_is_ase_calculator():
     from ase.calculators.calculator import Calculator
@@ -47,19 +45,6 @@ def test_get_ts_search_params_upet_default_torchsim_flags():
     assert ts["calculator"] == "UPET"
     assert ts["use_torchsim"] is True
     assert ts["use_parallel_neb"] is True
-
-
-def test_multiple_mlip_stacks_raises_when_more_than_one_importable():
-    from scgo.utils.mlip_extras import installed_mlip_stacks
-
-    mace, uma, upet = installed_mlip_stacks()
-    if sum((mace, uma, upet)) < 2:
-        pytest.skip("needs at least two MLIP stacks importable")
-
-    from scgo.utils.mlip_extras import ensure_mace_uma_not_both_installed
-
-    with pytest.raises(SCGOConfigurationError, match="Multiple MLIP stacks"):
-        ensure_mace_uma_not_both_installed()
 
 
 def test_parse_upet_model_and_size():

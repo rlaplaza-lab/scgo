@@ -9,7 +9,7 @@ import pytest
 from ase import Atoms
 
 from scgo.ts_search import transition_state_run as ts_run_mod
-from tests.ts_search.test_ts_dedupe_partition import (
+from tests.ts_search.neb_fixtures import (
     _capture_pairing_minima,
     _prepared_search_config,
     _run_ts_until_pairing,

@@ -110,18 +110,9 @@ class TestAnisotropicRattleGuaranteedSelection:
 
 
 # ---------------------------------------------------------------------------
-# 3. RotationalMutation angle is in [min_angle, pi]
+# 3. RotationalMutation on tagged clusters
 # ---------------------------------------------------------------------------
 class TestRotationalMutationAngleRange:
-    def test_angle_within_correct_range(self, pt4_tetrahedron):
-        """Monkey-patch rng.random to record the raw draw and verify
-        the angle formula produces values in [min_angle, pi]."""
-        min_angle = np.pi / 2
-        # Directly check the formula: angle = min_angle + (pi - min_angle) * u
-        for u in [0.0, 0.5, 1.0]:
-            angle = min_angle + (np.pi - min_angle) * u
-            assert min_angle <= angle <= np.pi + 1e-12
-
     def test_mutation_succeeds_on_tagged_cluster(self):
         """RotationalMutation on a cluster with multi-atom moieties."""
         # Two "molecules" of 2 atoms each, tagged 0 and 1

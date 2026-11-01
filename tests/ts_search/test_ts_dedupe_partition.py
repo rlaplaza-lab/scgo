@@ -8,72 +8,16 @@ survive and frozen-slab geometry cannot dilute the comparison.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from ase import Atoms
-from ase.build import fcc111
 
-from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import AdsorbateDefinition
-from scgo.ts_search import transition_state_run as ts_run_mod
 from scgo.utils.helpers import get_cluster_formula
-
-
-def _prepared_search_config() -> tuple[SurfaceSystemConfig, int, int]:
-    """Return a slab-search config ordered [fixed...][mobile...] plus sizes."""
-    from scgo.surface.partition import prepare_slab_search_surface_config
-
-    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
-    slab.pbc = [True, True, False]
-    cfg = SurfaceSystemConfig(
-        slab=slab,
-        fix_all_slab_atoms=False,
-        n_relax_top_slab_layers=1,
-    )
-    cfg, part = prepare_slab_search_surface_config(cfg)
-    return cfg, int(part.n_fixed), len(cfg.slab)
-
-
-def _capture_pairing_minima(
-    monkeypatch: pytest.MonkeyPatch,
-    minima_by_formula: dict[str, list[tuple[float, Atoms]]],
-) -> dict[str, Any]:
-    """Stub minima loading; capture the deduped minima reaching pair selection."""
-    captured: dict[str, Any] = {}
-
-    def _fake_load(_minima_dir, composition, **_kwargs):
-        captured["loaded_composition"] = list(composition)
-        return dict(minima_by_formula)
-
-    def _fake_select_pairs(minima, **_kwargs):
-        captured["pairing_minima"] = list(minima)
-        return []
-
-    monkeypatch.setattr(ts_run_mod, "load_minima_by_composition", _fake_load)
-    monkeypatch.setattr(ts_run_mod, "select_structure_pairs", _fake_select_pairs)
-    return captured
-
-
-def _run_ts_until_pairing(
-    *,
-    composition: list[str],
-    system_type: str,
-    surface_config: SurfaceSystemConfig | None,
-    adsorbate_definition: AdsorbateDefinition | None,
-    tmp_path,
-) -> None:
-    ts_run_mod.run_transition_state_search(
-        composition=composition,
-        system_type=system_type,  # type: ignore[arg-type]
-        output_dir=str(tmp_path),
-        params={"calculator": "EMT", "calculator_kwargs": {}},
-        surface_config=surface_config,
-        adsorbate_definition=adsorbate_definition,
-        verbosity=0,
-        use_torchsim=False,
-        use_parallel_neb=False,
-    )
+from tests.ts_search.neb_fixtures import (
+    _capture_pairing_minima,
+    _prepared_search_config,
+    _run_ts_until_pairing,
+)
 
 
 def test_surface_adsorbate_dedupe_keeps_distinct_top_layer_registries(

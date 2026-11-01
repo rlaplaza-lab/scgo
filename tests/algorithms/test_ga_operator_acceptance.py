@@ -36,7 +36,7 @@ from scgo.initialization import create_initial_cluster
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
 from scgo.system_types import validate_minimum_structure
-from tests.algorithms.test_adsorbate_ga_acceptance import (
+from tests.algorithms.ga_acceptance_helpers import (
     _gas_pt3_oh_parent,
     _surface_pt3_oh_parent,
 )

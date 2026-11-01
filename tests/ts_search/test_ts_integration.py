@@ -9,10 +9,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.calculators.emt import EMT
 from ase_ga.data import DataConnection
 
 from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
 from scgo.system_types import AdsorbateDefinition
 from scgo.ts_search.transition_state_io import (
@@ -23,6 +25,7 @@ from scgo.ts_search.transition_state_io import (
 from scgo.ts_search.transition_state_run import (
     run_transition_state_search,
 )
+from scgo.utils.helpers import filter_unique_minima
 from tests.helpers import (
     create_cu2_ts_searches_dir,
     create_preparedb,
@@ -368,43 +371,13 @@ def test_run_transition_state_search_no_minima():
         assert results == []
 
 
-def test_run_transition_state_search_energy_gap_filter(mock_database_dir):
-    params = {"calculator": "EMT"}
-
-    results = run_transition_state_search(
-        composition=["Cu", "Cu"],
-        system_type="gas_cluster",
-        output_dir=mock_database_dir,
-        params=params,
-        verbosity=0,
-        energy_gap_threshold=0.01,  # Very tight - should filter most pairs
-        neb_n_images=3,
-        neb_steps=10,
-    )
-
-    # Depending on the actual energies, may or may not find pairs
-    # Just check it doesn't crash
-    assert isinstance(results, list)
-
-
 def test_run_transition_state_search_deduplicates_minima(tmp_path):
     """Deduplicate identical minima across run directories."""
-    from scgo.ts_search.transition_state_io import (
-        load_minima_by_composition,
-        select_structure_pairs,
-    )
-    from scgo.utils.helpers import filter_unique_minima
-
     # Build two run_* dirs with identical Cu2 minima
     for run_id in ("run_A", "run_B"):
         run_dir = tmp_path / run_id
         run_dir.mkdir()
         db_path = run_dir / "candidates.db"
-
-        from ase import Atoms
-        from ase.calculators.emt import EMT
-
-        from scgo.metadata.atoms import set_tags
 
         db = create_preparedb(Atoms("Cu2"), db_path, population_size=10)
 
@@ -422,8 +395,6 @@ def test_run_transition_state_search_deduplicates_minima(tmp_path):
         db.add_unrelaxed_candidate(atoms2, description="Cu2_b")
 
         # Mark relaxed (use DataConnection so add_relaxed_step sets relaxed=1 correctly)
-        from scgo.metadata.atoms import set_tags
-
         da = DataConnection(str(db_path))
         while da.get_number_of_unrelaxed_candidates() > 0:
             a = da.get_an_unrelaxed_candidate()
@@ -456,8 +427,6 @@ def test_run_transition_state_search_deduplicates_minima(tmp_path):
     raw_pairs = select_structure_pairs(raw_minima, use_mic=False)
     dedup_pairs = select_structure_pairs(deduped, use_mic=False)
     assert len(dedup_pairs) <= len(raw_pairs)
-
-    # At least one NEB should converge with linear interpolation
 
 
 def test_interpolate_path_does_not_modify_endpoints():
@@ -734,43 +703,6 @@ def test_run_transition_state_search_torchsim(mock_database_dir):
         if result["status"] == "success":
             # Should have force call tracking
             assert "force_calls" in result
-
-
-def test_select_structure_pairs_similarity_filter():
-    """Test similarity cutoff filters too-similar structures using comparator.
-
-    This test verifies that the pair selection logic correctly identifies
-    and filters out pairs of structures that are too similar for meaningful
-    TS search (e.g., structures from the same basin).
-    """
-    # Create structures that are very similar (just slightly displaced)
-    atoms1 = Atoms("Cu2", positions=[[0, 0, 0], [2.5, 0, 0]])
-    atoms2 = Atoms("Cu2", positions=[[0.01, 0, 0], [2.51, 0, 0]])  # Very similar
-    atoms3 = Atoms("Cu2", positions=[[0, 0, 0], [1.8, 1.8, 0]])  # Different
-
-    atoms1.center(vacuum=5.0)
-    atoms2.center(vacuum=5.0)
-    atoms3.center(vacuum=5.0)
-
-    minima = [
-        (-1.0, atoms1),
-        (-0.99, atoms2),
-        (-0.9, atoms3),
-    ]
-
-    # Tight similarity tolerance should filter out (0,1)
-    pairs = select_structure_pairs(
-        minima,
-        similarity_tolerance=0.01,  # Very tight
-        similarity_pair_cor_max=0.1,  # Very tight
-        use_mic=False,
-    )
-
-    # (0,1) should be filtered (too similar)
-    # (0,2) and (1,2) should remain (sufficiently different)
-    assert (0, 1) not in pairs
-    # At least one pair should survive
-    assert pairs
 
 
 @pytest.mark.slow

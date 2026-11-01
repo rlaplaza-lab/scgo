@@ -1,6 +1,8 @@
-"""Consolidated initialization edge-case tests (T2-13 fold).
+"""Mode-specific initialization edge cases.
 
-Merged verbatim from the former per-mode fold files so every mode-specific test and marker is preserved.
+Cross-mode smoke, composition, connectivity, and parameter sweeps live in
+``test_initialization_modes.py``. This module keeps seed-growth, template,
+GA blmin, retry, and logging behavior those parametrized tests do not cover.
 """
 
 import logging
@@ -59,10 +61,7 @@ from tests.helpers import (
     DIVERSITY_TEST_SAMPLES_SMALL,
     DIVERSITY_THRESHOLD_DEFAULT,
     DIVERSITY_THRESHOLD_MIN,
-    LARGE_SIZES,
-    MEDIUM_SIZES,
     REPRODUCIBILITY_SEEDS,
-    SMALL_SIZES,
     assert_cluster_valid,
     create_paired_rngs,
     get_structure_signature,
@@ -131,27 +130,6 @@ def _seed_clusters(composition: list[str], n: int, rng) -> list[Atoms]:
         assert is_cluster_connected(atoms, connectivity_factor=CONNECTIVITY_FACTOR)
         out.append(atoms)
     return out
-
-
-# ---------------------------------------------------------------------
-# from test_init_smart.py
-# ---------------------------------------------------------------------
-
-"""Tests for smart initialization mode.
-
-This module consolidates all tests for smart mode initialization including:
-- Basic smart mode functionality
-- Default initialization strictness
-- Single connectivity factor consistency
-- Exact composition counts
-- Connectivity validation
-- Reproducibility
-- Edge cases
-- Disconnection prevention
-- No clashes
-- Large cluster connectivity (50-60 atoms)
-- Multi-seed reliability tests
-"""
 
 
 class TestSmartModeInitialization:
@@ -413,60 +391,6 @@ class TestSingleConnectivityFactor:
             assert is_valid is True
 
 
-class TestExactCompositionCounts:
-    """Tests to verify exact composition counts (not ratios) are preserved."""
-
-    @pytest.mark.parametrize(
-        "mode", ["smart", "random_spherical", "seed+growth", "template"]
-    )
-    def test_all_modes_exact_counts(self, mode, rng):
-        """Test that all initialization modes preserve exact composition counts."""
-        pattern = ["Pt", "Au", "Pt", "Au", "Pt"]  # 5 atoms: 3 Pt, 2 Au
-        target_composition = pattern * 2  # 10 atoms: 6 Pt, 4 Au
-
-        atoms = create_initial_cluster(target_composition, mode=mode, rng=rng)
-        if atoms is not None:
-            expected_counts = get_composition_counts(target_composition)
-            actual_counts = get_composition_counts(atoms.get_chemical_symbols())
-            assert actual_counts == expected_counts, (
-                f"Mode {mode} failed: expected {expected_counts}, got {actual_counts}"
-            )
-
-
-class TestConnectivityValidation:
-    """Tests to verify connectivity is validated with factor 1.4."""
-
-    @pytest.mark.parametrize(
-        "composition",
-        [
-            ["Pt"] * 5,
-            ["Pt", "Au"] * 4,
-            ["Pt"] * 13,  # Magic number
-            ["Pt", "Au", "Pd"] * 3,
-        ],
-    )
-    @pytest.mark.parametrize("mode", ["smart", "random_spherical"])
-    def test_all_generated_clusters_connected(self, composition, mode, rng):
-        """Test that all generated clusters are connected with factor 1.4."""
-        atoms = create_initial_cluster(composition, mode=mode, rng=rng)
-        assert (
-            is_cluster_connected(atoms, connectivity_factor=CONNECTIVITY_FACTOR) is True
-        ), (
-            f"Cluster from {mode} mode should be connected with factor {CONNECTIVITY_FACTOR}"
-        )
-
-    def test_template_atom_removal_maintains_connectivity(self, rng):
-        """Test that template atom removal maintains connectivity."""
-        # Test removing atoms from template
-        target_composition = ["Pt"] * 12  # Remove 1 from 13-atom template
-        atoms = create_initial_cluster(target_composition, mode="template", rng=rng)
-        if atoms is not None:
-            assert (
-                is_cluster_connected(atoms, connectivity_factor=CONNECTIVITY_FACTOR)
-                is True
-            )
-
-
 class TestEdgeCases:
     """Tests for edge cases in smart initialization."""
 
@@ -544,21 +468,6 @@ class TestNoClashes:
             assert is_valid is True, (
                 f"Mode {mode} produced invalid structure: {error_msg}"
             )
-
-
-# ---------------------------------------------------------------------
-# from test_init_random_spherical.py
-# ---------------------------------------------------------------------
-
-"""Tests for random_spherical initialization mode.
-
-This module consolidates all tests for random_spherical initialization including:
-- Basic functionality and edge cases
-- Boundary value testing
-- Retry logic and diversity
-- Large cluster connectivity (50-60 atoms)
-- Multi-seed reliability tests
-"""
 
 
 class TestRandomSphericalInitialization:
@@ -794,22 +703,6 @@ class TestRandomSphericalStressAndPerformance:
                 or "clash" in error_msg
                 or "validation failed" in error_msg
             )
-
-
-# ---------------------------------------------------------------------
-# from test_init_seed_growth.py
-# ---------------------------------------------------------------------
-
-"""Tests for seed+growth initialization mode.
-
-This module consolidates all tests for seed+growth initialization including:
-- Basic seed+growth functionality
-- Threshold relaxation legitimacy
-- Convex hull placement reliability
-- Large cluster connectivity (50-60 atoms)
-- Multi-seed reliability tests
-- Refactored seed growth tests
-"""
 
 
 class TestSeedGrowthInitialization:
@@ -1402,21 +1295,6 @@ class TestSeedGrowthFallbackChain:
         assert "DB combinations exhausted; trying random-seed growth" in caplog.text
 
 
-# ---------------------------------------------------------------------
-# from test_init_template.py
-# ---------------------------------------------------------------------
-
-"""Tests for template initialization mode.
-
-This module consolidates all tests for template mode initialization including:
-- Basic template mode functionality
-- Template removal safety
-- Convex hull placement reliability
-- Large cluster connectivity (50-60 atoms)
-- Template generation optimization
-"""
-
-
 class TestTemplateModeInitialization:
     """Tests for template mode initialization."""
 
@@ -1714,119 +1592,6 @@ class TestTemplateGenerationOptimization:
         ) == get_composition_counts(comp)
 
 
-# ---------------------------------------------------------------------
-# from test_mixed_compositions.py
-# ---------------------------------------------------------------------
-
-"""Consolidated tests for mixed compositions.
-
-This module was refactored to reduce duplication by parametrizing similar
-cases (bimetallic / trimetallic / multimetallic / small-mixed) while keeping
-edge cases and mode coverage explicit.
-"""
-
-
-@pytest.mark.parametrize(
-    "composition",
-    [
-        ["Pt", "Au"],
-        ["Pt", "Au"] * 5,
-        ["Pt", "Au", "Au"] * 3,
-        ["Pt", "Pt", "Au"] * 3,
-        ["Pt"] + ["Au"] * 8,
-        ["Pt"] * 8 + ["Au"],
-        ["H", "Pt"] * 5,
-        ["Pt", "Au"] * 10,
-    ],
-)
-def test_bimetallic_variants(composition, rng):
-    """Parametrized coverage of bimetallic composition shapes and sizes."""
-    atoms = create_initial_cluster(composition, rng=rng)
-    assert_cluster_valid(atoms, composition)
-
-
-@pytest.mark.parametrize(
-    "mode", ["smart", "random_spherical", "seed+growth", "template"]
-)
-def test_bimetallic_all_modes(mode, rng):
-    """Ensure basic bimetallic cases work across all initialization modes."""
-    composition = ["Pt", "Au"] * 3
-    atoms = create_initial_cluster(composition, mode=mode, rng=rng)
-    assert_cluster_valid(atoms, composition)
-
-
-@pytest.mark.parametrize(
-    "composition",
-    [
-        ["Pt", "Au", "Pd"] * 3,
-        ["Pt", "Pt", "Au", "Pd"] * 2 + ["Pt"],
-        ["Pt"] * 7 + ["Au"] + ["Pd"],
-        ["Li", "Pt", "Au"] * 3,
-        ["Pt", "Au", "Pd"] * 5,
-    ],
-)
-def test_trimetallic_variants(composition, rng):
-    """Parametrized trimetallic cases (equal/unequal/skewed/large)."""
-    atoms = create_initial_cluster(composition, rng=rng)
-    assert_cluster_valid(atoms, composition)
-
-
-@pytest.mark.parametrize(
-    "composition",
-    [["Pt", "Au", "Pd", "Ag"] * 2, ["Pt", "Au", "Pd", "Ag", "Cu"] * 2],
-)
-def test_multimetallic_variants(composition, rng):
-    """Parametrized coverage for 4+ element clusters."""
-    atoms = create_initial_cluster(composition, rng=rng)
-    assert_cluster_valid(atoms, composition)
-
-
-@pytest.mark.parametrize(
-    "composition",
-    [
-        ["Pt", "Au"],
-        ["Pt", "Pt", "Au"],
-        ["Pt", "Au", "Pd", "Pt"],
-        ["Pt", "Au", "Pd", "Ag", "Cu"],
-    ],
-)
-def test_small_mixed_compositions(composition, rng):
-    """Small (2-5 atom) mixed-composition smoke tests."""
-    atoms = create_initial_cluster(composition, rng=rng)
-    assert_cluster_valid(atoms, composition)
-
-
-@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
-def test_different_seeds_produce_diversity(seed):
-    """Different RNG seeds should produce diverse structures for mixed comps."""
-    composition = ["Pt", "Au"] * 5
-    rng_test, _ = create_paired_rngs(seed)
-    atoms = create_initial_cluster(composition, rng=rng_test)
-    assert_cluster_valid(atoms, composition)
-
-
-@pytest.mark.reproducibility
-@pytest.mark.requires_cache_isolation
-def test_reproducibility_same_seed(rng):
-    """Same seed produces identical structure and composition."""
-    composition = ["Pt", "Au"] * 5
-    rng1, rng2 = create_paired_rngs(42)
-    atoms1 = create_initial_cluster(composition, rng=rng1)
-    atoms2 = create_initial_cluster(composition, rng=rng2)
-
-    assert np.allclose(atoms1.get_positions(), atoms2.get_positions(), atol=1e-10)
-    assert atoms1.get_chemical_symbols() == atoms2.get_chemical_symbols()
-
-
-@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
-def test_trimetallic_diversity(seed):
-    """Parametrized diversity checks for trimetallic compositions."""
-    composition = ["Pt", "Au", "Pd"] * 4
-    rng_test, _ = create_paired_rngs(seed)
-    atoms = create_initial_cluster(composition, rng=rng_test)
-    assert_cluster_valid(atoms, composition)
-
-
 @pytest.mark.parametrize(
     "composition",
     [["H", "H", "Pt", "Pt", "Pt"], ["H", "Li", "Pt", "Au"] * 2],
@@ -1849,323 +1614,6 @@ def test_magic_number_and_strict_connectivity(composition, rng):
         min_distance_factor=0.5,
     )
     assert_cluster_valid(atoms, composition)
-
-
-# ---------------------------------------------------------------------
-# from test_parameter_sensitivity.py
-# ---------------------------------------------------------------------
-
-"""Tests for parameter sensitivity and cross-mode comparisons.
-
-This module tests:
-- How initialization parameters affect cluster generation across modes
-- Cross-mode behavior comparisons
-- Parameter interactions
-- Performance scaling with cluster size
-
-These tests were identified as coverage gaps and are new additions
-to improve overall test suite coverage.
-"""
-
-
-class TestParameterSensitivity:
-    """Test how parameters affect cluster generation."""
-
-    @pytest.mark.parametrize(
-        "connectivity_factor",
-        [0.9, 1.0, 1.1, 1.3],
-    )
-    def test_connectivity_factor_impact(self, connectivity_factor, rng):
-        """Test that varying connectivity_factor affects cluster generation."""
-        comp = ["Pt"] * 8
-        atoms = create_initial_cluster(
-            comp,
-            mode="random_spherical",
-            connectivity_factor=connectivity_factor,
-            rng=rng,
-        )
-        assert len(atoms) == 8
-        assert_cluster_valid(atoms, comp, connectivity_factor=connectivity_factor)
-
-    @pytest.mark.parametrize(
-        "placement_radius_scaling",
-        [0.4, 0.6, 0.8, 1.0, 1.2],
-    )
-    def test_placement_radius_scaling_impact(self, placement_radius_scaling, rng):
-        """Test that varying placement_radius_scaling still yields a valid cluster."""
-        comp = ["Pt"] * 6
-        atoms = create_initial_cluster(
-            comp,
-            mode="smart",
-            placement_radius_scaling=placement_radius_scaling,
-            rng=rng,
-        )
-        assert atoms is not None
-        assert len(atoms) == 6
-        assert np.all(np.isfinite(atoms.get_positions()))
-        assert_cluster_valid(atoms, comp)
-
-    @pytest.mark.parametrize(
-        "vacuum",
-        [3.0, 5.0, 7.0, 10.0, 15.0],
-    )
-    def test_vacuum_impact_on_cluster(self, vacuum, rng):
-        """Test that vacuum parameter affects cell size appropriately."""
-        comp = ["Pt"] * 5
-        atoms1 = create_initial_cluster(
-            comp, mode="random_spherical", vacuum=3.0, rng=rng
-        )
-        atoms2 = create_initial_cluster(
-            comp, mode="random_spherical", vacuum=10.0, rng=rng
-        )
-
-        cell1 = atoms1.get_cell().lengths()
-        cell2 = atoms2.get_cell().lengths()
-
-        # Larger vacuum should result in larger cells
-        assert np.mean(cell2) > np.mean(cell1)
-
-    def test_parameter_interaction_connectivity_and_radius(self, rng):
-        """Test interaction between connectivity_factor and placement_radius_scaling."""
-        comp = ["Pt"] * 8
-
-        # Test different combinations
-        combinations = [
-            (0.8, 0.5),
-            (1.0, 0.7),
-            (1.2, 1.0),
-        ]
-
-        for cf, prs in combinations:
-            atoms = create_initial_cluster(
-                comp,
-                mode="smart",
-                connectivity_factor=cf,
-                placement_radius_scaling=prs,
-                rng=rng,
-            )
-            assert len(atoms) == 8
-            assert_cluster_valid(atoms, comp, check_connectivity=True)
-
-    @pytest.mark.reproducibility
-    @pytest.mark.requires_cache_isolation
-    @pytest.mark.parametrize("seed", [42, 123, 456, 789, 999])
-    def test_reproducibility_with_parameters(self, seed):
-        """Test that same parameters with same seed produce same structure."""
-        comp = ["Pt"] * 6
-
-        rng1, rng2 = create_paired_rngs(seed)
-        atoms1 = create_initial_cluster(
-            comp,
-            mode="seed+growth",
-            connectivity_factor=1.0,
-            placement_radius_scaling=0.7,
-            rng=rng1,
-        )
-
-        atoms2 = create_initial_cluster(
-            comp,
-            mode="seed+growth",
-            connectivity_factor=1.0,
-            placement_radius_scaling=0.7,
-            rng=rng2,
-        )
-
-        assert np.allclose(
-            atoms1.get_positions(),
-            atoms2.get_positions(),
-            atol=1e-6,
-        )
-
-
-class TestCrossModeComparison:
-    """Compare behavior across different initialization modes."""
-
-    def test_all_modes_produce_similar_composition(self, rng):
-        """Test that all modes respect composition exactly."""
-        comp = ["Pt", "Au", "Pd", "Pt", "Au"]
-
-        modes = ["random_spherical", "seed+growth", "smart"]
-
-        for mode in modes:
-            try:
-                atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-                assert_cluster_valid(atoms, comp)
-            except (ValueError, SCGOValidationError):
-                if mode == "template":
-                    pytest.skip("Template mode may fail for non-magic numbers")
-                raise
-
-    def test_mode_connectivity_consistency(self, rng):
-        """Test that all modes produce connected structures."""
-        comp = ["Pt"] * 10
-
-        modes = ["random_spherical", "seed+growth", "smart"]
-
-        for mode in modes:
-            try:
-                atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-                assert is_cluster_connected(atoms)
-            except (ValueError, SCGOValidationError):
-                if mode == "template":
-                    pytest.skip("Template mode may fail for non-magic numbers")
-                raise
-
-    def test_mode_diversity_comparison(self):
-        """Compare diversity of structures across modes."""
-        comp = ["Pt"] * 6
-
-        def structure_signature(atoms):
-            """Create a unique signature for cluster structure."""
-            p = atoms.get_positions()
-            d = np.linalg.norm(p[:, None, :] - p[None, :, :], axis=-1)
-            triu = d[np.triu_indices(len(p), k=1)]
-            return tuple(np.round(np.sort(triu), 4))
-
-        mode_diversities = {}
-
-        for mode in ["random_spherical", "seed+growth"]:
-            signatures = set()
-            for i in range(5):
-                rng, _ = create_paired_rngs(1000 + i)
-                atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-                signatures.add(structure_signature(atoms))
-
-            mode_diversities[mode] = len(signatures)
-
-        assert all(d >= 2 for d in mode_diversities.values())
-
-    def test_mode_performance_scaling(self, rng):
-        """Verify all initialization modes complete for small cluster sizes."""
-        modes = ["random_spherical", "seed+growth", "smart"]
-        sizes = [3, 5, 8]
-
-        for size in sizes:
-            comp = ["Pt"] * size
-            for mode in modes:
-                try:
-                    atoms = create_initial_cluster(comp, mode=mode, rng=rng)
-                    assert len(atoms) == size
-                    assert is_cluster_connected(atoms) or size <= 2
-                except (ValueError, SCGOValidationError):
-                    if mode == "template":
-                        pytest.skip("Template mode may fail for non-magic numbers")
-                    raise
-
-
-class TestClusterSizeScaling:
-    """Test how algorithms scale with cluster size."""
-
-    @pytest.mark.parametrize("size", SMALL_SIZES)
-    def test_connectivity_scaling_small(self, size, rng):
-        """Test connectivity is maintained for small clusters."""
-        comp = ["Pt"] * size
-        atoms = create_initial_cluster(comp, mode="smart", rng=rng)
-
-        if size > 2:
-            assert is_cluster_connected(atoms)
-
-    @pytest.mark.parametrize("size", MEDIUM_SIZES)
-    @pytest.mark.slow
-    def test_connectivity_scaling_medium(self, size, rng):
-        """Test connectivity is maintained for medium clusters."""
-        comp = ["Pt"] * size
-        atoms = create_initial_cluster(comp, mode="smart", rng=rng)
-
-        if size > 2:
-            assert is_cluster_connected(atoms)
-
-    @pytest.mark.parametrize("size", LARGE_SIZES)
-    @pytest.mark.slow
-    def test_connectivity_scaling_large(self, size, rng):
-        """Test connectivity is maintained for large clusters."""
-        comp = ["Pt"] * size
-        atoms = create_initial_cluster(comp, mode="random_spherical", rng=rng)
-
-        if size > 2:
-            assert is_cluster_connected(atoms)
-
-    def test_cell_size_scales_with_cluster_size(self, rng):
-        """Test that cell size appropriately scales with cluster size."""
-        cell_sizes = {}
-
-        for size in [2, 5, 10, 15]:
-            comp = ["Pt"] * size
-            atoms = create_initial_cluster(comp, vacuum=6.0, rng=rng)
-            cell_volume = atoms.get_cell().volume
-            cell_sizes[size] = cell_volume
-
-        # Larger clusters should have larger cells
-        assert cell_sizes[15] > cell_sizes[10]
-        assert cell_sizes[10] > cell_sizes[5]
-        assert cell_sizes[5] > cell_sizes[2]
-
-    def test_position_variance_scales_with_size(self, rng):
-        """Test that positional variance increases with cluster size."""
-        position_ranges = {}
-
-        for size in [3, 5, 8, 12]:
-            comp = ["Pt"] * size
-            atoms = create_initial_cluster(comp, rng=rng)
-            positions = atoms.get_positions()
-            position_range = np.max(positions) - np.min(positions)
-            position_ranges[size] = position_range
-
-        # Larger clusters should have larger position spreads
-        assert position_ranges[12] > position_ranges[3]
-
-
-class TestCompositionVariety:
-    """Test parameter sensitivity across various compositions."""
-
-    @pytest.mark.parametrize(
-        "composition",
-        [
-            ["Pt"] * 4,
-            ["Au"] * 4,
-            ["Pd"] * 4,
-            ["Pt", "Pt", "Au", "Au"],
-            ["Pt", "Au", "Pd", "Pd"],
-            ["Pt", "Pt", "Pt", "Au"],
-        ],
-    )
-    def test_connectivity_across_compositions(self, composition, rng):
-        """Test that connectivity is maintained across different compositions."""
-        atoms = create_initial_cluster(composition, mode="smart", rng=rng)
-        assert_cluster_valid(atoms, composition)
-
-        if len(atoms) > 2:
-            assert is_cluster_connected(atoms)
-
-    @pytest.mark.parametrize(
-        "composition",
-        [
-            ["Pt"] * 5,
-            ["Au"] * 5,
-            ["Pt", "Pt", "Au", "Au", "Pd"],
-        ],
-    )
-    @pytest.mark.parametrize("cf", [0.8, 1.0, 1.2])
-    def test_parameter_robustness_across_elements(self, composition, cf, rng):
-        """Parameter sensitivity must be consistent: every combo yields a valid cluster."""
-        atoms = create_initial_cluster(
-            composition,
-            mode="seed+growth",
-            connectivity_factor=cf,
-            rng=rng,
-        )
-        assert atoms is not None
-        assert len(atoms) == len(composition)
-        assert np.all(np.isfinite(atoms.get_positions()))
-        assert_cluster_valid(atoms, composition)
-        assert is_cluster_connected(atoms)
-
-
-# ---------------------------------------------------------------------
-# from test_init_logging.py
-# ---------------------------------------------------------------------
-
-"""Test initialization logging to understand the duplicate messages."""
 
 
 def test_create_initial_cluster_batch_logs_and_returns_population(caplog, rng):

@@ -2,7 +2,7 @@
 
 This module deliberately carries NO ``requires_cuda``/``requires_mace`` marker
 so it runs on the CPU CI fast suite. It build-exercises the shared
-``_gas_neb_cfg`` helper to catch the class of break where a new *required*
+``_gas_neb_cfg`` helper in ``neb_fixtures`` to catch the class of break where a new *required*
 field is added to ``NebRunConfig`` but the test helper is left behind (that
 drift only surfaced on Kaggle previously because the MACE/CUDA-gated tests are
 deselected by the CPU CI expression).
@@ -10,7 +10,7 @@ deselected by the CPU CI expression).
 
 from __future__ import annotations
 
-from tests.ts_search.test_parallel_neb import _gas_neb_cfg
+from tests.ts_search.neb_fixtures import _gas_neb_cfg
 
 
 def test_neb_run_config_builds_with_all_required_fields():

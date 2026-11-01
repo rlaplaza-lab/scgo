@@ -290,18 +290,3 @@ class TestPermutationIncrementalApplication:
             rng=np.random.default_rng(1),
         )
         assert mut.mutate(pt4_tetrahedron) is None
-
-
-def test_rattle_schedule_is_sixteen_attempts(pt4_tetrahedron):
-    atoms = pt4_tetrahedron.copy()
-    atoms.set_positions(np.tile([0.0, 0.0, 0.0], (len(atoms), 1)))
-    mut = RattleMutation(
-        {(78, 78): 5.0},
-        len(atoms),
-        system_type="gas_cluster",
-        rattle_strength=0.05,
-        test_dist_to_slab=False,
-        rng=np.random.default_rng(0),
-    )
-    assert mut.mutate(atoms) is None
-    assert mut.last_attempt_count < 50

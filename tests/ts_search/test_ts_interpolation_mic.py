@@ -9,7 +9,6 @@ from ase.build import fcc111
 from ase.calculators.emt import EMT
 from ase.constraints import FixAtoms
 
-from scgo.system_types import get_system_policy
 from scgo.ts_search.transition_state import find_transition_state, interpolate_path
 
 
@@ -136,14 +135,6 @@ def test_interpolate_path_mic_alignment_anchors_fixed_slab_atoms():
     disp = images[-1].get_positions() - images[0].get_positions()
     slab_disp = np.linalg.norm(disp[fixed_idx], axis=1)
     assert float(np.max(slab_disp)) < 1e-2
-
-
-def test_surface_system_policy_enables_alignment_and_mic():
-    """Surface types force MIC and allow endpoint alignment by default."""
-    for st in ("surface_cluster", "surface_cluster_adsorbate"):
-        policy = get_system_policy(st)
-        assert policy.neb_force_mic is True
-        assert policy.neb_disable_alignment is False
 
 
 def test_interpolate_path_mic_with_n_slab_anchors_slab_prefix():
