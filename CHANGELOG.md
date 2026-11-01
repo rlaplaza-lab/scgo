@@ -26,6 +26,11 @@
 
 ### Fixed
 
+- A TorchSim relaxation that hits Warp's CUDA pool (`Failed to allocate N
+  bytes on device 'cuda:0'`) releases PyTorch's cache and the Warp pool, then
+  retries the same batch. A batch that still does not fit is split in half.
+  That failure used to abort the search: the exception text does not contain
+  "out of memory", so the existing guard never saw it.
 - Surface NEB alignment ranks one shared Cartesian lattice image per bonded
   mobile fragment. Minimum-image scores were blind to that shift, and a
   per-atom wrap tore a deposit that straddled the cell. Lone adatoms still
