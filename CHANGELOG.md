@@ -14,7 +14,9 @@
   growth and only the four rotations about the surface normal, so it asks for
   slightly more slots than the vacuum cluster of the same size. The atom-count
   floor keeps that increment small until the population widens. A three-atom
-  basin-hopping run uses the hop count set by that atom count. Local
+  basin-hopping run uses the hop count set by that atom count. A bare slab
+  uses that same hop count. Molecules on the slab scale the hop count by the
+  site term, while the genetic algorithm still scales its slot square. Local
   relaxation and NEB step counts stay on their own curves.
   See the search-effort page in the docs.
 - **One GPU relax worker per GA run.** Offspring construction overlaps the

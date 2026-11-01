@@ -340,9 +340,12 @@ def bh_auto_budget(
 ) -> int:
     """Return the automatic basin-hopping hop count.
 
-    A unary three-atom search uses the atom-count hop count. Larger systems
+    A unary three-atom search uses the atom-count hop count. Larger clusters
     grow from that anchor with the same animal-count factor and never fall
-    below the atom-count hop count for their own size.
+    below the atom-count hop count for their own size. A slab grows from its
+    own atom-count hop count: ``M`` with no molecules, and
+    ``ceil(M * exp(α log Ω_sites))`` when molecules are present, capped at
+    1000.
     """
     dimension = _dimension(system_type)
     anchor_slots = float(_moving_atom_count(BH_REFERENCE_ATOMS))

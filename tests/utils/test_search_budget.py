@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import exp, log, log1p
+from math import ceil, exp, log, log1p
 
 import pytest
 from ase.build import fcc111
@@ -239,6 +239,42 @@ class TestSlabSearch:
         expected = auto_niter(["Pt"] * n_mobile)
         assert (population, generations) == (expected, expected)
         assert expected != auto_niter([])
+        assert (
+            bh_auto_budget([], system_type="surface", surface_config=config) == expected
+        )
+
+    def test_adsorbates_scale_hops_from_the_atom_count_not_the_slot_square(self):
+        """Slab hops are ``ceil(M Ω_sites^α)``; GA slots stay on ``M² Ω_sites^α``."""
+        slab = fcc111("Pt", size=(2, 2, 3), vacuum=8.0, orthogonal=True)
+        config = SurfaceSystemConfig(
+            slab=slab,
+            fix_all_slab_atoms=False,
+            n_relax_top_slab_layers=1,
+        )
+        definition = AdsorbateDefinition(
+            core_symbols=[],
+            adsorbate_symbols=["H", "H", "H"],
+            adsorbate_fragment_lengths=[1, 1, 1],
+        )
+        composition = ["H", "H", "H"]
+        kwargs = {
+            "system_type": "surface_adsorbate",
+            "surface_config": config,
+            "adsorbate_definition": definition,
+        }
+        bare_hops = bh_auto_budget([], system_type="surface", surface_config=config)
+        estimate = estimate_search_complexity(composition, **kwargs)
+        floor = auto_niter(["Pt"] * estimate.n_mobile)
+        assert estimate.log_sites > 0.0
+        assert estimate.evaluations / (floor * floor) == pytest.approx(
+            exp(GROWTH_FACTOR * estimate.log_sites)
+        )
+        hops = bh_auto_budget(composition, **kwargs)
+        expected = min(1000, ceil(floor * exp(GROWTH_FACTOR * estimate.log_sites)))
+        assert hops == expected
+        assert bare_hops < hops
+        population, generations = ga_auto_budget(composition, **kwargs)
+        assert hops < population * generations
 
 
 class TestResolver:

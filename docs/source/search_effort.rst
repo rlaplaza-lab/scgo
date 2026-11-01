@@ -116,23 +116,39 @@ population. Generations stay at :math:`M` until the population would pass
 Both numbers stay inside 3 and 1000. A pure 10-atom vacuum cluster is the
 anchor, so its pair is 86 by 86. The same cluster on a surface is 91 by 86.
 Pt38 is 336 by 131. Pt55 is 908 by 143, and on a surface it is 958 by 143.
-Pt5Co5 is 102 by 86. Basin hopping uses the same :math:`\alpha`
+Pt5Co5 is 102 by 86. Basin hopping of a cluster uses the same :math:`\alpha`
 and the same :math:`\Omega`, anchored on the atom-count hop count of a
-3-atom cluster. The hop count is
-:math:`\min(1000, \max(M, \lceil E \rceil))`. A bare slab with no molecules
-uses :math:`M` for both the population and the generations, or for the hop
-count. Molecules on that slab add :math:`\alpha \log \Omega_{\mathrm{sites}}`
-on top of :math:`\log(M^2)`.
+3-atom cluster. That hop count is
+:math:`\min(1000, \max(M, \lceil E \rceil))`.
+
+A bare slab with no molecules uses :math:`M` for the population, the
+generations, and the hop count. Molecules on that slab add
+:math:`\alpha \log \Omega_{\mathrm{sites}}` on top of :math:`\log(M^2)` for
+the genetic-algorithm slot count, so
+:math:`E = M^2 \Omega_{\mathrm{sites}}^{\alpha}`. Basin hopping on the same
+slab grows from the hop count, not from that square:
+
+.. math::
+
+   \mathrm{hops} = \min\bigl(1000,\,
+   \lceil M \,\Omega_{\mathrm{sites}}^{\alpha} \rceil\bigr).
+
+A bare slab has :math:`\Omega_{\mathrm{sites}} = 1`, so the hop count stays
+at :math:`M`. The site term widens the genetic-algorithm population through
+:math:`E` and scales the hop count only by
+:math:`\Omega_{\mathrm{sites}}^{\alpha}`.
 
 Basin hopping
 -------------
 
-Basin hopping uses the animal count for its number of hops. SCGO picks basin
-hopping for three-atom clusters with no molecule attached, and those runs use
-the hop count set by that atom count. A larger basin-hopping search, including
-one chosen by hand, gets more hops from the same growth factor, never fewer
-than the atom-count hop count for its own size, and at most 1000. The
-Lennard-Jones waits at 75 and 102 atoms sit above that cap.
+Basin hopping of a cluster uses the animal count for its number of hops.
+SCGO picks basin hopping for three-atom clusters with no molecule attached,
+and those runs use the hop count set by that atom count. A larger cluster
+search, including one chosen by hand, gets more hops from the same growth
+factor, never fewer than the atom-count hop count for its own size, and at
+most 1000. The Lennard-Jones waits at 75 and 102 atoms sit above that cap.
+A slab uses the formula above: :math:`M` with no molecules, and :math:`M`
+times :math:`\Omega_{\mathrm{sites}}^{\alpha}` when molecules are present.
 
 One optimization, not a search
 ------------------------------
