@@ -13,7 +13,11 @@ if TYPE_CHECKING:
 def resolve_fragment_anchor_and_bond_axis(
     adsorbate_definition: AdsorbateDefinition,
 ) -> tuple[int, tuple[int, int] | None]:
-    """Return fragment anchor index and optional bond-axis pair from adsorbate metadata."""
+    """Return fragment anchor index and optional bond-axis pair from adsorbate metadata.
+
+    An omitted axis stays ``None`` here. Placement then infers one when the
+    anchor has a single bonded neighbor.
+    """
     anchor = adsorbate_definition.fragment_anchor_index
     anchor = int(anchor) if anchor is not None else 0
     bond_axis = adsorbate_definition.fragment_bond_axis

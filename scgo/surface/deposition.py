@@ -629,7 +629,7 @@ def create_deposited_cluster(
             continue
         return combined
 
-    logger.warning(
+    logger.debug(
         "Exhausted max_placement_attempts=%s in create_deposited_cluster",
         config.max_placement_attempts,
     )

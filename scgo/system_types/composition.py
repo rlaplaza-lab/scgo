@@ -36,6 +36,9 @@ class AdsorbateDefinition:
     :func:`~scgo.cluster_adsorbate.placement.place_fragment_on_cluster` (one site per fragment),
     then (for surface) deposit. Pass ``adsorbates`` as ``list[Atoms]`` with one
     entry per fragment at the runner API; ``adsorbate_fragment_lengths`` must match.
+    When ``fragment_bond_axis`` is omitted, placement infers an axis if the
+    anchor atom has exactly one bonded neighbor (OH, CO, the O-O bond of OOH).
+    Anchors with several neighbors, such as water, keep a random orientation.
     """
 
     core_symbols: list[str] = field(default_factory=list)

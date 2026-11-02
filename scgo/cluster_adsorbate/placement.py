@@ -212,6 +212,45 @@ def _generate_placement_trials(
     return trials
 
 
+def infer_fragment_bond_axis(
+    fragment: Atoms,
+    anchor_index: int,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
+) -> tuple[int, int] | None:
+    """Return ``(anchor, neighbor)`` when the anchor has exactly one bonded neighbor.
+
+    OH, CO, and the O-O bond of OOH qualify. Water and other multi-coordinate
+    anchors return ``None``.
+    """
+    if len(fragment) < 2:
+        return None
+    spec = normalize_connectivity_factor(connectivity_factor)
+    symbols = fragment.get_chemical_symbols()
+    positions = fragment.get_positions()
+    anchor_symbol = symbols[anchor_index]
+    anchor_radius = get_covalent_radius(anchor_symbol)
+    anchor_pos = positions[anchor_index]
+    neighbors: list[int] = []
+    for index, symbol in enumerate(symbols):
+        if index == anchor_index:
+            continue
+        distance = float(np.linalg.norm(positions[index] - anchor_pos))
+        threshold = pair_bond_threshold(
+            anchor_radius,
+            get_covalent_radius(symbol),
+            anchor_symbol,
+            symbol,
+            spec,
+        )
+        if distance <= threshold:
+            neighbors.append(index)
+    if len(neighbors) != 1:
+        return None
+    return anchor_index, neighbors[0]
+
+
 def place_fragment_on_cluster(
     core: Atoms,
     fragment_template: Atoms,
@@ -233,7 +272,9 @@ def place_fragment_on_cluster(
     Each attempt scores several site/height trials by steric deficit and takes
     the first clash-free trial among the best-ranked ones. Multi-atom fragments
     are oriented along ``bond_axis`` when given (aligned to the site normal,
-    optionally spun about it) and randomly rotated otherwise.
+    optionally spun about it). When ``bond_axis`` is omitted,
+    :func:`infer_fragment_bond_axis` supplies one if the anchor has a single
+    bonded neighbor; otherwise the fragment is randomly rotated.
 
     Returns:
         The placed fragment, or ``None`` if every attempt fails.
@@ -260,6 +301,12 @@ def place_fragment_on_cluster(
             raise SCGOValidationError(
                 f"bond_axis={bond_axis} invalid for this fragment"
             )
+    else:
+        bond_axis = infer_fragment_bond_axis(
+            fragment_template,
+            anchor_index,
+            config.structure_connectivity_factor,
+        )
 
     site_atoms = site_core if site_core is not None else core
     clash_target = clash_atoms if clash_atoms is not None else core
@@ -376,8 +423,9 @@ def place_fragment_on_cluster(
             placement_metadata["site_type"] = trial.site_type
         return frag
 
-    logger.warning(
-        "Reached max_placement_attempts=%s in place_fragment_on_cluster",
+    logger.debug(
+        "Reached max_placement_attempts=%s in place_fragment_on_cluster (bond_axis=%s)",
         config.max_placement_attempts,
+        bond_axis,
     )
     return None

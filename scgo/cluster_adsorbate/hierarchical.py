@@ -171,7 +171,7 @@ def build_adsorbate_only_cluster(
         if all_ok:
             _stamp_site_metadata(combined, site_types)
             return combined
-    logger.warning(
+    logger.debug(
         "Reached max_placement_attempts=%s in build_adsorbate_only_cluster",
         max_placement_attempts,
     )
@@ -255,7 +255,7 @@ def build_hierarchical_core_fragment_cluster(
             placement_metadata["site_types"] = ",".join(site_types)
             placement_metadata["site_type"] = site_types[-1]
         return combined
-    logger.warning(
+    logger.debug(
         "Reached max_placement_attempts=%s in build_hierarchical_core_fragment_cluster",
         max_placement_attempts,
     )
