@@ -650,7 +650,7 @@ def test_run_transition_state_search_rejects_buried_surface_ts(monkeypatch, tmp_
         n_relax_top_slab_layers=1,
     )
     react = slab + Atoms(
-        "PtOH", positions=[[0.4, 0.4, 1.8], [0.5, 0.4, 2.8], [0.4, 0.5, 3.6]]
+        "PtOH", positions=[[0.4, 0.4, 2.0], [0.5, 0.4, 4.0], [0.5, 0.4, 4.97]]
     )
     prod = react.copy()
     # Build an invalid TS with adsorbate pushed below slab top.

@@ -14,11 +14,14 @@ from scgo.cluster_adsorbate.validation import validate_adsorbate_fragment_integr
 from scgo.exceptions import (
     SCGOValidationError,
 )
-from scgo.initialization.atomic_radii import get_covalent_radius
+from scgo.initialization.atomic_radii import (
+    covalent_surface_layer_thickness,
+    get_covalent_radius,
+)
 from scgo.initialization.geometry_helpers import validate_cluster_structure
 from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
-    MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
@@ -26,7 +29,7 @@ from scgo.system_types import validate_connectivity_policy
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
-    bond_thresholds_for_cross_pairs,
+    bond_threshold_cross_matrix,
     format_connectivity_factor,
     normalize_connectivity_factor,
 )
@@ -171,12 +174,16 @@ def _slab_surface_layer_indices(
     n_slab: int,
     *,
     surface_normal_axis: int,
-    thickness: float = 2.5,
+    thickness: float | None = None,
 ) -> list[int]:
-    """Indices of slab atoms within ``thickness`` Å of the top surface."""
+    """Indices of slab atoms within one covalent diameter of the top surface."""
     pos = combined.get_positions()
     if n_slab <= 0 or len(pos) < n_slab:
-        return list(range(n_slab))
+        return list(range(max(n_slab, 0)))
+    if thickness is None:
+        thickness = covalent_surface_layer_thickness(
+            combined.get_chemical_symbols()[:n_slab]
+        )
     return top_layer_indices(pos[:n_slab], surface_normal_axis, thickness=thickness)
 
 
@@ -197,8 +204,9 @@ def _mobile_indices_touch_slab(
     that cutoff also counts — used for layered crystals whose template
     interlayer is itself non-covalent.
 
-    Only slab atoms within 2.5 Å of the top surface count: a mobile atom cannot
-    bond a buried slab atom without also bonding a top-layer one.
+    Only slab atoms within one covalent diameter of the top surface count.
+    A mobile atom touches the slab when any of those atoms lies inside that
+    pair's bond threshold.
 
     Returns:
         ``(touches, min_cross_distance)``. The distance is the smallest
@@ -256,22 +264,28 @@ def _mobile_indices_touch_slab(
         slab_tree_j = np.arange(len(slab_pos))
 
     tree = cKDTree(slab_tree_pos)
-    dists, nn = tree.query(mob_pos)
-    dists = np.atleast_1d(np.asarray(dists, dtype=float))
-    nn = np.atleast_1d(np.asarray(nn, dtype=int))
-    min_dist = float(np.min(dists)) if len(dists) else float("inf")
-    nn_j = slab_tree_j[nn.astype(int)]
-    i_local = np.arange(len(mobile_indices), dtype=int)
-    thresholds = bond_thresholds_for_cross_pairs(
-        r_mobile,
-        sym_mobile,
-        i_local,
-        r_slab,
-        sym_slab,
-        nn_j.astype(int),
-        cf,
+    nearest, _nn = tree.query(mob_pos)
+    nearest = np.atleast_1d(np.asarray(nearest, dtype=float))
+    min_dist = float(np.min(nearest)) if len(nearest) else float("inf")
+    pair_thresholds = bond_threshold_cross_matrix(
+        r_mobile, sym_mobile, r_slab, sym_slab, cf
     )
-    touched = bool(np.any(dists <= thresholds)) if thresholds.size else False
+    query_radii = (
+        pair_thresholds.max(axis=1)
+        if pair_thresholds.size
+        else np.zeros(len(mobile_indices))
+    )
+    neighbors = tree.query_ball_point(mob_pos, r=query_radii)
+    touched = False
+    for i_local, neighs in enumerate(neighbors):
+        if not neighs:
+            continue
+        neigh_arr = np.asarray(neighs, dtype=int)
+        dists = np.linalg.norm(slab_tree_pos[neigh_arr] - mob_pos[i_local], axis=1)
+        orig_j = slab_tree_j[neigh_arr]
+        if np.any(dists <= pair_thresholds[i_local, orig_j]):
+            touched = True
+            break
     if not touched and stack_cut is not None and min_dist <= stack_cut:
         touched = True
     return touched, min_dist
@@ -385,7 +399,7 @@ def validate_supported_cluster_deposit(
     *,
     surface_normal_axis: int,
     use_mic: bool = False,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     binding_penetration_tolerance_a: float = _BINDING_PENETRATION_TOLERANCE_A,

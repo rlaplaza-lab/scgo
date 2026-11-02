@@ -56,10 +56,11 @@ GA repositioning and rigid geometry
 Radii and steric scoring
 ------------------------
 
-Operator clash checks and placement ranking use covalent-radius ``blmin`` tables
-(``BLMIN_RATIO_DEFAULT = 0.7``). Structure validation uses the shared
-``connectivity_factor`` spec (float or dict; default ``1.4``) via
+Operator clash checks use covalent-radius ``blmin`` tables
+(``BLMIN_RATIO_DEFAULT = 0.7``). Structure validation uses that floor and the
+``connectivity_factor`` bond cutoff (default ``1.2``) via
 :func:`~scgo.system_types.validate_structure_for_system_type`.
+``height_min`` and ``height_max`` default to ``None``.
 
 .. autofunction:: scgo.initialization.atomic_radii.build_blmin
 .. autofunction:: scgo.initialization.atomic_radii.build_blmin_from_zs

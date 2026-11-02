@@ -321,8 +321,8 @@ def test_load_previous_run_results(tmp_path, pt3_atoms):
 
 def test_result_merging_across_runs(tmp_path, rng):
     """Test that results from multiple runs are merged and deduplicated."""
-    # H2 (EMT keeps the diatomic bonded) so the connectivity gate passes; the
-    # test exercises run_trials merge/dedup logic, not a specific metal.
+    # EMT H–H is 0.78 Å, past the 1.2 cutoff, so this run passes a 1.6 factor.
+    # The test exercises run_trials merge/dedup logic, not a specific metal.
     composition = ["H", "H"]
     output_dir = str(tmp_path / "H2_searches")
 
@@ -333,6 +333,7 @@ def test_result_merging_across_runs(tmp_path, rng):
         global_optimizer_kwargs={
             "niter": 1,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
@@ -350,6 +351,7 @@ def test_result_merging_across_runs(tmp_path, rng):
         global_optimizer_kwargs={
             "niter": 1,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
@@ -381,8 +383,8 @@ def test_result_merging_across_runs(tmp_path, rng):
 
 def test_clean_mode(tmp_path, rng):
     """Test that clean mode ignores previous runs."""
-    # H2 (EMT keeps the diatomic bonded) so the connectivity gate passes; the
-    # test exercises run_trials clean-mode logic, not a specific metal.
+    # EMT H–H is 0.78 Å, past the 1.2 cutoff, so this run passes a 1.6 factor.
+    # The test exercises run_trials clean-mode logic, not a specific metal.
     composition = ["H", "H"]
     output_dir = str(tmp_path / "H2_searches")
 
@@ -393,6 +395,7 @@ def test_clean_mode(tmp_path, rng):
         global_optimizer_kwargs={
             "niter": 1,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
@@ -410,6 +413,7 @@ def test_clean_mode(tmp_path, rng):
         global_optimizer_kwargs={
             "niter": 1,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
@@ -427,15 +431,16 @@ def test_clean_mode(tmp_path, rng):
 
 def test_composition_isolation(tmp_path, rng):
     """Test that results from different compositions don't interfere."""
-    # H2/H3 with EMT so the connectivity gate passes; this exercises
+    # H2/H3 with a 1.6 factor so EMT's long H–H bond passes the gate; this exercises
     # composition-isolated output dirs, not a specific metal.
     run_trials(
         composition=["H", "H"],
         global_optimizer="bh",
         global_optimizer_kwargs={
             "niter": 2,
-            "niter_local_relaxation": 5,
+            "niter_local_relaxation": 20,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=str(tmp_path / "H2_searches"),
         calculator_for_global_optimization=EMT(),
@@ -451,9 +456,10 @@ def test_composition_isolation(tmp_path, rng):
         global_optimizer="ga",
         global_optimizer_kwargs={
             "niter": 1,
-            "niter_local_relaxation": 5,
+            "niter_local_relaxation": 20,
             "population_size": 4,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=str(tmp_path / "H3_searches"),
         calculator_for_global_optimization=EMT(),
@@ -491,8 +497,8 @@ def test_no_duplicates_across_runs(tmp_path):
     """Test that duplicate structures from different runs are filtered out."""
     from tests.helpers import create_paired_rngs
 
-    # H2 (EMT keeps the diatomic bonded) so the connectivity gate passes; the
-    # test exercises cross-run dedup, not a specific metal.
+    # EMT H–H is 0.78 Å, past the 1.2 cutoff, so this run passes a 1.6 factor.
+    # The test exercises cross-run dedup, not a specific metal.
     composition = ["H", "H"]
     output_dir = str(tmp_path / "H2_searches")
 
@@ -506,6 +512,7 @@ def test_no_duplicates_across_runs(tmp_path):
             "niter": 5,
             "niter_local_relaxation": 10,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),
@@ -524,6 +531,7 @@ def test_no_duplicates_across_runs(tmp_path):
             "niter": 5,
             "niter_local_relaxation": 10,
             "system_type": "gas_cluster",
+            "connectivity_factor": 1.6,
         },
         output_dir=output_dir,
         calculator_for_global_optimization=EMT(),

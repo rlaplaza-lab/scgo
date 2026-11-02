@@ -172,6 +172,40 @@ def test_frozen_slab_matches_lattice_shift_and_rejects_other_sites() -> None:
     assert not cartesian.looks_like(base, lattice)
 
 
+def test_layer_frozen_slab_keeps_distinct_sites() -> None:
+    """Freezing every layer without the flag still records the adsorption site."""
+    slab = fcc111("Pt", size=(4, 4, 2), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    config = SurfaceSystemConfig(
+        slab=slab,
+        fix_all_slab_atoms=False,
+        n_fix_bottom_slab_layers=2,
+    )
+    z = float(slab.positions[:, 2].max()) + 2.2
+    dimer = np.array([[2.2, 1.5, z], [2.2, 3.4, z]], dtype=float)
+    symbols = ["Pt"] * n_slab + ["Pt", "O"]
+
+    def _placed(deposit: np.ndarray) -> Atoms:
+        pos = np.vstack([slab.get_positions(), deposit])
+        return Atoms(symbols=symbols, positions=pos, cell=slab.cell, pbc=slab.pbc)
+
+    geo = resolve_uniqueness_geometry(
+        system_type="surface_cluster",
+        n_atoms=n_slab + 2,
+        surface_config=config,
+        counts=(2, 0),
+    )
+    assert geo.blocks is not None
+    support = geo.blocks.blocks[0]
+    assert support.role == "mobile_slab"
+    assert support.indices == tuple(range(n_slab))
+    mic = geo.build_comparator(n_top=2, mic=True)
+    base = _placed(dimer)
+    other_site = _placed(dimer + np.array([1.8, -0.6, 0.5]))
+    assert not mic.looks_like(base, other_site)
+
+
 def test_explicit_tolerance_disables_tightening() -> None:
     cfg = SurfaceSystemConfig(slab=_layered_slab())
     geo = resolve_uniqueness_geometry(

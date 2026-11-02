@@ -163,7 +163,7 @@ def test_prefilter_frozen_prefix_enables_bare_surface_clash() -> None:
     )
     n_fixed = 2
     n_slab_full = 3
-    blmin = {(78, 78): 2.0}  # Pt-Pt; prefilter threshold = 0.55 * 2.0 = 1.1
+    blmin = {(78, 78): 2.0}  # operator table; the prefilter uses 0.4 × (r_Pt + r_Pt)
 
     # Full slab length disables the gate (n_mobile == 0).
     assert fails_fast_geometric_prefilter(slab, blmin, n_slab=n_slab_full) is False

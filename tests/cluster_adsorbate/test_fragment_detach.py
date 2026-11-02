@@ -14,6 +14,7 @@ from scgo.algorithms.ga_common import (
     create_mutation_operators,
     unmatched_operator_weight_keys,
 )
+from scgo.ase_ga_patches.mutations._common import _resolve_op_connectivity_factor
 from scgo.cluster_adsorbate.detach import FragmentDetachMutation
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.surface.validation import validate_supported_cluster_deposit
@@ -37,7 +38,7 @@ def _oh_template() -> Atoms:
     return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
 
 
-def _supported_oh(z_offset: float = 2.0) -> tuple[Atoms, int]:
+def _supported_oh(z_offset: float = 1.5) -> tuple[Atoms, int]:
     """Pt3 + OH on a small slab. ``z_offset`` is the O height above the cluster."""
     slab = fcc111("Pt", size=(6, 6, 2), vacuum=8.0, orthogonal=True)
     n_slab = len(slab)
@@ -146,6 +147,34 @@ def test_fragment_detach_rejects_non_touching_and_clashing_placements(
 
     monkeypatch.setattr(detach_mod, "place_fragment_on_cluster", _place_at(0.05))
     assert op.mutate(full) is None
+
+
+def test_fragment_detach_rejects_penetration_and_a_floating_core() -> None:
+    """Below the slab top, or a core left off the slab, is not a child."""
+    full, n_slab = _supported_oh()
+    op = _operator(full, n_slab, seed=1)
+    slab = full[:n_slab]
+    z_top = float(np.max(slab.positions[:, 2]))
+    surface = slab.positions
+    top_layer = surface[:, 2] >= float(np.median(surface[:, 2]))
+    edge = surface[top_layer][int(np.argmax(surface[top_layer, 0]))]
+    oxygen_xy = edge[:2] + np.array([1.6, 0.0])
+    connectivity = _resolve_op_connectivity_factor(op)
+    core_z = float(full.positions[n_slab, 2])
+
+    def _child(core_height: float, oxygen_z: float) -> Atoms:
+        mobile = full[n_slab:].copy()
+        mobile.positions[:3, 2] = core_height
+        mobile.positions[3] = [oxygen_xy[0], oxygen_xy[1], oxygen_z]
+        mobile.positions[4] = [oxygen_xy[0], oxygen_xy[1], oxygen_z + 0.96]
+        return mobile
+
+    def _accepts(mobile: Atoms) -> bool:
+        return op._accepts(slab, mobile, 1, connectivity, True)
+
+    assert _accepts(_child(core_z, z_top + 1.8))
+    assert not _accepts(_child(core_z, z_top - 0.4))
+    assert not _accepts(_child(z_top + 6.0, z_top + 1.8))
 
 
 def test_fragment_detach_returns_none_when_fragment_is_already_off() -> None:

@@ -52,13 +52,13 @@ from .geometry_helpers import (
     validate_cluster,
 )
 from .initialization_config import (
+    BLMIN_RATIO_DEFAULT,
     BOLTZMANN_TEMPERATURE_MAX,
     BOLTZMANN_TEMPERATURE_MIN,
     CONNECTIVITY_FACTOR,
     ENERGY_SPREAD_DIVISOR,
     ENERGY_SPREAD_TOLERANCE,
     MAX_REASONABLE_CELL_SIDE,
-    MIN_DISTANCE_FACTOR_DEFAULT,
     MULTI_ELEMENT_TEMPLATE_PENALTY,
     PACKING_EFFICIENCY_FCC_HCP,
     PLACEMENT_RADIUS_SCALING_DEFAULT,
@@ -1078,7 +1078,7 @@ def _try_strategies_in_order(
     strategies: list[tuple[str, Callable[..., Atoms]]],
     composition: list[str],
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     return_strategy: bool = False,
 ) -> Atoms | tuple[Atoms, str, str | None]:
     """Try initialization strategies in order until one succeeds.
@@ -1177,7 +1177,7 @@ def create_initial_cluster(
     composition: list[str],
     rng: np.random.Generator,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     vacuum: float = VACUUM_DEFAULT,
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
@@ -1218,7 +1218,7 @@ def create_initial_cluster(
             templates, seed+growth, and random_spherical), ``seed+growth``,
             ``random_spherical``, or ``template``.
         connectivity_factor: Factor to multiply sum of covalent radii for
-            connectivity threshold. Defaults to ``CONNECTIVITY_FACTOR`` (1.4).
+            connectivity threshold. Defaults to ``CONNECTIVITY_FACTOR`` (1.2).
         plan: A pre-computed :class:`BatchInitPlan` (discovery + allocation).
             When provided, this call reuses the already-resolved templates,
             seeds, and strategy allocation instead of re-running discovery. Use
@@ -1274,7 +1274,7 @@ def _try_exact_match(
     exact_candidates: dict[str, list[tuple[float, Atoms]]],
     rng: np.random.Generator,
     *,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
@@ -1356,7 +1356,7 @@ def _generate_single_structure_internal(
     structure_rng: np.random.Generator,
     vacuum: float = VACUUM_DEFAULT,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     template_index: int | None = None,
@@ -1448,7 +1448,7 @@ def _generate_structure_batch_item(
     composition: list[str],
     vacuum: float = VACUUM_DEFAULT,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     discovery_templates: list[Atoms] | None = None,
@@ -1541,7 +1541,7 @@ def plan_batch_initialization(
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     reuse_exact_matches: bool = True,
@@ -1641,7 +1641,7 @@ def create_initial_cluster_batch(
     n_structures: int,
     rng: np.random.Generator,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     vacuum: float = VACUUM_DEFAULT,
     previous_search_glob: str = "**/*.db",
     mode: str = "smart",

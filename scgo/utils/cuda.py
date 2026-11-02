@@ -14,12 +14,13 @@ except ImportError:  # Torch is optional; the OOM classifier does not need it.
 
 
 def is_cuda_oom_error(exc: BaseException) -> bool:
-    """True if ``exc`` is a CUDA OOM (type name or message); no torch import.
+    """True if ``exc`` is a CUDA OOM (message); no torch import.
 
     Warp's CUDA memory pool reports a failed ``cudaMallocAsync`` as
     ``Failed to allocate N bytes on device 'cuda:0'``. The words "out of
     memory" are printed by the native runtime and are not part of that
     exception. A CPU allocation failure uses ``device 'cpu'`` and is ignored.
+    The message must name CUDA or a GPU: CPU and CUDA share ``OutOfMemoryError``.
 
     The walk follows ``__cause__`` when set, otherwise ``__context__`` when
     that context is not suppressed.
@@ -43,10 +44,10 @@ def _next_exception(exc: BaseException) -> BaseException | None:
 
 
 def _exception_text_is_cuda_oom(exc: BaseException) -> bool:
-    if type(exc).__name__ == "OutOfMemoryError":
-        return True
     text = str(exc).lower()
-    if "out of memory" in text or "out of gpu memory" in text:
+    if ("cuda" in text or "gpu" in text) and (
+        "out of memory" in text or "out of gpu memory" in text
+    ):
         return True
     return "failed to allocate" in text and "device 'cuda" in text
 

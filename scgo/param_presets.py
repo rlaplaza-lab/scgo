@@ -23,7 +23,10 @@ from scgo.constants import (
     DEFAULT_TS_PAIR_COR_MAX,
 )
 from scgo.exceptions import SCGOValidationError
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
+from scgo.initialization.initialization_config import (
+    CLASH_HARD_CAP_FACTOR,
+    CONNECTIVITY_FACTOR,
+)
 from scgo.pair_selection_defaults import pair_selection_param_defaults
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
@@ -143,9 +146,9 @@ _GAS_TS_NEB_DEFAULTS: dict[str, Any] = {
     "torchsim_fmax": TS_NEB_FMAX,
     "torchsim_max_steps": "auto",
     "max_endpoint_mismatch": None,
-    # Bare gas clusters get a looser clash gate and a tighter saddle-prominence
-    # floor (flat-PES rearrangements are common for small gas clusters).
-    "neb_prescreen_clash_distance": 1.0,
+    # Bare gas uses a tighter saddle-prominence floor. The clash scale matches
+    # the other presets.
+    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
     "min_saddle_prominence": 0.10,
     "neb_max_spurious_barrier": 8.0,
     "binding_penetration_tolerance_a": 0.1,
@@ -177,7 +180,7 @@ _SURFACE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "torchsim_fmax": TS_NEB_FMAX,
     "torchsim_max_steps": 2000,
     # Surface clusters newly gain the endpoint-displacement gate (was unset).
-    "neb_prescreen_clash_distance": 0.7,
+    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
     "min_saddle_prominence": 0.40,
     "neb_max_spurious_barrier": 8.0,
     "binding_penetration_tolerance_a": 0.1,
@@ -212,12 +215,12 @@ _SURFACE_CLUSTER_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_max_spurious_barrier": 12.0,
 }
 
-# Bare-slab vacancy/rearrangement NEBs: softer clash floor than adsorbate
-# presets, but at/above the atomic-distance warning and the shared barrier cap.
+# Bare-slab vacancy hops use a wider endpoint mismatch (3.0 Å). The clash
+# scale matches the other presets.
 _SURFACE_BARE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_SURFACE_TS_NEB_DEFAULTS,
     "max_endpoint_mismatch": 3.0,
-    "neb_prescreen_clash_distance": 0.5,
+    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
     "neb_max_spurious_barrier": 8.0,
 }
 
@@ -234,9 +237,8 @@ _GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_climb": True,
     "torchsim_max_steps": 4000,
     "max_endpoint_mismatch": 1.25,  # Å; also enables pre-NEB path gates
-    # Explicitly preserve the adsorbate clash/prominence/barrier behavior (the
-    # bare-gas base dict loosens these; do not inherit the loose values).
-    "neb_prescreen_clash_distance": 0.7,
+    # Prominence stays at the adsorbate value. The bare-gas base uses 0.10 eV.
+    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
     "min_saddle_prominence": 0.40,
     "neb_max_spurious_barrier": 8.0,
     "binding_penetration_tolerance_a": 0.1,
@@ -255,8 +257,8 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     # Inherited surface defaults enable free in-plane Kabsch; that shifts
     # adsorbates off registry. Remap/MIC stay on via the surface base dict.
     "neb_surface_lattice_rotation": False,
-    # Explicitly preserve the adsorbate clash/prominence/barrier behavior.
-    "neb_prescreen_clash_distance": 0.7,
+    # Prominence stays at the adsorbate value.
+    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
     "min_saddle_prominence": 0.40,
     "neb_max_spurious_barrier": 8.0,
     "binding_penetration_tolerance_a": 0.1,
@@ -880,7 +882,7 @@ def get_ts_search_params(
     If ``seed`` is set, it is stored in the returned dict; :func:`~scgo.run_go_ts` / ``run_ts_*``
     require it to be consistent with ``go_params["seed"]`` and the ``seed=`` run argument.
     The ``connectivity_factor`` key sets the global connectivity threshold for cluster
-    validation (default 1.4). It accepts a float or a dict of per-element and/or
+    validation (default 1.2). It accepts a float or a dict of per-element and/or
     per-pair multipliers (see :mod:`scgo.system_types.connectivity_factor`); the
     same spec is used by GO algorithm gates, the ``run_trials`` final gate, and TS.
 
@@ -893,6 +895,8 @@ def get_ts_search_params(
     policy AND-gates that flag at resolve time, so an explicit ``True`` stays
     off when the policy default is off. ``surface_cluster`` also raises
     ``neb_max_spurious_barrier`` to ``12.0`` eV (others keep ``8.0``).
+    ``neb_prescreen_clash_distance`` is ``0.4`` (a covalent scale) for every
+    system type.
     """
     policy = get_system_policy(system_type)
     if policy.uses_surface and not isinstance(surface_config, SurfaceSystemConfig):

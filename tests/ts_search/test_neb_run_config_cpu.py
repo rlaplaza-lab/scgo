@@ -10,13 +10,14 @@ deselected by the CPU CI expression).
 
 from __future__ import annotations
 
+from scgo.initialization.initialization_config import CLASH_HARD_CAP_FACTOR
 from tests.ts_search.neb_fixtures import _gas_neb_cfg
 
 
 def test_neb_run_config_builds_with_all_required_fields():
     """Helper must supply every required ``NebRunConfig`` field (gas defaults)."""
     cfg = _gas_neb_cfg()
-    assert cfg.neb_prescreen_clash_distance == 1.0
+    assert cfg.neb_prescreen_clash_distance == CLASH_HARD_CAP_FACTOR
     assert cfg.min_saddle_prominence == 0.10
     assert cfg.neb_max_spurious_barrier == 8.0
 
@@ -24,6 +25,6 @@ def test_neb_run_config_builds_with_all_required_fields():
 def test_neb_run_config_surface_override_uses_surface_defaults():
     """Switching system_type must pick surface-family required-field defaults."""
     cfg = _gas_neb_cfg(system_type="surface_cluster")
-    assert cfg.neb_prescreen_clash_distance == 0.7
+    assert cfg.neb_prescreen_clash_distance == CLASH_HARD_CAP_FACTOR
     assert cfg.min_saddle_prominence == 0.40
     assert cfg.neb_max_spurious_barrier == 8.0

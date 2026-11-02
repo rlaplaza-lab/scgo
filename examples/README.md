@@ -12,7 +12,7 @@ converge). The Kaggle GPU matrix in
 same two presets, so CI cannot drift from these scripts. For a full-strength
 campaign, swap in the production presets.
 
-Adsorbate examples set `connectivity_factor=1.8` and
+The bond cutoff defaults to `1.2` times the covalent sum. Adsorbate examples set `connectivity_factor=1.8` and
 `freeze_adsorbate_internal_geometry=True`; the bare surface example also uses
 `connectivity_factor=1.8` for slab validation. Adsorbate examples often use
 fewer `max_pairs` because IDPP screening is heavier and their bands run

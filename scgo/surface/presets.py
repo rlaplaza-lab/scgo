@@ -1,14 +1,11 @@
 """Reusable slab and surface presets for runners and benchmarks.
 
-Note on the adsorption-height window: every preset fixes
-``adsorption_height_min/max`` to a narrow 0.5-1.0 or 0.5-1.5 Å band above the
-slab top. This is a *deliberate* chemisorption-contact bias — it seeds the mobile
-cluster at typical chemical-bonding distances rather than far out in the
-physisorption tail. It is NOT a free standoff: every accepted placement is still
-gated by ``atoms_too_close_two_sets(adsorbate, slab, blmin)`` (blmin_ratio 0.7,
-so e.g. Pt-C >= 1.48 Å), and the window can be widened or overridden per-run via
-``adsorption_height_min/max``. The tradeoff of the tight window is a hollow /
-vacancy-site bias and no physisorption sampling — intended for bonding searches.
+Note on the adsorption-height window: presets still pass a narrow
+``adsorption_height_min/max`` band. Deposition intersects that band with the
+covalent window from the steric floor to the bond cutoff, so a requested height
+inside the floor is raised to the floor and one past the cutoff is pulled back.
+Accepted placements are also gated by ``atoms_too_close_two_sets`` at the same
+0.7 floor (Pt–C stays at least 1.48 Å).
 """
 
 from __future__ import annotations

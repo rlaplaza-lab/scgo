@@ -103,7 +103,7 @@ def test_simple_go_uses_rng_to_break_coincident_atoms(tmp_path) -> None:
             atoms,
             str(tmp_path / f"degenerate_{run}"),
             rng=np.random.default_rng(7),
-            niter_local_relaxation=5,
+            niter_local_relaxation=40,
             verbosity=0,
         )
         assert minima

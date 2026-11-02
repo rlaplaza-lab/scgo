@@ -12,6 +12,7 @@ import pytest
 from ase import Atoms
 from ase.build import fcc111
 
+from scgo.initialization.initialization_config import CLASH_HARD_CAP_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.partition import prepare_slab_search_surface_config
 from scgo.system_types import AdsorbateDefinition
@@ -55,9 +56,9 @@ def _gas_neb_cfg(**overrides) -> NebRunConfig:
     _surface_defaults = ("surface_cluster", "surface", "surface_adsorbate")
     _is_surface = overrides.get("system_type", "gas_cluster") in _surface_defaults
     if _is_surface:
-        _clash, _prom, _spurious = 0.7, 0.40, 8.0
+        _clash, _prom, _spurious = CLASH_HARD_CAP_FACTOR, 0.40, 8.0
     else:
-        _clash, _prom, _spurious = 1.0, 0.10, 8.0
+        _clash, _prom, _spurious = CLASH_HARD_CAP_FACTOR, 0.10, 8.0
     kwargs.update(
         neb_prescreen_clash_distance=_clash,
         min_saddle_prominence=_prom,

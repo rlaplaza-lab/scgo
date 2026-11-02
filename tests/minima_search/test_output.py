@@ -462,7 +462,7 @@ def test_final_xyz_is_canonicalized_before_write(tmp_path, rng, monkeypatch):
 
     atoms = Atoms(
         "Pt2",
-        positions=[[1.0, 2.0, 3.0], [2.2, 2.0, 3.0]],
+        positions=[[1.0, 2.0, 3.0], [3.5, 2.0, 3.0]],
         cell=[10.0, 10.0, 10.0],
         pbc=False,
     )

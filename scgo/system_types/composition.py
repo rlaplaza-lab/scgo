@@ -252,6 +252,7 @@ def resolve_adsorbate_run_composition(
     adsorbates: AdsorbatesInput | None,
     preset_adsorbate_definition: AdsorbateDefinition | None,
     context: str,
+    connectivity_factor: object | None = None,
 ) -> tuple[AdsorbateDefinition | None, list[Atoms] | None, list[str]]:
     """Build or reconcile mobile composition for adsorbate runs (gas or surface).
 
@@ -276,6 +277,7 @@ def resolve_adsorbate_run_composition(
             composition=comp,
             adsorbates=adsorbates,
             context=context,
+            connectivity_factor=connectivity_factor,
         )
 
     if preset_adsorbate_definition is not None:
@@ -295,6 +297,7 @@ def resolve_adsorbate_run_composition(
         composition=comp,
         adsorbates=None,
         context=context,
+        connectivity_factor=connectivity_factor,
     )
 
 
@@ -497,6 +500,7 @@ def build_adsorbate_definition_from_inputs(
     composition: list[str],
     adsorbates: AdsorbatesInput | None,
     context: str,
+    connectivity_factor: object | None = None,
 ) -> tuple[AdsorbateDefinition | None, list[Atoms] | None, list[str]]:
     from scgo.cluster_adsorbate.feasibility import (
         validate_adsorbate_placement_feasibility,
@@ -516,7 +520,11 @@ def build_adsorbate_definition_from_inputs(
         return None, None, list(composition)
     core_list = [str(s) for s in composition]
     fragments = normalize_adsorbates_input(adsorbates, context=context)
-    _validate_input_adsorbate_fragments_connected(fragments, context=context)
+    _validate_input_adsorbate_fragments_connected(
+        fragments,
+        context=context,
+        connectivity_factor=connectivity_factor,
+    )
     ads_list = flatten_adsorbate_symbols(fragments)
     full_mobile_composition = list(core_list) + list(ads_list)
     ads_def = AdsorbateDefinition(

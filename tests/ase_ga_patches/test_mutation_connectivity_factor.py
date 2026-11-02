@@ -25,7 +25,7 @@ def test_mutation_operators_use_run_connectivity_factor() -> None:
     )
     assert ops and all(op.connectivity_factor == 1.1 for op in ops)
 
-    # Pt–Pt at 3.5 Å: connected at default 1.4 (~3.81 Å), not at 1.1 (~2.99 Å).
+    # Pt–Pt at 3.5 Å: connected at an explicit factor of 1.4 (~3.81 Å), not at 1.1.
     dimer = Atoms("Pt2", positions=[[0.0, 0.0, 0.0], [3.5, 0.0, 0.0]])
     assert _mobile_is_connected(dimer, use_mic=False, connectivity_factor=1.4)
     assert not _mobile_is_connected(dimer, use_mic=False, connectivity_factor=1.1)

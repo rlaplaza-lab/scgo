@@ -81,9 +81,11 @@ def test_relax_water_connected_structure_emt() -> None:
     core = _pt_triangle()
     h2o = molecule("H2O")
 
-    # O near the cluster so connectivity survives a short unconstrained relax (EMT).
-    o_pos = np.array([1.15, 0.65, 1.35])
+    # O above the triangle, hydrogens pointing away so every pair stays
+    # outside the 0.7 steric floor and O stays inside the Pt–O cutoff.
+    o_pos = np.array([1.15, 0.67, 1.80])
     rel = h2o.get_positions() - h2o.get_positions()[0]
+    rel[:, 2] *= -1.0
     pre = Atoms(
         symbols=h2o.get_chemical_symbols(),
         positions=rel + o_pos,

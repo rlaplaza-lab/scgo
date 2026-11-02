@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
-from ase.data import atomic_numbers as ase_atomic_numbers
+from ase.data import chemical_symbols
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
@@ -42,8 +42,12 @@ from scgo.initialization import (
     plan_batch_initialization,
     reset_init_diagnostics,
 )
-from scgo.initialization.atomic_radii import get_covalent_radius
+from scgo.initialization.atomic_radii import (
+    covalent_surface_layer_thickness,
+    get_covalent_radius,
+)
 from scgo.initialization.geometry_helpers import _generate_rotation_matrix
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.metadata.atoms import get_tag
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
@@ -53,7 +57,7 @@ from scgo.system_types import (
     resolve_adsorbate_fragments,
     resolve_connectivity_factor,
 )
-from scgo.system_types.connectivity_factor import max_connectivity_scale
+from scgo.system_types.connectivity_factor import bond_thresholds_for_cross_pairs
 from scgo.utils.combine_atoms import (
     concatenate_inherit_cell_pbc,
     random_rotation_matrix,
@@ -75,11 +79,18 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _slab_surface_layer(slab: Atoms, axis: int, thickness: float = 2.5) -> Atoms:
-    """Return slab atoms in the top ``thickness`` Å along the surface normal."""
+def _slab_surface_layer(
+    slab: Atoms, axis: int, thickness: float | None = None
+) -> Atoms:
+    """Return slab atoms within ``thickness`` of the top along the surface normal.
+
+    ``None`` uses one covalent diameter of the largest slab species.
+    """
     pos = slab.get_positions()
     if len(pos) == 0:
         return slab.copy()
+    if thickness is None:
+        thickness = covalent_surface_layer_thickness(slab.get_chemical_symbols())
     indices = top_layer_indices(pos, axis, thickness=thickness)
     return slab[indices].copy()
 
@@ -314,8 +325,10 @@ def _place_cluster_above_slab(
         axis: Surface normal axis index (0, 1, or 2).
         rng: Random number generator.
         config: Surface system configuration.
-        cluster_atomic_numbers: Atomic numbers of cluster atoms. If provided,
-            used to calculate covalent radii for connectivity-based placement.
+        cluster_atomic_numbers: Atomic numbers of the cluster. Required. The
+            height window is the steric floor through the bond cutoff of the
+            lowest atom against the top layer, intersected with the config
+            heights.
         prefer_surface_normal: Use a mostly in-plane rotation with a small tilt
             instead of a uniformly random rotation.
 
@@ -363,46 +376,50 @@ def _place_cluster_above_slab(
             slab, axis, rng, cluster_radius
         )
 
-    # Cap the sampled height so the cluster bottom stays within bonding
-    # distance of the slab top.
-    cf = config.structure_connectivity_factor
-
+    cf = normalize_connectivity_factor(config.structure_connectivity_factor)
     slab_symbols = slab.get_chemical_symbols()
     if not slab_symbols:
         raise SCGOValidationError(
             "Cannot estimate deposition height: slab has no atoms"
         )
-    slab_radius = get_covalent_radius(slab_symbols[0])
-
-    if cluster_atomic_numbers is not None and len(cluster_atomic_numbers) > 0:
-        number_to_symbol = {v: k for k, v in ase_atomic_numbers.items()}
-
-        unique_atomic_numbers = set(cluster_atomic_numbers)
-        cluster_radii = []
-        for z in unique_atomic_numbers:
-            symbol = number_to_symbol.get(int(z))
-            if symbol is None:
-                raise SCGOValidationError(
-                    f"Cannot estimate deposition height: unknown atomic number {z}"
-                )
-            cluster_radii.append(get_covalent_radius(symbol))
-        cluster_radius_est = max(cluster_radii)
-    else:
+    if cluster_atomic_numbers is None or len(cluster_atomic_numbers) == 0:
         raise SCGOValidationError(
             "Cannot estimate deposition height: cluster has no atomic numbers"
         )
-
-    connectivity_threshold = max_connectivity_scale(
-        normalize_connectivity_factor(cf)
-    ) * (slab_radius + cluster_radius_est)
+    bottom_i = int(np.argmin(rotated_positions[:, axis]))
+    z_bottom = int(cluster_atomic_numbers[bottom_i])
+    if z_bottom < 0 or z_bottom >= len(chemical_symbols):
+        raise SCGOValidationError(
+            f"Cannot estimate deposition height: unknown atomic number {z_bottom}"
+        )
+    bottom_symbol = chemical_symbols[z_bottom]
+    r_bottom = get_covalent_radius(bottom_symbol)
+    thickness = covalent_surface_layer_thickness(slab_symbols)
+    top_idx = top_layer_indices(slab.get_positions(), axis, thickness=thickness)
+    top_symbols = [slab_symbols[i] for i in top_idx]
+    top_radii = np.array([get_covalent_radius(s) for s in top_symbols], dtype=float)
+    n_top = len(top_radii)
+    bond_limits = bond_thresholds_for_cross_pairs(
+        np.array([r_bottom], dtype=float),
+        [bottom_symbol],
+        np.zeros(n_top, dtype=int),
+        top_radii,
+        top_symbols,
+        np.arange(n_top, dtype=int),
+        cf,
+    )
+    steric = (r_bottom + top_radii) * BLMIN_RATIO_DEFAULT
+    h_min = float(np.min(steric))
+    h_max = float(np.max(bond_limits)) if bond_limits.size else h_min
+    if config.adsorption_height_min is not None:
+        h_min = max(h_min, float(config.adsorption_height_min))
+    if config.adsorption_height_max is not None:
+        h_max = min(h_max, float(config.adsorption_height_max))
+    if h_max < h_min:
+        h_max = h_min
 
     cluster_min = float(np.min(rotated_positions[:, axis]))
-
-    # Truncated uniform on [h_min, min(h_max, connectivity_threshold)].
-    h_min = config.adsorption_height_min
-    h_max = config.adsorption_height_max
-    hi = min(h_max, max(h_min, connectivity_threshold))
-    effective_height = float(rng.uniform(h_min, hi)) if hi > h_min else h_min
+    effective_height = float(rng.uniform(h_min, h_max)) if h_max > h_min else h_min
 
     translated_positions[:, axis] += slab_top + effective_height - cluster_min
     return translated_positions

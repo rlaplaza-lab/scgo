@@ -84,10 +84,11 @@ Constants in [`constants.py`](constants.py) (`EMT_PT2_BOND_ANG`, `PT4_EMT_BARRIE
 
 ### Surface height checks (placement vs relaxation)
 
-`adsorption_height_min/max` constrain the **deposition sampler** in
-`create_deposited_cluster`: how far the cluster bottom is placed above the
-slab top. After GA or NEB, atoms may move outside that window while still
-being chemisorbed. Tests must use:
+`adsorption_height_min/max` are optional bounds on the deposition sampler.
+`None` uses the covalent window of the lowest cluster atom (steric floor
+through the bond cutoff). An explicit band is intersected with that window,
+so the sampled gap can sit outside a band that was inside the floor. After
+GA or NEB, atoms may move further while still being chemisorbed. Tests must use:
 
 - `assert_deposition_height_in_bounds` — mock-relaxer / fresh placement smoke tests
 - `assert_supported_cluster_binding` — real EMT relaxation and end-to-end GO

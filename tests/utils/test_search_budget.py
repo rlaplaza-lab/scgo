@@ -217,6 +217,22 @@ class TestBasinHopping:
         small = bh_auto_budget(["Pt"] * 3)
         large = bh_auto_budget(["Pt"] * 30)
         assert small < large <= 1000
+        assert large == 285
+
+    def test_empty_core_uses_the_atom_count_not_the_slot_square(self):
+        """A molecule with no core is not a 1000-hop search."""
+        composition = ["O", "H", "H"]
+        definition = AdsorbateDefinition(
+            core_symbols=[],
+            adsorbate_symbols=list(composition),
+            adsorbate_fragment_lengths=[3],
+        )
+        hops = bh_auto_budget(
+            composition,
+            system_type="gas_cluster_adsorbate",
+            adsorbate_definition=definition,
+        )
+        assert hops == auto_niter(composition)
 
 
 class TestSlabSearch:

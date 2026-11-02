@@ -673,17 +673,13 @@ def assert_deposition_height_in_bounds(
     tolerance: float = ADSORPTION_HEIGHT_TOLERANCE_ANG,
     mobile_slice: slice | None = None,
 ) -> None:
-    """Assert **initial placement** heights lie in the deposition sampler window.
+    """Assert the deposited cluster's bottom gap lies in ``[h_min, h_max]``.
 
-    ``SurfaceSystemConfig.adsorption_height_min/max`` constrain only the
-    **bottom** of the deposited cluster: ``scgo.surface.deposition`` places the
-    cluster bottom at ``slab_top + effective_height`` where
-    ``effective_height = max(h_min, min(sampled, target_height))`` and
-    ``sampled ~ Uniform(h_min, h_max)``. So only the *bottom gap*
-    ``min(mobile_z) - slab_top`` is guaranteed inside ``[h_min, h_max]``; a
-    non-spherical cluster's top atoms legitimately sit far outside. GA and NEB
-    may move atoms further during relaxation -- use
-    :func:`assert_supported_cluster_binding` after relaxation instead.
+    Pass the window deposition sampled: the steric floor through the bond
+    cutoff of the lowest cluster atom, intersected with
+    ``adsorption_height_min`` / ``adsorption_height_max`` when those are set.
+    Only ``min(mobile_z) - slab_top`` is checked. After GA or NEB, use
+    :func:`assert_supported_cluster_binding`.
     """
     from scgo.surface.deposition import slab_surface_extreme
 

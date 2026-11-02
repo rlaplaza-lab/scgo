@@ -9,6 +9,7 @@ from scipy.spatial.distance import cdist
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    effective_clash_factor,
     format_connectivity_factor,
     normalize_connectivity_factor,
 )
@@ -26,7 +27,6 @@ from .geometry_helpers import (
     validate_cluster,
 )
 from .initialization_config import (
-    CLASH_TOLERANCE,
     CONNECTIVITY_FACTOR,
     SEED_CLASH_FACTOR,
 )
@@ -76,8 +76,9 @@ def _is_valid_placement(
         r_exist = np.array(
             [get_covalent_radius(s) for s in existing_symbols], dtype=float
         )
-        min_allowed = (r_seed[:, None] + r_exist[None, :]) * min_distance_factor
-        if np.any(distances < min_allowed - CLASH_TOLERANCE):
+        clash_factor = effective_clash_factor(min_distance_factor)
+        min_allowed = (r_seed[:, None] + r_exist[None, :]) * clash_factor
+        if np.any(distances < min_allowed):
             return False
 
     temp_combined = combined_atoms.copy()

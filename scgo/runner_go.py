@@ -333,7 +333,8 @@ def _run_go_campaign_compositions(
         )
         log_phase_header(
             logger,
-            f"Running minima search for {path_key} ({i + 1}/{num_compositions})",
+            f"Running minima search for {path_key} "
+            f"({format_count_of(i + 1, num_compositions, after='compositions')})",
             verbosity=verbosity,
         )
 

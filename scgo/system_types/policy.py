@@ -202,7 +202,7 @@ def resolve_connectivity_factor(
 
     Precedence: explicit ``connectivity_factor`` →
     ``ClusterAdsorbateConfig.structure_connectivity_factor`` →
-    ``SurfaceSystemConfig.structure_connectivity_factor`` → module default ``1.4``.
+    ``SurfaceSystemConfig.structure_connectivity_factor`` → module default ``1.2``.
 
     Accepts a global float or a dict of per-element and/or per-pair multipliers
     (see :mod:`scgo.system_types.connectivity_factor`).

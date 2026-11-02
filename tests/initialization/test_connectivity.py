@@ -29,12 +29,12 @@ class TestConnectivityValidation:
 
     def test_two_atoms_connected(self, pt2_atoms):
         """Test that two atoms within bonding distance are connected."""
-        # Pt-Pt distance of ~2.8 Å (within 2 * 1.4 Å = 2.8 Å threshold)
+        # Pt-Pt distance of ~2.8 Å (inside the 1.2 covalent cutoff, 3.26 Å).
         assert is_cluster_connected(pt2_atoms) is True
 
     def test_two_atoms_disconnected(self):
         """Test that two atoms beyond bonding distance are disconnected."""
-        # Pt-Pt distance of ~10 Å (far beyond 2 * 1.4 Å = 2.8 Å threshold)
+        # Pt-Pt distance of ~10 Å (far beyond the 1.2 covalent cutoff, 3.26 Å).
         atoms = Atoms("Pt2", positions=[[0, 0, 0], [10, 0, 0]])
         assert is_cluster_connected(atoms) is False
 

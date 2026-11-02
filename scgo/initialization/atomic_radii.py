@@ -27,6 +27,7 @@ from ase.data import atomic_numbers, chemical_symbols, covalent_radii, vdw_radii
 from scgo.exceptions import (
     SCGOValidationError,
 )
+from scgo.initialization.initialization_config import SURFACE_LAYER_THICKNESS_SCALE
 
 if TYPE_CHECKING:
     from ase import Atoms
@@ -230,12 +231,26 @@ def resolve_steric_floor(
     min_distance_factor: float,
     blmin_ratio: float | None,
 ) -> float:
-    """Minimum clash factor for placement: at least ``blmin_ratio`` when set.
+    """Return the steric scale used for a placement clash check.
 
-    Returns ``max(min_distance_factor, blmin_ratio)`` so the tighter of the
-    validation fallback (``min_distance_factor``) and the GA steric scale
-    (``blmin_ratio``) wins. When ``blmin_ratio`` is None only the fallback applies.
+    The requested scale is ``min_distance_factor``, or the larger of that and
+    ``blmin_ratio`` when a ratio is set. The result is then raised to the
+    hard cap.
     """
+    # Importing ``scgo.system_types`` loads validation, which loads geometry
+    # helpers, which load this module. Keep the helper import local.
+    from scgo.system_types.connectivity_factor import effective_clash_factor
+
     if blmin_ratio is None:
-        return min_distance_factor
-    return max(min_distance_factor, blmin_ratio)
+        requested = min_distance_factor
+    else:
+        requested = max(min_distance_factor, blmin_ratio)
+    return effective_clash_factor(requested)
+
+
+def covalent_surface_layer_thickness(symbols: Iterable[str]) -> float:
+    """One covalent diameter of the largest species in ``symbols``."""
+    unique = {str(symbol) for symbol in symbols}
+    if not unique:
+        return 0.0
+    return SURFACE_LAYER_THICKNESS_SCALE * max(get_covalent_radius(s) for s in unique)

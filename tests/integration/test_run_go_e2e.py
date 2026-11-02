@@ -362,8 +362,13 @@ def test_run_go_pt2_produces_tagged_minima(tmp_path: Path) -> None:
 @pytest.mark.slow
 @pytest.mark.integration
 def test_run_go_ts_h2_has_no_ts_pairs(tmp_path: Path) -> None:
-    """H2 GO+TS finds no candidate pairs (negative control)."""
+    """H2 GO+TS finds no candidate pairs (negative control).
+
+    EMT's H–H minimum sits past the default 1.2 covalent cutoff, so this
+    case raises the factor the way the composition-isolation run does.
+    """
     go_params = get_testing_params()
+    go_params["connectivity_factor"] = 1.6
     go_params["optimizer_params"]["simple"].update(
         {"niter": 2, "niter_local_relaxation": 8}
     )

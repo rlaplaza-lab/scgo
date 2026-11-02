@@ -78,10 +78,9 @@ Both configs set ``fix_all_slab_atoms=False`` with ``n_relax_top_slab_layers=1``
 so the surface layer can relax with the deposited cluster. Raise the layer count
 or pass ``fix_all_slab_atoms=True`` to freeze the whole slab.
 
-Metal-carbon contacts (for example Pt on graphite or graphene) are often longer
-than a default ``1.4×`` covalent-radius sum. Loosen only that contact via
-``go_params["connectivity_factor"]`` (also used by the final structural check),
-for example ``{"Pt": 1.4, "C": 1.4, "Pt-C": 1.8}``.
+Metal–carbon contacts use the same ``1.2`` cutoff (Pt–C is about 2.54 Å).
+A longer contact is a pair override, for example
+``{"Pt": 1.2, "C": 1.2, "Pt-C": 1.8}``.
 
 Defective slabs
 ---------------
@@ -210,12 +209,11 @@ Tuning deposition
 
 Key options on :class:`~scgo.surface.config.SurfaceSystemConfig`:
 
-* ``adsorption_height_min`` / ``adsorption_height_max``: vertical gap between
-  slab top and cluster bottom. Graphene and n-doped graphite presets use
-  0.5-1.5 Å; graphite and defected-graphite presets use 0.5-1.0 Å. That range
-  keeps the cluster close to the surface (or to the vacancy neighbours). You
-  can widen or override it per run. Accepted placements still pass a clash
-  check (``blmin_ratio = 0.7``).
+* ``adsorption_height_min`` / ``adsorption_height_max``: optional gap between
+  the slab top and the lowest cluster atom. ``None`` samples the covalent
+  window. Graphene and n-doped graphite pass 0.5-1.5 Å; graphite and
+  defected graphite pass 0.5-1.0 Å. A requested band is intersected with
+  that window, and accepted placements also pass the 0.7 clash check.
 * ``max_placement_attempts``: retries per structure (default 1000 for the
   presets) before giving up on a sterically valid placement.
 * ``defect_bias_probability``: fraction of placements targeting the vacancy

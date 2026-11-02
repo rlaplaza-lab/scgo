@@ -72,12 +72,15 @@ class SurfaceSystemConfig:
 
     Do not set ``n_relax_top_slab_layers`` together with
     ``n_fix_bottom_slab_layers``, or together with ``fix_all_slab_atoms=True``.
+
+    ``None`` adsorption heights derive the covalent window of the lowest
+    cluster atom. Explicit heights are intersected with that window.
     """
 
     slab: Atoms
     name: str = DEFAULT_SURFACE_NAME
-    adsorption_height_min: float = 1.2
-    adsorption_height_max: float = 3.0
+    adsorption_height_min: float | None = None
+    adsorption_height_max: float | None = None
     surface_normal_axis: int = 2
     fix_all_slab_atoms: bool = True
     n_fix_bottom_slab_layers: int | None = None
@@ -98,12 +101,14 @@ class SurfaceSystemConfig:
         slab = self.slab
         if self.surface_normal_axis not in (0, 1, 2):
             raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
-        validate_positive(
-            "adsorption_height_min", self.adsorption_height_min, strict=True
-        )
-        validate_positive(
-            "adsorption_height_max", self.adsorption_height_max, strict=True
-        )
+        if self.adsorption_height_min is not None:
+            validate_positive(
+                "adsorption_height_min", self.adsorption_height_min, strict=True
+            )
+        if self.adsorption_height_max is not None:
+            validate_positive(
+                "adsorption_height_max", self.adsorption_height_max, strict=True
+            )
         object.__setattr__(
             self,
             "structure_connectivity_factor",
@@ -112,7 +117,11 @@ class SurfaceSystemConfig:
                 name="structure_connectivity_factor",
             ),
         )
-        if self.adsorption_height_min > self.adsorption_height_max:
+        if (
+            self.adsorption_height_min is not None
+            and self.adsorption_height_max is not None
+            and self.adsorption_height_min > self.adsorption_height_max
+        ):
             raise SCGOValidationError(
                 "adsorption_height_min must be <= adsorption_height_max, "
                 f"got {self.adsorption_height_min} and {self.adsorption_height_max}"
@@ -174,7 +183,11 @@ def make_surface_config(
     comparator_use_mic: bool = True,
     max_placement_attempts: int = 500,
 ) -> SurfaceSystemConfig:
-    """Build a :class:`~scgo.surface.config.SurfaceSystemConfig` from an arbitrary ASE slab."""
+    """Build a :class:`~scgo.surface.config.SurfaceSystemConfig` from an arbitrary ASE slab.
+
+    The height arguments are Ångström overrides and are intersected with the
+    covalent window.
+    """
     return SurfaceSystemConfig(
         slab=slab.copy(),
         name=name,

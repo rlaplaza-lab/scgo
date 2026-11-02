@@ -238,6 +238,73 @@ def test_interpolate_path_wrapped_dimer_keeps_identity_and_bond():
     assert float(np.linalg.norm(disp[0] - disp[1])) < 0.05
 
 
+def test_interpolate_path_three_cell_adsorbate_rides_the_core_image():
+    """A same-index image beyond the window must not tear a bonded adsorbate."""
+    slab = fcc111("Pt", size=(2, 2, 1), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    n_slab = len(slab)
+    z0 = float(slab.get_positions()[:, 2].max()) + 2.2
+    core = np.array(
+        [[1.0, 1.2, z0], [3.4, 1.3, z0], [2.1, 3.2, z0 + 0.4]],
+        dtype=float,
+    )
+    oxygen = core[0] + np.array([0.2, 0.1, 2.0])
+    reactant = slab.copy() + Atoms("Pt3O", positions=np.vstack([core, oxygen]))
+    shift = 3.0 * np.asarray(slab.cell[0], dtype=float)
+    product = reactant.copy()
+    product.positions[n_slab:] = reactant.positions[n_slab:] + shift
+    images = interpolate_path(
+        reactant,
+        product,
+        n_images=3,
+        method="linear",
+        mic=True,
+        align_endpoints=True,
+        n_slab=n_slab,
+        n_core_mobile=3,
+        n_adsorbate_mobile=1,
+        adsorbate_fragment_lengths=[1],
+        system_type="surface_cluster_adsorbate",
+        allow_symmetry_copies=False,
+        neb_surface_lattice_rotation=False,
+    )
+    bonded = (n_slab, n_slab + 3)
+    bond = float(reactant.get_distance(*bonded, mic=False))
+    for img in images:
+        length = float(img.get_distance(*bonded, mic=False))
+        assert length == pytest.approx(bond, abs=0.05)
+
+
+def test_alignment_keeps_a_relaxable_top_layer_under_a_bonded_deposit():
+    """FixAtoms are pinned; a moved top-layer atom is not reset to the reactant."""
+    slab = fcc111("Pt", size=(2, 2, 2), vacuum=8.0, orthogonal=True)
+    slab.pbc = [True, True, False]
+    z = slab.positions[:, 2]
+    bottom = z <= float(np.median(z))
+    slab.set_constraint(FixAtoms(mask=bottom))
+    n_slab = len(slab)
+    top_idx = int(np.flatnonzero(~bottom)[0])
+    bottom_idx = int(np.flatnonzero(bottom)[0])
+    z0 = float(slab.positions[:, 2].max()) + 2.2
+    core = np.array(
+        [[1.0, 1.2, z0], [3.4, 1.3, z0], [2.1, 3.2, z0 + 0.4]],
+        dtype=float,
+    )
+    reactant = slab.copy() + Atoms("Pt3", positions=core)
+    product = reactant.get_positions().copy()
+    product[top_idx, 0] += 0.4
+    aligned, _used = _align_product_surface_pbc(
+        reactant,
+        product,
+        n_slab=n_slab,
+        enable_cell_remap=True,
+        enable_lattice_rotation=False,
+        allow_symmetry_copies=False,
+    )
+    assert aligned[top_idx, 0] == pytest.approx(product[top_idx, 0], abs=1e-6)
+    assert aligned[bottom_idx] == pytest.approx(reactant.positions[bottom_idx])
+
+
 def test_interpolate_path_surface_uses_pbc_align_entrypoint(monkeypatch):
     """Slab NEB routes endpoint alignment through ``_align_product_for_neb``."""
     slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
@@ -973,11 +1040,12 @@ def test_core_anchored_kabsch_ignores_adsorbate_drag() -> None:
 def test_validate_initial_neb_path_rejects_clash() -> None:
     # Three images so the middle one is treated as an interior clash check.
     a = Atoms("H2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
-    mid = Atoms("H2", positions=[[0.6, 0.0, 0.0], [1.1, 0.0, 0.0]])
+    # 0.20 Å is inside 0.4 × (r_H + r_H) = 0.248 Å.
+    mid = Atoms("H2", positions=[[0.60, 0.0, 0.0], [0.80, 0.0, 0.0]])
     b = Atoms("H2", positions=[[3.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
     with pytest.raises(SCGOValidationError, match="clashing/discontinuous"):
         validate_initial_neb_path(
-            [a, mid, b], max_endpoint_mismatch=1.25, clash_distance=0.7
+            [a, mid, b], max_endpoint_mismatch=1.25, clash_distance=0.4
         )
 
 

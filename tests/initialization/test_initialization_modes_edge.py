@@ -348,7 +348,7 @@ class TestDefaultInitializationStrictness:
 
 
 class TestSingleConnectivityFactor:
-    """Tests to verify only connectivity factor 1.4 is used (no CONNECTIVITY_FACTOR_GROWTH)."""
+    """Tests to verify only connectivity factor 1.2 is used (no CONNECTIVITY_FACTOR_GROWTH)."""
 
     def test_connectivity_factor_growth_removed(self):
         """Test that CONNECTIVITY_FACTOR_GROWTH has been removed from config."""
@@ -361,7 +361,7 @@ class TestSingleConnectivityFactor:
         )
         # Verify CONNECTIVITY_FACTOR exists
         assert hasattr(config, "CONNECTIVITY_FACTOR")
-        assert pytest.approx(1.4) == config.CONNECTIVITY_FACTOR
+        assert pytest.approx(1.2) == config.CONNECTIVITY_FACTOR
 
     @pytest.mark.parametrize("mode", ["random_spherical", "template", "seed+growth"])
     def test_connectivity_factor_consistency_all_modes(self, mode, rng):
@@ -810,7 +810,7 @@ class TestSeedGrowthInitialization:
         result = grow_from_seed(
             seed_atoms=seed,
             target_composition=target_comp,
-            placement_radius_scaling=1.2,
+            placement_radius_scaling=1.0,
             cell_side=cell_side,
             connectivity_factor=CONNECTIVITY_FACTOR,  # Use default value
             rng=rng,
@@ -836,7 +836,7 @@ class TestSeedGrowthInitialization:
         result = grow_from_seed(
             seed_atoms=seed,
             target_composition=target_comp,
-            placement_radius_scaling=1.2,
+            placement_radius_scaling=1.0,
             cell_side=cell_side,
             rng=rng,
         )

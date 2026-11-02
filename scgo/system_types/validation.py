@@ -13,8 +13,8 @@ from scgo.initialization.geometry_helpers import (
     validate_cluster_structure,
 )
 from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
-    MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types.composition import AdsorbateDefinition
@@ -380,7 +380,7 @@ def validate_structure_for_system_type(
         # across the whole region (core + adsorbate must be bonded).
         ok, msg = validate_cluster_structure(
             atoms,
-            MIN_DISTANCE_FACTOR_DEFAULT,
+            BLMIN_RATIO_DEFAULT,
             cf,
             check_clashes=True,
             check_connectivity=False,
@@ -542,21 +542,27 @@ def validate_minimum_structure(
 
 
 def _validate_input_adsorbate_fragments_connected(
-    adsorbates: list[Atoms], *, context: str
+    adsorbates: list[Atoms],
+    *,
+    context: str,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
 ) -> None:
     """Ensure each provided input adsorbate fragment is internally connected."""
     prefix = f"{context}: " if context else ""
+    factor = CONNECTIVITY_FACTOR if connectivity_factor is None else connectivity_factor
     for idx, frag in enumerate(adsorbates):
         if len(frag) <= 1:
             continue
         components = _find_connected_components(
             frag,
-            connectivity_factor=CONNECTIVITY_FACTOR,
+            connectivity_factor=factor,
             use_mic=False,
         )
         if len(components) > 1:
             raise SCGOValidationError(
                 f"{prefix}adsorbates[{idx}] is disconnected under "
-                f"connectivity_factor={CONNECTIVITY_FACTOR}. Provide a connected "
+                f"connectivity_factor={format_connectivity_factor(normalize_connectivity_factor(factor))}. Provide a connected "
                 "initial adsorbate geometry."
             )

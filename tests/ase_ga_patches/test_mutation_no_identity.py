@@ -42,12 +42,12 @@ def _pt4_valid(rng: np.random.Generator) -> tuple[Atoms, dict]:
 
 
 def _tight_pt3_oh_on_slab() -> tuple[Atoms, dict, int]:
-    """Pt3-OH with Pt-O just inside the default connectivity cutoff."""
+    """Pt3-OH with Pt–O inside the 1.2 covalent cutoff and above the steric floor."""
     slab = fcc111("Pt", size=(4, 4, 2), vacuum=6.0, orthogonal=True)
     n_slab = len(slab)
     z_top = float(np.max(slab.positions[:, 2]))
     xy = np.mean(slab.positions[:, :2], axis=0)
-    r_pt_o = 2.82
+    r_pt_o = 2.10
     cluster = Atoms(
         symbols=["Pt", "Pt", "Pt", "O", "H"],
         positions=[

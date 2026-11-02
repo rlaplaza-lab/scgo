@@ -58,6 +58,13 @@ def _combined_core_ads_mobile(
     return combine_slab_adsorbate(pt_slab, mobile)
 
 
+def _top_xy(pt_slab: Atoms) -> np.ndarray:
+    """In-plane coordinates of the top slab layer."""
+    z = _z(pt_slab)
+    pos = pt_slab.get_positions()
+    return pos[pos[:, 2] > z - 0.3, :2]
+
+
 def _build_single(pt_slab: Atoms, offsets: list[tuple[float, float, float]]) -> Atoms:
     z = _z(pt_slab)
     positions = [[x, y, z + dz] for (x, y, dz) in offsets]
@@ -113,7 +120,12 @@ FLAG_MATRIX = [
         "fragmentation_accepts_two_slab_bound_core_subgroups",
         lambda s: _build_single(
             s,
-            [(0.0, 0.0, 2.0), (0.0, 0.0, 4.0), (5.0, 5.0, 2.0), (5.0, 5.0, 4.0)],
+            [
+                (float(_top_xy(s)[0, 0]), float(_top_xy(s)[0, 1]), 2.3),
+                (float(_top_xy(s)[0, 0]), float(_top_xy(s)[0, 1]), 4.6),
+                (float(_top_xy(s)[-1, 0]), float(_top_xy(s)[-1, 1]), 2.3),
+                (float(_top_xy(s)[-1, 0]), float(_top_xy(s)[-1, 1]), 4.6),
+            ],
         ),
         {"allow_cluster_fragmentation": True},
         True,
@@ -153,8 +165,14 @@ FLAG_MATRIX = [
         "detachment_accepts_detached_ads_on_slab",
         lambda s: _build_core_ads(
             s,
-            [(0.0, 0.0, 2.0), (0.0, 0.0, 4.0)],
-            [(4.5, 4.5, 1.5), (5.0, 5.0, 1.5)],
+            [
+                (float(_top_xy(s)[0, 0]), float(_top_xy(s)[0, 1]), 2.3),
+                (float(_top_xy(s)[0, 0]), float(_top_xy(s)[0, 1]), 4.6),
+            ],
+            [
+                (float(_top_xy(s)[-1, 0]), float(_top_xy(s)[-1, 1]), 1.7),
+                (float(_top_xy(s)[-1, 0]) + 1.2, float(_top_xy(s)[-1, 1]), 1.7),
+            ],
             ["Pt", "Pt"],
             ["O", "O"],
         ),
@@ -214,13 +232,14 @@ def test_validate_structure_for_system_type_respects_connectivity_flags(
 
     n_slab = len(pt_slab)
     z_top = slab_surface_extreme(pt_slab, 2, upper=True)
+    xy = _top_xy(pt_slab)
     combined = _combined_with_mobile(
         pt_slab,
         [
-            [0.0, 0.0, z_top + 2.0],
-            [0.0, 0.0, z_top + 4.0],
-            [5.0, 5.0, z_top + 2.0],
-            [5.0, 5.0, z_top + 4.0],
+            [float(xy[0, 0]), float(xy[0, 1]), z_top + 2.3],
+            [float(xy[0, 0]), float(xy[0, 1]), z_top + 4.6],
+            [float(xy[-1, 0]), float(xy[-1, 1]), z_top + 2.3],
+            [float(xy[-1, 0]), float(xy[-1, 1]), z_top + 4.6],
         ],
     )
     surface_config = make_surface_config(pt_slab, comparator_use_mic=False)
@@ -327,14 +346,22 @@ def test_validate_supported_cluster_deposit_rejects_dissociated_adsorbate_fragme
 ) -> None:
     n_slab = len(pt_slab)
     z_top = slab_surface_extreme(pt_slab, 2, upper=True)
+    xy = _top_xy(pt_slab)
     combined = _combined_core_ads_mobile(
         pt_slab,
-        [[0.0, 0.0, z_top + 2.0], [0.0, 0.0, z_top + 4.0]],
         [
-            [2.2, 0.4, z_top + 1.5],  # O (fragment 0)
-            [2.6, 0.4, z_top + 1.5],  # H (fragment 0) connected
-            [3.0, 0.4, z_top + 1.5],  # O (fragment 1)
-            [1.0, 0.4, z_top + 1.5],  # H (fragment 1) dissociated from O
+            [float(xy[1, 0]), float(xy[1, 1]), z_top + 2.3],
+            [float(xy[1, 0]), float(xy[1, 1]), z_top + 4.6],
+        ],
+        [
+            [float(xy[0, 0]), float(xy[0, 1]), z_top + 2.0],  # O (fragment 0)
+            [float(xy[0, 0]), float(xy[0, 1]), z_top + 2.97],  # H bonded to that O
+            [float(xy[-1, 0]), float(xy[-1, 1]), z_top + 2.0],  # O (fragment 1)
+            [
+                float(xy[2, 0]),
+                float(xy[2, 1]),
+                z_top + 1.8,
+            ],  # H dissociated, on the slab
         ],
         core_symbols=["Pt", "Pt"],
         ads_symbols=["O", "H", "O", "H"],
@@ -358,14 +385,18 @@ def test_validate_supported_cluster_deposit_allows_dissociation_when_integrity_d
 ) -> None:
     n_slab = len(pt_slab)
     z_top = slab_surface_extreme(pt_slab, 2, upper=True)
+    xy = _top_xy(pt_slab)
     combined = _combined_core_ads_mobile(
         pt_slab,
-        [[0.0, 0.0, z_top + 2.0], [0.0, 0.0, z_top + 4.0]],
         [
-            [2.2, 0.4, z_top + 1.5],
-            [2.6, 0.4, z_top + 1.5],
-            [3.0, 0.4, z_top + 1.5],
-            [1.0, 0.4, z_top + 1.5],
+            [float(xy[1, 0]), float(xy[1, 1]), z_top + 2.3],
+            [float(xy[1, 0]), float(xy[1, 1]), z_top + 4.6],
+        ],
+        [
+            [float(xy[0, 0]), float(xy[0, 1]), z_top + 2.0],
+            [float(xy[0, 0]), float(xy[0, 1]), z_top + 2.97],
+            [float(xy[-1, 0]), float(xy[-1, 1]), z_top + 2.0],
+            [float(xy[2, 0]), float(xy[2, 1]), z_top + 1.8],
         ],
         core_symbols=["Pt", "Pt"],
         ads_symbols=["O", "H", "O", "H"],

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
-    MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
@@ -19,16 +19,20 @@ from scgo.utils.validation import validate_positive
 
 @dataclass(frozen=True)
 class ClusterAdsorbateConfig:
-    """Shared placement / relaxation settings for any small adsorbate fragment."""
+    """Placement settings for a small adsorbate fragment.
 
-    height_min: float = 0.9
-    height_max: float = 2.2
+    ``None`` heights derive the covalent window; explicit heights are
+    intersected with it. Steric scales stay at or above ``BLMIN_RATIO_DEFAULT``.
+    """
+
+    height_min: float | None = None
+    height_max: float | None = None
     max_placement_attempts: int = 80
     blmin_ratio: float = 0.7
     cell_margin: float = 6.0
     random_spin_about_normal: bool = True
     validate_combined_structure: bool = True
-    structure_min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT
+    structure_min_distance_factor: float = BLMIN_RATIO_DEFAULT
     structure_connectivity_factor: (
         ConnectivityFactorInput | NormalizedConnectivityFactor
     ) = CONNECTIVITY_FACTOR
@@ -36,9 +40,15 @@ class ClusterAdsorbateConfig:
     structure_check_connectivity: bool = True
 
     def __post_init__(self) -> None:
-        validate_positive("height_min", self.height_min, strict=True)
-        validate_positive("height_max", self.height_max, strict=True)
-        if self.height_max < self.height_min:
+        if self.height_min is not None:
+            validate_positive("height_min", self.height_min, strict=True)
+        if self.height_max is not None:
+            validate_positive("height_max", self.height_max, strict=True)
+        if (
+            self.height_min is not None
+            and self.height_max is not None
+            and self.height_max < self.height_min
+        ):
             raise SCGOValidationError("height_max must be >= height_min")
         if self.max_placement_attempts < 1:
             raise SCGOValidationError("max_placement_attempts must be positive")

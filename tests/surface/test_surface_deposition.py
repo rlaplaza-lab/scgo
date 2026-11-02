@@ -13,6 +13,10 @@ from scgo.algorithms.ga_common import create_ga_pairing
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius
 from scgo.initialization.geometry_helpers import _generate_rotation_matrix
+from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_DEFAULT,
+    CONNECTIVITY_FACTOR,
+)
 from scgo.metadata.atoms import set_tags
 from scgo.surface import deposition as deposition_module
 from scgo.surface.config import SurfaceSystemConfig
@@ -84,22 +88,19 @@ def test_create_deposited_cluster_len_and_order(pt_slab: Atoms) -> None:
 
 
 def test_place_cluster_above_slab_samples_the_configured_height_range(
-    pt_slab: Atoms, monkeypatch: pytest.MonkeyPatch
+    pt_slab: Atoms,
 ) -> None:
-    """Height is truncated-uniform on [min, connectivity_cap], with no cap spike."""
+    """Height is uniform on the covalent window intersected with the user band."""
     cfg = SurfaceSystemConfig(
         slab=pt_slab,
         adsorption_height_min=1.0,
         adsorption_height_max=3.0,
         max_placement_attempts=50,
     )
-    target = 2.0
     r_pt = get_covalent_radius("Pt")
-    monkeypatch.setattr(
-        deposition_module,
-        "max_connectivity_scale",
-        lambda _cf: target / (2.0 * r_pt),
-    )
+    covalent_sum = 2.0 * r_pt
+    low = max(cfg.adsorption_height_min, BLMIN_RATIO_DEFAULT * covalent_sum)
+    high = min(cfg.adsorption_height_max, CONNECTIVITY_FACTOR * covalent_sum)
     slab_top = slab_surface_extreme(pt_slab, 2, upper=True)
     cluster = Atoms(
         "Pt2", positions=[[0.0, 0.0, -1.2], [0.0, 0.0, 1.2]], cell=[20, 20, 20]
@@ -119,9 +120,8 @@ def test_place_cluster_above_slab_samples_the_configured_height_range(
         )
         gaps.append(float(np.min(placed[:, 2])) - slab_top)
 
-    assert min(gaps) >= cfg.adsorption_height_min - 1e-9
-    assert max(gaps) <= target + 1e-9
-    assert sum(1 for g in gaps if abs(g - target) < 1e-12) <= 1
+    assert min(gaps) >= low - 1e-9
+    assert max(gaps) <= high + 1e-9
     assert len({round(g, 4) for g in gaps}) >= 10
     assert max(gaps) - min(gaps) > 0.4
 

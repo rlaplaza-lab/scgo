@@ -224,9 +224,10 @@ def _pair_overlay_metrics(
     ``max_lattice_shift``, so pair gating and NEB alignment agree by
     construction. Minima are not mutated.
 
-    ``core_rms`` is RMS Cartesian core displacement after the overlay (0.0 when
-    there is no core block). ``ads_hop`` is the max adsorbate-atom displacement
-    after fragment matching (0.0 when there is no adsorbate block).
+    ``core_rms`` is the RMS core displacement after the overlay, under the
+    minimum image when ``use_mic`` is set (0.0 when there is no core block).
+    ``ads_hop`` is the max adsorbate-atom displacement after fragment matching
+    (0.0 when there is no adsorbate block).
 
     When ``n_adsorbate`` is set (surface adsorbate on a searchable top slab
     layer), the adsorbate block is the trailing ``n_adsorbate`` atoms and any

@@ -114,10 +114,11 @@ seed and every trial.
    cores are rejected up front: the mobile core **is** the supported slab top.
    Pass adsorbates only (``core_symbols=[]``).
 
-The connectivity factor resolves the same way at every gate: explicit
+The bond cutoff resolves the same way at every gate: explicit
 ``connectivity_factor``, then ``ClusterAdsorbateConfig``, then
-``SurfaceSystemConfig``, then ``1.4``. The value may be a float or a
-per-element/pair dict.
+``SurfaceSystemConfig``, then ``1.2``. The value may be a float or a
+per-element/pair dict. Clashes are a different scale: kept structures use
+``0.7`` times the covalent sum, and nothing can go below the ``0.4`` hard cap.
 
 Minima pair selection
 ---------------------
@@ -144,10 +145,8 @@ Pairing regimes per system type (intentional):
 
 .. note::
 
-   The pre-screen geometry gates (images, clash distance, displacement) are
-   fixed-size knobs — they do not scale with the number of mobile atoms. Large
-   search-mobile layers may need manual retuning of
-   ``neb_prescreen_clash_distance`` / ``max_endpoint_mismatch``.
+   The clash prescreen is a covalent scale and does not grow with the number
+   of mobile atoms. ``max_endpoint_mismatch`` stays an absolute distance.
 
 .. note::
 
@@ -195,7 +194,8 @@ runs only when ``max_endpoint_mismatch`` is set (bare ``gas_cluster`` leaves it
   actually distinct (maximum mobile displacement at least
   ``MIN_NEB_ENDPOINT_DISPLACEMENT_A`` = 0.3 Å; a label-swap or symmetry image of
   the same minimum has no transition path) and that interior images do not
-  clash (minimum mobile pairwise distance vs ``neb_prescreen_clash_distance``).
+  clash (any mobile pair closer than ``neb_prescreen_clash_distance`` times
+  its covalent sum).
   An upper aligned endpoint-displacement gate also runs when
   ``max_endpoint_mismatch`` is set.
 - ``validate_initial_neb_energy_profile`` runs only when
@@ -215,35 +215,39 @@ Per-system-type defaults:
      - ``neb_max_spurious_barrier``
      - ``max_endpoint_mismatch``
    * - Bare gas
-     - 1.0
+     - 0.4
      - 0.10
      - 8.0
      - ``None`` (clash always; energy-profile skipped)
    * - Surface cluster
-     - 0.7
+     - 0.4
      - 0.40
      - 12.0
      - 2.5
    * - Bare surface
-     - 0.5
+     - 0.4
      - 0.40
      - 8.0
      - 3.0
    * - Gas adsorbate
-     - 0.7
+     - 0.4
      - 0.40
      - 8.0
      - 1.25
    * - Surface cluster adsorbate
-     - 0.7
+     - 0.4
      - 0.40
      - 8.0
      - 1.5
    * - Surface adsorbate
-     - 0.7
+     - 0.4
      - 0.40
      - 8.0
      - 3.0
+
+``neb_prescreen_clash_distance`` is a covalent scale, the same 0.4 for every
+preset. Prominence and the barrier cap are in eV. ``max_endpoint_mismatch``
+is in Å.
 
 Constraint model
 ----------------
@@ -283,48 +287,42 @@ Tunables and floors
 Placement and steric room
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- ``height_min`` / ``height_max``: default ``0.9`` / ``2.2`` Å; placement
-  height range in :mod:`scgo.cluster_adsorbate.config`.
-- ``blmin_ratio``: default ``0.7``; clash threshold with a floor of ``0.55``.
-- ``structure_min_distance_factor``: default ``0.4``; floor ``0.3``.
+- ``height_min`` / ``height_max``: ``None`` derives the steric floor through
+  the bond cutoff. Explicit values are intersected with that window.
+- ``blmin_ratio`` and ``structure_min_distance_factor``: ``0.7``. Placement
+  does not go below this. The ``0.4`` hard cap is the prefilter and the NEB
+  prescreen only.
 
 Connectivity and legal topology
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- ``connectivity_factor`` / ``structure_connectivity_factor``: default ``1.4``.
-  This is the main structural legality check during initialization, after GA
-  operators, at per-minimum algorithm gates, at the final structural gate, and
-  in TS. Precedence (resolved via
-  :func:`~scgo.system_types.resolve_connectivity_factor`): explicit
-  ``connectivity_factor``, then
-  ``ClusterAdsorbateConfig.structure_connectivity_factor``, then
-  ``SurfaceSystemConfig.structure_connectivity_factor``, then ``1.4``.
-- The value may be a global float or a dict:
+Distances are ``scale * (r_i + r_j)`` from the ASE Cordero radii.
 
-  - float ``f``: bonded if ``d <= (r_i + r_j) * f``
-  - element dict (e.g. ``{"Pt": 1.8, "C": 1.4}``): bonded if
-    ``d <= r_i*f_i + r_j*f_j`` (missing symbols use ``1.4``)
-  - pair keys ``"Pt-C"`` or ``("Pt", "C")``: bonded if ``d <= (r_i + r_j) * f_ij``;
-    pair entries override element-derived thresholds
+- ``CONNECTIVITY_FACTOR``: ``1.2``. Bonded when ``d <= threshold``. Precedence
+  is above. A float, an element dict (missing symbols use ``1.2``), or a pair
+  key ``"Pt-C"`` / ``("Pt", "C")`` that overrides the element form.
+- ``BLMIN_RATIO_DEFAULT``: ``0.7``. Steric floor for growth, seeds, GA
+  offspring, deposition, adsorbate placement, and stored minima. Clash when
+  ``d < threshold``.
+- ``CLASH_HARD_CAP_FACTOR``: ``0.4``. Prefilter and NEB image prescreen.
+  :func:`~scgo.system_types.connectivity_factor.effective_clash_factor` raises
+  anything smaller to this value.
+- ``BOND_LENGTH_SCALE``: ``1.0``. Placement targets and template
+  nearest-neighbor lengths are the covalent sum.
 
-  Example for Pt on graphite: ``{"Pt": 1.4, "C": 1.4, "Pt-C": 1.8}``.
-
-  Example (Pt on graphite): ``{"Pt": 1.4, "C": 1.4, "Pt-C": 1.8}``.
+Example: ``{"Pt": 1.2, "C": 1.2, "Pt-C": 1.8}``. The same pair form loosens
+H–H. At 1.2, H2 is bonded (inclusive at 0.744 Å) and fcc second neighbors are
+not. bcc Fe's second neighbor stays inside that cutoff.
 
 Surface contact and penetration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Penetration tolerance: ``0.1`` Å.
-- Soft H-contact threshold: ``1.15`` Å (not tunable). It separates weak
-  H-bond-like contacts from newly formed covalent bonds between fragments.
-
-Why placement and validation differ
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Placement uses a looser steric floor (for example ``blmin_ratio=0.7``), while
-validation runs at ``connectivity_factor=1.4``. That gives the search room to
-explore, then rejects borderline disconnected or topologically illegal
-candidates before they reach the final set.
+- Penetration tolerance: ``0.1`` Å below the nominal slab top.
+- Slab contact uses the same bond thresholds, hydrogen included. On a mixed
+  top layer a mobile atom touches the slab when any top-layer atom is inside
+  that pair's cutoff.
+- The top-layer window is one covalent diameter of the largest slab species
+  (``SURFACE_LAYER_THICKNESS_SCALE = 2.0``).
 
 MIC semantics
 -------------

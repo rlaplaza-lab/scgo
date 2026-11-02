@@ -312,6 +312,8 @@ def _supported_ranges(
     else:
         # Intra-slab pairs add nothing; slab–deposit distances are the registry.
         support = tuple(range(n_slab))
+    if not support and n_deposit > 0 and n_slab > 0:
+        support = tuple(range(n_slab))
     if support:
         ranges.insert(0, ("mobile_slab", support))
         defaults["mobile_slab"] = DEFAULT_SUPPORTED_SLAB_WEIGHT

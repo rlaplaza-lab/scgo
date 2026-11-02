@@ -97,7 +97,7 @@ def test_normalize_accepts_string_pair_keys() -> None:
 
 
 def test_bonded_pairs_honor_pair_override() -> None:
-    """Pt–C distance bonded only under a pair override, not under default 1.4."""
+    """Pt–C distance bonded only under a pair override, not under the 1.2 default."""
     r_pt, r_c = get_covalent_radius("Pt"), get_covalent_radius("C")
     # Midway between 1.4× and 1.8× thresholds.
     d = (r_pt + r_c) * 1.6

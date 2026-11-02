@@ -15,7 +15,8 @@ structures for ``surface_cluster`` and ``surface_cluster_adsorbate``:
 
 - **Plain cluster**: gas-phase seed via :mod:`scgo.initialization` (``init_mode``
   on :class:`~scgo.surface.config.SurfaceSystemConfig`), then rotate/translate
-  above the slab with covalent-radius connectivity height heuristics.
+  above the slab. Height is the covalent window of the lowest cluster atom,
+  intersected with any adsorption-height override.
 - **Cluster + adsorbate**: hierarchical core + fragment placement (hull sites,
   ranked steric candidates), then deposit with surface-biased rotation.
 - **Adsorbate-only mobile region** (empty ``core_symbols``): fragments placed

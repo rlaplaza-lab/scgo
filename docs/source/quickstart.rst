@@ -153,6 +153,7 @@ Do not use ``n_relax_top_slab_layers`` together with ``n_fix_bottom_slab_layers`
 
    slab = fcc111("Fe", size=(4, 4, 3), vacuum=12.0)
 
+   # Explicit heights are intersected with the derived covalent window.
    surface_config = SurfaceSystemConfig(
        slab=slab,
        adsorption_height_min=1.2,
@@ -234,7 +235,7 @@ will:
 
    params = get_default_params()
    params["cluster_adsorbate_config"] = ClusterAdsorbateConfig(
-       height_min=0.9,
+       height_min=0.9,  # intersected with the covalent window
        height_max=2.2,
        max_placement_attempts=200,
    )

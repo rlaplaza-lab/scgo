@@ -14,8 +14,8 @@ from scgo.initialization.geometry_helpers import (
     validate_cluster_structure,
 )
 from scgo.initialization.initialization_config import (
+    BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
-    MIN_DISTANCE_FACTOR_DEFAULT,
 )
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
@@ -24,15 +24,11 @@ from scgo.system_types.connectivity_factor import (
     normalize_connectivity_factor,
 )
 
-# Covalent H-X contact distance (Å) above which an inter-fragment H contact is
-# treated as a hydrogen bond rather than a newly formed covalent bond.
-_H_CONTACT_THRESHOLD_A = 1.15
-
 
 def validate_combined_cluster_structure(
     atoms: Atoms,
     *,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     check_clashes: bool = True,
@@ -142,31 +138,20 @@ def validate_adsorbate_fragment_integrity(
             )
             sym_i = [symbols[k] for k in fragment_i]
             sym_j = [symbols[k] for k in fragment_j]
-            is_h_i = np.array([s == "H" for s in sym_i])
-            is_h_j = np.array([s == "H" for s in sym_j])
-            h_pair = is_h_i[:, None] | is_h_j[None, :]
-            # Hydrogen bonds between fragments are allowed; only covalent H-X
-            # contacts (e.g. unwanted HOH formation) are rejected.
-            covalent = bond_threshold_cross_matrix(radii_i, sym_i, radii_j, sym_j, cf)
-            thresholds = np.where(h_pair, _H_CONTACT_THRESHOLD_A, covalent)
+            thresholds = bond_threshold_cross_matrix(radii_i, sym_i, radii_j, sym_j, cf)
             violations = np.argwhere(dist <= thresholds)
             if violations.size == 0:
                 continue
             local_i, local_j = (int(x) for x in violations[0])
             idx_i, idx_j = fragment_i[local_i], fragment_j[local_j]
             threshold = float(thresholds[local_i, local_j])
-            detail = (
-                "covalent H-contact threshold="
-                if bool(h_pair[local_i, local_j])
-                else "threshold="
-            )
             return (
                 False,
                 "Adsorbate fragment integrity check failed: "
                 f"fragment {i} bonded to fragment {j} "
                 f"(atoms {idx_i}-{idx_j}, "
                 f"distance={float(dist[local_i, local_j]):.3f} Å, "
-                f"{detail}{threshold:.3f} Å).",
+                f"threshold={threshold:.3f} Å).",
             )
 
     return True, ""

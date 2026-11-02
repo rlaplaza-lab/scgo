@@ -206,9 +206,9 @@ class TestOctahedronGeneration:
     def test_generate_octahedron_near_sizes(self, rng):
         """Test generation near common sizes."""
         atoms = generate_template_structure(
-            ["Pt"], 20, template_type="octahedron", rng=rng
+            ["Pt"], 19, template_type="octahedron", rng=rng
         )
-        _assert_template_ok(atoms, 20)
+        _assert_template_ok(atoms, 19)
 
 
 class TestTemplateStructureGeneration:

@@ -23,6 +23,7 @@ from scgo.cluster_adsorbate.helpers import (
     resolve_fragment_anchor_and_bond_axis,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
@@ -121,10 +122,12 @@ class FragmentRepositionMutation(OffspringCreator):
         relaxed = ClusterAdsorbateConfig(
             max_placement_attempts=min(max(ca.max_placement_attempts * 3, 80), 400),
             random_spin_about_normal=True,
-            height_min=ca.height_min * 0.75,
-            height_max=ca.height_max * 1.5,
-            blmin_ratio=min(ca.blmin_ratio, 0.6),
-            structure_min_distance_factor=min(ca.structure_min_distance_factor, 0.35),
+            height_min=None if ca.height_min is None else ca.height_min * 0.75,
+            height_max=None if ca.height_max is None else ca.height_max * 1.5,
+            blmin_ratio=max(ca.blmin_ratio, BLMIN_RATIO_DEFAULT),
+            structure_min_distance_factor=max(
+                ca.structure_min_distance_factor, BLMIN_RATIO_DEFAULT
+            ),
             validate_combined_structure=ca.validate_combined_structure,
             structure_connectivity_factor=ca.structure_connectivity_factor,
             structure_check_clashes=ca.structure_check_clashes,

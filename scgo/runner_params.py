@@ -30,6 +30,7 @@ from scgo.system_types import (
     extract_adsorbate_definition_from_params,
     get_system_policy,
     resolve_adsorbate_run_composition,
+    resolve_connectivity_factor,
     validate_system_type_settings,
 )
 from scgo.utils.logging import get_logger
@@ -214,6 +215,23 @@ def _resolve_surface_config(
     return None
 
 
+def _connectivity_for_adsorbate_inputs(
+    params: dict[str, Any] | None,
+    surface_config: SurfaceSystemConfig | None,
+):
+    """Connectivity spec used to accept input adsorbate fragments."""
+    explicit = None
+    cluster_cfg = None
+    if params is not None:
+        explicit = params.get("connectivity_factor")
+        cluster_cfg = params.get("cluster_adsorbate_config")
+    return resolve_connectivity_factor(
+        explicit,
+        cluster_adsorbate_config=cluster_cfg,
+        surface_config=surface_config,
+    )
+
+
 def _prepare_run_context(
     composition: CompositionInput,
     *,
@@ -250,6 +268,9 @@ def _prepare_run_context(
         adsorbates=adsorbates,
         preset_adsorbate_definition=preset_ads,
         context=context,
+        connectivity_factor=_connectivity_for_adsorbate_inputs(
+            params, resolved_surface
+        ),
     )
     params_prep = _with_surface_on_params(params, surface_config=resolved_surface)
     return st, params_prep, ads_def, ads_template, full_comp, resolved_surface
@@ -630,6 +651,9 @@ def _prepare_run_go_campaign_context(
             adsorbates=adsorbates,
             preset_adsorbate_definition=preset_ads_def,
             context="run_go_campaign",
+            connectivity_factor=_connectivity_for_adsorbate_inputs(
+                params_prep, resolved_surface
+            ),
         )
         full_compositions.append(full_comp)
         composition_adsorbate.append((ads_def, ads_temp))
@@ -707,6 +731,9 @@ def _prepare_run_go_ts_context(
         adsorbates=adsorbates,
         preset_adsorbate_definition=preset_ads,
         context=context_name,
+        connectivity_factor=_connectivity_for_adsorbate_inputs(
+            go_prep, resolved_surface
+        ),
     )
     _validate_go_ts_param_coherence(
         go_prepared=go_prep,

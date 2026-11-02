@@ -164,12 +164,10 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
      - Refresh diversity references every N BH iterations / GA generations.
        BH/GA slot copies default to ``None`` (inherit these top-level values).
    * - ``connectivity_factor``
-     - ``1.4``
-     - Connectivity threshold for initialization, post-operator GA checks,
-       per-minimum algorithm gates, the ``run_trials`` final structural gate, and
-       TS. Accepts a global float or a dict of per-element and/or per-pair
-       multipliers. Bonded means distance ≤ threshold; see
-       :doc:`/validation_and_constraints` for the full spec and precedence rules.
+     - ``1.2``
+     - Bond cutoff: distance at most this factor times the Cordero sum (or the
+       element/pair form). Clashes use the 0.7 steric floor. See
+       :doc:`/validation_and_constraints`.
    * - ``allow_cluster_fragmentation``
      - ``False``
      - Allow cluster to split (surface only)
@@ -361,9 +359,11 @@ The TorchSim/UMA/UPET benchmark presets default to ``-2``.
 
    * - ``niter``
      - ``"auto"``
-     - Number of basin-hopping moves. ``"auto"`` grows with the same arrangement
-       count as a genetic algorithm, never goes below the hop count set by how
-       many atoms are moving, and stays at most 1000. See :doc:`/search_effort`.
+     - Number of basin-hopping moves. ``"auto"`` grows from a unary three-atom
+       hop count with the same arrangement factor as a genetic algorithm, stays
+       between the moving-atom hop count and 1000, and for a slab or an empty
+       core scales that hop count by the site term instead of the slot square.
+       See :doc:`/search_effort`.
    * - ``temperature``
      - ``1.0`` eV
      - Metropolis energy scale for accepting uphill moves (eV; not a physical temperature)
@@ -450,8 +450,8 @@ Pairing and NEB defaults are tuned per system type and rarely need edits.
      - Tag unique successful saddles in the minima databases (consumed by TS
        resume and downstream loading). Settable via ``ts_params``.
    * - ``connectivity_factor``
-     - ``1.4``
-     - Same connectivity spec as GO (float or per-element/pair dict); resolved
+     - ``1.2``
+     - Same bond-cutoff spec as GO (float or per-element/pair dict); resolved
        with the same precedence for TS structural gates.
    * - ``similarity_tolerance``
      - ``0.05``
@@ -657,8 +657,9 @@ logs include skip counts (energy gap, mismatch, core RMS, and so on).
        enables select oversampling (see **Budget and oversampling**). On bare
        surface it does not.
    * - ``neb_prescreen_clash_distance``
-     - ``1.0`` (bare gas) / ``0.7`` (surface cluster + all adsorbate) / ``0.5`` (bare surface)
-     - Interior NEB image min mobile pairwise distance (Å) below which the initial path is rejected.
+     - ``0.4``
+     - Covalent clash scale for interior images, the same for every system type.
+       A mobile pair closer than this times the covalent sum is rejected.
    * - ``min_saddle_prominence``
      - ``0.10`` (bare gas) / ``0.40`` (surface + adsorbate)
      - Minimum interior-max prominence (eV) above both endpoints for a band to pass the pre-NEB energy profile gate.
@@ -714,21 +715,18 @@ skips the energy screen.
 - **Path check.** Aligned endpoints must move at least 0.3 Å
   (``MIN_NEB_ENDPOINT_DISPLACEMENT_A``). Less means they are the same minimum
   with permuted labels or symmetry. No path exists. The interior-image clash
-  check also always runs. It compares the smallest mobile pair distance to
-  ``neb_prescreen_clash_distance``. When ``max_endpoint_mismatch`` is set, an
-  upper displacement gate also applies.
+  check also always runs. A mobile pair closer than
+  ``neb_prescreen_clash_distance`` times its covalent sum is rejected. When
+  ``max_endpoint_mismatch`` is set, an upper displacement gate also applies.
 - **Energy-profile check.** Runs only when ``max_endpoint_mismatch`` is set
   and endpoint energies are known. It checks barrier cap
   ``neb_max_spurious_barrier``, endpoint drift greater than 0.5 eV, and
   interior prominence below ``min_saddle_prominence``. Bands with fewer than
   three images skip the prominence and drift checks.
 
-Per-type defaults are in :doc:`/validation_and_constraints`. Bare gas is
-looser (1.0 Å and 0.10 eV). Surface clusters and adsorbates are tighter
-(0.7 Å and 0.40 eV). Bare surface uses a 0.5 Å clash floor (matching the
-atomic-distance warning) and the shared 8.0 eV barrier cap.
-``surface_cluster`` raises the cap to 12.0 eV so metal-deposit IDPP
-false positives (~11 eV) can still reach a converged CI-NEB band.
+Per-type defaults are in :doc:`/validation_and_constraints`. Prominence is
+0.10 eV for bare gas and 0.40 eV otherwise. ``surface_cluster`` uses a 12.0 eV
+barrier cap; other types use 8.0 eV.
 
 **Adsorbate NEB specifics** (beyond the gates above):
 
@@ -793,11 +791,15 @@ Surface Config
      - Path-key surface segment (filesystem-safe). Graphite preset uses
        ``"graphite"`` (e.g. ``Pt5_OH_OH_graphite_searches``).
    * - ``adsorption_height_min``
-     - ``1.2`` (class) / ``2.0`` (``make_surface_config``)
-     - Minimum height above slab (\ :math:`\AA`).
+     - ``None`` (class) / ``2.0`` (``make_surface_config``)
+     - ``None`` derives the gap from the steric floor of the lowest cluster
+       atom against the top layer. An explicit value (\ :math:`\AA`) is
+       intersected with that covalent window and cannot go below the floor.
    * - ``adsorption_height_max``
-     - ``3.0`` (class) / ``3.5`` (``make_surface_config``)
-     - Maximum height above slab (\ :math:`\AA`).
+     - ``None`` (class) / ``3.5`` (``make_surface_config``)
+     - ``None`` derives the ceiling from the bond cutoff of those same pairs.
+       An explicit value is intersected with that window and cannot pass the
+       cutoff.
    * - ``surface_normal_axis``
      - ``2``
      - Normal axis (0=x, 1=y, 2=z)
@@ -828,8 +830,8 @@ Surface Config
      - ``200`` (class) / ``500`` (``make_surface_config``); presets use ``1000``
      - Max cluster placement attempts on slab
    * - ``structure_connectivity_factor``
-     - ``1.4``
-     - Fallback connectivity spec (float or dict; same forms as top-level
+     - ``1.2``
+     - Fallback bond-cutoff spec (float or dict; same forms as top-level
        ``connectivity_factor``, see :doc:`/validation_and_constraints`) when the
        GO/TS param is omitted. Used for slab-contact / supported-deposit checks,
        not only placement.
@@ -838,13 +840,10 @@ Surface Config
    Use only one of the layer options, not both. See :doc:`/api/surface`.
 
 .. note::
-   The graphite preset functions override ``adsorption_height_min`` /
-   ``adsorption_height_max``: ``make_graphite_surface_config`` and
-   ``make_defected_graphite_surface_config`` use **0.5 / 1.0 Å**, while
-   ``make_graphene_surface_config`` and ``make_n_doped_graphite_surface_config``
-   use **0.5 / 1.5 Å**. The values above are the class and
-   ``make_surface_config`` defaults, which apply only when you build a config
-   directly rather than through a preset. See :doc:`/surface_slab_guide`.
+   Graphite and defected-graphite presets pass **0.5 / 1.0 Å**; graphene and
+   n-doped graphite pass **0.5 / 1.5 Å**. Those bands are intersected with the
+   covalent window. ``make_surface_config`` passes **2.0 / 3.5 Å** the same way.
+   The class default is ``None``. See :doc:`/surface_slab_guide`.
 
 .. note::
    Graphite and graphene presets default to the HOPG 5×5 × 3-layer footprint
@@ -860,20 +859,26 @@ Adsorbate Config
    :widths: 25 10 65
 
    * - ``height_min``
-     - ``0.9``
-     - Minimum placement height (\ :math:`\AA`).
+     - ``None``
+     - ``None`` derives the floor from ``0.7 * (r_anchor + r_site)``. An
+       explicit value (\ :math:`\AA`) is intersected with that covalent window.
    * - ``height_max``
-     - ``2.2``
-     - Maximum placement height (\ :math:`\AA`).
+     - ``None``
+     - ``None`` derives the ceiling from the pair bond cutoff of the anchor
+       and the nearest site atom. An explicit value is intersected with that
+       window.
    * - ``max_placement_attempts``
      - ``80``
      - Maximum placement tries
    * - ``blmin_ratio``
      - ``0.7``
-     - Clash threshold
+     - Steric floor. Placement does not go below ``0.7``.
+   * - ``structure_min_distance_factor``
+     - ``0.7``
+     - Same floor for the combined-structure check.
    * - ``structure_connectivity_factor``
-     - ``1.4``
-     - Fallback connectivity spec (float or dict; same forms as top-level
+     - ``1.2``
+     - Fallback bond-cutoff spec (float or dict; same forms as top-level
        ``connectivity_factor``) when the GO/TS param is omitted.
 
 See Also

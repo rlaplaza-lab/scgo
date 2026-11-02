@@ -190,9 +190,11 @@ def consistent_product_positions(
     """Unwrap intact mobile fragments so IDPP does not split them across PBC.
 
     Intact edges are covalent bonds present under MIC in both endpoints. Lone
-    adatoms (size-1 components) keep per-atom MIC. Anchors (slab prefix and
-    ``FixAtoms``) stay on the reactant coordinates. The in-plane image search
-    span matches ``neb_surface_max_lattice_shift`` (default ±1 cell).
+    adatoms (size-1 components) keep per-atom MIC. The slab prefix and
+    ``FixAtoms`` stay out of the fragment walk. Reactant coordinates are copied
+    only onto atoms that are actually fixed; with no ``FixAtoms``, the whole
+    slab prefix is pinned. The in-plane image search span matches
+    ``neb_surface_max_lattice_shift`` (default ±1 cell).
     """
     prod = np.asarray(product_positions, dtype=float).copy()
     if not _requires_surface_pbc_alignment(reactant, n_slab=n_slab):
@@ -206,7 +208,9 @@ def consistent_product_positions(
     product = reactant.copy()
     product.set_positions(prod, apply_constraint=False)
 
-    anchor = set(range(n_slab_i)) | _fixed_atom_indices(reactant)
+    fixed = _fixed_atom_indices(reactant)
+    anchor = set(range(n_slab_i)) | fixed
+    pin = fixed if fixed else set(range(n_slab_i))
     react_edges = _bond_edge_set(reactant, connectivity_factor, use_mic=True)
     prod_edges = _bond_edge_set(product, connectivity_factor, use_mic=True)
     intact = {
@@ -240,7 +244,7 @@ def consistent_product_positions(
 
     ref_pos = reactant.get_positions()
     out = prod.copy()
-    for idx in anchor:
+    for idx in pin:
         out[idx] = ref_pos[idx]
 
     for members in components.values():

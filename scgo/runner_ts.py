@@ -20,6 +20,7 @@ from scgo.runner_go import _run_go_trials
 from scgo.runner_params import (
     RunGOTSContext,
     _coerce_ts_for_runner,
+    _connectivity_for_adsorbate_inputs,
     _default_go_ts_output_path,
     _log_completion,
     _log_validation_error,
@@ -402,6 +403,9 @@ def run_go_ts_campaign(
             adsorbates=adsorbates,
             preset_adsorbate_definition=preset_ads,
             context="run_go_ts_campaign",
+            connectivity_factor=_connectivity_for_adsorbate_inputs(
+                go_prep, resolved_surface
+            ),
         )
         full_compositions.append(full_comp)
         composition_adsorbate.append((ads_def, ads_temp))
@@ -631,6 +635,9 @@ def run_ts_campaign(
             adsorbates=adsorbates,
             preset_adsorbate_definition=preset_ads,
             context="run_ts_campaign",
+            connectivity_factor=_connectivity_for_adsorbate_inputs(
+                ts_mat, resolved_surface
+            ),
         )
         full_compositions.append(full)
     out_path = _resolved_path(output_dir)

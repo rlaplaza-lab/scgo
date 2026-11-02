@@ -7,9 +7,11 @@ from ase import Atoms
 from ase.geometry import get_distances
 from scipy.spatial.distance import cdist
 
-from scgo.initialization.initialization_config import BLMIN_RATIO_FLOOR
+from scgo.initialization.atomic_radii import get_covalent_radius_by_z
+from scgo.initialization.initialization_config import CLASH_HARD_CAP_FACTOR
 
-PREFILTER_BLMIN_FACTOR = BLMIN_RATIO_FLOOR
+# Severe-clash screen: ``(r_i + r_j) * CLASH_HARD_CAP_FACTOR``, independent of
+# the 0.7 blmin table the operators enforce afterward.
 
 # Cache by (unique Z, id(blmin)). Cleared by GA each generation so recycled ids
 # and per-generation empty ``{}`` (prefilter off) cannot accumulate stale entries.
@@ -41,13 +43,14 @@ def _blmin_threshold_matrix(
     if cached is None:
         z_to_i = {z: i for i, z in enumerate(unique_z)}
         n_u = len(unique_z)
-        min_allowed = np.zeros((n_u, n_u), dtype=float)
-        for i, zi in enumerate(unique_z):
-            for j, zj in enumerate(unique_z):
-                min_allowed[i, j] = float(blmin.get((zi, zj), blmin.get((zj, zi), 0.0)))
-        mask = min_allowed > 0.0
         thresh = np.zeros((n_u, n_u), dtype=float)
-        thresh[mask] = PREFILTER_BLMIN_FACTOR * min_allowed[mask]
+        for i, zi in enumerate(unique_z):
+            ri = get_covalent_radius_by_z(zi)
+            for j, zj in enumerate(unique_z):
+                if (zi, zj) not in blmin and (zj, zi) not in blmin:
+                    continue
+                rj = get_covalent_radius_by_z(zj)
+                thresh[i, j] = (ri + rj) * CLASH_HARD_CAP_FACTOR
         _BLMIN_THRESH_CACHE[cache_key] = (thresh, z_to_i)
     else:
         thresh, z_to_i = cached
@@ -85,9 +88,9 @@ def fails_fast_geometric_prefilter(
 
     Only mobile atoms (indices ``n_slab:``) participate: mobile–mobile and
     mobile–slab pairs are checked; slab–slab pairs are skipped. Thresholds are
-    ``PREFILTER_BLMIN_FACTOR`` times the blmin table entry. When ``use_mic`` is
-    True and the structure has any periodic flag, distances use the
-    minimum-image convention.
+    ``(r_i + r_j) * CLASH_HARD_CAP_FACTOR`` for pairs present in ``blmin``.
+    When ``use_mic`` is True and the structure has any periodic flag, distances
+    use the minimum-image convention.
     """
     n_atoms = len(atoms)
     if n_atoms < 2:

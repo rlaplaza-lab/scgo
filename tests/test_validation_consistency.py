@@ -175,7 +175,7 @@ def test_final_gate_honors_top_level_connectivity_factor() -> None:
     from scgo.minima_search.core import _gate_structurally_valid_candidates
 
     r = get_covalent_radius("Pt")
-    # Distance between default 1.4× and a permissive 2.0× threshold.
+    # Distance between the 1.2 default and a permissive 2.0× threshold.
     d = (r + r) * 1.7
     loose = Atoms(
         "Pt2",
@@ -190,7 +190,7 @@ def test_final_gate_honors_top_level_connectivity_factor() -> None:
         "gas_cluster",
         None,
         None,
-        {},  # no explicit connectivity_factor → default 1.4
+        {},  # no explicit connectivity_factor → default 1.2
         None,
         verbosity=0,
     )
@@ -265,12 +265,12 @@ def test_find_transition_state_ase_runs_energy_prescreen(
     monkeypatch.setattr(run_mod, "select_structure_pairs", lambda *a, **k: [(0, 1)])
 
     def _load(_dir, _comp, **_k):
-        # Bonded H2 minima (both well inside the 1.4 connectivity threshold) so
+        # Bonded H2 minima (both inside the 1.2 connectivity threshold) so
         # the per-endpoint gate passes and find_transition_state is reached.
         a = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
         a.center(vacuum=5.0)
         a.calc = EMT()
-        b = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.80, 0.0, 0.0]])
+        b = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.73, 0.0, 0.0]])
         b.center(vacuum=5.0)
         b.calc = EMT()
         return {"H2": [(0.0, a), (0.5, b)]}
@@ -292,7 +292,7 @@ def test_find_transition_state_ase_runs_energy_prescreen(
 
     assert calls, "find_transition_state was not called for gas_cluster"
     assert calls[0]["neb_cfg"].min_saddle_prominence == 0.10
-    assert calls[0]["neb_cfg"].neb_prescreen_clash_distance == 1.0
+    assert calls[0]["neb_cfg"].neb_prescreen_clash_distance == 0.4
     assert calls[0]["neb_cfg"].neb_max_spurious_barrier == 8.0
 
 
@@ -375,12 +375,12 @@ def test_run_transition_state_search_forwards_system_type_prescreen_defaults(
     monkeypatch.setattr(run_mod, "get_cluster_formula", lambda comp: "H2")
 
     def _load(_dir, _comp, **_k):
-        # Bonded H2 minima (inside the 1.4 connectivity threshold) so the
+        # Bonded H2 minima (inside the 1.2 connectivity threshold) so the
         # per-endpoint gate passes and find_transition_state is reached.
         a = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
         a.center(vacuum=5.0)
         a.calc = EMT()
-        b = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.80, 0.0, 0.0]])
+        b = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.73, 0.0, 0.0]])
         b.center(vacuum=5.0)
         b.calc = EMT()
         return {"H2": [(0.0, a), (0.5, b)]}
@@ -395,16 +395,16 @@ def test_run_transition_state_search_forwards_system_type_prescreen_defaults(
 
     def _surface_min(x_offset: float):
         z_top = slab.get_positions()[:, 2].max()
-        pt = Atoms("Pt", positions=[[x_offset, x_offset, z_top + 1.5]])
+        pt = Atoms("Pt", positions=[[x_offset, x_offset, z_top + 2.4]])
         return slab.copy() + pt
 
     cases = [
-        ("gas_cluster", None, None, 1.0, 0.10, 8.0),
+        ("gas_cluster", None, None, 0.4, 0.10, 8.0),
         (
             "surface_cluster",
             surf,
             None,
-            0.7,
+            0.4,
             0.40,
             12.0,
         ),
@@ -464,9 +464,9 @@ def test_adsorbate_tag_partition_accepts_correct_tags():
         "Pt2O2",
         positions=[
             [0.0, 0.0, 0.0],
-            [1.2, 0.0, 0.0],
-            [2.0, 0.0, 0.0],
-            [2.8, 0.0, 0.0],
+            [2.5, 0.0, 0.0],
+            [4.5, 0.0, 0.0],
+            [5.7, 0.0, 0.0],
         ],
     )
     atoms.set_tags([0, 0, 1, 1])
@@ -488,9 +488,9 @@ def test_adsorbate_tag_partition_rejects_mistagged():
         "Pt2O2",
         positions=[
             [0.0, 0.0, 0.0],
-            [1.2, 0.0, 0.0],
-            [2.0, 0.0, 0.0],
-            [2.8, 0.0, 0.0],
+            [2.5, 0.0, 0.0],
+            [4.5, 0.0, 0.0],
+            [5.7, 0.0, 0.0],
         ],
     )
     atoms.set_tags([0, 1, 0, 1])

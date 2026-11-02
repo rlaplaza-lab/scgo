@@ -7,7 +7,8 @@ Notable tunables (library-internal, not GO preset keys):
 
 - ``MASS_FIRST_PLACEMENT_PROB``: fraction of placement attempts that use
   heavy-element-first growth order; the remainder use exploratory strategies.
-- ``CONNECTIVITY_FACTOR``: default connectivity validation multiplier.
+- ``CONNECTIVITY_FACTOR`` (1.2), ``BLMIN_RATIO_DEFAULT`` (0.7),
+  ``CLASH_HARD_CAP_FACTOR`` (0.4), ``BOND_LENGTH_SCALE`` (1.0).
 """
 
 from __future__ import annotations
@@ -17,30 +18,17 @@ MAX_PLACEMENT_ATTEMPTS_PER_ATOM = 500
 MAX_CONNECTIVITY_RETRIES = 10
 MAX_CONSECUTIVE_FAILURES = 50
 
-# Distance and connectivity
-# atoms connected if distance <= (r_i + r_j) * CONNECTIVITY_FACTOR
-# GA operators use blmin_ratio=0.7 (steric floor); validation at 1.4 catches
-# borderline disconnections that still pass the tighter operator threshold.
-#
-# CONNECTIVITY_FACTOR is intentionally generous (1.4). For metals a 1.0x bond
-# length still trips (e.g. Pt-Pt at 2.72 A < 2.77 A at 1.0x), so the higher
-# factor is required for correct connectivity. It plays two roles:
-#   1. cluster/slab fragmentation vs single-subgroup contact validation
-#      (deliberately permissive), and
-#   2. intra-fragment integrity (also permissive, with the dedicated
-#      H-contact special case _H_CONTACT_THRESHOLD_A = 1.15 A so short
-#      X-H bonds are not spuriously broken).
-CONNECTIVITY_FACTOR = 1.4  # Connectivity threshold used consistently throughout
-BLMIN_RATIO_DEFAULT = 0.7  # Covalent-radius scale for GA/placement clash tables
-BLMIN_RATIO_FLOOR = 0.55
-# Validation fallback only. Every placement path clamps to
-# max(MIN_DISTANCE_FACTOR_DEFAULT, blmin_ratio=0.7) via resolve_steric_floor,
-# so real clashes are gated by the 0.7 blmin_ratio (or BLMIN_RATIO_FLOOR for
-# adsorbate-vs-slab two-set checks / prefilter), never by 0.4 alone. 0.4 is a
-# lower bound for paths that do not supply a blmin_ratio.
-MIN_DISTANCE_FACTOR_DEFAULT = 0.4
-PLACEMENT_RADIUS_SCALING_DEFAULT = 1.2
-SEED_CLASH_FACTOR = MIN_DISTANCE_FACTOR_DEFAULT  # Use same factor as random placement
+# Bonded when d <= (r_i + r_j) * factor. Clash when d < (r_i + r_j) * floor.
+CONNECTIVITY_FACTOR = 1.2
+BOND_LENGTH_SCALE = 1.0  # placement and template nearest-neighbor length
+BLMIN_RATIO_DEFAULT = 0.7  # steric floor for growth, GA, deposition, stored minima
+CLASH_HARD_CAP_FACTOR = 0.4  # prefilter and NEB prescreen; never go below
+MIN_DISTANCE_FACTOR_DEFAULT = CLASH_HARD_CAP_FACTOR
+PLACEMENT_RADIUS_SCALING_DEFAULT = BOND_LENGTH_SCALE
+SEED_CLASH_FACTOR = BLMIN_RATIO_DEFAULT
+NONBONDED_GAP_SCALE = 1.5  # unbound fragment gap, in bond-cutoff units
+SURFACE_LAYER_THICKNESS_SCALE = 2.0  # top layer, in radii of the largest slab species
+BOND_REPAIR_INSET = 0.95  # pull a repaired contact inside the bond cutoff
 # Fraction of placements that use mass-biased ordering; remainder uses exploratory strategies.
 MASS_FIRST_PLACEMENT_PROB = 0.65
 
@@ -175,9 +163,6 @@ TEMPLATE_DIVERSITY_BOOST_FACTOR = 0.15
 # Tolerance and thresholds
 LINEAR_GEOMETRY_TOLERANCE = 1e-4  # Tolerance for linear geometry detection
 ROTATION_AXIS_TOLERANCE = 1e-10  # Tolerance for rotation axis normalization
-CLASH_TOLERANCE = (
-    0.02  # Tolerance for clash detection (accounts for placement relaxation)
-)
 POSITION_COMPARISON_TOLERANCE_FACTOR = 0.05  # 5% of bond length for position comparison
 SMART_FILTERING_PERTURBATION_SCALE = (
     0.3  # Reduced perturbation scale for smart facet filtering

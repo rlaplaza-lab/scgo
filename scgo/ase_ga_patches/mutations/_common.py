@@ -21,6 +21,7 @@ from scgo.initialization.geometry_helpers import (
     validate_cluster_structure,
 )
 from scgo.initialization.initialization_config import (
+    BOND_REPAIR_INSET,
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
@@ -361,7 +362,7 @@ def _reconnect_mobile_components(
         symbols[large_idx],
         spec,
     )
-    needed = _clamp_repair_step(work, gap - 0.95 * threshold, use_mic)
+    needed = _clamp_repair_step(work, gap - BOND_REPAIR_INSET * threshold, use_mic)
     if needed <= 1e-8:
         return work
     direction = _short_delta(

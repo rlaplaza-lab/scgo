@@ -12,24 +12,11 @@ https://doye.chem.ox.ac.uk/jon/structures/Morse/paper/node5.html
 
 Polyhedra scaling:
 ------------------
-All template structures are scaled so the **longest vertex–vertex distance**
-(or longest edge) equals **(r_i + r_j) × connectivity_factor**, with
-a = 2 × avg covalent radius for the composition.
-
-- Custom templates (Tetrahedron, Cube, Cuboctahedron, Truncated Octahedron):
-  Apply this rule directly: geometric parameters (edge lengths, vertex
-  positions) are derived from a and connectivity_factor so the longest
-  edge ≤ a × connectivity_factor.
-
-- ASE-based templates (Icosahedron, Decahedron, Octahedron):
-  ASE scales using atomic radii. We rescale after generation via
-  _rescale_cluster_to_bond_length so nn distances match covalent-based
-  bond length, keeping structures within the connectivity threshold.
-
-- Validation:
-  All templates are validated with validate_cluster() (connectivity
-  (r_i + r_j) × connectivity_factor, minimum distances × min_distance_factor).
-  No magic numbers; all thresholds derive from covalent radii.
+``a`` is twice the covalent radius of the most abundant element. Custom
+templates build edges from ``a`` (some also multiply by the connectivity
+factor). ASE icosahedra, decahedra, and octahedra are rescaled so nearest
+neighbors match ``a``. ``validate_cluster`` then applies the connectivity
+cutoff and the steric floor.
 """
 
 from __future__ import annotations
@@ -59,12 +46,14 @@ from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
     bond_threshold_matrix,
+    bond_thresholds_to_atom,
     connectivity_factor_cache_key,
-    max_connectivity_scale,
+    effective_clash_factor,
     normalize_connectivity_factor,
 )
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
+from scgo.utils.phase_logging import format_count_of
 from scgo.utils.rng_helpers import ensure_rng_or_create
 
 from .candidate_discovery import get_structure_signature
@@ -87,10 +76,11 @@ from .geometry_helpers import (
     validate_cluster,
 )
 from .initialization_config import (
+    BLMIN_RATIO_DEFAULT,
+    BOND_LENGTH_SCALE,
     CONNECTIVITY_FACTOR,
     MAGIC_NUMBER_TOLERANCE,
     MAGIC_NUMBERS,
-    MIN_DISTANCE_FACTOR_DEFAULT,
     PLACEMENT_RADIUS_SCALING_DEFAULT,
     POSITION_COMPARISON_TOLERANCE_FACTOR,
     TEMPLATE_ROTATION_CANDIDATES,
@@ -189,17 +179,9 @@ def _get_base_element(composition: list[str]) -> str:
 
 
 def _get_typical_bond_length(composition: list[str]) -> float:
-    """Calculate typical bond length from composition using covalent radii.
+    """``2 * r * BOND_LENGTH_SCALE`` for the most abundant element.
 
-    Computes the average covalent radius for all unique elements in the
-    composition and returns twice that value as the typical bond length.
-    This provides element-specific scaling for template structures.
-
-    Args:
-        composition: List of element symbols
-
-    Returns:
-        Typical bond length in Angstroms (2 × average covalent radius)
+    Ties take the larger radius.
 
     Raises:
         SCGOValidationError: If composition is empty
@@ -207,10 +189,12 @@ def _get_typical_bond_length(composition: list[str]) -> float:
     if not composition:
         raise SCGOValidationError("Cannot calculate bond length from empty composition")
 
-    unique_elements: set[str] = set(composition)
-    radii: list[float] = [get_covalent_radius(elem) for elem in unique_elements]
-    avg_radius: float = sum(radii) / len(radii)
-    return 2.0 * avg_radius
+    counts = Counter(composition)
+    majority = max(
+        counts,
+        key=lambda symbol: (counts[symbol], get_covalent_radius(symbol)),
+    )
+    return 2.0 * get_covalent_radius(majority) * BOND_LENGTH_SCALE
 
 
 def _get_ase_lattice_constant(symbol: str) -> float:
@@ -351,7 +335,7 @@ def remove_atoms_from_vertices(
     target_composition: list[str] | None = None,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     rng: np.random.Generator | None = None,
 ) -> Atoms | None:
     """Remove atoms from convex-hull vertices in bulk.
@@ -428,9 +412,8 @@ def remove_atoms_from_vertices(
         if hull is None or len(hull.vertices) == 0:
             logger.debug(
                 "remove_atoms_from_vertices: no 3D convex-hull vertices remaining "
-                "(removed %d/%d)",
-                total_removed,
-                n_remove,
+                "(removed %s)",
+                format_count_of(total_removed, n_remove),
             )
             return None
         vertices = np.asarray(hull.vertices, dtype=np.intp)
@@ -587,7 +570,7 @@ def grow_template_via_facets(
     placement_radius_scaling: float,
     cell_side: float,
     rng: np.random.Generator,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     template_name: str | None = None,
@@ -647,7 +630,6 @@ def grow_template_via_facets(
     to_add: list[str] = list(atoms_to_add)
     radii_to_add: dict[str, float] = {s: get_covalent_radius(s) for s in set(to_add)}
     cf = normalize_connectivity_factor(connectivity_factor)
-    cf_scale = max_connectivity_scale(cf)
 
     max_round_retries = 3
     round_retry_count = 0
@@ -703,6 +685,7 @@ def grow_template_via_facets(
         candidate_idx = 0
         positions = current.get_positions()
         radii = np.asarray(current_radii, dtype=float)
+        placed_symbols = list(symbols)
 
         while placed_count < len(to_add) and candidate_idx < len(candidates):
             sym: str = to_add[placed_count]
@@ -711,14 +694,17 @@ def grow_template_via_facets(
 
             r_new: float = radii_to_add[sym]
             dists = np.linalg.norm(positions - pos, axis=1)
-            if np.any(dists < (radii + r_new) * min_distance_factor):
+            clash_scale = effective_clash_factor(min_distance_factor)
+            if np.any(dists < (radii + r_new) * clash_scale):
                 continue
-            if not np.any(dists <= (radii + r_new) * cf_scale):
+            bond_limits = bond_thresholds_to_atom(radii, placed_symbols, r_new, sym, cf)
+            if not np.any(dists <= bond_limits):
                 continue
 
             current.append(Atom(sym, pos))
             positions = np.vstack([positions, pos])
             radii = np.append(radii, r_new)
+            placed_symbols.append(sym)
             placed_count += 1
 
         to_add = to_add[placed_count:]
@@ -933,7 +919,7 @@ def _generate_custom_template(
             rng,
             template_name,
             connectivity_factor,
-            MIN_DISTANCE_FACTOR_DEFAULT,
+            BLMIN_RATIO_DEFAULT,
         )
         if adjusted is None:
             return None
@@ -949,22 +935,14 @@ def _rescale_cluster_to_bond_length(
     composition: list[str],
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
 ) -> None:
-    """Rescale ASE-generated cluster so nn distances match covalent-based bond length.
+    """Rescale an ASE cluster so nearest neighbors match the covalent diameter.
 
-    ASE Icosahedron, Decahedron, Octahedron use atomic radii. We validate with
-    covalent radii × connectivity_factor. Rescaling ensures nn distances align
-    with our connectivity model so structures pass validation.
-
-    Modifies atoms in place. Keeps the geometric centroid of the positions fixed.
-
-    Args:
-        atoms: ASE-generated cluster (e.g. Icosahedron, Decahedron, Octahedron).
-        composition: Target composition (used for typical bond length).
-        connectivity_factor: Connectivity factor; the mean nearest-neighbor
-            distance is rescaled to ``a × min(1.0, 0.95 × connectivity_factor)``.
+    Modifies atoms in place and keeps the geometric centroid fixed.
+    ``connectivity_factor`` is unused; validation applies that cutoff separately.
     """
     if len(atoms) < 2:
         return
+    del connectivity_factor
     a: float = _get_typical_bond_length(composition)
     positions: Any | np.ndarray[tuple[Any, ...], np.dtype[Any]] = atoms.get_positions()
     dist_matrix = cdist(positions, positions)
@@ -972,10 +950,7 @@ def _rescale_cluster_to_bond_length(
     current_scale = float(np.min(dist_matrix, axis=1).mean())
     if current_scale <= 0:
         return
-    cf_scale = max_connectivity_scale(
-        normalize_connectivity_factor(connectivity_factor)
-    )
-    target_scale: float = a * min(1.0, cf_scale * 0.95)
+    target_scale: float = a
     scale: float = target_scale / current_scale
     com = np.mean(positions, axis=0)
     new_positions = com + (positions - com) * scale
@@ -1055,10 +1030,8 @@ def _generate_ase_template_with_common_pattern(
     5. Assign balanced composition if multi-element
     6. Adjust atom count and composition
 
-    Note on scaling: ASE's Icosahedron, Decahedron, and Octahedron scale using
-    atomic radii. We rescale via _rescale_cluster_to_bond_length so nn distances
-    match covalent-based bond length (a = 2×avg covalent radius), ensuring
-    structures stay within (r_i + r_j) × connectivity_factor before validation.
+    ASE scales by atomic radii. ``_rescale_cluster_to_bond_length`` then sets
+    nearest neighbors to the majority-element covalent diameter.
 
     Args:
         composition: List of element symbols
@@ -1095,7 +1068,7 @@ def _generate_ase_template_with_common_pattern(
             rng,
             template_name,
             connectivity_factor,
-            MIN_DISTANCE_FACTOR_DEFAULT,
+            BLMIN_RATIO_DEFAULT,
         )
         if adjusted is None:
             return None
@@ -1141,7 +1114,7 @@ def _adjust_template_to_target(
     template_name: str,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     *,
@@ -1161,7 +1134,7 @@ def _adjust_template_to_target(
         template_name: Name of template type (for error messages)
         connectivity_factor: Factor for connectivity threshold (default: CONNECTIVITY_FACTOR)
         min_distance_factor: Factor for minimum distance checks
-            (default: MIN_DISTANCE_FACTOR_DEFAULT)
+            (default: BLMIN_RATIO_DEFAULT)
         cell_side: Cell side length (defaults to cluster cell or VACUUM_DEFAULT * 2)
         placement_radius_scaling: Scaling for placement radius (for growth).
         allow_shrink_refusal: When True, refuse to shrink if it would remove half or
@@ -1225,10 +1198,8 @@ def _adjust_template_to_target(
         removal_ratio: float = n_remove / base_count
         if allow_shrink_refusal and removal_ratio >= 0.5:
             logger.debug(
-                "Template shrink refused: removing %d/%d atoms (%.0f%% >= 50%%) "
-                "from %s base",
-                n_remove,
-                base_count,
+                "Template shrink refused: removing %s (%.0f%% >= 50%%) from %s base",
+                format_count_of(n_remove, base_count, after="atoms"),
                 100.0 * removal_ratio,
                 template_name,
             )
@@ -1659,7 +1630,7 @@ def _generate_template_with_atom_adjustment(
     rng: np.random.Generator,
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
 ) -> Atoms | None:
@@ -1811,7 +1782,7 @@ def generate_template_matches(
     rng: np.random.Generator | None = None,
     cell_side: float | None = None,
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
-    min_distance_factor: float = MIN_DISTANCE_FACTOR_DEFAULT,
+    min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
     include_exact: bool = True,

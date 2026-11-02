@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Bond cutoff, steric floor, and clash cap are covalent-radius scales.**
+  Bonds use `1.2` times the Cordero sum (float or the existing element/pair
+  forms). Kept structures clash below `0.7`. The prefilter and NEB prescreen
+  use `0.4` (`neb_prescreen_clash_distance`, every system type). Heights
+  default to `None` and come from that floor and cutoff; an explicit window
+  is intersected with them. Hydrogen contacts use the same bond thresholds.
 - **Automatic GA and basin-hopping budgets follow a lattice-animal count.**
   The slot count is that arrangement count relative to a unary 10-atom vacuum
   cluster, tempered by a growth factor of 0.03. The factor is the shared slope

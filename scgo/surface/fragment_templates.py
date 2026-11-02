@@ -5,8 +5,23 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 
-# Default O–H length (Å) for built-in OH and paired-OH patterns
-DEFAULT_OH_BOND_LENGTH = 0.96
+from scgo.initialization.atomic_radii import get_covalent_radius
+from scgo.initialization.initialization_config import (
+    BOND_LENGTH_SCALE,
+    CONNECTIVITY_FACTOR,
+    NONBONDED_GAP_SCALE,
+)
+
+# O–H length from the covalent sum. Callers may still pass ``oh_bond_length``.
+DEFAULT_OH_BOND_LENGTH = (
+    get_covalent_radius("O") + get_covalent_radius("H")
+) * BOND_LENGTH_SCALE
+# Separation that keeps two parallel OH units in different components.
+DEFAULT_PAIRED_OH_SEPARATION = (
+    (get_covalent_radius("O") + get_covalent_radius("O"))
+    * CONNECTIVITY_FACTOR
+    * NONBONDED_GAP_SCALE
+)
 
 
 def build_default_fragment_template(
@@ -16,7 +31,7 @@ def build_default_fragment_template(
 
     Supported patterns (exact symbol order) for a **single** template:
         - ``["O", "H"]``: one OH
-        - ``["O", "H", "O", "H"]``: two OH separated by 2.2 Å
+        - ``["O", "H", "O", "H"]``: two OH separated by ``DEFAULT_PAIRED_OH_SEPARATION``
 
     For multiple identical fragments, pass ``adsorbates=[frag, frag, ...]`` at the
     runner API; each fragment is placed on its own adsorption site.
@@ -26,7 +41,7 @@ def build_default_fragment_template(
         pos = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, oh_bond_length]], dtype=float)
         return Atoms(symbols=s, positions=pos)
     if s == ["O", "H", "O", "H"]:
-        sep = 2.2
+        sep = DEFAULT_PAIRED_OH_SEPARATION
         pos = np.array(
             [
                 [0.0, 0.0, 0.0],

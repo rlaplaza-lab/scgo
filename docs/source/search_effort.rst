@@ -117,9 +117,22 @@ Both numbers stay inside 3 and 1000. A pure 10-atom vacuum cluster is the
 anchor, so its pair is 86 by 86. The same cluster on a surface is 91 by 86.
 Pt38 is 336 by 131. Pt55 is 908 by 143, and on a surface it is 958 by 143.
 Pt5Co5 is 102 by 86. Basin hopping of a cluster uses the same :math:`\alpha`
-and the same :math:`\Omega`, anchored on the atom-count hop count of a
-3-atom cluster. That hop count is
-:math:`\min(1000, \max(M, \lceil E \rceil))`.
+and the same :math:`\Omega`, with a different anchor: the atom-count hop
+count of a unary vacuum trimer, :math:`M(3) = 51`, and :math:`\Omega_3` for
+that trimer.
+
+.. math::
+
+   E_{\mathrm{BH}} = 51 \, (\Omega / \Omega_3)^{\alpha}.
+
+The hop count is
+
+.. math::
+
+   \mathrm{hops} = \min\bigl(1000,\, \max(M, \lceil E_{\mathrm{BH}} \rceil)\bigr).
+
+A cluster with no core atoms has no animal count. Its hops use the slab
+formula below.
 
 A bare slab with no molecules uses :math:`M` for the population, the
 generations, and the hop count. Molecules on that slab add
@@ -154,12 +167,15 @@ One optimization, not a search
 ------------------------------
 
 The number of steps inside one local relaxation, and the number of steps in a
-nudged-elastic-band calculation, follow how many atoms are moving. Those
-limits belong to a single optimization, not to how many different structures
-to try.
+nudged-elastic-band calculation, follow ``len(composition)`` on their own
+curves. They do not use the moving-atom count :math:`M` that sizes a bare
+slab. A surface genetic algorithm then raises the local-relaxation step count
+to at least 400. Those limits belong to a single optimization, not to how
+many different structures to try.
 
-A search of the top layers of a bare slab uses that same atom-count budget.
-The count uses the atoms that are allowed to move, not an empty formula.
+A search of the top layers of a bare slab uses the moving-atom count
+:math:`M` for its population, generations, and hop count. That count uses
+the atoms that are allowed to move, not an empty formula.
 
 How the growth factor was chosen
 --------------------------------

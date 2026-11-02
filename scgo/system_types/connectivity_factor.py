@@ -1,12 +1,12 @@
 """Connectivity-factor specs: global float or per-element / per-pair multipliers.
 
-Bonded means ``distance <= threshold``. Thresholds:
+Bonded means ``distance <= threshold``. The default global factor is
+``CONNECTIVITY_FACTOR`` (1.2). Thresholds:
 
 - float ``f``: ``(r_i + r_j) * f``
 - element dict: ``r_i * f_i + r_j * f_j`` (missing symbols use ``CONNECTIVITY_FACTOR``)
 - pair entry ``("Pt", "C")`` / ``"Pt-C"``: ``(r_i + r_j) * f_ij`` (order-independent)
 - mixed dict: pair entries override the element-derived threshold
-
 """
 
 from __future__ import annotations
@@ -19,7 +19,10 @@ from typing import Any, Literal
 import numpy as np
 
 from scgo.exceptions import SCGOValidationError
-from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
+from scgo.initialization.initialization_config import (
+    CLASH_HARD_CAP_FACTOR,
+    CONNECTIVITY_FACTOR,
+)
 
 # User-facing input: real scalar (incl. numpy floats) or element/pair mapping.
 ConnectivityFactorInput = Real | Mapping[Any, float]
@@ -358,9 +361,41 @@ def bond_thresholds_for_cross_pairs(
     return out
 
 
+def effective_clash_factor(requested: float) -> float:
+    """Return ``requested``, or ``CLASH_HARD_CAP_FACTOR`` when that is larger."""
+    return max(float(requested), float(CLASH_HARD_CAP_FACTOR))
+
+
 def clash_threshold_matrix(radii: np.ndarray, min_distance_factor: float) -> np.ndarray:
-    """Steric clash threshold matrix: ``(r_i + r_j) * min_distance_factor``."""
-    return (radii[:, None] + radii[None, :]) * float(min_distance_factor)
+    """Steric clash thresholds ``(r_i + r_j) * effective_clash_factor``."""
+    factor = effective_clash_factor(min_distance_factor)
+    return (radii[:, None] + radii[None, :]) * factor
+
+
+def bond_thresholds_to_atom(
+    neighbor_radii: np.ndarray,
+    neighbor_symbols: Sequence[str],
+    atom_radius: float,
+    atom_symbol: str,
+    spec: NormalizedConnectivityFactor,
+) -> np.ndarray:
+    """Bond threshold between one atom and each neighbor under ``spec``.
+
+    Uses the pair formula (global, per-element, or per-pair), not the largest
+    multiplier in the spec.
+    """
+    n = int(len(neighbor_radii))
+    if n == 0:
+        return np.empty(0, dtype=float)
+    return bond_thresholds_for_cross_pairs(
+        np.asarray(neighbor_radii, dtype=float),
+        list(neighbor_symbols),
+        np.arange(n, dtype=int),
+        np.asarray([float(atom_radius)], dtype=float),
+        [str(atom_symbol)],
+        np.zeros(n, dtype=int),
+        spec,
+    )
 
 
 def max_connectivity_scale(spec: NormalizedConnectivityFactor) -> float:

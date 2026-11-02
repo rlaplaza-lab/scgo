@@ -23,7 +23,6 @@ from ase.mep import NEB
 from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
 from scipy.optimize import linear_sum_assignment
-from scipy.spatial.distance import pdist
 from scipy.spatial.transform import Rotation, Slerp
 
 from scgo.ase_ga_patches._vector_utils import (
@@ -41,6 +40,8 @@ from scgo.constants import (
     NEB_RIGID_FRAGMENT_TOLERANCE_A,
 )
 from scgo.exceptions import SCGOFileError, SCGORuntimeError, SCGOValidationError
+from scgo.initialization.atomic_radii import get_covalent_radius
+from scgo.initialization.initialization_config import CLASH_HARD_CAP_FACTOR
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
 from scgo.system_types import ConnectivityFactorInput, SystemType, get_system_policy
@@ -508,13 +509,14 @@ def _permute_atoms_block_to_match(
       whole block shares one lattice image, chosen jointly with the permutation.
     """
     if method == "spatial":
-        return _permute_atoms_block_spatially(
+        positions, numbers, _shift = _permute_atoms_block_spatially(
             a1_block,
             a2_block,
             mic_cell=mic_cell,
             mic_pbc=mic_pbc,
             max_lattice_shift=max_lattice_shift,
         )
+        return positions, numbers
     if method != "fingerprint":
         raise SCGOValidationError(f"Unknown block permute method: {method!r}")
     mapping = _match_atoms_by_fingerprint(
@@ -532,14 +534,16 @@ def _permute_atoms_block_spatially(
     mic_cell: np.ndarray | None = None,
     mic_pbc: np.ndarray | list[bool] | None = None,
     max_lattice_shift: int = 1,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Permute a2 onto a1 by one shared lattice image and a Cartesian assignment.
 
     Independent minimum-image distances let a wrapped atom of a dimer look
     closer to the wrong partner. The block is first made internally contiguous,
     then each candidate lattice vector is applied to every atom and the
-    permutation is chosen from Cartesian distances. Gas matching (no MIC cell)
-    keeps the historical sum-of-distances assignment and does not translate.
+    permutation is chosen from Cartesian distances. The third value is that
+    shared translation, or zeros when there is no periodic cell. Gas matching
+    (no MIC cell) keeps the historical sum-of-distances assignment and does
+    not translate.
     """
     if len(a1_block) != len(a2_block):
         raise SCGOValidationError("spatial block match: length mismatch")
@@ -547,10 +551,11 @@ def _permute_atoms_block_spatially(
     pos2 = np.asarray(a2_block.get_positions(), dtype=float)
     nums1 = np.asarray(a1_block.numbers)
     nums2 = np.asarray(a2_block.numbers)
+    no_shift = np.zeros(3, dtype=float)
     use_mic = mic_cell is not None and mic_pbc is not None and bool(np.any(mic_pbc))
     if not use_mic:
         order, _cost = _hungarian_species_order(pos1, pos2, nums1, nums2, squared=False)
-        return pos2[order], nums2[order]
+        return pos2[order], nums2[order], no_shift
 
     pos2 = _compact_bonded_positions(a2_block, pbc=mic_pbc)
     axis_a, axis_b = _inplane_periodic_axes(mic_pbc)
@@ -567,6 +572,7 @@ def _permute_atoms_block_spatially(
     best_cost = float("inf")
     best_pos = pos2
     best_order = np.arange(len(pos2))
+    best_shift = no_shift
     for shift in shifts:
         shifted = pos2 + shift
         order, cost = _hungarian_species_order(
@@ -576,7 +582,8 @@ def _permute_atoms_block_spatially(
             best_cost = cost
             best_pos = shifted
             best_order = order
-    return best_pos[best_order], nums2[best_order]
+            best_shift = np.asarray(shift, dtype=float)
+    return best_pos[best_order], nums2[best_order], best_shift
 
 
 def _match_adsorbate_fragments_by_com(
@@ -1381,8 +1388,9 @@ def _overlay_product_core(
     """Permute product core onto reactant; Kabsch-overlay gas mobile atoms.
 
     Shared by TS pairing and NEB endpoint prep. Layout is
-    ``[slab | core | adsorbate]``; adsorbate atoms ride the core transform and
-    are not permuted here.
+    ``[slab | core | adsorbate]``. Adsorbate atoms are not permuted. On a slab
+    they take the same lattice translation as the core. Gas adsorbates ride
+    the core Kabsch.
 
     Gas (``n_slab == 0``): fingerprint correspondence, core-derived rigid
     motion (translation if ``n_core == 1``), spatial rematch, re-Kabsch.
@@ -1407,18 +1415,26 @@ def _overlay_product_core(
         cell=atoms_i.cell,
         pbc=atoms_i.pbc,
     )
+    if n_slab != 0:
+        matched_core, matched_nums, shift = _permute_atoms_block_spatially(
+            core_i,
+            core_j,
+            mic_cell=mic_cell,
+            mic_pbc=mic_pbc,
+            max_lattice_shift=max_lattice_shift,
+        )
+        pos_j[i0:i1] = matched_core
+        nums_j[i0:i1] = matched_nums
+        pos_j[i1:] += shift
+        return pos_j, nums_j
     matched_core, matched_nums = _permute_atoms_block_to_match(
         core_i,
         core_j,
         mic_cell=mic_cell,
         mic_pbc=mic_pbc,
-        method=_core_block_match_method(n_slab),
-        max_lattice_shift=max_lattice_shift,
     )
     pos_j[i0:i1] = matched_core
     nums_j[i0:i1] = matched_nums
-    if n_slab != 0:
-        return pos_j, nums_j
     pos_j = _align_product_kabsch_to_reactant(
         atoms_i, pos_j, n_slab=0, n_core_mobile=n_core
     )
@@ -2203,6 +2219,33 @@ def interpolate_path(
     return images
 
 
+def _mobile_pair_distances(
+    atoms: Atoms,
+    *,
+    n_slab: int = 0,
+    mic: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Mobile pair distances and the covalent radii of each endpoint."""
+    start = max(0, int(n_slab))
+    pos = atoms.get_positions()[start:]
+    n = len(pos)
+    if n < 2:
+        empty = np.empty(0, dtype=float)
+        return empty, empty, empty
+    symbols = atoms.get_chemical_symbols()[start:]
+    radii = np.array([get_covalent_radius(s) for s in symbols], dtype=float)
+    i_idx, j_idx = np.triu_indices(n, k=1)
+    if mic and bool(np.any(atoms.pbc)):
+        cell = _cell_array(atoms.cell)
+        pbc = _pbc_for_mic_alignment(atoms.pbc)
+        dlt = pos[j_idx] - pos[i_idx]
+        dlt_mic, _ = find_mic(dlt, cell, pbc)
+        dists = np.linalg.norm(dlt_mic, axis=1)
+    else:
+        dists = np.linalg.norm(pos[j_idx] - pos[i_idx], axis=1)
+    return dists, radii[i_idx], radii[j_idx]
+
+
 def _mobile_min_pairwise_distance(
     atoms: Atoms,
     *,
@@ -2210,20 +2253,10 @@ def _mobile_min_pairwise_distance(
     mic: bool = False,
 ) -> float:
     """Minimum pairwise distance among mobile atoms (slab prefix excluded)."""
-    pos = atoms.get_positions()[max(0, int(n_slab)) :]
-    n = len(pos)
-    if n < 2:
+    dists, _ri, _rj = _mobile_pair_distances(atoms, n_slab=n_slab, mic=mic)
+    if dists.size == 0:
         return float("inf")
-    if mic and bool(np.any(atoms.pbc)):
-        cell = _cell_array(atoms.cell)
-        pbc = _pbc_for_mic_alignment(atoms.pbc)
-        i_idx, j_idx = np.triu_indices(n, k=1)
-        if i_idx.size == 0:
-            return float("inf")
-        dlt = pos[j_idx] - pos[i_idx]
-        dlt_mic, _ = find_mic(dlt, cell, pbc)
-        return float(np.linalg.norm(dlt_mic, axis=1).min())
-    return float(np.min(pdist(pos)))
+    return float(np.min(dists))
 
 
 def _endpoint_mobile_max_displacement(
@@ -2284,7 +2317,7 @@ def validate_initial_neb_path(
     n_slab: int = 0,
     mic: bool = False,
     max_endpoint_mismatch: float | None = None,
-    clash_distance: float = 0.7,
+    clash_distance: float = CLASH_HARD_CAP_FACTOR,
     min_endpoint_displacement: float = MIN_NEB_ENDPOINT_DISPLACEMENT_A,
 ) -> None:
     """Reject degenerate/clashing/discontinuous IDPP bands before NEB.
@@ -2294,8 +2327,8 @@ def validate_initial_neb_path(
     permutation / symmetry, so the band has zero length and can never produce
     an interior saddle. The upper displacement gate is only enabled when
     ``max_endpoint_mismatch`` is set (adsorbate/surface presets). The
-    interior-image clash check (min mobile pairwise distance vs
-    ``clash_distance``) always runs.
+    interior-image clash check (any mobile pair closer than
+    ``clash_distance`` times the covalent sum) always runs.
 
     Raises:
         SCGOValidationError: when the initial path is unsuitable for NEB.
@@ -2325,13 +2358,18 @@ def validate_initial_neb_path(
                 f"cartesian limit {cartesian_limit:.3f} Å"
             )
     interiors = images[1:-1] if len(images) > 2 else images
+    factor = float(clash_distance)
     for i, img in enumerate(interiors, start=1):
-        min_d = _mobile_min_pairwise_distance(img, n_slab=n_slab, mic=mic)
-        if min_d < float(clash_distance):
+        dists, ri, rj = _mobile_pair_distances(img, n_slab=n_slab, mic=mic)
+        thresh = (ri + rj) * factor
+        bad = dists < thresh
+        if np.any(bad):
+            k = int(np.flatnonzero(bad)[0])
             raise SCGOValidationError(
                 "Initial NEB path rejected (clashing/discontinuous interpolation): "
-                f"image {i} min mobile distance {min_d:.3f} Å < "
-                f"neb_prescreen_clash_distance={float(clash_distance):.3f} Å"
+                f"image {i} mobile pair {float(dists[k]):.3f} Å < "
+                f"{float(thresh[k]):.3f} Å "
+                f"(neb_prescreen_clash_distance={factor:.3f} x covalent sum)"
             )
 
 
@@ -2709,7 +2747,7 @@ def find_transition_state(
     n_adsorbate_mobile: int | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
     max_endpoint_mismatch: float | None = None,
-    neb_prescreen_clash_distance: float = 0.7,
+    neb_prescreen_clash_distance: float = CLASH_HARD_CAP_FACTOR,
     min_saddle_prominence: float = 0.40,
     neb_max_spurious_barrier: float = MAX_SPURIOUS_NEB_BARRIER_EV,
     neb_interpolation_bond_tolerance_a: float | None = None,

@@ -21,7 +21,7 @@ from scgo.system_types.connectivity_factor import (
 )
 
 STRICT_FACTOR = 0.3
-LENIENT_FACTOR = CONNECTIVITY_FACTOR  # 1.4
+LENIENT_FACTOR = CONNECTIVITY_FACTOR
 
 
 def _cache_key(n_atoms: int, factor) -> tuple:

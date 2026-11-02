@@ -33,7 +33,7 @@ def test_grow_template_logs_discovery_failure(monkeypatch, caplog, rng):
         placement_radius_scaling=templates.PLACEMENT_RADIUS_SCALING_DEFAULT,
         cell_side=30.0,
         rng=rng,
-        min_distance_factor=templates.MIN_DISTANCE_FACTOR_DEFAULT,
+        min_distance_factor=templates.BLMIN_RATIO_DEFAULT,
         connectivity_factor=templates.CONNECTIVITY_FACTOR,
     )
 
@@ -72,7 +72,7 @@ def test_validate_and_add_template_logs_validation_drop(monkeypatch, caplog):
         results=results,
         template_type="icosahedron",
         template_description="for 1 atoms",
-        min_distance_factor=templates.MIN_DISTANCE_FACTOR_DEFAULT,
+        min_distance_factor=templates.BLMIN_RATIO_DEFAULT,
         connectivity_factor=templates.CONNECTIVITY_FACTOR,
     )
     assert ok is False

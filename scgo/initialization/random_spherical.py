@@ -21,6 +21,8 @@ from scgo.exceptions import (
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    bond_thresholds_to_atom,
+    effective_clash_factor,
     format_connectivity_factor,
     max_connectivity_scale,
     min_connectivity_scale,
@@ -860,7 +862,6 @@ def _add_atoms_single_mode(
     steric floor, and as the fallback when batch placement finds no candidates.
     """
     cf = normalize_connectivity_factor(connectivity_factor)
-    cf_scale = max_connectivity_scale(cf)
     connectivity_factor = cf
     for atom_idx, atom_symbol in enumerate(atoms_to_add):
         atom_radius = radii_to_add[atom_symbol]
@@ -909,6 +910,8 @@ def _add_atoms_single_mode(
                         placement_radius_scaling,
                         effective_min_distance=effective_min_distance,
                         effective_scaling=effective_scaling,
+                        existing_symbol=new_atoms.get_chemical_symbols()[0],
+                        new_symbol=atom_symbol,
                     )
                     anchor_pos = current_positions[0]
                     candidate_pos = _sample_connectivity_anchored_position(
@@ -979,6 +982,10 @@ def _add_atoms_single_mode(
                             placement_radius_scaling,
                             effective_min_distance=effective_min_distance,
                             effective_scaling=effective_scaling,
+                            existing_symbol=new_atoms.get_chemical_symbols()[
+                                anchor_idx
+                            ],
+                            new_symbol=atom_symbol,
                         )
                         candidate_pos = _sample_connectivity_anchored_position(
                             anchor_pos, anchor_bond_distance, rng
@@ -987,10 +994,15 @@ def _add_atoms_single_mode(
                         candidate_pos = candidates[0]
 
             if len(current_positions) > 0:
-                min_allowed_dists = (
-                    current_radii + atom_radius
-                ) * effective_min_distance
-                max_connectivity_dists = (current_radii + atom_radius) * cf_scale
+                clash_scale = effective_clash_factor(effective_min_distance)
+                min_allowed_dists = (current_radii + atom_radius) * clash_scale
+                max_connectivity_dists = bond_thresholds_to_atom(
+                    current_radii,
+                    new_atoms.get_chemical_symbols(),
+                    atom_radius,
+                    atom_symbol,
+                    cf,
+                )
 
                 if use_kdtree and tree is not None:
                     query_r = float(
@@ -1129,7 +1141,6 @@ def _add_atoms_batch_mode(
 ) -> Atoms | None:
     """Batch placement mode for clusters with ≥4 atoms."""
     cf = normalize_connectivity_factor(connectivity_factor)
-    cf_scale = max_connectivity_scale(cf)
     connectivity_factor = cf
     total_target = len(base_atoms) + len(atoms_to_add)
     batch_attempt = 0
@@ -1231,11 +1242,10 @@ def _add_atoms_batch_mode(
         cand_pos = np.asarray(candidates, dtype=float)
         cand_radii = np.array([radii_to_add[s] for s in atoms_to_place], dtype=float)
         inter_clash_free = np.ones(len(atoms_to_place), dtype=bool)
+        clash_scale = effective_clash_factor(effective_min_distance)
         if len(atoms_to_place) > 1:
             inter_d = cdist(cand_pos, cand_pos)
-            inter_thresh = (
-                cand_radii[:, None] + cand_radii[None, :]
-            ) * effective_min_distance
+            inter_thresh = (cand_radii[:, None] + cand_radii[None, :]) * clash_scale
             eye = np.eye(len(atoms_to_place), dtype=bool)
             inter_clash_free = ~np.any((inter_d < inter_thresh) & ~eye, axis=1)
 
@@ -1254,10 +1264,14 @@ def _add_atoms_batch_mode(
 
             # Check distance to existing atoms
             if len(current_positions) > 0:
-                min_allowed_dists = (
-                    current_radii + atom_radius
-                ) * effective_min_distance
-                max_connectivity_dists = (current_radii + atom_radius) * cf_scale
+                min_allowed_dists = (current_radii + atom_radius) * clash_scale
+                max_connectivity_dists = bond_thresholds_to_atom(
+                    current_radii,
+                    new_atoms.get_chemical_symbols(),
+                    atom_radius,
+                    atom_symbol,
+                    cf,
+                )
                 if use_kdtree:
                     query_r = float(
                         max(np.max(min_allowed_dists), np.max(max_connectivity_dists))

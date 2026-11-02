@@ -10,7 +10,7 @@ from scgo.utils.run_helpers import cleanup_torch_cuda
 
 
 class OutOfMemoryError(RuntimeError):
-    """Stand-in for ``torch.cuda.OutOfMemoryError`` (matched by type name)."""
+    """Stand-in for a CUDA out-of-memory message."""
 
 
 def test_is_cuda_oom_error_matches_torch_and_warp_messages():
@@ -34,6 +34,11 @@ def test_is_cuda_oom_error_ignores_cpu_and_unrelated_failures():
     assert not is_cuda_oom_error(
         RuntimeError("Failed to allocate 108 bytes on device 'cpu'")
     )
+    assert not is_cuda_oom_error(
+        OutOfMemoryError("DefaultCPUAllocator: not enough memory")
+    )
+    assert not is_cuda_oom_error(RuntimeError("MPS backend out of memory"))
+    assert not is_cuda_oom_error(OutOfMemoryError("out of memory"))
     assert not is_cuda_oom_error(RuntimeError("neighbor list failed"))
     assert not is_cuda_oom_error(ValueError("max_metric 10"))
 

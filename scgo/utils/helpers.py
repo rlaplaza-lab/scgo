@@ -850,10 +850,9 @@ def filter_unique_minima(
     return unique_minima
 
 
-# Population, generations, and basin-hopping hops share this curve in the
-# number of moving atoms. Local relaxation and NEB pass their own arguments.
+# Atom-count floor M. The simple optimizer uses it directly. GA and BH
+# budgets are in scgo.utils.search_budget.
 #   M = clip(floor(offset + slope * ln(1 + N)), minimum, maximum)
-# See the search-effort page.
 POPULATION_OFFSET = 3
 POPULATION_SLOPE = 35.0
 POPULATION_MIN = 3
@@ -913,12 +912,11 @@ def auto_niter(
     min_niter: int = POPULATION_MIN,
     max_niter: int = POPULATION_MAX,
 ) -> int:
-    """Iteration count from the number of atoms.
+    """Atom-count floor from ``len(composition)``.
 
-    Simple-optimizer runs use this count. Genetic-algorithm generations use
-    :mod:`scgo.utils.search_budget` and follow this same count. Basin-hopping
-    hops are at least this count. Local relaxation and transition-state step
-    counts use their own atom-count helpers.
+    Simple-optimizer runs use this count. GA generations and basin-hopping
+    hops come from :mod:`scgo.utils.search_budget`. Local relaxation and NEB
+    steps use their own helpers on this length.
     """
     return _auto_scale_parameter(
         composition, base=base, scaling=scaling, min_val=min_niter, max_val=max_niter

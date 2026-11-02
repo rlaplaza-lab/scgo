@@ -30,11 +30,12 @@ from scgo.cluster_adsorbate.sites import (
 from scgo.cluster_adsorbate.validation import validate_adsorbate_fragment_integrity
 from scgo.initialization.atomic_radii import get_covalent_radius
 from scgo.initialization.geometry_helpers import _find_connected_components
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.surface.deposition import (
     _outward_slab_site_candidates,
     _slab_surface_layer,
 )
-from scgo.surface.validation import _adsorbate_subgroup_touches_slab
+from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
@@ -202,17 +203,19 @@ def _placement_config(
     relaxed: bool,
 ) -> ClusterAdsorbateConfig:
     """Slab-contact heights. Connectivity to the clash target stays off."""
-    height_min = max(base.height_min, 1.35)
-    height_max = max(base.height_max, height_min)
+    height_min = base.height_min
+    height_max = base.height_max
     attempts = base.max_placement_attempts
-    blmin_ratio = base.blmin_ratio
-    min_distance = base.structure_min_distance_factor
+    blmin_ratio = max(base.blmin_ratio, BLMIN_RATIO_DEFAULT)
+    min_distance = max(base.structure_min_distance_factor, BLMIN_RATIO_DEFAULT)
     if relaxed:
-        height_min *= 0.9
-        height_max *= 1.15
+        if height_min is not None:
+            height_min *= 0.9
+        if height_max is not None:
+            height_max *= 1.15
+        if height_min is not None and height_max is not None:
+            height_max = max(height_max, height_min)
         attempts = min(max(attempts * 3, 80), 400)
-        blmin_ratio = min(blmin_ratio, 0.6)
-        min_distance = min(min_distance, 0.35)
     return ClusterAdsorbateConfig(
         max_placement_attempts=attempts,
         random_spin_about_normal=True,
@@ -333,14 +336,19 @@ class FragmentDetachMutation(OffspringCreator):
             return False
         if fragment_roots & core_roots:
             return False
-        return _adsorbate_subgroup_touches_slab(
+        ok, _msg = validate_supported_cluster_deposit(
             combined,
             n_slab,
-            fragment_indices,
-            connectivity_factor=connectivity_factor,
-            use_mic=use_mic,
             surface_normal_axis=self.surface_normal_axis,
+            use_mic=use_mic,
+            connectivity_factor=connectivity_factor,
+            n_core_mobile=n_core,
+            adsorbate_fragment_lengths=list(
+                self.adsorbate_definition.adsorbate_fragment_lengths
+            ),
+            allow_adsorbate_surface_detachment=True,
         )
+        return ok
 
     def mutate(self, atoms: Atoms) -> Atoms | None:
         n_top = int(self.n_top)

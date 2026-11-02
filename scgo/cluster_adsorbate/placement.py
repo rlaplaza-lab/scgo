@@ -26,19 +26,19 @@ from scgo.cluster_adsorbate.validation import validate_combined_cluster_structur
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs, get_covalent_radius
 from scgo.initialization.geometry_helpers import _should_check_connectivity
-from scgo.initialization.initialization_config import (
-    BLMIN_RATIO_FLOOR,
-    CONNECTIVITY_FACTOR,
-    PLACEMENT_RELAXATION_FACTOR,
-)
+from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.initialization.steric_scoring import steric_deficit_two_sets
+from scgo.system_types.connectivity_factor import (
+    ConnectivityFactorInput,
+    NormalizedConnectivityFactor,
+    normalize_connectivity_factor,
+    pair_bond_threshold,
+)
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _RANKED_CANDIDATES_PER_ATTEMPT = 12
-
-_MIN_DISTANCE_FACTOR_FLOOR = 0.3
 
 
 @dataclass(frozen=True)
@@ -54,41 +54,34 @@ def radii_derived_height_bounds(
     fragment_template: Atoms,
     core: Atoms,
     anchor_index: int,
+    *,
+    site_index: int | None = None,
+    connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor
+    | None = None,
 ) -> tuple[float, float]:
-    """Heuristic height range from covalent radii of anchor and core atoms."""
+    """Height window from the anchor atom and one core site atom.
+
+    The floor is the steric scale times the covalent sum. The ceiling is that
+    pair's bond threshold. When ``site_index`` is omitted the core atom farthest
+    from the center of mass is used.
+    """
+    if len(core) == 0:
+        raise SCGOValidationError("core must contain at least one atom")
     anchor_sym = fragment_template.get_chemical_symbols()[anchor_index]
     r_anchor = get_covalent_radius(anchor_sym)
-    r_core = max(get_covalent_radius(s) for s in core.get_chemical_symbols())
-    base = (r_anchor + r_core) * CONNECTIVITY_FACTOR
-    return base * 0.5, base * 1.2
-
-
-def _compute_effective_placement_params(
-    config: ClusterAdsorbateConfig,
-    attempt_ratio: float,
-    fragment_template: Atoms,
-    core: Atoms,
-    anchor_index: int,
-) -> tuple[float, float, float, float]:
-    """Progressively relax placement thresholds as attempts are exhausted."""
-    derived_min, derived_max = radii_derived_height_bounds(
-        fragment_template, core, anchor_index
-    )
-    relax = float(np.clip(attempt_ratio, 0.0, 1.0)) * PLACEMENT_RELAXATION_FACTOR
-    height_min = max(
-        min(config.height_min, derived_min) * (1.0 - 0.2 * relax),
-        derived_min * 0.85,
-    )
-    height_max = max(
-        height_min,
-        max(config.height_max, derived_max) * (1.0 + 0.25 * relax),
-    )
-    blmin_ratio = max(config.blmin_ratio * (1.0 - 0.15 * relax), BLMIN_RATIO_FLOOR)
-    min_dist_factor = max(
-        config.structure_min_distance_factor * (1.0 - 0.1 * relax),
-        _MIN_DISTANCE_FACTOR_FLOOR,
-    )
-    return height_min, height_max, blmin_ratio, min_dist_factor
+    if site_index is None:
+        positions = core.get_positions()
+        com = np.mean(positions, axis=0)
+        site_index = int(np.argmax(np.linalg.norm(positions - com, axis=1)))
+    site_sym = core.get_chemical_symbols()[int(site_index)]
+    r_site = get_covalent_radius(site_sym)
+    spec = normalize_connectivity_factor(connectivity_factor)
+    ceiling = pair_bond_threshold(r_anchor, r_site, anchor_sym, site_sym, spec)
+    floor = (r_anchor + r_site) * BLMIN_RATIO_DEFAULT
+    if ceiling < floor:
+        ceiling = floor
+    return float(floor), float(ceiling)
 
 
 def _select_site_type(
@@ -149,10 +142,12 @@ def _generate_placement_trials(
     rng: Generator,
     site_candidates: dict[SiteType, list[SurfaceSiteCandidate]],
     flat_candidates: list[SurfaceSiteCandidate],
+    site_atoms: Atoms,
     site_pos: np.ndarray,
     relative_site_pos: np.ndarray,
-    height_min: float,
-    height_max: float,
+    fragment_template: Atoms,
+    anchor_index: int,
+    config: ClusterAdsorbateConfig,
     within_structure_site_counts: dict[str, int] | None,
     batch_site_counts: dict[str, int] | None,
     n_trials: int,
@@ -182,7 +177,29 @@ def _generate_placement_trials(
             anchor_surf = outermost_point_along_normal(
                 site_pos, relative_site_pos, n_dir
             )
-        height = float(rng.uniform(height_min, height_max))
+        site_index = int(np.argmin(np.linalg.norm(site_pos - anchor_surf, axis=1)))
+        floor, ceiling = radii_derived_height_bounds(
+            fragment_template,
+            site_atoms,
+            anchor_index,
+            site_index=site_index,
+            connectivity_factor=config.structure_connectivity_factor,
+        )
+        height_min = (
+            floor if config.height_min is None else max(floor, float(config.height_min))
+        )
+        height_max = (
+            ceiling
+            if config.height_max is None
+            else min(ceiling, float(config.height_max))
+        )
+        if height_max < height_min:
+            height_max = height_min
+        height = (
+            float(rng.uniform(height_min, height_max))
+            if height_max > height_min
+            else height_min
+        )
         trials.append(
             _PlacementTrial(
                 site_type=site_type,
@@ -269,26 +286,26 @@ def place_fragment_on_cluster(
     blmin_zs = list(clash_numbers) + list(frag_numbers)
     blmin_base = build_blmin_from_zs(blmin_zs, ratio=1.0)
 
-    for attempt in range(config.max_placement_attempts):
-        attempt_ratio = attempt / max(1, config.max_placement_attempts - 1)
-        height_min, height_max, blmin_ratio, min_dist_factor = (
-            _compute_effective_placement_params(
-                config, attempt_ratio, fragment_template, core, anchor_index
-            )
-        )
-        if blmin_ratio == 1.0:
-            blmin = blmin_base
-        else:
-            blmin = {pair: dist * blmin_ratio for pair, dist in blmin_base.items()}
+    blmin_ratio = max(float(config.blmin_ratio), BLMIN_RATIO_DEFAULT)
+    min_dist_factor = max(
+        float(config.structure_min_distance_factor), BLMIN_RATIO_DEFAULT
+    )
+    if blmin_ratio == 1.0:
+        blmin = blmin_base
+    else:
+        blmin = {pair: dist * blmin_ratio for pair, dist in blmin_base.items()}
 
+    for _attempt in range(config.max_placement_attempts):
         trials = _generate_placement_trials(
             rng,
             site_candidates,
             flat_candidates,
+            site_atoms,
             site_pos,
             relative_site_pos,
-            height_min,
-            height_max,
+            fragment_template,
+            anchor_index,
+            config,
             within_structure_site_counts,
             batch_site_counts,
             _RANKED_CANDIDATES_PER_ATTEMPT,

@@ -17,7 +17,7 @@ from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
 
 @dataclass(frozen=True)
 class NebRunConfig:
-    """Shared NEB geometry / validation knobs for serial and parallel runners."""
+    """Shared NEB geometry knobs. ``neb_prescreen_clash_distance`` is a covalent scale."""
 
     neb_n_images: int
     neb_spring_constant: float

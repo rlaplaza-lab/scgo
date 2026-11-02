@@ -70,15 +70,11 @@ Adsorbate placement tuning
 For ``*_adsorbate`` GO runs, the placement and validation knobs live in
 ``go_params`` only:
 
-- ``connectivity_factor``: primary connectivity spec for all structural gates
-  (initialization, post-operator checks, per-minimum algorithm gates, the
-  ``run_trials`` final gate, and TS). Accepts a float or a per-element/pair
-  dict; see :doc:`/validation_and_constraints`.
+- ``connectivity_factor``: bond cutoff (default ``1.2``, float or
+  per-element/pair dict; see :doc:`/validation_and_constraints`).
 - ``cluster_adsorbate_config``: optional
-  :class:`~scgo.cluster_adsorbate.config.ClusterAdsorbateConfig` (fragment height
-  range, ``max_placement_attempts``, ``blmin_ratio``, clash/connectivity checks).
-  Prefer ``connectivity_factor`` alone unless you need placement-specific
-  overrides.
+  :class:`~scgo.cluster_adsorbate.config.ClusterAdsorbateConfig`. ``None``
+  heights derive the covalent window. ``blmin_ratio`` stays at ``0.7``.
 - ``freeze_adsorbate_internal_geometry``: keep fragments rigid after mutations
   (strict template mode). Default ``False`` still preserves intra-fragment bonds
   via tag-rigid GA operators.

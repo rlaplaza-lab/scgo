@@ -708,6 +708,9 @@ def run_transition_state_search(
         neb_tangent_method: ASE NEB tangent method.
         max_endpoint_mismatch: Optional Å geometric gate on comparator ``max_diff``;
             when set (adsorbate presets), also enables pre-NEB path/energy checks.
+        neb_prescreen_clash_distance: Covalent scale for the interior-image
+            prescreen. ``None`` uses the preset (0.4). A mobile pair closer than
+            this times ``(r_i + r_j)`` is rejected.
         use_torchsim: Use TorchSim for GPU-efficient batched force evaluation
             (MACE/UMA/UPET only).
             Low-level default ``False``; presets set ``True``.
@@ -1208,7 +1211,7 @@ def run_transition_state_search(
         if not screened:
             logger.error(
                 "No adsorbate pairs survived IDPP priority screening for TS search. "
-                "Relax neb_prescreen_clash_distance=%.3f Å, "
+                "Relax neb_prescreen_clash_distance=%.3f (covalent scale), "
                 "neb_max_spurious_barrier=%.2f eV, and/or "
                 "min_saddle_prominence=%.2f eV "
                 "(or raise max_pairs / inspect pair debug logs).",

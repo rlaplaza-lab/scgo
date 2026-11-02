@@ -14,6 +14,7 @@ from ase.calculators.emt import EMT
 
 from scgo.cluster_adsorbate import ClusterAdsorbateConfig
 from scgo.exceptions import SCGOValidationError
+from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface import make_surface_config
 from scgo.surface.deposition import combine_slab_adsorbate, slab_surface_extreme
 from scgo.system_types import (
@@ -59,7 +60,7 @@ def test_resolve_connectivity_factor_precedence() -> None:
     # module default when nothing is set.
     assert resolve_connectivity_factor(
         None, cluster_adsorbate_config=None, surface_config=None
-    ) == normalize_connectivity_factor(1.4)
+    ) == normalize_connectivity_factor(CONNECTIVITY_FACTOR)
 
 
 # --- Task 1: unified policy across system types -----------------------------
@@ -173,7 +174,7 @@ def test_gateway_honors_cluster_adsorbate_config() -> None:
     atoms = Atoms(
         "Pt2", positions=[[0, 0, 0], [4.0, 0, 0]], cell=[20, 20, 20], pbc=False
     )
-    # Default factor (1.4) -> threshold 3.58 < 4.0 -> disconnected -> reject.
+    # Default factor (1.2) -> threshold 3.26 < 4.0 -> disconnected -> reject.
     with pytest.raises(SCGOValidationError):
         validate_structure_for_system_type(atoms, system_type="gas_cluster")
     # High factor via ClusterAdsorbateConfig -> connected -> accept.
@@ -263,14 +264,15 @@ def test_surface_validation_mic_true() -> None:
     def _combined(x0: float, x1: float) -> Atoms:
         mobile = Atoms(
             "Pt2",
-            positions=[[x0, 0, z_top + 1.5], [x1, 0, z_top + 1.5]],
+            positions=[[x0, 0, z_top + 2.2], [x1, 0, z_top + 2.2]],
             cell=cell,
             pbc=[True, True, False],
         )
         return combine_slab_adsorbate(slab, mobile)
 
-    # Real-space 8.8 A apart, 1.2 A apart through the x-periodic image.
-    combined = _combined(0.5, 9.3)
+    # Real-space 7.1 A apart, 2.9 A apart through the x-periodic image:
+    # inside the 1.2 Pt–Pt cutoff (3.26 A) and outside the 0.7 steric floor.
+    combined = _combined(0.5, 7.6)
     # use_mic=False -> genuinely disconnected -> rejected.
     ok, _ = validate_supported_cluster_deposit_wrapped(combined, n_slab, use_mic=False)
     assert not ok
@@ -341,7 +343,7 @@ def test_ts_gate_parity_honors_cluster_adsorbate_config() -> None:
     ads_def = AdsorbateDefinition(core_symbols=[], adsorbate_symbols=["Pt", "Pt"])
 
     # Two separate Pt atoms ~5.0 A apart, each slab-bound. With MIC on the (large)
-    # slab the in-plane image distance stays ~5.0 A, so at the default factor 1.4
+    # slab the in-plane image distance stays ~5.0 A, so at factor 1.4
     # the Pt-Pt threshold (~3.8 A) is below 5.0 A -> two components -> rejected by
     # both GO and TS gates; at factor 3.0 (~8.2 A) -> one component -> accepted.
     def _two_pt(separation: float) -> Atoms:
