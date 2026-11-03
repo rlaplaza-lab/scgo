@@ -1,50 +1,22 @@
-Quick Start
+Quick start
 ===========
 
-SCGO finds low-energy atomic structures with global optimization. This guide
-shows how to use each supported workflow.
+Install the base package and run one search. Later sections are one snippet
+each for a real potential, a surface, a molecule, a slab, transition states,
+and a campaign. ``system_type`` is a required argument on every ``run_*`` call.
 
-A **cluster** (also called the **core** when molecules are present) is the metal
-nanoparticle whose shape you are searching. An **adsorbate** is a small molecule
-or fragment (for example OH or CO) attached to the cluster or the surface. A
-**slab** is a periodic surface the cluster or adsorbate sits on. You can also
-search the top layers of the slab itself, with the bottom layers held still.
+.. _quickstart-try:
 
-System Types
-------------
+Try it
+------
 
-You must specify one of six system types:
+.. code-block:: bash
 
-.. list-table::
-   :widths: 30 70
-   :header-rows: 1
+   pip install scgo
 
-   * - Type
-     - What you search
-   * - ``gas_cluster``
-     - Cluster in vacuum
-   * - ``surface_cluster``
-     - Cluster on a slab
-   * - ``gas_cluster_adsorbate``
-     - Cluster plus adsorbates in vacuum
-   * - ``surface_cluster_adsorbate``
-     - Cluster plus adsorbates on a slab
-   * - ``surface``
-     - Top layers of a bare slab
-   * - ``surface_adsorbate``
-     - Top slab layers plus adsorbates, no cluster
-
-For surface types, pass a ``surface_config``. For adsorbate types, pass
-``adsorbates``. When the slab itself is the search target
-(``surface`` / ``surface_adsorbate``), also set ``fix_all_slab_atoms=False``
-and choose ``n_relax_top_slab_layers`` or ``n_fix_bottom_slab_layers``.
-
-Gas Cluster
------------
-
-Optimize a simple cluster in vacuum.
-
-**Fast test with EMT:**
+Python 3.12 or newer. This install is enough for the EMT examples on this
+page. A machine-learning potential is a separate extra; see
+:doc:`/installation`.
 
 .. code-block:: python
 
@@ -59,14 +31,44 @@ Optimize a simple cluster in vacuum.
    )
 
    for energy, atoms in results:
-       print(f"Energy: {energy:.4f} eV, Formula: {atoms.get_chemical_formula()}")
+       print(f"{energy:.3f} eV  {atoms.get_chemical_formula()}")
 
-For multi-element clusters, atom order follows the composition list you pass in
-so genetic-algorithm crossover can pair structures safely. Heavier elements are
-favoured during initialization while the population stays diverse. Details:
-:doc:`/api/initialization`.
+``results`` is a list of ``(energy, Atoms)`` pairs, lowest energy first. The
+composition can be a symbol list (``["Pt"] * 4``) or a formula string
+(``"Pt4"``). :func:`~scgo.param_presets.get_testing_params` uses ASE's EMT
+potential and a small search (2 generations, population 5). In the log,
+``calculator=EMT`` and ``niter=2`` are that preset. A line that names
+``get_default_params()`` is the merge base.
 
-**Production run with MACE:**
+SCGO picks the algorithm from how many atoms move. One or two atoms in vacuum
+are relaxed. Three atoms and no molecule use basin hopping, on a slab as well
+as in vacuum. Every other search uses a genetic algorithm.
+
+The run writes ``Pt4_searches/`` in the current directory. Inside it,
+``run_YYYYMMDD_HHMMSS_ffffff/`` holds that attempt, and
+``final_unique_minima/`` holds the structures you just printed. The folder
+name is the composition for a bare gas cluster. A molecule or a slab appends
+its own pieces (``Pt5_OH``, ``Pt5_graphite``). The full tree, including
+transition-state output, is in :doc:`/output_layout`.
+
+.. _quickstart-mace:
+
+A real potential
+----------------
+
+.. code-block:: bash
+
+   pip install "scgo[mace]"
+
+:func:`~scgo.param_presets.get_default_params` is the production preset. The
+calculator is MACE ``mace_matpes_0`` (MatPES r²SCAN) with DFT-D3(BJ). The
+first run downloads that checkpoint. With ``device`` unset, MACE uses CUDA,
+then Apple MPS, then CPU.
+
+Left alone, a gas-phase ``Pt5`` search uses a population of 83 and 65
+generations. It stops early if the best energy is unchanged for 10
+generations. The two overrides below shrink the search. Remove them for the
+automatic budget in :doc:`/search_effort`.
 
 .. code-block:: python
 
@@ -74,9 +76,8 @@ favoured during initialization while the population stays diverse. Details:
    from scgo.param_presets import get_default_params
 
    params = get_default_params()
-   params["calculator_kwargs"]["model_name"] = "mace_mp_small"
-   # r²SCAN-D3 is only valid on the MatPES default checkpoint.
-   params["calculator_kwargs"]["dispersion_xc"] = None
+   params["optimizer_params"]["ga"]["niter"] = 2
+   params["optimizer_params"]["ga"]["population_size"] = 5
 
    results = run_go(
        "Pt5",
@@ -85,419 +86,183 @@ favoured during initialization while the population stays diverse. Details:
        system_type="gas_cluster",
    )
 
-On a Surface
+``params["n_jobs"] = -2`` uses every CPU but one for the CPU stages. The
+default is a single worker. Other checkpoints and dispersion settings are
+in :doc:`/parameters`.
+
+.. _quickstart-surface:
+
+On a surface
 ------------
 
-Use the built-in graphite surface or create your own slab.
-
-**Using graphite preset:**
+Pass a slab as ``surface_config`` and set ``system_type="surface_cluster"``.
+:func:`~scgo.make_graphite_surface_config` builds a graphite slab and names
+it ``graphite``, so the output folder is ``Pt5_graphite_searches/``.
 
 .. code-block:: python
 
    from scgo import run_go, make_graphite_surface_config
-   from scgo.param_presets import get_default_params
-
-   surface_config = make_graphite_surface_config(slab_layers=3)
+   from scgo.param_presets import get_testing_params
 
    results = run_go(
        "Pt5",
-       params=get_default_params(),
+       params=get_testing_params(),
        seed=42,
-       surface_config=surface_config,
+       surface_config=make_graphite_surface_config(),
        system_type="surface_cluster",
    )
 
-Use :func:`~scgo.adsorption_energy` to compare adsorption energies on a slab.
+This call uses the EMT preset. For MACE, use the preset from the previous
+section. Graphene, vacancies, dopants, and a slab you built yourself are in
+:doc:`/surface_slab_guide`.
 
-**Using a custom slab:**
+.. _quickstart-molecule:
 
-.. code-block:: python
-
-   from ase.build import fcc111
-   from scgo import run_go, make_surface_config
-   from scgo.param_presets import get_default_params
-
-   slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0)
-   surface_config = make_surface_config(slab)
-
-   results = run_go(
-       "Pt4",
-       params=get_default_params(),
-       seed=42,
-       surface_config=surface_config,
-       system_type="surface_cluster",
-   )
-
-Defining Custom Surfaces
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Use ``SurfaceSystemConfig`` or the simpler ``make_surface_config()`` helper.
-
-**Slab motion options:**
-
-- ``fix_all_slab_atoms=True``: entire slab stays frozen (default)
-- ``n_relax_top_slab_layers=2``: allow top 2 layers to relax
-- ``n_fix_bottom_slab_layers=1``: freeze bottom layer only
-- Both layer counts = ``None``: entire slab can relax
-
-Do not use ``n_relax_top_slab_layers`` together with ``n_fix_bottom_slab_layers``.
-
-**Full example:**
-
-.. code-block:: python
-
-   from ase.build import fcc111
-   from scgo import run_go
-   from scgo.param_presets import get_default_params
-   from scgo.surface import SurfaceSystemConfig
-
-   slab = fcc111("Fe", size=(4, 4, 3), vacuum=12.0)
-
-   # Explicit heights are intersected with the derived covalent window.
-   surface_config = SurfaceSystemConfig(
-       slab=slab,
-       adsorption_height_min=1.2,
-       adsorption_height_max=2.5,
-       fix_all_slab_atoms=False,
-       n_relax_top_slab_layers=2,
-   )
-
-   results = run_go(
-       "Pt5",
-       params=get_default_params(),
-       seed=42,
-       surface_config=surface_config,
-       system_type="surface_cluster",
-   )
-
-With Adsorbates
+With a molecule
 ---------------
 
-Add adsorbate molecules (OH, CO, and so on) to your cluster.
-
-**Gas phase with adsorbate:**
-
-.. code-block:: python
-
-   from ase import Atoms
-   from scgo import run_go
-   from scgo.param_presets import get_default_params
-
-   oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
-
-   results = run_go(
-       ["Pt"] * 5,
-       params=get_default_params(),
-       seed=42,
-       system_type="gas_cluster_adsorbate",
-       adsorbates=oh,
-   )
-
-**Multiple adsorbates:**
+An adsorbate is an ASE ``Atoms`` fragment, passed separately from the metal
+composition. One fragment or a list of fragments both work. ``system_type``
+is ``gas_cluster_adsorbate``.
 
 .. code-block:: python
 
    from ase import Atoms
    from scgo import run_go
-   from scgo.param_presets import get_default_params
-
-   oh1 = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
-   oh2 = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
-
-   results = run_go(
-       "Pt5",
-       params=get_default_params(),
-       seed=42,
-       system_type="gas_cluster_adsorbate",
-       adsorbates=[oh1, oh2],
-   )
-
-Defining Custom Adsorbates
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Any ASE ``Atoms`` object is a valid adsorbate fragment. The genetic algorithm
-will:
-
-- Place fragments on cluster surface sites
-- Keep fragments rigid (bonds stay intact)
-- Optionally reposition fragments during optimization
-
-**Tuning placement:**
-
-.. code-block:: python
-
-   from ase import Atoms
-   from scgo import run_go
-   from scgo.param_presets import get_default_params
-   from scgo.cluster_adsorbate import ClusterAdsorbateConfig
+   from scgo.param_presets import get_testing_params
 
    oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
 
-   params = get_default_params()
-   params["cluster_adsorbate_config"] = ClusterAdsorbateConfig(
-       height_min=0.9,  # intersected with the covalent window
-       height_max=2.2,
-       max_placement_attempts=200,
-   )
-   params["freeze_adsorbate_internal_geometry"] = True  # Keep fragment rigid
-
    results = run_go(
        "Pt5",
-       params=params,
+       params=get_testing_params(),
        seed=42,
        system_type="gas_cluster_adsorbate",
        adsorbates=oh,
    )
 
-Use :func:`~scgo.is_true_minimum` or :func:`~scgo.perform_local_relaxation` to
-check or re-relax candidates outside a full GO run.
+Output goes to ``Pt5_OH_searches/``. Placement knobs live on
+:class:`~scgo.cluster_adsorbate.config.ClusterAdsorbateConfig`; see
+:doc:`/api/cluster_adsorbate`. The same fragment on a slab uses
+``surface_config`` and ``system_type="surface_cluster_adsorbate"``, covered
+in :doc:`/surface_slab_guide`.
 
-Surface + Adsorbates
---------------------
+.. _quickstart-slab:
 
-Combine surface and adsorbates.
+The slab itself
+---------------
 
-.. code-block:: python
-
-   from ase import Atoms
-   from scgo import run_go, make_graphite_surface_config
-   from scgo.param_presets import get_default_params
-
-   surface_config = make_graphite_surface_config(slab_layers=3)
-   oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.96]])
-
-   results = run_go(
-       "Pt5",
-       params=get_default_params(),
-       seed=42,
-       surface_config=surface_config,
-       system_type="surface_cluster_adsorbate",
-       adsorbates=oh,
-   )
-
-Slab as search target
----------------------
-
-Use ``surface`` / ``surface_adsorbate`` when the search should move the
-**top slab layers** rather than a deposited nanoparticle. Pass an empty composition
-``[]`` for the nanoparticle core. Presets such as
-:func:`~scgo.make_defected_graphite_surface_config` and
-:func:`~scgo.make_n_doped_graphite_surface_config` set
-``fix_all_slab_atoms=False``, ``n_relax_top_slab_layers=1``, and a filesystem
-``name`` for path keys.
-
-**Bare defected graphite:**
+``surface`` searches the top layers of the slab. There is no deposited
+cluster, so the composition is an empty list. This helper punches one
+vacancy and leaves the top layer free to move.
 
 .. code-block:: python
 
    from scgo import run_go, make_defected_graphite_surface_config
-   from scgo.param_presets import get_default_params
+   from scgo.param_presets import get_testing_params
 
    surface_config = make_defected_graphite_surface_config(
-       n_vacancies=1, seed=42
+       n_vacancies=1,
+       seed=42,
    )
 
    results = run_go(
        [],
-       params=get_default_params(),
+       params=get_testing_params(),
        seed=42,
        surface_config=surface_config,
        system_type="surface",
    )
 
-**OH on N-doped graphite:**
+Output goes to ``defected_graphite_searches/``. The preset is a 5×5,
+three-layer sheet with one carbon removed (149 atoms), so this is a heavier
+EMT run than ``Pt4``. Add an ``OH`` fragment and set
+``system_type="surface_adsorbate"`` to move the top layer and the molecule
+together. Pristine, defected, and N-doped graphite presets are in
+:doc:`/surface_slab_guide`.
 
-.. code-block:: python
+.. _quickstart-ts:
 
-   from ase import Atoms
-   from scgo import run_go, make_n_doped_graphite_surface_config
-   from scgo.param_presets import get_default_params
-
-   surface_config = make_n_doped_graphite_surface_config(
-       n_dopants=2, seed=42
-   )
-   oh = Atoms("OH", positions=[[0, 0, 0], [0, 0, 0.97]])
-
-   results = run_go(
-       [],
-       params=get_default_params(),
-       seed=42,
-       surface_config=surface_config,
-       system_type="surface_adsorbate",
-       adsorbates=oh,
-   )
-
-Transition States
+Transition states
 -----------------
 
-Find transition states between optimized structures. SCGO builds a short list
-of minima pairs, ranks them, and runs NEB only on the top candidates. The
-budget is ``max_pairs``.
+A transition-state search reads minima you already wrote and runs nudged
+elastic band on a short list of pairs. ``max_pairs`` is how many bands run.
+Which pairs make that list is documented under **Pair selection** in
+:doc:`/parameters`.
 
-How candidate pairs are chosen
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-SCGO does not run NEB on every possible combination. It builds and ranks
-candidates before spending any NEB force evaluations:
-
-1. **Load and dedupe minima.** GO minima are loaded and filtered with the
-   uniqueness rule (see :doc:`/uniqueness`). For TS, the distance gate is
-   tighter (``0.1`` Å instead of ``0.7`` Å).
-2. **Enumerate pairs.** Every remaining pair is considered.
-3. **Hard gates — drop bad pairs.** A pair is skipped if its energy gap
-   exceeds ``energy_gap_threshold`` (2.0 eV for bare systems, 0.75 eV with
-   adsorbates), if its shape difference exceeds ``max_endpoint_mismatch``,
-   or, for adsorbate plus metal core, if core RMS exceeds
-   ``pair_core_rms_max``.
-4. **Soft rank.** Survivors are scored with ``pair_score_*`` weights. The
-   score favors a mid-range energy gap, similar cores, and some adsorbate
-   site motion. Bare systems favor distinct fingerprints instead.
-5. **Budget and oversampling.** Keep the top N pairs where N comes from the
-   budget. Bare systems use ``max_pairs`` directly. Adsorbate systems with
-   ``max_endpoint_mismatch`` set oversample to
-   ``min(max_pairs * 10, max(max_pairs, 50))`` and re-rank by IDPP path
-   quality before keeping ``max_pairs`` for NEB. When TorchSim or IDPP
-   screening is not available, the oversampled list is still truncated to
-   ``max_pairs`` before NEB.
-6. **Run NEB.** Only those N pairs run NEB. Bare ``surface_cluster`` and
-   ``surface`` use the same budget rule as bare gas (no oversampling even
-   though ``max_endpoint_mismatch`` is set).
-
-Hard gates always apply. Soft scores only matter when the pool is larger than
-the budget. Pair selection and NEB endpoint setup share the same core overlay:
-gas cores are fingerprint-matched then Kabsch-aligned (including 1-atom
-translation); slab cores stay in the lab frame. Defaults by system type and
-full knob tables: :doc:`/parameters` (Pair selection) and
-:doc:`/validation_and_constraints`.
-
-**TS from existing minima** (after a prior ``run_go`` or manual GO output):
+Run this after the first example, so ``Pt4_searches/`` exists in the
+working directory (or pass ``searches_dir``). EMT needs
+``use_torchsim=False``.
 
 .. code-block:: python
 
    from scgo import run_ts_search
    from scgo.param_presets import get_ts_search_params
 
-   ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
-   ts_params["max_pairs"] = 10
+   ts_params = get_ts_search_params(
+       calculator="EMT",
+       system_type="gas_cluster",
+       seed=42,
+   )
+   ts_params["use_torchsim"] = False
+   ts_params["max_pairs"] = 2
 
-   # Campaign root: reads Pt5_searches/, writes Pt5_ts_results/ as sibling
    results = run_ts_search(
-       "Pt5",
+       "Pt4",
        ts_params=ts_params,
        seed=42,
-       output_dir="results/pt5_gas_mace",
        system_type="gas_cluster",
    )
 
-   # Or pass the searches directory directly (parent becomes campaign root)
-   results = run_ts_search(
-       "Pt5",
-       ts_params=ts_params,
-       seed=42,
-       searches_dir="results/pt5_gas_mace/Pt5_searches",
-       system_type="gas_cluster",
-   )
+``results`` is a list of dicts, one per NEB. Files land in
+``Pt4_ts_results/``, next to ``Pt4_searches/``.
 
-**GO + TS combined:**
+To optimize and then search in one call:
 
 .. code-block:: python
 
    from scgo import run_go_ts
-   from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
-
-   go_params = get_torchsim_ga_params(system_type="gas_cluster", seed=42)
-   go_params["n_jobs"] = -2   # all but one CPU, across every parallel stage
-   go_params["optimizer_params"]["ga"].update(
-       niter=10,
-       population_size=50,
-   )
-
-
-   ts_params = get_ts_search_params(system_type="gas_cluster", seed=42)
-   ts_params["max_pairs"] = 15
-
-   summary = run_go_ts(
-       "Pt5",
-       go_params=go_params,
-       ts_params=ts_params,
-       seed=42,
-       system_type="gas_cluster",
-   )
-
-**On a surface:**
-
-.. code-block:: python
-
-   from scgo import run_go_ts, make_graphite_surface_config
-   from scgo.param_presets import get_torchsim_ga_params, get_ts_search_params
-
-   surface_config = make_graphite_surface_config(slab_layers=3)
-
-   go_params = get_torchsim_ga_params(
-       system_type="surface_cluster",
-       surface_config=surface_config,
-       seed=42,
-   )
-   go_params["n_jobs"] = -2   # all but one CPU, across every parallel stage
-
+   from scgo.param_presets import get_testing_params, get_ts_search_params
 
    ts_params = get_ts_search_params(
-       system_type="surface_cluster",
-       surface_config=surface_config,
+       calculator="EMT",
+       system_type="gas_cluster",
        seed=42,
    )
-   ts_params["max_pairs"] = 10
+   ts_params["use_torchsim"] = False
+   ts_params["max_pairs"] = 2
 
    summary = run_go_ts(
-       "Pt5",
-       go_params=go_params,
+       "Pt4",
+       go_params=get_testing_params(),
        ts_params=ts_params,
        seed=42,
-       surface_config=surface_config,
-       system_type="surface_cluster",
+       system_type="gas_cluster",
    )
 
-Campaigns
----------
+``summary`` includes ``minima_by_formula`` and ``ts_results``. With
+``output_dir`` omitted, files go under ``scgo_runs/Pt4_emt/``, separate from
+the ``Pt4_searches/`` folder of the first example. ``seed`` must agree across
+the call, ``go_params``, and ``ts_params`` when more than one of them sets it.
 
-Run multiple compositions in one call. Composition builders
-(``build_one_element_compositions``, ``build_two_element_compositions``) live in
+.. _quickstart-campaign:
+
+Several compositions
+--------------------
+
+:func:`~scgo.runner_api.build_one_element_compositions` and
+:func:`~scgo.runner_api.build_two_element_compositions` live in
 ``scgo.runner_api``, not the top-level ``scgo`` package.
 
-**Global optimization:**
-
 .. code-block:: python
 
    from scgo import run_go_campaign
    from scgo.param_presets import get_testing_params
    from scgo.runner_api import build_one_element_compositions
 
-   # Pt2, Pt3, Pt4, Pt5, Pt6
-   compositions = build_one_element_compositions("Pt", min_atoms=2, max_atoms=6)
-
-   results = run_go_campaign(
-       compositions,
-       params=get_testing_params(),
-       seed=42,
-       system_type="gas_cluster",
-   )
-   # results is dict[path_key, list[(energy, Atoms)]]
-   # (for gas_cluster, path_key matches the formula, e.g. "Pt5")
-
-Failed compositions are logged, recorded as empty lists under their ``path_key``,
-and skipped so the rest of the campaign continues. See :doc:`/api/initialization`
-for multi-element atom ordering and placement.
-
-**Binary compositions:**
-
-.. code-block:: python
-
-   from scgo import run_go_campaign
-   from scgo.param_presets import get_testing_params
-   from scgo.runner_api import build_two_element_compositions
-
-   # All Au/Pt combinations with 2-4 total atoms
-   compositions = build_two_element_compositions("Au", "Pt", min_atoms=2, max_atoms=4)
+   # Pt2, Pt3, Pt4
+   compositions = build_one_element_compositions("Pt", min_atoms=2, max_atoms=4)
 
    results = run_go_campaign(
        compositions,
@@ -506,78 +271,32 @@ for multi-element atom ordering and placement.
        system_type="gas_cluster",
    )
 
-**TS from existing minima** (each composition needs a prior ``{path_key}_searches/`` tree):
+``results`` is a dict keyed by the on-disk folder stem (``"Pt2"``,
+``"Pt3"``, ``"Pt4"`` for this call). Each value is the same
+``(energy, Atoms)`` list as ``run_go``. A composition that fails is logged,
+stored as an empty list, and skipped. The rest of the campaign continues.
 
-.. code-block:: python
+``run_ts_campaign`` and ``run_go_ts_campaign`` take the same composition
+list. Signatures and the two-element builder are in :doc:`/api/runner_api`.
 
-   from scgo import run_ts_campaign
-   from scgo.param_presets import get_ts_search_params
-   from scgo.runner_api import build_one_element_compositions
-
-   compositions = build_one_element_compositions("Pt", min_atoms=4, max_atoms=6)
-
-   results = run_ts_campaign(
-       compositions,
-       ts_params=get_ts_search_params(system_type="gas_cluster", seed=42),
-       seed=42,
-       output_dir="benchmark/results",  # shared campaign root
-       system_type="gas_cluster",
-   )
-
-**GO + TS for multiple compositions:**
-
-.. code-block:: python
-
-   from scgo import run_go_ts_campaign
-   from scgo.param_presets import get_testing_params, get_ts_search_params
-   from scgo.runner_api import build_one_element_compositions
-
-   compositions = build_one_element_compositions("Pt", min_atoms=4, max_atoms=5)
-
-   results = run_go_ts_campaign(
-       compositions,
-       go_params=get_testing_params(),
-       ts_params=get_ts_search_params(system_type="gas_cluster", seed=42),
-       seed=42,
-       output_dir="benchmark/results",
-       system_type="gas_cluster",
-   )
-
-See :doc:`/api/runner_api` for full signatures.
-
-Output
-------
-
-See :doc:`/output_layout` for directory structure, path keys, run IDs, and file
-formats. In brief: ``run_go`` writes ``{path_key}_searches/`` with ``run_*/``
-subdirectories, and GO+TS creates a sibling ``{path_key}_ts_results/`` tree.
-
-Parameters
-----------
-
-Quick parameter selection:
+Presets
+-------
 
 .. list-table::
-   :widths: 30 70
+   :widths: 40 60
    :header-rows: 1
 
    * - Preset
      - Use for
    * - ``get_testing_params()``
-     - Fast tests (EMT calculator)
+     - Fast first run (EMT, small search)
    * - ``get_default_params()``
-     - Default production (MACE)
+     - Full MACE search (MatPES r²SCAN + DFT-D3)
    * - ``get_torchsim_ga_params(...)``
-     - GPU-accelerated with TorchSim
+     - Genetic algorithm with a TorchSim relaxer
    * - ``get_ts_search_params(...)``
-     - Transition state search
+     - Transition-state search
 
-See :doc:`/parameters` for all options and :doc:`/api/param_presets` for details.
-
-Examples
---------
-
-Working examples live in the repository. See
-`examples/README.md <https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md>`_
-for the full list and usage notes. Each example enables ``write_timing_json``
-so per-run ``timing.json`` and campaign ``go_ts_timing.json`` are written.
+Every option is in :doc:`/parameters`. What each preset function changes is
+in :doc:`/api/param_presets`. Working scripts for all six system types are
+in the repository `examples/ <https://github.com/rlaplaza-lab/scgo/blob/main/examples/README.md>`_.

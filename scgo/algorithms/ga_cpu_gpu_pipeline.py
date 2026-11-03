@@ -16,7 +16,10 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-import torch
+try:
+    import torch
+except ImportError:  # PyTorch ships with an MLIP extra; EMT runs do not need it.
+    torch = None  # type: ignore[assignment]
 from ase import Atoms
 
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
@@ -35,7 +38,7 @@ def relaxer_supports_cpu_gpu_pipeline(relaxer: Any) -> bool:
     """True for CUDA :class:`TorchSimBatchRelaxer` (not ASE / CPU)."""
     if not isinstance(relaxer, TorchSimBatchRelaxer):
         return False
-    if relaxer.device is None:
+    if relaxer.device is None or torch is None:
         return False
     return torch.device(relaxer.device).type == "cuda"
 

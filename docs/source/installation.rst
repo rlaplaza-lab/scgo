@@ -1,41 +1,36 @@
 Installation
 ============
 
-SCGO is on `PyPI <https://pypi.org/project/scgo/>`_. Use **exactly one** MLIP
-extra per environment (``[mace]``, ``[uma]``, or ``[upet]``); the stacks conflict.
-``[uma]`` requires ``fairchem-core>=2.25.0``. The MACE default is MatPES
-r²SCAN plus DFT-D3(BJ) (``dispersion_xc="r2scan"``); see :doc:`/parameters`.
+SCGO is on `PyPI <https://pypi.org/project/scgo/>`_. Python 3.12 or newer.
+SQLite needs the JSON1 extension (``pysqlite3-binary`` if your build lacks it).
 
-Prerequisites
--------------
-
-- Python 3.12+
-- SQLite with JSON1 (``pysqlite3-binary`` if your build lacks it)
-- CUDA for GPU MLIPs
-
-Every ``run_*`` entry point calls :func:`~scgo.configure`, which sets
-``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` unless that variable is
-already set or ``SCGO_SKIP_PYTORCH_CONFIG`` is set.
-
-PyPI
-----
+The EMT examples in :doc:`/quickstart` need only the base package. A
+machine-learning potential needs exactly one extra; the stacks conflict.
 
 .. code-block:: bash
 
-   pip install "scgo[mace]"    # or [uma] / [upet]
+   pip install scgo                 # EMT tutorial
+   pip install "scgo[mace]"         # or [uma] / [upet]
 
-For **UPET**, after installing ``scgo[upet]``, manually install the required
-``vesin`` version:
+``[uma]`` requires ``fairchem-core>=2.25.0``. The ``[mace]`` extra pins a
+compatible MACE and TorchSim stack, including ``nvalchemi-toolkit-ops``. The
+MACE default is MatPES r²SCAN plus DFT-D3(BJ) (``dispersion_xc="r2scan"``);
+see :doc:`/parameters`.
+
+For **UPET**, after installing ``scgo[upet]``, install the required ``vesin``
+version:
 
 .. code-block:: bash
 
    pip install 'vesin==0.6.0' --force-reinstall --no-deps
 
-For MACE/TorchSim pip installs, ensure ``nvalchemi-toolkit-ops`` is available
-and avoid ``vesin`` / ``vesin-torch`` unless you are on the UPET extra.
+With ``device`` unset, MACE uses CUDA, then Apple MPS, then CPU. UMA and UPET
+use CUDA, then CPU. An unsupported ``device`` string raises
+``SCGOValidationError``.
 
-Unsupported calculator ``device`` values raise ``SCGOValidationError`` (no silent
-CPU fallback).
+Every ``run_*`` entry point calls :func:`~scgo.configure`, which sets
+``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` unless that variable is
+already set or ``SCGO_SKIP_PYTORCH_CONFIG`` is set.
 
 From source
 -----------

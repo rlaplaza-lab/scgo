@@ -17,7 +17,11 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ImportError:  # PyTorch ships with an MLIP extra; EMT runs do not need it.
+    torch = None  # type: ignore[assignment]
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.optimize import FIRE
@@ -1570,6 +1574,11 @@ def ga_go(
     if torchsim_dtype is not None and torchsim_dtype not in ("float32", "float64"):
         raise SCGOValidationError(
             f"torchsim_dtype must be 'float32' or 'float64', got {torchsim_dtype!r}"
+        )
+    if torchsim_dtype is not None and torch is None:
+        raise SCGOValidationError(
+            "torchsim_dtype requires PyTorch. Install an MLIP extra (scgo[mace], "
+            "scgo[uma], or scgo[upet])."
         )
     torchsim_dtype_resolved = (
         getattr(torch, torchsim_dtype) if torchsim_dtype is not None else None

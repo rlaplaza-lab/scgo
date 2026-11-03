@@ -7,27 +7,26 @@ SCGO Documentation
        <img src="_static/scgo_logo.svg" alt="SCGO" style="width: 200px;">
    </div>
 
-**SCGO** finds low-energy atomic structures with global optimization. It uses
-Basin Hopping, Genetic Algorithms, NEB transition-state search, and machine
-learning potentials (MACE, UMA, UPET) through ASE and TorchSim.
+**SCGO** searches for low-energy arrangements of atoms. A **cluster** is the
+metal nanoparticle. An **adsorbate** is a molecule or fragment on that cluster
+or on a surface. A **slab** is the periodic surface underneath. Basin hopping
+or a genetic algorithm runs the search. Nudged elastic band finds transition
+states. MACE, UMA, and UPET are optional extras on top of ASE.
 
-What SCGO works with
---------------------
+New here? Install the base package and run the first example in
+:doc:`/quickstart`.
 
-Three building blocks cover every workflow:
+What you can search
+-------------------
 
-- **Cluster** (also called the ``core`` when molecules are present): the metal
-  nanoparticle whose shape you are searching.
-- **Adsorbate**: a small molecule or fragment (for example OH or CO) attached
-  to the cluster or the surface.
-- **Slab**: a periodic surface the cluster or adsorbate sits on. You can also
-  search the top layers of the slab itself, with the bottom layers held still.
+Set ``system_type`` to one of these. Copy-paste calls are in the quickstart.
 
-The six system types combine these pieces (see :doc:`/quickstart` for the
-full table): ``gas_cluster``, ``surface_cluster``, ``gas_cluster_adsorbate``,
-``surface_cluster_adsorbate``, bare-slab ``surface``, and ``surface_adsorbate``.
-
-See :doc:`/quickstart` to get started.
+- ``gas_cluster`` — cluster in vacuum
+- ``surface_cluster`` — cluster on a slab
+- ``gas_cluster_adsorbate`` — cluster plus molecules in vacuum
+- ``surface_cluster_adsorbate`` — cluster plus molecules on a slab
+- ``surface`` — top layers of a bare slab
+- ``surface_adsorbate`` — top slab layers plus molecules, no cluster
 
 Contents
 --------

@@ -410,8 +410,8 @@ TS Parameters
 
 Passed as ``ts_params`` to ``run_ts_search``, ``run_ts_campaign``, ``run_go_ts``, etc. Sparse dicts are merged with :func:`~scgo.param_presets.get_ts_search_params` defaults at run time.
 
-Use :doc:`/quickstart` for the pairing overview. This section is the
-exhaustive reference. Most runs only change ``max_pairs`` and the calculator.
+How pairs are chosen is under **Pair selection** below. Most runs only change
+``max_pairs`` and the calculator.
 Pairing and NEB defaults are tuned per system type and rarely need edits.
 
 **Core:**

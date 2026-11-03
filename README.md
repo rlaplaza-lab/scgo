@@ -4,28 +4,31 @@
 
 ![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
-SCGO finds low-energy atomic structures with global optimization. It uses Basin Hopping, Genetic Algorithms, NEB transition-state search, and machine learning potentials (MACE, UMA, UPET) through ASE and TorchSim.
-
-A **cluster** (also called the **core** when molecules are present) is the metal nanoparticle whose shape you are searching. An **adsorbate** is a small molecule or fragment (for example OH or CO) attached to the cluster or the surface. A **slab** is a periodic surface the cluster or adsorbate sits on. You can also search the top layers of the slab itself, with the bottom layers held still.
-
-Six system types combine these pieces: `gas_cluster`, `surface_cluster`, `gas_cluster_adsorbate`, `surface_cluster_adsorbate`, `surface`, and `surface_adsorbate`.
+SCGO searches for low-energy arrangements of atoms: a metal cluster, a molecule on that cluster, a cluster on a surface, or the top layers of a slab. Searches use basin hopping or a genetic algorithm. Transition states between the minima use nudged elastic band. Machine-learning potentials (MACE, UMA, UPET) are available through ASE and TorchSim.
 
 **Documentation:** [Read the Docs](https://scgo.readthedocs.io/)
 
 ## Install
 
-Exactly one MLIP extra per environment:
+The example below needs only the base package. It uses ASE's EMT potential:
+
+```bash
+pip install scgo
+```
+
+For a machine-learning potential, install exactly one extra. The stacks conflict:
 
 ```bash
 pip install "scgo[mace]"   # or [uma] / [upet]
 ```
 
-**UPET note:** After `pip install "scgo[upet]"`, manually install `vesin==0.6.0`:
+**UPET only.** After `pip install "scgo[upet]"`, install this neighbor-list package as well:
+
 ```bash
 pip install 'vesin==0.6.0' --force-reinstall --no-deps
 ```
 
-Python 3.12+, SQLite JSON1. Details: [installation guide](https://scgo.readthedocs.io/en/latest/installation.html).
+Python 3.12+, with SQLite JSON1. Details: [installation guide](https://scgo.readthedocs.io/en/latest/installation.html).
 
 ## Quick start
 
@@ -39,37 +42,27 @@ results = run_go(
     seed=42,
     system_type="gas_cluster",
 )
+
+for energy, atoms in results:
+    print(f"{energy:.3f} eV  {atoms.get_chemical_formula()}")
 ```
 
-`results` is a list of `(energy, Atoms)` unique minima (energy-sorted).
+`results` is a list of `(energy, Atoms)` pairs, lowest energy first. The energies are EMT, and the preset is a small search (2 generations, population 5). Files are written to `Pt4_searches/` in the current directory.
 
-**Algorithms:** SCGO auto-selects based on system size:
-- ≤2 mobile atoms (``gas_cluster`` only): Simple relaxation
-- 3 atoms, no adsorbate: Basin Hopping
-- 3+ atoms with adsorbate: Genetic Algorithm
-- ≥4 atoms: Genetic Algorithm
+`system_type` is required. SCGO chooses the algorithm from the number of moving atoms: one or two atoms in vacuum are relaxed, three atoms and no molecule use basin hopping (on a slab as well as in vacuum), and every other search uses a genetic algorithm. The same call covers the other system types. Walk through them in the [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
-## Workflows
+## Next
 
-| Goal | Entry point |
-|------|-------------|
-| Single composition GO | `run_go` |
-| Multi-composition GO | `run_go_campaign` |
-| TS from existing minima | `run_ts_search` |
-| GO then TS | `run_go_ts` |
-| Multi-composition TS / GO+TS | `run_ts_campaign` / `run_go_ts_campaign` |
-
-`system_type` is always a run argument (never inside `go_params` /
-`optimizer_params` slots). Surfaces prefer `surface_config=` as a run
-argument; a top-level `surface_config` in `go_params` / `ts_params` is
-enough when the run argument is omitted (both must agree when set).
-Adsorbates need `adsorbates=`.
-
-**Output:** `run_go` writes `{path_key}_searches/` with datetime-tagged `run_*/` subdirectories. GO+TS creates sibling `{path_key}_ts_results/`. The `path_key` combines nanoparticle formula, adsorbate fragments, and surface name (for example `Pt5`, `Pt5_OH_OH_graphite`). See [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
+- [A real MACE potential](https://scgo.readthedocs.io/en/latest/quickstart.html#quickstart-mace)
+- [A cluster on graphite](https://scgo.readthedocs.io/en/latest/quickstart.html#quickstart-surface)
+- [A molecule on the cluster](https://scgo.readthedocs.io/en/latest/quickstart.html#quickstart-molecule)
+- [The top layers of a slab](https://scgo.readthedocs.io/en/latest/quickstart.html#quickstart-slab)
+- [Transition states](https://scgo.readthedocs.io/en/latest/quickstart.html#quickstart-ts)
+- [Many compositions at once](https://scgo.readthedocs.io/en/latest/quickstart.html#quickstart-campaign)
 
 ## Examples
 
-[`examples/`](examples/) holds MACE + TorchSim smoke scripts for all six system types. See [`examples/README.md`](examples/README.md) for details.
+[`examples/`](examples/) holds smoke scripts for all six system types. See [`examples/README.md`](examples/README.md).
 
 ## Development
 
@@ -79,7 +72,7 @@ pre-commit install
 pytest tests/ -m "not slow and not integration and not requires_cuda and not requires_upet and not requires_uma"
 ```
 
-Long MLIP sweeps: [`benchmark/`](benchmark/).
+Long MLIP sweeps live in [`benchmark/`](benchmark/).
 
 ---
 
