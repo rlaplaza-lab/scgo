@@ -5,17 +5,18 @@ SCGO is on `PyPI <https://pypi.org/project/scgo/>`_. Python 3.12 or newer.
 SQLite needs the JSON1 extension (``pysqlite3-binary`` if your build lacks it).
 
 The EMT examples in :doc:`/quickstart` need only the base package. A
-machine-learning potential needs exactly one extra; the stacks conflict.
+machine-learning potential needs one extra. Do not mix ``[mace]``, ``[uma]``,
+and ``[upet]`` in the same environment.
 
 .. code-block:: bash
 
    pip install scgo                 # EMT tutorial
    pip install "scgo[mace]"         # or [uma] / [upet]
 
-``[uma]`` requires ``fairchem-core>=2.25.0``. The ``[mace]`` extra pins a
-compatible MACE and TorchSim stack, including ``nvalchemi-toolkit-ops``. The
-MACE default is MatPES r²SCAN plus DFT-D3(BJ) (``dispersion_xc="r2scan"``);
-see :doc:`/parameters`.
+``[uma]`` requires ``fairchem-core>=2.25.0``. The ``[mace]`` extra installs
+fixed versions of MACE, TorchSim, and ``nvalchemi-toolkit-ops``. The MACE
+default is MatPES r²SCAN plus DFT-D3(BJ) (``dispersion_xc="r2scan"``). See
+:doc:`/parameters`.
 
 For **UPET**, after installing ``scgo[upet]``, install the required ``vesin``
 version:

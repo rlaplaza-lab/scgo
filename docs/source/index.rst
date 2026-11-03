@@ -9,24 +9,23 @@ SCGO Documentation
 
 **SCGO** searches for low-energy arrangements of atoms. A **cluster** is the
 metal nanoparticle. An **adsorbate** is a molecule or fragment on that cluster
-or on a surface. A **slab** is the periodic surface underneath. Basin hopping
-or a genetic algorithm runs the search. Nudged elastic band finds transition
-states. MACE, UMA, and UPET are optional extras on top of ASE.
+or on a surface. A **slab** is the periodic surface underneath. The search
+uses basin hopping or a genetic algorithm. Transition states use nudged
+elastic band. MACE, UMA, and UPET are optional and run through ASE.
 
-New here? Install the base package and run the first example in
-:doc:`/quickstart`.
+Install the base package and run the first example in :doc:`/quickstart`.
 
 What you can search
 -------------------
 
-Set ``system_type`` to one of these. Copy-paste calls are in the quickstart.
+Set ``system_type`` to one of these. The calls are in the quickstart.
 
-- ``gas_cluster`` — cluster in vacuum
-- ``surface_cluster`` — cluster on a slab
-- ``gas_cluster_adsorbate`` — cluster plus molecules in vacuum
-- ``surface_cluster_adsorbate`` — cluster plus molecules on a slab
-- ``surface`` — top layers of a bare slab
-- ``surface_adsorbate`` — top slab layers plus molecules, no cluster
+- ``gas_cluster``: cluster in vacuum
+- ``surface_cluster``: cluster on a slab
+- ``gas_cluster_adsorbate``: cluster plus molecules in vacuum
+- ``surface_cluster_adsorbate``: cluster plus molecules on a slab
+- ``surface``: top layers of a bare slab
+- ``surface_adsorbate``: top slab layers plus molecules, no cluster
 
 Contents
 --------

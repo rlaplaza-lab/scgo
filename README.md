@@ -4,7 +4,7 @@
 
 ![SCGO Logo](docs/source/_static/scgo_logo.svg)
 
-SCGO searches for low-energy arrangements of atoms: a metal cluster, a molecule on that cluster, a cluster on a surface, or the top layers of a slab. Searches use basin hopping or a genetic algorithm. Transition states between the minima use nudged elastic band. Machine-learning potentials (MACE, UMA, UPET) are available through ASE and TorchSim.
+SCGO searches for low-energy arrangements of atoms. That can be a metal cluster, a molecule on a cluster, a cluster on a surface, or the top layers of a slab. The search uses basin hopping or a genetic algorithm. Transition states use nudged elastic band. MACE, UMA, and UPET are optional and run through ASE and TorchSim.
 
 **Documentation:** [Read the Docs](https://scgo.readthedocs.io/)
 
@@ -16,7 +16,7 @@ The example below needs only the base package. It uses ASE's EMT potential:
 pip install scgo
 ```
 
-For a machine-learning potential, install exactly one extra. The stacks conflict:
+For a machine-learning potential, install one extra. Do not mix `[mace]`, `[uma]`, and `[upet]` in the same environment:
 
 ```bash
 pip install "scgo[mace]"   # or [uma] / [upet]
@@ -49,7 +49,7 @@ for energy, atoms in results:
 
 `results` is a list of `(energy, Atoms)` pairs, lowest energy first. The energies are EMT, and the preset is a small search (2 generations, population 5). Files are written to `Pt4_searches/` in the current directory.
 
-`system_type` is required. SCGO chooses the algorithm from the number of moving atoms: one or two atoms in vacuum are relaxed, three atoms and no molecule use basin hopping (on a slab as well as in vacuum), and every other search uses a genetic algorithm. The same call covers the other system types. Walk through them in the [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
+`system_type` is required. SCGO picks the algorithm from the number of moving atoms. One or two atoms in vacuum are relaxed. Three atoms and no molecule use basin hopping, in vacuum or on a slab. Every other search uses a genetic algorithm. The other system types are in the [quickstart](https://scgo.readthedocs.io/en/latest/quickstart.html).
 
 ## Next
 
@@ -62,7 +62,7 @@ for energy, atoms in results:
 
 ## Examples
 
-[`examples/`](examples/) holds smoke scripts for all six system types. See [`examples/README.md`](examples/README.md).
+[`examples/`](examples/) has short scripts for all six system types. See [`examples/README.md`](examples/README.md).
 
 ## Development
 
@@ -72,7 +72,7 @@ pre-commit install
 pytest tests/ -m "not slow and not integration and not requires_cuda and not requires_upet and not requires_uma"
 ```
 
-Long MLIP sweeps live in [`benchmark/`](benchmark/).
+Longer MLIP runs are in [`benchmark/`](benchmark/).
 
 ---
 
