@@ -26,6 +26,7 @@ from scgo.ts_search.transition_state import (
     _image_has_cached_forces,
     evaluate_neb_image_energies,
     interpolate_path,
+    neb_stage2_step_budget,
 )
 
 # Tagged so a GPU log scan can tell simulated OOM apart from a real one.
@@ -102,6 +103,100 @@ def test_stage1_climb_missing_failed_key_is_hard_failure():
         {"steps_taken": 1, "error": "NEB forces are non-finite (fmax=nan)"}
     )
     assert not _stage1_band_climb_eligible({"steps_taken": 2, "error": SIMULATED_OOM})
+
+
+def test_stage2_step_budget_is_the_serial_remainder():
+    """Climb steps are ``max(1, neb_steps - stage1_steps)``."""
+    assert neb_stage2_step_budget(100, 10) == 90
+    assert neb_stage2_step_budget(4, 10) == 1
+
+
+def test_parallel_band_stops_at_its_own_step_cap():
+    """A shared batch still stops each band at its own stage-2 cap."""
+
+    class _Opt:
+        def __init__(self, atoms, logfile=None, trajectory=None):
+            self.steps = 0
+
+        def step(self):
+            self.steps += 1
+
+    class _Relaxer:
+        def relax_batch(self, images, steps=0):
+            out = []
+            for i, img in enumerate(images):
+                ra = img.copy()
+                forces = np.zeros((len(img), 3))
+                forces[:, 1] = 5.0
+                ra.arrays["forces"] = forces
+                out.append((float(i), ra))
+            return out
+
+    def _band():
+        a = Atoms(
+            "Cu2", positions=[[0.0, 0.0, 0.0], [2.2, 0.0, 0.0]], cell=[12, 12, 12]
+        )
+        mid = a.copy()
+        mid.positions[1, 0] = 2.5
+        b = a.copy()
+        b.positions[1] = [2.8, 0.2, 0.0]
+        return [a, mid, b]
+
+    relaxer = _Relaxer()
+    nebs = [
+        TorchSimNEB(_band(), relaxer, k=0.0, climb=False, method="improvedtangent")
+        for _ in range(2)
+    ]
+    for img in nebs[1].images:
+        img.set_cell([14.0, 14.0, 14.0])
+    batch = ParallelNEBBatch(nebs, relaxer, max_total_steps=5, optimizer=_Opt)
+    results = batch.run_optimization(fmax=0.01, max_steps=5, max_steps_per_band=[2, 5])
+    assert [opt.steps for opt in batch._optimizers.values()] == [2, 5]
+    assert [int(r["steps_taken"]) for r in results] == [2, 5]
+    assert [bool(r["failed"]) for r in results] == [False, False]
+    assert [bool(r["converged"]) for r in results] == [False, False]
+
+
+def test_parallel_final_fmax_matches_geometry_after_last_step():
+    """The reported fmax is the NEB force after the last move, not before it."""
+
+    class _Opt:
+        def __init__(self, atoms, logfile=None, trajectory=None):
+            pass
+
+        def step(self):
+            pass
+
+    class _Relaxer:
+        def __init__(self):
+            self.calls = 0
+
+        def relax_batch(self, images, steps=0):
+            self.calls += 1
+            scale = 5.0 if self.calls == 1 else 1.0e-4
+            out = []
+            for i, img in enumerate(images):
+                ra = img.copy()
+                forces = np.zeros((len(img), 3))
+                forces[:, 1] = scale
+                ra.arrays["forces"] = forces
+                out.append((float(i), ra))
+            return out
+
+    a = Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [2.2, 0.0, 0.0]], cell=[12, 12, 12])
+    mid = a.copy()
+    mid.positions[1, 0] = 2.5
+    b = a.copy()
+    b.positions[1] = [2.8, 0.2, 0.0]
+    relaxer = _Relaxer()
+    neb = TorchSimNEB(
+        [a, mid, b], relaxer, k=0.0, climb=False, method="improvedtangent"
+    )
+    batch = ParallelNEBBatch([neb], relaxer, max_total_steps=1, optimizer=_Opt)
+    results = batch.run_optimization(fmax=0.05, max_steps=1)
+    assert results[0]["converged"] is True
+    assert results[0]["error"] is None
+    assert float(results[0]["final_fmax"]) < 0.05
 
 
 def test_stage1_climb_failed_boolean_controls_eligibility():

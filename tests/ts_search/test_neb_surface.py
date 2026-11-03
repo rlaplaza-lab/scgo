@@ -7,6 +7,7 @@ import pytest
 from ase import Atoms
 from ase.build import fcc111
 from ase.calculators.emt import EMT
+from ase.calculators.singlepoint import SinglePointCalculator
 from ase.mep import NEB
 
 from scgo.constants import DEFAULT_NEB_TANGENT_METHOD
@@ -602,8 +603,6 @@ def test_parallel_neb_updates_k_on_surface(monkeypatch):
                 img.calc = EMT()
                 e = float(img.get_potential_energy())
                 f = img.get_forces()
-                from ase.calculators.singlepoint import SinglePointCalculator
-
                 img.calc = SinglePointCalculator(img, energy=e, forces=f)
                 out.append((e, img))
             return out
@@ -615,12 +614,10 @@ def test_parallel_neb_updates_k_on_surface(monkeypatch):
             img.calc = EMT()
             e = img.get_potential_energy()
             f = img.get_forces()
-            from ase.calculators.singlepoint import SinglePointCalculator
-
             img.calc = SinglePointCalculator(img, energy=e, forces=f)
 
     relaxer = _FakeRelaxer()
-    monkeypatch.setattr(ns, "K_UPDATE_EVERY", 1)
+    monkeypatch.setattr("scgo.ts_search.parallel_neb.K_UPDATE_EVERY", 1)
     neb1 = TorchSimNEB(images1, relaxer, k=0.1, climb=False)
     neb1._scgo_n_slab = 0
     neb1._scgo_k_min = 0.1
@@ -632,19 +629,32 @@ def test_parallel_neb_updates_k_on_surface(monkeypatch):
     assert isinstance(neb1.k, (list, np.ndarray))
     assert len(np.asarray(neb1.k)) == len(images1) - 1
 
-    monkeypatch.setattr(ns, "K_UPDATE_EVERY", 40)
-    neb3 = TorchSimNEB(images1, relaxer, k=0.1, climb=False)
+    monkeypatch.setattr(
+        "scgo.ts_search.parallel_neb.K_UPDATE_EVERY",
+        40,
+    )
+    # Interior clash so the peak sits above both endpoints and springs stiffen.
+    hot = a.copy()
+    hot.positions[1] = hot.positions[0] + [0.4, 0.0, 0.0]
+    band3 = [a.copy(), hot, b.copy()]
+    for img in band3:
+        img.calc = EMT()
+        e = img.get_potential_energy()
+        f = img.get_forces()
+        img.calc = SinglePointCalculator(img, energy=e, forces=f)
+    energies = np.array([float(img.get_potential_energy()) for img in band3])
+    expected_k = variable_spring_constants(energies, 0.1)
+    assert float(np.max(expected_k)) > 0.1
+    neb3 = TorchSimNEB(band3, relaxer, k=0.1, climb=False)
     neb3._scgo_n_slab = 0
     neb3._scgo_k_min = 0.1
     batch2 = ParallelNEBBatch([neb3], relaxer, max_total_steps=1)
     batch2.run_optimization(fmax=10.0, max_steps=1)
-    # No refresh within one step when interval is 40; k stays scalar (or length-1).
-    k3 = np.asarray(neb3.k, dtype=float).ravel()
-    assert k3.size >= 1
-    assert float(k3[0]) == pytest.approx(0.1)
+    # Step 0 is on the update schedule (0 % 40 == 0), before the projection.
+    np.testing.assert_allclose(np.asarray(neb3.k, dtype=float), expected_k)
 
     # Gas (no 2D PBC): k unchanged even with interval=1.
-    monkeypatch.setattr(ns, "K_UPDATE_EVERY", 1)
+    monkeypatch.setattr("scgo.ts_search.parallel_neb.K_UPDATE_EVERY", 1)
     gas = Atoms(
         "Cu3",
         positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.1, 0]],
@@ -658,8 +668,6 @@ def test_parallel_neb_updates_k_on_surface(monkeypatch):
         img.calc = EMT()
         e = img.get_potential_energy()
         f = img.get_forces()
-        from ase.calculators.singlepoint import SinglePointCalculator
-
         img.calc = SinglePointCalculator(img, energy=e, forces=f)
     neb_g = TorchSimNEB(imgs, relaxer, k=0.1, climb=False)
     neb_g._scgo_n_slab = 0
@@ -667,6 +675,60 @@ def test_parallel_neb_updates_k_on_surface(monkeypatch):
     batch_g = ParallelNEBBatch([neb_g], relaxer, max_total_steps=2)
     batch_g.run_optimization(fmax=10.0, max_steps=2)
     assert float(np.asarray(neb_g.k).ravel()[0]) == pytest.approx(0.1)
+
+
+def test_serial_neb_weights_springs_before_first_step(tmp_path):
+    """Energy-weighted springs are set before the first optimizer step."""
+    a = Atoms(
+        "Cu3",
+        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.1, 0.0]],
+        cell=[8.0, 8.0, 12.0],
+        pbc=[True, True, False],
+    )
+    b = a.copy()
+    b.positions[2, 0] += 0.6
+    hot = a.copy()
+    # Close, but above the NEB clash gate, so the interior is the energy peak.
+    hot.positions[1] = hot.positions[0] + [1.5, 0.0, 0.0]
+    for atoms in (a, b):
+        atoms.calc = EMT()
+    band = [a.copy(), hot, b.copy()]
+    seen: dict[str, np.ndarray] = {}
+
+    class _Opt:
+        def __init__(self, neb, trajectory=None, logfile=None):
+            self.neb = neb
+            self.nsteps = 0
+
+        def attach(self, fn, interval=1):
+            return None
+
+        def run(self, fmax=0.05, steps=1):
+            energies = np.array(
+                [float(img.get_potential_energy()) for img in self.neb.images]
+            )
+            seen["k"] = np.asarray(self.neb.k, dtype=float).copy()
+            seen["expected"] = variable_spring_constants(energies, 0.1)
+            self.nsteps = 0
+            return False
+
+    find_transition_state(
+        a,
+        b,
+        calculator=EMT(),
+        output_dir=str(tmp_path),
+        pair_id="spr",
+        n_images=1,
+        neb_steps=4,
+        fmax=1.0e9,
+        verbosity=0,
+        optimizer=_Opt,
+        align_endpoints=False,
+        spring_constant=0.1,
+        prebuilt_images=band,
+    )
+    assert float(np.max(seen["expected"])) > 0.1
+    np.testing.assert_allclose(seen["k"], seen["expected"])
 
 
 # --- Fidelity -----------------------------------------------------------------
@@ -751,8 +813,6 @@ def test_finalize_writes_fidelity_without_clearing_status():
         Atoms("Pt2", positions=[[0, 0, 0], [5.0, 0, 0]]),
     ]
     for e, img in zip([0.0, 0.5, 1.0, 0.1], images, strict=True):
-        from ase.calculators.singlepoint import SinglePointCalculator
-
         img.calc = SinglePointCalculator(img, energy=e, forces=np.zeros((2, 3)))
     result = {
         "pair_id": "fid",
@@ -809,8 +869,6 @@ def test_imaginary_modes_from_negative_curvature_force_fn():
 
     images = [atoms.copy() for _ in range(3)]
     for e, img in zip([0.0, 1.0, 0.0], images, strict=True):
-        from ase.calculators.singlepoint import SinglePointCalculator
-
         img.calc = SinglePointCalculator(img, energy=e, forces=np.zeros((1, 3)))
     result = {
         "pair_id": "im",

@@ -2311,6 +2311,11 @@ def neb_uses_two_stage_climb(
     return barrier >= float(min_interior_barrier)
 
 
+def neb_stage2_step_budget(neb_steps: int, stage1_steps: int) -> int:
+    """Climb steps left after stage 1. Shared by the serial and parallel paths."""
+    return max(1, int(neb_steps) - int(stage1_steps))
+
+
 def validate_initial_neb_path(
     images: list[Atoms],
     *,
@@ -3095,11 +3100,13 @@ def find_transition_state(
             refresh_surface_neb_springs(neb, k_min=float(spring_constant))
 
         dyn.attach(_refresh_springs, interval=K_UPDATE_EVERY)
+        # A restarted trajectory skips the step-0 observer.
+        _refresh_springs()
         dyn.run(fmax=fmax, steps=stage1_cap)
         steps_taken = int(dyn.nsteps)
         if use_two_stage:
             neb.climb = True
-            stage2_steps = max(1, steps_budget - steps_taken)
+            stage2_steps = neb_stage2_step_budget(steps_budget, steps_taken)
             log_debug_v(
                 logger,
                 "Enabling climbing image for second NEB stage (%d steps)",
@@ -3108,6 +3115,7 @@ def find_transition_state(
             )
             dyn = optimizer(neb, trajectory=trajectory, logfile=opt_logfile)  # type: ignore[arg-type]
             dyn.attach(_refresh_springs, interval=K_UPDATE_EVERY)
+            _refresh_springs()
             dyn.run(fmax=fmax, steps=stage2_steps)
             steps_taken += int(dyn.nsteps)
         neb_opt = perf_counter() - t_neb0

@@ -57,6 +57,10 @@
 - ASE NEB and extxyz export warnings are silenced. `improvedtangent` stays
   the default, and non-JSON `atoms.info` (`adsorbate_info`) is dropped before
   XYZ write.
+- Serial and parallel NEB weight surface springs from the current image
+  energies before projecting forces, including the first step. The parallel
+  batch reports the force maximum on the geometry after the last FIRE move,
+  and each band's climbing stage keeps that band's own remaining steps.
 
 ### Docs
 

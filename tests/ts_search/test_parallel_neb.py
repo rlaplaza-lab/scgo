@@ -711,12 +711,13 @@ def test_parallel_two_stage_climb_runs_after_stage1_converges(
             self.neb_instances = list(neb_instances)
             self.climb_flags = [bool(n.climb) for n in self.neb_instances]
 
-        def run_optimization(self, fmax=0.05, max_steps=100):
+        def run_optimization(self, fmax=0.05, max_steps=100, max_steps_per_band=None):
             calls.append(
                 {
                     "n": len(self.neb_instances),
                     "climb": list(self.climb_flags),
                     "max_steps": int(max_steps),
+                    "max_steps_per_band": max_steps_per_band,
                 }
             )
             return [
@@ -767,6 +768,7 @@ def test_parallel_two_stage_climb_runs_after_stage1_converges(
     assert calls[0]["climb"] == [False]
     assert calls[1]["climb"] == [True]
     assert calls[1]["max_steps"] == 15
+    assert calls[1]["max_steps_per_band"] == [15]
 
 
 def test_run_parallel_neb_batches_single_screen_relax_batch(

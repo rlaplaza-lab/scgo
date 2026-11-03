@@ -38,6 +38,7 @@ from .transition_state import (
     load_completed_neb_result,
     make_ts_result,
     neb_max_atom_force,
+    neb_stage2_step_budget,
     neb_uses_two_stage_climb,
     save_neb_result,
     validate_initial_neb_energy_profile,
@@ -249,12 +250,25 @@ class ParallelNEBBatch:
             self._optimizers[neb_idx] = optimizer
         optimizer.step()
 
+    def _refresh_active_surface_springs(self) -> None:
+        """Recompute surface springs from the energies just evaluated."""
+        for neb_idx in self.active_nebs:
+            neb = self.neb_instances[neb_idx]
+            k_min = getattr(neb, "_scgo_k_min", None)
+            if not isinstance(k_min, (int, float)):
+                continue
+            refresh_surface_neb_springs(neb, k_min=float(k_min))
+
     def run_optimization(
         self,
         fmax: float = DEFAULT_FMAX_THRESHOLD,
         max_steps: int = 500,
+        max_steps_per_band: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         """Optimize NEBs using batched evaluations; return per-NEB summaries.
+
+        ``max_steps_per_band`` is one cap per band. The loop runs to the
+        longest cap; a band that reaches its own cap stops without failing.
 
         Raises:
             RuntimeError: (or ``torch.cuda.OutOfMemoryError``) when a batched
@@ -282,13 +296,12 @@ class ParallelNEBBatch:
         ]
 
         step_cap = min(self.max_total_steps, int(max_steps))
+        band_caps = (
+            None
+            if max_steps_per_band is None
+            else [int(cap) for cap in max_steps_per_band]
+        )
         while self.active_nebs and self.step_count < step_cap:
-            if self.step_count > 0 and self.step_count % K_UPDATE_EVERY == 0:
-                for neb_idx in self.active_nebs:
-                    neb = self.neb_instances[neb_idx]
-                    k_min = float(getattr(neb, "_scgo_k_min", neb.k))
-                    refresh_surface_neb_springs(neb, k_min=k_min)
-
             unique_images: list[Atoms] = []
             unique_index: dict[tuple, int] = {}
             neb_image_map: list[tuple[int, int, int]] = []
@@ -371,6 +384,9 @@ class ParallelNEBBatch:
             for neb_idx in batch_participants:
                 self.neb_instances[neb_idx]._force_calls += 1
 
+            if self.step_count % K_UPDATE_EVERY == 0:
+                self._refresh_active_surface_springs()
+
             still_active: list[int] = []
             for neb_idx in self.active_nebs:
                 neb = self.neb_instances[neb_idx]
@@ -401,7 +417,12 @@ class ParallelNEBBatch:
                         )
                     else:
                         self._step_optimizer(neb_idx)
-                        still_active.append(neb_idx)
+                        taken = self.step_count + 1
+                        band_limit = (
+                            band_caps[neb_idx] if band_caps is not None else step_cap
+                        )
+                        if taken < band_limit:
+                            still_active.append(neb_idx)
                 except (RuntimeError, ValueError) as e:
                     if is_cuda_oom_error(e):
                         # Same contract as the batched eval above: OOM belongs to
@@ -432,6 +453,7 @@ class ParallelNEBBatch:
         # Final FIRE.step() invalidates SinglePoint caches on moved images.
         # Refresh PES at the final geometries so barrier finalize can read energies.
         self._refresh_pes_after_optimization(results)
+        self._sync_fmax_at_final_geometry(results, fmax)
 
         logger.debug(
             "Parallel NEB batch complete: %d steps, %d converged, %d failed",
@@ -481,6 +503,42 @@ class ParallelNEBBatch:
             attach_singlepoint_from_relax_output(
                 atoms, energy, relaxed_atoms, require_forces=True
             )
+
+    def _sync_fmax_at_final_geometry(
+        self, results: list[dict[str, Any]], fmax: float
+    ) -> None:
+        """Record the NEB force on the geometry left by the last FIRE step."""
+
+        def _fail(neb_idx: int, msg: str) -> None:
+            self.failed_nebs[neb_idx] = msg
+            results[neb_idx]["failed"] = True
+            results[neb_idx]["converged"] = False
+            results[neb_idx]["error"] = msg
+
+        for neb_idx, neb in enumerate(self.neb_instances):
+            if neb_idx in self.failed_nebs or neb_idx in self.converged_nebs:
+                continue
+            if int(results[neb_idx].get("steps_taken") or 0) <= 0:
+                continue
+            try:
+                max_force = neb_max_atom_force(neb.get_forces())
+            except (RuntimeError, ValueError) as exc:
+                if is_cuda_oom_error(exc):
+                    raise
+                _fail(neb_idx, f"Final NEB force evaluation failed: {exc}")
+                continue
+            results[neb_idx]["final_fmax"] = max_force
+            if not np.isfinite(max_force):
+                _fail(
+                    neb_idx,
+                    "NEB forces are non-finite "
+                    f"(fmax={max_force!r}); refusing optimizer step",
+                )
+                continue
+            if max_force < fmax:
+                results[neb_idx]["converged"] = True
+                results[neb_idx]["error"] = None
+                self.converged_nebs[neb_idx] = True
 
 
 def run_parallel_neb_search(
@@ -883,6 +941,7 @@ def run_parallel_neb_search(
             *,
             max_total_steps: int,
             max_steps: int,
+            max_steps_per_band: dict[int, int] | None = None,
         ) -> list[dict[str, Any]]:
             """Run one chunk; on CUDA OOM re-bin at half its atom cost and retry.
 
@@ -892,7 +951,12 @@ def run_parallel_neb_search(
             for them downstream.
             """
             try:
-                return _run_chunk(chunk, max_total_steps, max_steps)
+                return _run_chunk(
+                    chunk,
+                    max_total_steps,
+                    max_steps,
+                    max_steps_per_band=max_steps_per_band,
+                )
             except (RuntimeError, MemoryError) as exc:
                 if not is_cuda_oom_error(exc):
                     raise
@@ -910,7 +974,12 @@ def run_parallel_neb_search(
                 chunk, band_costs, retry_budget
             ):
                 try:
-                    sub_results = _run_chunk(sub_chunk, max_total_steps, max_steps)
+                    sub_results = _run_chunk(
+                        sub_chunk,
+                        max_total_steps,
+                        max_steps,
+                        max_steps_per_band=max_steps_per_band,
+                    )
                 except (RuntimeError, MemoryError) as exc:
                     if not is_cuda_oom_error(exc):
                         raise
@@ -935,16 +1004,25 @@ def run_parallel_neb_search(
             return [summaries[i] for i in chunk]
 
         def _run_chunk(
-            chunk: list[int], max_total_steps: int, max_steps: int
+            chunk: list[int],
+            max_total_steps: int,
+            max_steps: int,
+            max_steps_per_band: dict[int, int] | None = None,
         ) -> list[dict[str, Any]]:
             chunk_nebs = [neb_instances[i] for i in chunk]
             batch = ParallelNEBBatch(
                 chunk_nebs, relaxer, max_total_steps=max_total_steps
             )
+            run_kwargs: dict[str, Any] = {
+                "fmax": neb_cfg.neb_fmax,
+                "max_steps": max_steps,
+            }
+            if max_steps_per_band is not None:
+                run_kwargs["max_steps_per_band"] = [
+                    int(max_steps_per_band[i]) for i in chunk
+                ]
             try:
-                return batch.run_optimization(
-                    fmax=neb_cfg.neb_fmax, max_steps=max_steps
-                )
+                return batch.run_optimization(**run_kwargs)
             finally:
                 del batch
                 cleanup_torch_cuda(logger=logger)
@@ -977,25 +1055,21 @@ def run_parallel_neb_search(
                 if _stage1_band_climb_eligible(summary)
             ]
             if climb_local:
-                steps1_vals = [
-                    int(stage1_results[i].get("steps_taken") or 0) for i in climb_local
-                ]
-                # Stage 2 shares one step budget across the whole chunk, so the
-                # slowest stage-1 band (max steps taken) sets it for everyone.
-                # This is intentionally conservative: it guarantees no band in the
-                # chunk exceeds the overall neb_steps budget, at the cost of
-                # shrinking the climb budget for bands that converged quickly.
-                # The neb_steps_i // 2 floor keeps a usable climb pass regardless.
-                stage2_steps = max(
-                    neb_steps_i // 2,
-                    neb_steps_i - max(steps1_vals),
-                    1,
-                )
+                # Per-band remainder, same formula as the serial climb stage.
+                stage2_budget = {
+                    chunk[i]: neb_stage2_step_budget(
+                        neb_steps_i,
+                        int(stage1_results[i].get("steps_taken") or 0),
+                    )
+                    for i in climb_local
+                }
+                stage2_steps = max(stage2_budget.values())
                 stage2_chunk = [chunk[i] for i in climb_local]
                 stage2_results = _run_chunk_with_oom_retry(
                     stage2_chunk,
                     max_total_steps=stage2_steps,
                     max_steps=stage2_steps,
+                    max_steps_per_band=stage2_budget,
                 )
                 for local_i, s1_i in enumerate(climb_local):
                     s2 = stage2_results[local_i]
@@ -1007,6 +1081,7 @@ def run_parallel_neb_search(
                         "final_fmax": s2.get("final_fmax", s1.get("final_fmax")),
                         "steps_taken": steps1 + steps2,
                         "error": s2.get("error") or s1.get("error"),
+                        "failed": bool(s2.get("failed", False)),
                     }
             for local_i, neb_i in enumerate(chunk):
                 batch_results[neb_i] = stage1_results[local_i]
