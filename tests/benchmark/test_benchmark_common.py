@@ -11,15 +11,17 @@ import pytest
 from benchmark.benchmark_common import (
     apply_ga_benchmark_overrides,
     format_ga_profile_lines,
-    get_benchmark_params,
     load_latest_ga_profile,
 )
 from scgo.utils.timing_report import TIMING_JSON_FILENAME
 
 
-@pytest.mark.requires_mace
 def test_apply_ga_benchmark_overrides_enables_timing():
-    params = get_benchmark_params(42, backend="mace")
+    params = {
+        "optimizer_params": {
+            "ga": {"niter": 1, "population_size": 2, "fmax": 0.05},
+        },
+    }
     updated = apply_ga_benchmark_overrides(
         params,
         niter=5,
@@ -30,6 +32,9 @@ def test_apply_ga_benchmark_overrides_enables_timing():
     assert ga["detailed_timing"] is True
     assert ga["niter"] == 5
     assert ga["population_size"] == 10
+    assert ga["fmax"] == 0.05
+    assert params["optimizer_params"]["ga"]["niter"] == 1
+    assert params["optimizer_params"]["ga"]["population_size"] == 2
 
 
 def test_format_ga_profile_lines_torchsim():
