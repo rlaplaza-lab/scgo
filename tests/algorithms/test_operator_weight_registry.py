@@ -112,7 +112,9 @@ def test_surface_cluster_tables_match_registry(comp):
     ["gas_cluster_adsorbate", "surface_cluster_adsorbate"],
 )
 @pytest.mark.parametrize("freeze_adsorbate_internal_geometry", [False, True])
-def test_adsorbate_tables_match_registry(system_type, freeze_adsorbate_internal_geometry):
+def test_adsorbate_tables_match_registry(
+    system_type, freeze_adsorbate_internal_geometry
+):
     ads = AdsorbateDefinition(**_OH)
     comp = ["Pt", "Pt", "Pt", "O", "H"]
     n_slab = len(_slab()) if system_type.startswith("surface") else 0
