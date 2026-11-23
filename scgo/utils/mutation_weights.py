@@ -29,6 +29,29 @@ def _renormalize_weights(weights: dict[str, float]) -> dict[str, float]:
     return {k: v / total for k, v in non_negative.items()}
 
 
+def _drop_overlap_relief_when_frozen(
+    weights: dict[str, float],
+    *,
+    freeze_adsorbate_internal_geometry: bool,
+    adsorbate_definition: AdsorbateDefinition | None,
+) -> dict[str, float]:
+    """Drop ``overlap_relief`` when the GA registry omits it under freeze.
+
+    Frozen tagged adsorbate searches skip that operator; leaving the key in the
+    weight table triggers a per-generation unmatched-key warning.
+    """
+    if (
+        not freeze_adsorbate_internal_geometry
+        or adsorbate_definition is None
+        or not adsorbate_definition.adsorbate_symbols
+        or "overlap_relief" not in weights
+    ):
+        return weights
+    trimmed = dict(weights)
+    trimmed.pop("overlap_relief")
+    return _renormalize_weights(trimmed)
+
+
 def _compute_stagnation_level(
     generations_without_improvement: int,
     stagnation_trigger: int,
@@ -635,6 +658,7 @@ def get_adaptive_mutation_config(
     system_type: SystemType = "gas_cluster",
     adsorbate_definition: AdsorbateDefinition | None = None,
     allow_adsorbate_surface_detachment: bool = False,
+    freeze_adsorbate_internal_geometry: bool = False,
 ) -> dict:
     """Get complete adaptive mutation configuration."""
     if not use_adaptive:
@@ -643,6 +667,11 @@ def get_adaptive_mutation_config(
             composition,
             adsorbate_definition,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        )
+        operator_weights = _drop_overlap_relief_when_frozen(
+            operator_weights,
+            freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+            adsorbate_definition=adsorbate_definition,
         )
         return {
             "operator_weights": operator_weights,
@@ -704,6 +733,11 @@ def get_adaptive_mutation_config(
         operator_weights,
         level=level,
         burst_multiplier=aggressive_burst_multiplier,
+    )
+    operator_weights = _drop_overlap_relief_when_frozen(
+        operator_weights,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+        adsorbate_definition=adsorbate_definition,
     )
     if level > 0.0:
         burst_scale = 1.0 + level * max(0.0, aggressive_burst_multiplier - 1.0)

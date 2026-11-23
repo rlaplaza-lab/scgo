@@ -1720,6 +1720,7 @@ def ga_go(
         system_type=system_type,
         adsorbate_definition=adsorbate_definition,
         allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
     )
 
     idx_top = (
@@ -2167,6 +2168,7 @@ def ga_go(
                     system_type=system_type,
                     adsorbate_definition=adsorbate_definition,
                     allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                 )
                 _ = update_mutation_weights(
                     operators_list=operators_list,

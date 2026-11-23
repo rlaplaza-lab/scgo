@@ -50,6 +50,7 @@ def _check_consistency(
     *,
     n_slab=0,
     adsorbate_definition=None,
+    freeze_adsorbate_internal_geometry: bool = False,
 ):
     slab = _slab() if n_slab > 0 else None
     tmpl = _template(comp, slab)
@@ -59,7 +60,7 @@ def _check_consistency(
         if adsorbate_definition is not None
         else None
     )
-    ops, name_map = create_mutation_operators(
+    _ops, name_map = create_mutation_operators(
         composition=comp,
         n_to_optimize=len(comp),
         blmin=blmin,
@@ -69,23 +70,30 @@ def _check_consistency(
         n_slab=n_slab,
         adsorbate_definition=adsorbate_definition,
         adsorbate_fragment_template=fragment_template,
-    )
-    weights, _ = calculate_system_type_weights(
-        system_type,
-        comp,
-        adsorbate_definition=adsorbate_definition,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
     )
     adaptive = get_adaptive_mutation_config(
         comp,
         use_adaptive=True,
         system_type=system_type,
         adsorbate_definition=adsorbate_definition,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
     )
+    candidates = [adaptive["operator_weights"]]
+    # Raw system-type tables are freeze-unaware; only check them when the
+    # registry still includes every table key (no freeze omission).
+    if not freeze_adsorbate_internal_geometry:
+        weights, _ = calculate_system_type_weights(
+            system_type,
+            comp,
+            adsorbate_definition=adsorbate_definition,
+        )
+        candidates.insert(0, weights)
     # Every table key must resolve to a registered operator (typo / drift
     # guard). Registered operators without table mass are allowed: bare
     # slab-target searches deliberately keep in_plane_rotate registered at
     # zero weight for future weight schedules.
-    for candidate in (weights, adaptive["operator_weights"]):
+    for candidate in candidates:
         assert unmatched_operator_weight_keys(candidate, name_map) == []
 
 
@@ -103,11 +111,39 @@ def test_surface_cluster_tables_match_registry(comp):
     "system_type",
     ["gas_cluster_adsorbate", "surface_cluster_adsorbate"],
 )
-def test_adsorbate_tables_match_registry(system_type):
+@pytest.mark.parametrize("freeze_adsorbate_internal_geometry", [False, True])
+def test_adsorbate_tables_match_registry(system_type, freeze_adsorbate_internal_geometry):
     ads = AdsorbateDefinition(**_OH)
     comp = ["Pt", "Pt", "Pt", "O", "H"]
     n_slab = len(_slab()) if system_type.startswith("surface") else 0
-    _check_consistency(system_type, comp, n_slab=n_slab, adsorbate_definition=ads)
+    _check_consistency(
+        system_type,
+        comp,
+        n_slab=n_slab,
+        adsorbate_definition=ads,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+    )
+
+
+def test_freeze_drops_overlap_relief_from_adaptive_weights():
+    ads = AdsorbateDefinition(**_OH)
+    comp = ["Pt", "Pt", "Pt", "O", "H"]
+    thawed = get_adaptive_mutation_config(
+        comp,
+        use_adaptive=True,
+        system_type="surface_cluster_adsorbate",
+        adsorbate_definition=ads,
+        freeze_adsorbate_internal_geometry=False,
+    )
+    frozen = get_adaptive_mutation_config(
+        comp,
+        use_adaptive=True,
+        system_type="surface_cluster_adsorbate",
+        adsorbate_definition=ads,
+        freeze_adsorbate_internal_geometry=True,
+    )
+    assert "overlap_relief" in thawed["operator_weights"]
+    assert "overlap_relief" not in frozen["operator_weights"]
 
 
 @pytest.mark.parametrize("comp", [["Pt"] * 4, ["Au", "Au", "Pt", "Pt"]])
