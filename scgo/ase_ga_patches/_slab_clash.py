@@ -49,6 +49,11 @@ def _blmin_threshold(blmin: dict, z1: int, z2: int) -> float:
     return float(threshold)
 
 
+def _pbc_neighbour_ranges(pbc) -> list[list[int]]:
+    """``[-1, 0, 1]`` per periodic axis, else ``[0]`` (ASE-GA image convention)."""
+    return [[-1, 0, 1] if bool(pbc[i]) else [0] for i in range(3)]
+
+
 class SlabClashChecker:
     """Pre-computes and caches slab positions (with PBC images) for fast clash screening.
 
@@ -78,9 +83,7 @@ class SlabClashChecker:
         self._unique_slab_z = sorted({int(z) for z in self._num_slab})
 
         # Build all PBC image displacements once – identical to ASE-GA logic.
-        neighbours: list[list[int]] = []
-        for i in range(3):
-            neighbours.append([-1, 0, 1] if bool(pbc[i]) else [0])
+        neighbours = _pbc_neighbour_ranges(pbc)
         images: list[np.ndarray] = []
         slab_pos = np.asarray(slab_positions, dtype=float)
         cell_arr = np.asarray(cell, dtype=float)
@@ -94,6 +97,9 @@ class SlabClashChecker:
         self._num_slab_expanded = np.tile(
             self._num_slab, n_images
         )  # (n_images * N_slab,)
+        self._slab_z_to_expanded_indices: dict[int, np.ndarray] = {
+            z: np.where(self._num_slab_expanded == z)[0] for z in self._unique_slab_z
+        }
 
         self._blmin = blmin
 
@@ -123,15 +129,11 @@ class SlabClashChecker:
         # over images.  Shape: (N_mobile, n_images * N_slab).
         dists = cdist(mob_pos, self._slab_expanded)
 
-        unique_types = sorted({int(z) for z in mob_num} | set(self._unique_slab_z))
-        for z1 in unique_types:
+        unique_mobile_z = sorted({int(z) for z in mob_num})
+        for z1 in unique_mobile_z:
             x1 = np.where(mob_num == z1)[0]
-            if len(x1) == 0:
-                continue
-            for z2 in unique_types:
-                x2 = np.where(self._num_slab_expanded == z2)[0]
-                if len(x2) == 0:
-                    continue
+            for z2 in self._unique_slab_z:
+                x2 = self._slab_z_to_expanded_indices[z2]
                 threshold = _blmin_threshold(self._blmin, z1, z2)
                 if float(np.min(dists[np.ix_(x1, x2)])) < threshold:
                     return True
@@ -160,9 +162,7 @@ def mobile_too_close_no_copy(
     cell_arr = np.asarray(cell, dtype=float)
     unique_types = sorted({int(z) for z in num})
 
-    neighbours: list[list[int]] = []
-    for i in range(3):
-        neighbours.append([-1, 0, 1] if bool(pbc[i]) else [0])
+    neighbours = _pbc_neighbour_ranges(pbc)
 
     for nx, ny, nz in itertools.product(*neighbours):
         displacement = cell_arr.T @ np.array([nx, ny, nz], dtype=float)
@@ -210,9 +210,7 @@ def mobile_too_close_tagged(
     cell_arr = np.asarray(cell, dtype=float)
     unique_types = sorted({int(z) for z in numbers})
 
-    neighbours: list[list[int]] = []
-    for i in range(3):
-        neighbours.append([-1, 0, 1] if bool(pbc[i]) else [0])
+    neighbours = _pbc_neighbour_ranges(pbc)
 
     for nx, ny, nz in itertools.product(*neighbours):
         displacement = cell_arr.T @ np.array([nx, ny, nz], dtype=float)

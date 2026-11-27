@@ -42,10 +42,6 @@ class SystemPolicy:
         return self.uses_surface
 
     @property
-    def neb_disable_alignment(self) -> bool:
-        return False
-
-    @property
     def neb_surface_cell_remap(self) -> bool:
         return self.uses_surface
 

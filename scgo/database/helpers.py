@@ -8,7 +8,7 @@ import heapq
 import os
 import sqlite3
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ase import Atoms
@@ -34,14 +34,14 @@ from scgo.database.sync import PRESET_AGGRESSIVE, database_retry
 from scgo.exceptions import SCGODatabaseError, SCGOValidationError
 from scgo.metadata.atoms import ensure_final_id, get_tag, set_tags
 from scgo.metadata.db_stamp import is_scgo_db, stamp_db
-from scgo.metadata.run_dir import load_run_dir_record, resolve_run_id_from_db_path
+from scgo.metadata.run_dir import resolve_run_id_from_db_path
 from scgo.utils.helpers import (
     _assign_penalty_energy,
     ensure_directory_exists,
-    get_cluster_formula,
     get_composition_counts,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.messages import SKIPPING_DATABASE_NO_RUN_ID
 
 logger = get_logger(__name__)
 
@@ -106,17 +106,19 @@ def _ensure_database_indices(
     *,
     enable_expression_indexes: bool = True,
     enable_wal_mode: bool = False,
+    apply_pragmas: bool = True,
 ) -> None:
-    """Apply performance pragmas and create SQLite indices on ``systems``."""
+    """Create SQLite indices on ``systems`` (optionally re-applying PRAGMAs)."""
     try:
 
         def _create_indices(conn: sqlite3.Connection) -> None:
-            apply_sqlite_pragmas(
-                conn,
-                wal_mode=enable_wal_mode,
-                busy_timeout=30000,
-                cache_size_mb=64,
-            )
+            if apply_pragmas:
+                apply_sqlite_pragmas(
+                    conn,
+                    wal_mode=enable_wal_mode,
+                    busy_timeout=30000,
+                    cache_size_mb=64,
+                )
             # ``id`` is the INTEGER PRIMARY KEY (rowid alias → implicit index) and
             # ``unique_id`` already carries ASE's implicit unique index, so a
             # second user index on either column is redundant. Drop them on
@@ -348,6 +350,7 @@ def setup_database(
             db_file,
             enable_expression_indexes=enable_expression_indexes,
             enable_wal_mode=enable_wal_mode,
+            apply_pragmas=False,
         )
 
         db_path_obj = Path(db_file)
@@ -372,7 +375,7 @@ def setup_database(
         _register_database_best_effort(output_dir_str, db_file, atoms_template, run_id)
 
         return SCGODataConnection(da, all_atom_numbers)
-    except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError) as e:
+    except (sqlite3.DatabaseError, OSError) as e:
         raise DatabaseSetupError(f"Failed to setup database {db_file}: {e}") from e
 
 
@@ -493,39 +496,31 @@ def load_previous_run_results(
     composition: list[str] | None = None,
     current_run_id: str | None = None,
     prefer_final_unique: bool = True,
+    discovered_entries: Sequence[tuple[str, str | None]] | None = None,
 ) -> list[tuple[float, Atoms]]:
-    """Load minima from previous runs for a composition."""
+    """Load minima from previous runs for a composition.
+
+    Pass ``discovered_entries`` from ``list_discovered_db_paths_with_run`` to
+    skip a second discovery scan.
+    """
     all_db_files: list[tuple[str, str | None]] = []
 
     if not os.path.exists(base_output_dir):
         return []
 
-    discovered_entries = list_discovered_db_paths_with_run(
-        base_output_dir,
-        composition=composition,
-        db_filename=db_filename,
-    )
+    if discovered_entries is None:
+        discovered_entries = list_discovered_db_paths_with_run(
+            base_output_dir,
+            composition=composition,
+            db_filename=db_filename,
+        )
 
     if discovered_entries:
-        by_run: dict[str, list[str]] = {}
+        # Discovery already filtered by formula-or-atom-probe and warned on unset run_id.
         for db_path_str, run_id in discovered_entries:
-            if not run_id:
-                logger.warning(
-                    "Skipping database %s: could not resolve run_id from path layout",
-                    db_path_str,
-                )
+            if not run_id or run_id == current_run_id:
                 continue
-            if run_id == current_run_id:
-                continue
-            by_run.setdefault(run_id, []).append(db_path_str)
-        for run_id, db_list in by_run.items():
-            run_dir = os.path.join(base_output_dir, run_id)
-            metadata = load_run_dir_record(run_dir)
-            if composition is not None and metadata and metadata.formula:
-                expected_formula = get_cluster_formula(composition)
-                if metadata.formula != expected_formula:
-                    continue
-            all_db_files.extend((p, run_id) for p in db_list)
+            all_db_files.append((db_path_str, run_id))
 
     if not all_db_files:
         logger.info("No previous-run databases found in %s", base_output_dir)
@@ -569,15 +564,19 @@ def load_reference_structures(
     composition: list[str] | None = None,
     max_structures: int = 100,
     base_dir: str | Path | None = None,
+    db_files: list[str | Path] | None = None,
 ) -> list[Atoms]:
     """Load up to `max_structures` final minima from databases matching pattern."""
-    pattern_path = Path(db_glob_pattern)
-    if pattern_path.is_absolute():
-        search_glob = str(pattern_path)
+    if db_files is None:
+        pattern_path = Path(db_glob_pattern)
+        if pattern_path.is_absolute():
+            search_glob = str(pattern_path)
+        else:
+            root = Path(base_dir) if base_dir is not None else Path.cwd()
+            search_glob = str(root / db_glob_pattern)
+        db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_db(p)]
     else:
-        root = Path(base_dir) if base_dir is not None else Path.cwd()
-        search_glob = str(root / db_glob_pattern)
-    db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_db(p)]
+        db_files = [str(p) for p in db_files if is_scgo_db(p)]
 
     if not db_files:
         logger.warning(
@@ -596,11 +595,7 @@ def load_reference_structures(
         try:
             resolved_run_id = resolve_run_id_from_db_path(db_file, base_dir=base_dir)
             if not resolved_run_id:
-                logger.warning(
-                    "Skipping reference database %s: could not resolve run_id "
-                    "from path layout",
-                    db_file,
-                )
+                logger.warning(SKIPPING_DATABASE_NO_RUN_ID, db_file)
                 continue
             try:
                 db_relpath = os.path.relpath(

@@ -23,7 +23,7 @@ def _parse_key_value_pairs_row(row: tuple) -> dict[str, Any]:
         if not kv_json:
             return {}
         return json.loads(kv_json)
-    except (json.JSONDecodeError, TypeError, ValueError, IndexError) as exc:
+    except (json.JSONDecodeError, TypeError, IndexError) as exc:
         logger.debug("Failed to parse key_value_pairs row: %s", exc)
         return {}
 
@@ -153,7 +153,7 @@ def mark_final_minima_in_db(
 
                         try:
                             existing = json.loads(kv_col) if kv_col else {}
-                        except (json.JSONDecodeError, TypeError, ValueError):
+                        except (json.JSONDecodeError, TypeError):
                             existing = {}
 
                         run_id = update["run_id"]
@@ -186,6 +186,7 @@ def mark_final_minima_in_db(
                         rows_updated_this_db += 1
                     return rows_updated_this_db
 
+                # IMMEDIATE is advisory when ASE already has an open transaction.
                 rows_updated_this_db = retry_transaction(
                     db,
                     _mark_rows,
@@ -196,7 +197,7 @@ def mark_final_minima_in_db(
                     total_rows_updated += rows_updated_this_db
                     dbs_touched.add(db_key)
                     details[db_key] = details.get(db_key, 0) + rows_updated_this_db
-        except (sqlite3.DatabaseError, OSError, json.JSONDecodeError, ValueError) as e:
+        except (sqlite3.DatabaseError, OSError, json.JSONDecodeError) as e:
             logger.warning("Failed marking final minima for %s: %s", db_path, e)
             continue
 

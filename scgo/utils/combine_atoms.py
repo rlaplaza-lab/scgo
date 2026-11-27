@@ -51,7 +51,10 @@ def top_layer_indices(
     pos = np.asarray(positions)
     if len(pos) == 0:
         return []
-    top = slab_surface_extreme(pos, axis, upper=True)
-    mask = pos[:, axis] >= top - thickness
-    indices = [i for i, m in enumerate(mask) if m]
-    return indices if indices else list(range(len(pos)))
+    coords = pos[:, axis]
+    order = np.argsort(coords, kind="stable")
+    cutoff = float(coords[order[-1]]) - thickness
+    start = int(np.searchsorted(coords[order], cutoff, side="left"))
+    if start >= len(order):
+        return list(range(len(pos)))
+    return np.sort(order[start:]).tolist()

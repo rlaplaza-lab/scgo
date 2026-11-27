@@ -234,6 +234,24 @@ def test_prepare_run_go_ts_and_ts_search_context(tmp_path: Path) -> None:
     )
     assert go_ts_from_params.go_params.get("surface_config") is cfg
 
+    frozen = SurfaceSystemConfig(slab=cfg.slab, fix_all_slab_atoms=True)
+    frozen_go = get_testing_params()
+    frozen_go["surface_config"] = frozen
+    with pytest.raises(SCGOValidationError, match="fix_all_slab_atoms"):
+        _prepare_run_go_ts_context(
+            [],
+            go_params=frozen_go,
+            ts_params=None,
+            seed=7,
+            verbosity=0,
+            output_dir=tmp_path,
+            output_root=None,
+            output_stem=None,
+            surface_config=None,
+            system_type="surface",
+            adsorbates=None,
+        )
+
     ts = _prepare_run_ts_search_context(
         ["Pt", "Pt"],
         ts_params=_emt_ts_params(system_type="gas_cluster"),

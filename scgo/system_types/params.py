@@ -16,7 +16,12 @@ class CalculatorKwargs(TypedDict, total=False):
 
     model_name: str
     device: str
-    dtype: str
+    default_dtype: str
+    task_name: str
+    version: str
+    dispersion_xc: str | None
+    checkpoint_path: str | None
+    non_conservative: bool
 
 
 class OptimizerSlotParams(TypedDict, total=False):

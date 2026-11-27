@@ -18,6 +18,7 @@ from scgo.system_types import (
     AdsorbateFragmentInput,
     resolve_adsorbate_fragments,
 )
+from scgo.utils.geometry_math import kabsch_rotation
 
 
 def _kabsch_place_template(template: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -27,16 +28,9 @@ def _kabsch_place_template(template: np.ndarray, target: np.ndarray) -> np.ndarr
     if len(template) == 1:
         return target.copy()
 
-    template_com = template.mean(axis=0)
+    template_centered = template - template.mean(axis=0)
     target_com = target.mean(axis=0)
-    template_centered = template - template_com
-    target_centered = target - target_com
-    covariance = template_centered.T @ target_centered
-    u, _singular, vt = np.linalg.svd(covariance)
-    rotation = vt.T @ u.T
-    if np.linalg.det(rotation) < 0.0:
-        vt[-1, :] *= -1.0
-        rotation = vt.T @ u.T
+    rotation = kabsch_rotation(target - target_com, template_centered)
     return (template_centered @ rotation.T) + target_com
 
 

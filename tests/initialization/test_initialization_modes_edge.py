@@ -55,6 +55,7 @@ from scgo.initialization.templates import (
     generate_template_structure,
 )
 from scgo.utils.helpers import get_cluster_formula, get_composition_counts
+from tests.constants import INITIALIZATION_MODES_SMART_FIRST
 from tests.helpers import (
     DIVERSITY_TEST_SAMPLES_LARGE,
     DIVERSITY_TEST_SAMPLES_MEDIUM,
@@ -449,9 +450,7 @@ class TestDisconnectionPrevention:
 class TestNoClashes:
     """Tests to verify no atomic clashes in generated structures."""
 
-    @pytest.mark.parametrize(
-        "mode", ["smart", "random_spherical", "seed+growth", "template"]
-    )
+    @pytest.mark.parametrize("mode", INITIALIZATION_MODES_SMART_FIRST)
     def test_all_modes_no_clashes(self, mode, rng):
         """Test that all modes produce structures without clashes."""
         composition = ["Pt", "Au"] * 5

@@ -307,20 +307,31 @@ def log_generation_offspring_summaries(
     if verbosity >= 1:
         failures: dict[str, int] = {}
         mutation_applied = 0
+        pairing_ok = 0
+        unary_ok = 0
         for result in job_results:
             reason = result.get("failure_reason")
             if reason:
                 failures[str(reason)] = failures.get(str(reason), 0) + 1
+            elif str(result.get("desc") or "").startswith("mutation:"):
+                unary_ok += 1
+            else:
+                pairing_ok += 1
             if result.get("mutation_applied"):
                 mutation_applied += 1
 
         if total_jobs > 0:
-            succeeded = total_jobs - sum(failures.values())
+            detail_parts = []
+            failure_summary = format_count_summary(failures)
+            if failure_summary:
+                detail_parts.append(failure_summary)
+            if unary_ok:
+                detail_parts.append(f"{unary_ok} unary")
             logger.info(
                 "Crossover: %s",
                 with_detail(
-                    format_count_of(succeeded, total_jobs, before="succeeded"),
-                    format_count_summary(failures),
+                    format_count_of(pairing_ok, total_jobs, before="succeeded"),
+                    ", ".join(detail_parts),
                 ),
             )
             logger.info(
@@ -485,9 +496,8 @@ def format_offspring_outcome_line(
     if failure_reason == "validation_failed":
         err = (validation_error or "validation failed").splitlines()[0]
         return f"Offspring {index}: validation failed ({err})"
-    if desc and "mutation:" in desc:
-        op = desc.split("mutation:", 1)[1].strip().split()[0]
-        mutation = f"mutation {op}"
-    else:
-        mutation = "mutation applied" if mutation_applied else "no mutation"
+    if desc and str(desc).startswith("mutation:"):
+        op = str(desc).split("mutation:", 1)[1].strip().split()[0]
+        return f"Offspring {index}: unary mutation {op}, eligible"
+    mutation = "mutation applied" if mutation_applied else "no mutation"
     return f"Offspring {index}: crossover succeeded, {mutation}, eligible"

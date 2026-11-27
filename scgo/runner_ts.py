@@ -19,27 +19,19 @@ from scgo.runner_composition import CompositionInput, _as_composition_list
 from scgo.runner_go import _run_go_trials
 from scgo.runner_params import (
     RunGOTSContext,
-    _coerce_ts_for_runner,
     _connectivity_for_adsorbate_inputs,
     _default_go_ts_output_path,
     _log_completion,
     _log_validation_error,
     _merge_adsorbate_context_into_params,
     _optimizer_write_timing_json_enabled,
+    _prepare_go_ts_preamble,
     _prepare_run_go_ts_context,
     _prepare_run_ts_search_context,
-    _reject_system_keys,
-    _require_system_type,
-    _resolve_go_ts_params,
-    _resolve_surface_config,
-    _resolve_ts_params,
+    _prepare_ts_preamble,
     _resolved_path,
-    _validate_go_ts_param_coherence,
-    _validate_go_ts_surface_config,
-    _with_surface_on_params,
     format_completion_details,
     resolve_run_path_key,
-    resolve_workflow_seed,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
@@ -50,7 +42,6 @@ from scgo.system_types import (
     get_system_policy,
     resolve_adsorbate_run_composition,
     resolve_connectivity_factor,
-    validate_system_type_settings,
 )
 from scgo.ts_search.transition_state_run import (
     run_transition_state_campaign as _ts_campaign,
@@ -58,8 +49,8 @@ from scgo.ts_search.transition_state_run import (
 from scgo.ts_search.transition_state_run import (
     run_transition_state_search as _ts_search,
 )
-from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import configure_logging, get_logger
+from scgo.utils.messages import NO_OUTPUT_DIR_CAMPAIGN_ROOT
 from scgo.utils.output_paths import (
     calculator_slug_from_go_params,
     resolve_campaign_root_from_args,
@@ -70,8 +61,9 @@ from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
-    initialize_ts_params,
     log_ts_configuration,
+    resolve_run_formula,
+    strip_ts_runner_overrides,
 )
 from scgo.utils.timing_report import (
     GO_TS_TIMING_JSON_FILENAME,
@@ -117,11 +109,7 @@ def _run_go_ts_pipeline(
         if isinstance(go_params.get("surface_config"), SurfaceSystemConfig)
         else None
     )
-    formula = (
-        get_cluster_formula(composition)
-        if composition
-        else (getattr(surface_cfg, "name", None) or "surface")
-    )
+    formula = resolve_run_formula(composition, surface_config=surface_cfg)
     path_key = resolve_run_path_key(
         composition,
         system_type=system_type,
@@ -146,9 +134,8 @@ def _run_go_ts_pipeline(
     searches_dir, ts_results_dir = resolve_go_ts_pipeline_paths(output_path, path_key)
 
     pipeline_t0 = perf_counter()
-    merged_ga = go_params
-    calculator_name = merged_ga["calculator"]
-    calculator_kwargs = merged_ga.get("calculator_kwargs", {})
+    calculator_name = go_params["calculator"]
+    calculator_kwargs = go_params.get("calculator_kwargs", {})
     _ = get_calculator_class(calculator_name)
     calculator_for_global_optimization = get_calculator_class(calculator_name)(
         **calculator_kwargs,
@@ -158,7 +145,7 @@ def _run_go_ts_pipeline(
         minima_list = _run_go_trials(
             composition,
             system_type,
-            params=merged_ga,
+            params=go_params,
             seed=seed,
             verbosity=verbosity,
             output_dir=str(searches_dir),
@@ -171,16 +158,7 @@ def _run_go_ts_pipeline(
 
     minima_by_formula = {formula: minima_list}
 
-    ts_kwargs_local = dict(ts_kwargs)
-    ts_kwargs_local.pop("base_dir", None)
-    ts_kwargs_local.pop("seed", None)
-    ts_kwargs_local.pop("verbosity", None)
-    ts_kwargs_local.pop("system_type", None)
-    # The resolved ``cluster_adsorbate_config`` (from go_params below) is passed
-    # explicitly to ``_ts_search``; drop the passthrough copy to avoid a
-    # duplicate-keyword TypeError.
-    ts_kwargs_local.pop("cluster_adsorbate_config", None)
-    write_ts_json = bool(ts_kwargs_local.pop("write_timing_json", False))
+    ts_kwargs_local, write_ts_json = strip_ts_runner_overrides(ts_kwargs)
 
     connectivity_factor_raw = ts_kwargs_local.pop("connectivity_factor", None)
     surface_config_ts = ts_kwargs_local.get("surface_config")
@@ -222,7 +200,7 @@ def _run_go_ts_pipeline(
         "cpu_non_relax_s": max(0.0, elapsed_s - go_wall_s - ts_neb),
     }
     log_timing_summary(logger, "go_ts", go_ts_timings, verbosity=verbosity)
-    write_go_json = _optimizer_write_timing_json_enabled(merged_ga)
+    write_go_json = _optimizer_write_timing_json_enabled(go_params)
     if write_ts_json or write_go_json:
         go_run_dirs = get_run_directories(str(searches_dir))
         ts_run_dirs = get_run_directories(str(ts_results_dir))
@@ -300,6 +278,7 @@ def run_go_ts(
     from scgo import configure
 
     configure()
+    configure_logging(verbosity)
     try:
         context = _prepare_run_go_ts_context(
             composition,
@@ -314,23 +293,23 @@ def run_go_ts(
             system_type=system_type,
             adsorbates=adsorbates,
         )
+        t0 = perf_counter()
+        summary = _run_go_ts_pipeline(
+            context.composition,
+            context.system_type,
+            go_params=context.go_params,
+            ts_kwargs=context.ts_kwargs,
+            adsorbate_definition=context.adsorbate_definition,
+            seed=context.seed,
+            verbosity=context.verbosity,
+            output_dir=context.output_dir,
+        )
+        if log_summary:
+            log_go_ts_summary(logger, summary, wall_time_s=perf_counter() - t0)
+        return summary
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
-    t0 = perf_counter()
-    summary = _run_go_ts_pipeline(
-        context.composition,
-        context.system_type,
-        go_params=context.go_params,
-        ts_kwargs=context.ts_kwargs,
-        adsorbate_definition=context.adsorbate_definition,
-        seed=context.seed,
-        verbosity=context.verbosity,
-        output_dir=context.output_dir,
-    )
-    if log_summary:
-        log_go_ts_summary(logger, summary, wall_time_s=perf_counter() - t0)
-    return summary
 
 
 def run_go_ts_campaign(
@@ -357,37 +336,23 @@ def run_go_ts_campaign(
 
     configure()
     try:
-        st = _require_system_type(system_type, "run_go_ts_campaign")
-        if go_params is not None:
-            _reject_system_keys(go_params, context="run_go_ts_campaign")
-        if ts_params is not None:
-            _reject_system_keys(ts_params, context="run_go_ts_campaign", kind="ts")
-        resolved_surface = _resolve_surface_config(surface_config, go_params)
-        if resolved_surface is None:
-            resolved_surface = _resolve_surface_config(None, ts_params)
-        validate_system_type_settings(system_type=st, surface_config=resolved_surface)
+        prepared = _prepare_go_ts_preamble(
+            context="run_go_ts_campaign",
+            system_type=system_type,
+            surface_config=surface_config,
+            go_params=go_params,
+            ts_params=ts_params,
+            seed=seed,
+        )
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
-    go_mat, ts_mat = _resolve_go_ts_params(
-        system_type=st,
-        surface_config=resolved_surface,
-        go_params=go_params,
-        ts_params=ts_params,
-    )
-    eff_seed = resolve_workflow_seed(seed_kw=seed, go_params=go_mat, ts_params=ts_mat)
-    rng = ensure_rng(eff_seed)
-    go_prep = _with_surface_on_params(go_mat, surface_config=resolved_surface)
-    _validate_go_ts_param_coherence(
-        go_prepared=go_prep,
-        ts_params=ts_mat,
-        system_type=st,
-        surface_config=resolved_surface,
-    )
-    _validate_go_ts_surface_config(
-        system_type=st,
-        surface_config=resolved_surface,
-    )
+    st = prepared.system_type
+    resolved_surface = prepared.resolved_surface
+    go_mat = prepared.go_mat
+    go_prep = prepared.go_prep
+    ts_kwargs = prepared.ts_kwargs
+    rng = ensure_rng(prepared.seed)
 
     full_compositions: list[list[str]] = []
     composition_adsorbate: list = []
@@ -410,12 +375,6 @@ def run_go_ts_campaign(
         full_compositions.append(full_comp)
         composition_adsorbate.append((ads_def, ads_temp))
 
-    ts_kwargs = _coerce_ts_for_runner(
-        ts_mat,
-        fn_name="run_go_ts_campaign",
-        system_type=st,
-        surface_config=resolved_surface,
-    )
     campaign_root = resolve_campaign_root_from_args(
         output_dir,
         output_root=output_root,
@@ -432,9 +391,7 @@ def run_go_ts_campaign(
         calc_slug=calculator_slug_from_go_params(go_mat),
     )
     if output_dir is None and output_root is None:
-        logger.info(
-            "No output_dir provided; using default campaign root %s", campaign_root
-        )
+        logger.info(NO_OUTPUT_DIR_CAMPAIGN_ROOT, campaign_root)
     out: dict[str, dict[str, Any]] = {}
     t0 = perf_counter()
     for comp, (ads_def, ads_temp) in zip(
@@ -587,35 +544,27 @@ def run_ts_campaign(
 
     configure()
     try:
-        st = _require_system_type(system_type, "run_ts_campaign")
-        if ts_params is not None:
-            _reject_system_keys(ts_params, context="run_ts_campaign", kind="ts")
-        resolved_surface = _resolve_surface_config(surface_config, ts_params)
-        validate_system_type_settings(system_type=st, surface_config=resolved_surface)
+        prepared = _prepare_ts_preamble(
+            context="run_ts_campaign",
+            system_type=system_type,
+            surface_config=surface_config,
+            ts_params=ts_params,
+            seed=seed,
+        )
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
-    ts_mat = _resolve_ts_params(
-        ts_params, system_type=st, surface_config=resolved_surface
-    )
-    ts_base = initialize_ts_params(
-        None, system_type=st, surface_config=resolved_surface
-    )
-    eff_seed = resolve_workflow_seed(seed_kw=seed, ts_params=ts_mat)
-    ts_kwargs = _coerce_ts_for_runner(
-        ts_mat,
-        fn_name="run_ts_campaign",
-        system_type=st,
-        surface_config=resolved_surface,
-    )
-    ts_kwargs.pop("system_type", None)  # passed as positional arg below
+    st = prepared.system_type
+    resolved_surface = prepared.resolved_surface
+    ts_mat = prepared.ts_mat
+    ts_kwargs = prepared.ts_kwargs
     configure_logging(verbosity)
     log_ts_configuration(
         ts_mat,
         ts_kwargs,
         verbosity=verbosity,
         user_params=ts_params,
-        base=ts_base,
+        base=prepared.ts_base,
     )
     # ``params`` (calculator name/kwargs) is a named argument of the campaign
     # runner, which forwards it to ``run_transition_state_search`` alongside
@@ -649,7 +598,7 @@ def run_ts_campaign(
         st,
         output_dir=out_path,
         params=ts_calc_params,
-        seed=eff_seed,
+        seed=prepared.seed,
         verbosity=verbosity,
         ts_kwargs=ts_kwargs,
     )

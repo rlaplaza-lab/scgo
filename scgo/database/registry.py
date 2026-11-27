@@ -67,7 +67,6 @@ class DatabaseRegistry:
 
         entry = {
             "path": db_key,
-            "absolute_path": str(db_path_resolved),
             "composition": composition or [],
             "composition_str": self._make_composition_key(composition or []),
             "run_id": run_id,

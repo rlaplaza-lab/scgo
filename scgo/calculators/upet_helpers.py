@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ase import Atoms
-from ase.calculators.calculator import Calculator, all_changes
+from ase.calculators.calculator import Calculator
 
+from scgo.calculators.inner_calculator import InnerDelegatingCalculator
 from scgo.calculators.torch_device import resolve_torch_device
-from scgo.exceptions import SCGONotImplementedError
+from scgo.constants import DEFAULT_UPET_MODEL, DEFAULT_UPET_VERSION
+from scgo.exceptions import SCGOConfigurationError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import (
     ensure_mace_uma_not_both_installed,
@@ -23,7 +24,7 @@ _MISSING_UPET_MSG = (
 )
 
 
-class UPET(Calculator):
+class UPET(InnerDelegatingCalculator):
     r"""ASE calculator wrapping UPET checkpoints via ``upet.calculator.UPETCalculator``.
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
@@ -35,8 +36,8 @@ class UPET(Calculator):
 
     def __init__(
         self,
-        model_name: str = "pet-mad-s",
-        version: str = "1.5.0",
+        model_name: str = DEFAULT_UPET_MODEL,
+        version: str = DEFAULT_UPET_VERSION,
         device: str | None = None,
         checkpoint_path: str | None = None,
         non_conservative: bool = False,
@@ -46,7 +47,7 @@ class UPET(Calculator):
         try:
             from upet.calculator import UPETCalculator
         except ImportError as e:
-            raise SCGONotImplementedError(_MISSING_UPET_MSG) from e
+            raise SCGOConfigurationError(_MISSING_UPET_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UPET")
 
@@ -67,30 +68,15 @@ class UPET(Calculator):
         # calculator`` honours an explicit device="cpu" instead of falling back
         # to "CUDA if available".
         self.device = dev
-        self._inner = UPETCalculator(
-            model=model_name if checkpoint_path is None else None,
-            version=version,
-            device=dev,
-            checkpoint_path=checkpoint_path,
-            non_conservative=non_conservative,
+        self._install_inner(
+            UPETCalculator(
+                model=model_name if checkpoint_path is None else None,
+                version=version,
+                device=dev,
+                checkpoint_path=checkpoint_path,
+                non_conservative=non_conservative,
+            )
         )
-        self.implemented_properties = list(self._inner.implemented_properties)
-
-    def calculate(
-        self,
-        atoms: Atoms | None = None,
-        properties: list[str] | None = None,
-        system_changes: list[str] = all_changes,
-    ) -> None:
-        if properties is None:
-            properties = self.implemented_properties
-        super().calculate(atoms, properties, system_changes)
-        self._inner.calculate(
-            atoms=self.atoms,
-            properties=properties,
-            system_changes=system_changes,
-        )
-        self.results = self._inner.results
 
 
 def disable_metatomic_nvalchemiops() -> None:

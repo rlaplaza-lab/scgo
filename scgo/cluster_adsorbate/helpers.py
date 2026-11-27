@@ -28,7 +28,7 @@ def parse_positive_fragment_lengths(raw: object) -> list[int]:
     """Return positive fragment lengths from an adsorbate_definition field.
 
     Raises:
-        ValueError: If *raw* is not a list or contains no positive integer lengths.
+        SCGOValidationError: If *raw* is not a list or contains no positive integer lengths.
     """
     if not isinstance(raw, list):
         raise SCGOValidationError(

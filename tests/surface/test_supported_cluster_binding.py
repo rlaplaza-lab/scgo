@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.build import fcc111
 
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.geometry_helpers import (
@@ -17,12 +16,16 @@ from scgo.surface.validation import (
     _mobile_indices_touch_slab,
     validate_supported_cluster_deposit,
 )
-from scgo.system_types import validate_structure_for_system_type
+from scgo.system_types import (
+    StructureValidationPolicy,
+    validate_structure_for_system_type,
+)
+from tests.helpers import build_pt111_slab
 
 
 @pytest.fixture
 def pt_slab() -> Atoms:
-    return fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    return build_pt111_slab()
 
 
 def _z(pt_slab: Atoms) -> float:
@@ -210,12 +213,21 @@ def test_validate_supported_cluster_deposit_flag_matrix(pt_slab: Atoms, case) ->
     _name, build, flags, expect_ok, expect_msg = case
     n_slab = len(pt_slab)
     combined = build(pt_slab)
+    call_flags = dict(flags)
+    policy_keys = (
+        "allow_cluster_fragmentation",
+        "allow_adsorbate_surface_detachment",
+    )
+    policy_kwargs = {
+        key: call_flags.pop(key) for key in policy_keys if key in call_flags
+    }
     ok, msg = validate_supported_cluster_deposit(
         combined,
         n_slab,
         surface_normal_axis=2,
         use_mic=False,
-        **flags,
+        validation=StructureValidationPolicy(**policy_kwargs),
+        **call_flags,
     )
     if expect_ok:
         assert ok, msg
@@ -250,8 +262,10 @@ def test_validate_structure_for_system_type_respects_connectivity_flags(
             system_type="surface_cluster",
             surface_config=surface_config,
             n_slab=n_slab,
-            allow_cluster_fragmentation=False,
-            allow_adsorbate_surface_detachment=False,
+            validation=StructureValidationPolicy(
+                allow_cluster_fragmentation=False,
+                allow_adsorbate_surface_detachment=False,
+            ),
         )
 
     validate_structure_for_system_type(
@@ -259,8 +273,10 @@ def test_validate_structure_for_system_type_respects_connectivity_flags(
         system_type="surface_cluster",
         surface_config=surface_config,
         n_slab=n_slab,
-        allow_cluster_fragmentation=True,
-        allow_adsorbate_surface_detachment=False,
+        validation=StructureValidationPolicy(
+            allow_cluster_fragmentation=True,
+            allow_adsorbate_surface_detachment=False,
+        ),
     )
 
 
@@ -303,8 +319,10 @@ def test_contact_with_buried_slab_atom_is_rejected_in_both_paths() -> None:
         len(slab),
         surface_normal_axis=2,
         use_mic=False,
-        allow_cluster_fragmentation=True,
-        allow_adsorbate_surface_detachment=True,
+        validation=StructureValidationPolicy(
+            allow_cluster_fragmentation=True,
+            allow_adsorbate_surface_detachment=True,
+        ),
     )
     assert not ok_split
     assert "Every mobile subgroup must touch the slab" in msg_split
@@ -373,8 +391,10 @@ def test_validate_supported_cluster_deposit_rejects_dissociated_adsorbate_fragme
         use_mic=False,
         n_core_mobile=2,
         adsorbate_fragment_lengths=[2, 2],
-        allow_cluster_fragmentation=True,
-        allow_adsorbate_surface_detachment=True,
+        validation=StructureValidationPolicy(
+            allow_cluster_fragmentation=True,
+            allow_adsorbate_surface_detachment=True,
+        ),
     )
     assert not ok
     assert "fragment integrity check failed" in msg
@@ -408,9 +428,11 @@ def test_validate_supported_cluster_deposit_allows_dissociation_when_integrity_d
         use_mic=False,
         n_core_mobile=2,
         adsorbate_fragment_lengths=[2, 2],
-        allow_cluster_fragmentation=True,
-        allow_adsorbate_surface_detachment=True,
-        enforce_adsorbate_subgraph_integrity=False,
+        validation=StructureValidationPolicy(
+            allow_cluster_fragmentation=True,
+            allow_adsorbate_surface_detachment=True,
+            enforce_adsorbate_subgraph_integrity=False,
+        ),
     )
     assert ok, msg
 
@@ -438,8 +460,10 @@ def test_validate_supported_cluster_deposit_rejects_cross_fragment_adsorbate_bon
         use_mic=False,
         n_core_mobile=2,
         adsorbate_fragment_lengths=[2, 1],
-        allow_cluster_fragmentation=True,
-        allow_adsorbate_surface_detachment=True,
+        validation=StructureValidationPolicy(
+            allow_cluster_fragmentation=True,
+            allow_adsorbate_surface_detachment=True,
+        ),
     )
     assert not ok
     assert "bonded to fragment" in msg

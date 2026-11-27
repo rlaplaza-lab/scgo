@@ -162,7 +162,6 @@ TEMPLATE_DIVERSITY_BOOST_FACTOR = 0.15
 
 # Tolerance and thresholds
 LINEAR_GEOMETRY_TOLERANCE = 1e-4  # Tolerance for linear geometry detection
-ROTATION_AXIS_TOLERANCE = 1e-10  # Tolerance for rotation axis normalization
 POSITION_COMPARISON_TOLERANCE_FACTOR = 0.05  # 5% of bond length for position comparison
 SMART_FILTERING_PERTURBATION_SCALE = (
     0.3  # Reduced perturbation scale for smart facet filtering

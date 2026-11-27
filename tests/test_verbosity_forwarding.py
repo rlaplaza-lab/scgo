@@ -23,7 +23,7 @@ from scgo.runner_api import run_go, run_go_campaign
 from scgo.ts_search.parallel_neb import run_parallel_neb_search
 from scgo.ts_search.transition_state import find_transition_state
 from scgo.utils.logging import log_info_v
-from scgo.utils.ts_runner_kwargs import NebRunConfig
+from tests.ts_search.neb_fixtures import _gas_neb_cfg
 
 CORE_LOGGER_NAME = "scgo.minima_search.core"
 
@@ -37,45 +37,6 @@ class _RecordingHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         self.records.append(record)
-
-
-def _gas_neb_cfg(**overrides) -> NebRunConfig:
-    """Minimal gas-cluster NebRunConfig for verbosity forwarding stubs."""
-    kwargs: dict = {
-        "neb_n_images": 3,
-        "neb_spring_constant": 0.1,
-        "neb_fmax": 0.05,
-        "neb_steps": 1,
-        "neb_climb": False,
-        "neb_interpolation_method": "linear",
-        "neb_align_endpoints": False,
-        "neb_perturb_sigma": 0.0,
-        "neb_interpolation_mic": False,
-        "neb_tangent_method": "aseneb",
-        "neb_surface_cell_remap": True,
-        "neb_surface_lattice_rotation": True,
-        "neb_surface_max_lattice_shift": 1,
-        "n_slab": 0,
-        "n_core_mobile": None,
-        "n_adsorbate_mobile": None,
-        "adsorbate_fragment_lengths": None,
-        "max_endpoint_mismatch": None,
-        "neb_prescreen_clash_distance": 1.0,
-        "min_saddle_prominence": 0.10,
-        "neb_max_spurious_barrier": 8.0,
-        "layer_cluster_threshold_ang": 0.4,
-        "neb_interpolation_bond_tolerance_a": 0.5,
-        "adsorbate_definition": None,
-        "connectivity_factor": None,
-        "allow_cluster_fragmentation": False,
-        "allow_adsorbate_surface_detachment": False,
-        "enforce_adsorbate_subgraph_integrity": True,
-        "system_type": "gas_cluster",
-        "surface_config": None,
-        "torchsim_params": {},
-    }
-    kwargs.update(overrides)
-    return NebRunConfig(**kwargs)
 
 
 @pytest.fixture
@@ -271,7 +232,7 @@ def test_parallel_neb_forwards_verbosity_to_interpolate_and_save(
     results, _meta = run_parallel_neb_search(
         pairs,
         minima,
-        neb_cfg=_gas_neb_cfg(),
+        neb_cfg=_gas_neb_cfg(neb_steps=1),
         run_dir=Path(tmp_path),
         rng=None,
         relaxer=MagicMock(),

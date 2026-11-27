@@ -235,7 +235,7 @@ def _boltzmann_sample(
 
     # At this point, temperature is guaranteed to be a float, but mypy can't narrow the type
     if temperature is None:
-        raise TypeError("temperature must be a float after adaptive clamping")
+        raise SCGOValidationError("temperature must be a float after adaptive clamping")
 
     # Validate temperature
     if temperature <= 0:
@@ -643,7 +643,7 @@ def _filter_candidates_by_geometry(
         suitable = []
         for energy, atoms in candidates:
             geometry = _classify_seed_geometry(atoms)
-            if geometry in ["planar", "3d"]:
+            if geometry in ("planar", "3d"):
                 suitable.append((energy, atoms))
         if suitable:
             filtered[formula] = suitable
@@ -768,7 +768,7 @@ def _grow_from_random_seed(
         return None
 
     try:
-        result = grow_from_seed(
+        return grow_from_seed(
             seed_atoms=seed_atoms,
             target_composition=composition,
             placement_radius_scaling=placement_radius_scaling,
@@ -777,7 +777,6 @@ def _grow_from_random_seed(
             min_distance_factor=min_distance_factor,
             connectivity_factor=connectivity_factor,
         )
-        return result
     except (ValueError, SCGOValidationError):
         logger.debug(
             "Growth from random seed failed for composition %s",
@@ -860,7 +859,7 @@ def _sample_suitable_seed(
     for attempt in range(max_attempts):
         sampled = _sample_seed_with_strategy(
             [(e, a) for e, a, _ in available_candidates],
-            strategy=(strategy + attempt) % 5,
+            strategy=(strategy + attempt) % SEED_COMBINATION_STRATEGY_COUNT,
             rng=rng,
         )
 
@@ -879,7 +878,7 @@ def _sample_suitable_seed(
         ]
 
         # Accept if suitable geometry
-        if geometry not in ["planar", "3d"]:
+        if geometry not in ("planar", "3d"):
             rejection_counts[f"unsuitable {geometry} geometry"] += 1
             if not available_candidates:
                 break
@@ -1138,14 +1137,13 @@ def _try_strategies_in_order(
                     )
                     return validated_atoms, strategy_name, fallback_from
                 return validated_atoms
-            else:
-                if not is_last_strategy:
-                    next_strategy = strategies[idx + 1][0]
-                    logger.debug(
-                        "%s strategy returned None, falling back to %s",
-                        strategy_name,
-                        next_strategy,
-                    )
+            if not is_last_strategy:
+                next_strategy = strategies[idx + 1][0]
+                logger.debug(
+                    "%s strategy returned None, falling back to %s",
+                    strategy_name,
+                    next_strategy,
+                )
         except (ValueError, RuntimeError, SCGOValidationError) as e:
             if is_last_strategy:
                 raise
@@ -1241,12 +1239,6 @@ def create_initial_cluster(
             if ``mode`` is unsupported, or if a valid cluster satisfying the
             distance/connectivity constraints cannot be constructed.
         SCGORuntimeError: If every initialization strategy returned ``None``.
-
-    Note:
-        This function is implemented as a wrapper around
-        :func:`create_initial_cluster_batch` to ensure consistent behavior.
-        For generating multiple structures, use :func:`create_initial_cluster_batch`
-        directly for better performance and deterministic strategy allocation.
 
     """
     results = create_initial_cluster_batch(
@@ -1582,7 +1574,7 @@ def plan_batch_initialization(
         # In smart mode, the exact-match tier is discovered together with the
         # sub-composition (seed) tier in a single DB scan. Other modes never
         # allocate exact matches, so we keep using the cheaper sub-only scan.
-        if mode == "smart" and n_atoms > 2 and reuse_exact_matches:
+        if mode == "smart" and reuse_exact_matches:
             sub, exact_candidates = _discover_all_candidates(
                 composition, previous_search_glob
             )

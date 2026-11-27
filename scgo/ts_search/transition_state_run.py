@@ -30,6 +30,7 @@ from scgo.surface.constraints import (
 from scgo.system_types import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    StructureValidationPolicy,
     SystemType,
     as_adsorbate_definition,
     get_system_policy,
@@ -56,6 +57,7 @@ from scgo.utils.logging import (
     log_debug_v,
     log_info_v,
 )
+from scgo.utils.messages import TS_NEED_AT_LEAST_TWO_MINIMA_TO_FIND_TS
 from scgo.utils.output_paths import resolve_ts_campaign_paths
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.phase_logging import format_count_of, log_neb_search_summaries
@@ -72,15 +74,19 @@ from scgo.utils.ts_runner_kwargs import NebRunConfig
 from scgo.utils.validation import validate_composition
 
 from .neb_endpoints import prepare_neb_endpoints
-from .parallel_neb import _evaluate_bands_in_chunks, run_parallel_neb_search
+from .parallel_neb import (
+    _evaluate_bands_in_chunks,
+    normalize_parallel_neb_band_cap,
+    run_parallel_neb_search,
+)
 from .transition_state import (
     _detach_calc,
-    attach_minima_traceability,
     find_transition_state,
     idpp_band_optimization_priority,
     interpolate_path,
-    load_completed_neb_result,
-    make_ts_result,
+    make_ts_result_from_config,
+    record_pair_result,
+    resume_completed_pair,
     save_neb_result,
     validate_initial_neb_energy_profile,
     validate_initial_neb_path,
@@ -96,6 +102,8 @@ from .ts_network import (
     save_ts_network_metadata,
     tag_unique_ts_in_databases,
 )
+
+logger = get_logger(__name__)
 
 __all__ = [
     "run_transition_state_search",
@@ -197,9 +205,11 @@ def _prioritize_adsorbate_pairs_by_idpp(
         valid_pairs.append((i, j, images))
 
     if not valid_pairs:
-        logger.info(
+        log_info_v(
+            logger,
             "Adsorbate IDPP priority screen: %s passed geometry screening",
             format_count_of(0, len(pairs), after="pairs"),
+            verbosity=verbosity,
         )
         return []
 
@@ -207,11 +217,7 @@ def _prioritize_adsorbate_pairs_by_idpp(
     # (no single unbounded fused launch, which OOM'd the 16 GB T4). Energy lists
     # are returned per band, in input order.
     bands = [images for _i, _j, images in valid_pairs]
-    band_cap = (
-        int(parallel_neb_max_bands)
-        if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
-        else None
-    )
+    band_cap = normalize_parallel_neb_band_cap(parallel_neb_max_bands)
     band_energy_lists = _evaluate_bands_in_chunks(
         bands,
         relaxer,
@@ -253,11 +259,13 @@ def _prioritize_adsorbate_pairs_by_idpp(
     # NEB budget on endpoint-max slides (CI-NEB often climbs into junk).
     chosen = robust if robust else ranked
     kept = [(i, j, images) for _priority, i, j, images in chosen[: int(max_pairs)]]
-    logger.info(
+    log_info_v(
+        logger,
         "Adsorbate IDPP priority screen: %s kept "
         "(%d robust-interior candidates in pool)",
         format_count_of(len(kept), len(pairs), after="pairs"),
         len(robust),
+        verbosity=verbosity,
     )
     return kept
 
@@ -283,15 +291,9 @@ def _run_serial_neb_search(
     ``prebuilt_bands`` maps ``(i, j)`` to IDPP-screen images (with cached forces)
     so NEB can skip a second interpolation and single-point.
     """
-    logger = get_logger(__name__)
     ts_results: list[dict[str, Any]] = []
     torchsim_params = neb_cfg.torchsim_params or {}
     system_type = neb_cfg.system_type
-    neb_steps = (
-        int(neb_cfg.neb_steps)
-        if isinstance(neb_cfg.neb_steps, int)
-        else neb_cfg.neb_steps
-    )
 
     shared_relaxer = None
     if use_torchsim:
@@ -309,7 +311,9 @@ def _run_serial_neb_search(
         pair_dir = run_dir / f"pair_{pair_id}"
         pair_dir.mkdir(parents=True, exist_ok=True)
 
-        resumed = load_completed_neb_result(pair_dir, pair_id)
+        resumed = resume_completed_pair(
+            pair_dir, pair_id, minima, i, j, system_type=system_type
+        )
         if resumed is not None:
             log_info_v(
                 logger,
@@ -318,9 +322,6 @@ def _run_serial_neb_search(
                 pair_id,
                 verbosity=verbosity,
             )
-            resumed["system_type"] = system_type
-            if "minima_indices" not in resumed:
-                attach_minima_traceability(resumed, minima, i, j)
             ts_results.append(resumed)
             continue
 
@@ -335,25 +336,25 @@ def _run_serial_neb_search(
         try:
             react_ep, prod_ep = prepare_neb_endpoints(atoms_i, atoms_j, neb_cfg)
         except (ValueError, SCGOValidationError) as e:
-            skipped = make_ts_result(
+            skipped = make_ts_result_from_config(
+                neb_cfg,
                 pair_id=pair_id,
-                n_images=neb_cfg.neb_n_images,
-                spring_constant=neb_cfg.neb_spring_constant,
                 use_torchsim=use_torchsim,
-                fmax=neb_cfg.neb_fmax,
-                neb_steps=neb_steps,
-                interpolation_method=neb_cfg.neb_interpolation_method,
-                climb=neb_cfg.neb_climb,
-                align_endpoints=neb_cfg.neb_align_endpoints,
-                perturb_sigma=neb_cfg.neb_perturb_sigma,
-                neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
-                neb_tangent_method=neb_cfg.neb_tangent_method,
                 reactant_energy=energy_i,
                 product_energy=energy_j,
                 error=str(e),
             )
             skipped["status"] = "skipped"
-            attach_minima_traceability(skipped, minima, i, j)
+            record_pair_result(
+                skipped,
+                minima,
+                i,
+                j,
+                pair_dir=pair_dir,
+                pair_id=pair_id,
+                system_type=system_type,
+                save=False,
+            )
             ts_results.append(skipped)
             continue
 
@@ -393,19 +394,10 @@ def _run_serial_neb_search(
                     "Detected CUDA OOM for pair %s; freed cached GPU memory",
                     pair_id,
                 )
-            result = make_ts_result(
+            result = make_ts_result_from_config(
+                neb_cfg,
                 pair_id=pair_id,
-                n_images=neb_cfg.neb_n_images,
-                spring_constant=neb_cfg.neb_spring_constant,
                 use_torchsim=use_torchsim,
-                fmax=neb_cfg.neb_fmax,
-                neb_steps=neb_steps,
-                interpolation_method=neb_cfg.neb_interpolation_method,
-                climb=neb_cfg.neb_climb,
-                align_endpoints=neb_cfg.neb_align_endpoints,
-                perturb_sigma=neb_cfg.neb_perturb_sigma,
-                neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
-                neb_tangent_method=neb_cfg.neb_tangent_method,
                 reactant_energy=energy_i,
                 product_energy=energy_j,
                 error=str(e),
@@ -413,11 +405,18 @@ def _run_serial_neb_search(
 
         if result.get("transition_state") is not None:
             _detach_calc(result["transition_state"])
-        result["system_type"] = system_type
-
-        attach_minima_traceability(result, minima, i, j)
+        record_pair_result(
+            result,
+            minima,
+            i,
+            j,
+            pair_dir=pair_dir,
+            pair_id=pair_id,
+            system_type=system_type,
+            verbosity=verbosity,
+            save_fn=save_neb_result,
+        )
         ts_results.append(result)
-        save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
 
         if not use_torchsim and calculator is not None:
             del calculator
@@ -447,7 +446,6 @@ def _warn_on_surface_mobile_indices(
     Warnings about ``all atoms mobile`` apply only when that partition is
     unavailable.
     """
-    logger = get_logger(__name__)
     policy = get_system_policy(system_type)
     if not policy.uses_surface:
         return
@@ -484,15 +482,7 @@ def _apply_surface_ts_geometry_gate(
     surface_config: SurfaceSystemConfig | None,
     system_type: SystemType,
     adsorbate_definition: Any | None = None,
-    connectivity_factor: ConnectivityFactorInput
-    | NormalizedConnectivityFactor
-    | None = None,
-    cluster_adsorbate_config: Any | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
-    binding_penetration_tolerance_a: float = 0.1,
-    n_slab_deposit: int | None = None,
+    validation: StructureValidationPolicy | None = None,
     run_dir: Path | None = None,
     verbosity: int = 1,
 ) -> None:
@@ -508,11 +498,6 @@ def _apply_surface_ts_geometry_gate(
         return
 
     n_slab = len(surface_config.slab)
-    cf = resolve_connectivity_factor(
-        connectivity_factor,
-        cluster_adsorbate_config=cluster_adsorbate_config,
-        surface_config=surface_config,
-    )
     checks = (
         ("reactant", "reactant_structure"),
         ("product", "product_structure"),
@@ -537,13 +522,7 @@ def _apply_surface_ts_geometry_gate(
                     surface_config=surface_config,
                     n_slab=n_slab,
                     adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=cf,
-                    cluster_adsorbate_config=cluster_adsorbate_config,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    binding_penetration_tolerance_a=binding_penetration_tolerance_a,
-                    n_slab_deposit=n_slab_deposit,
+                    validation=validation,
                 )
             except SCGOValidationError as exc:
                 result["status"] = "failed"
@@ -747,7 +726,6 @@ def run_transition_state_search(
             ``use_parallel_neb=True`` is requested without TorchSim.
     """
     configure_logging(verbosity)
-    logger = get_logger(__name__)
     cleanup_torch_cuda(logger=logger)
 
     connectivity_factor = resolve_connectivity_factor(
@@ -1045,7 +1023,7 @@ def run_transition_state_search(
                 else DEFAULT_PAIR_COR_MAX
             ),
         )
-        if verbosity >= 1 and len(minima) != original_count:
+        if len(minima) != original_count:
             log_info_v(
                 logger,
                 "Deduplicated minima for %s: %d -> %d unique entries",
@@ -1056,7 +1034,7 @@ def run_transition_state_search(
             )
 
     if len(minima) < 2:
-        logger.error("Only %d minima found, need at least 2 to find TS", len(minima))
+        logger.error(TS_NEED_AT_LEAST_TWO_MINIMA_TO_FIND_TS, len(minima))
         cleanup_torch_cuda(logger=logger)
         return []
 
@@ -1363,16 +1341,18 @@ def run_transition_state_search(
         surface_config=surface_config,
         system_type=system_type,
         adsorbate_definition=adsorbate_definition,
-        connectivity_factor=connectivity_factor,
-        cluster_adsorbate_config=cluster_adsorbate_config,
-        allow_cluster_fragmentation=allow_cluster_fragmentation,
-        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-        binding_penetration_tolerance_a=binding_penetration_tolerance_a,
-        n_slab_deposit=(
-            int(slab_search_partition.n_fixed)
-            if slab_search_partition is not None
-            else None
+        validation=StructureValidationPolicy(
+            connectivity_factor=connectivity_factor,
+            cluster_adsorbate_config=cluster_adsorbate_config,
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+            binding_penetration_tolerance_a=binding_penetration_tolerance_a,
+            n_slab_deposit=(
+                int(slab_search_partition.n_fixed)
+                if slab_search_partition is not None
+                else None
+            ),
         ),
         run_dir=run_dir,
         verbosity=verbosity,
@@ -1453,7 +1433,6 @@ def run_transition_state_campaign(
     result list.
     """
     configure_logging(verbosity)
-    logger = get_logger(__name__)
 
     ts_kwargs = dict(ts_kwargs or {})
     # ``params`` and ``system_type`` are named arguments of this function and are

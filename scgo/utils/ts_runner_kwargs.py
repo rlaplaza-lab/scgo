@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from scgo.calculators.dispersion import dispersion_xc_for_mace_kwargs
+from scgo.calculators.torchsim_params import build_torchsim_params
 from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.param_presets import TS_POSTPROCESS_DEFAULTS, get_ts_defaults
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import ConnectivityFactorInput, SystemType, get_system_policy
+from scgo.utils.calculator_names import normalize_calculator_name
 from scgo.utils.torchsim_policy import resolve_ts_torchsim_flags
 
 
@@ -141,6 +142,18 @@ _TS_PARAM_ALLOWLIST: frozenset[str] = (
 )
 
 
+def ts_config_log_keys() -> tuple[str, ...]:
+    """Allowlisted TS keys printed by ``log_ts_configuration``, in allowlist order."""
+    ordered = (
+        *_TS_PARAM_PASSTHROUGH_KEYS,
+        *_TS_PARAM_NEB_KEYS,
+        *_TS_PARAM_GENERIC_DEFAULTS,
+        "use_torchsim",
+        "use_parallel_neb",
+    )
+    return tuple(dict.fromkeys(ordered))
+
+
 def coerce_ts_params_to_runner_kwargs(
     ts_params: dict[str, Any] | None,
     *,
@@ -222,42 +235,26 @@ def coerce_ts_params_to_runner_kwargs(
         # real workload (native torch-sim estimation needs no synthetic probe).
         kwargs["torchsim_params"]["expected_max_atoms"] = int(ts_batch_atoms)
         kwargs["torchsim_params"]["max_atoms_to_try"] = int(ts_batch_atoms)
-    if str(ts_params.get("calculator", "")).strip().upper() == "UMA":
-        ck = ts_params.get("calculator_kwargs", {}) or {}
-        model_name = ck.get("model_name")
-        task_name = ck.get("task_name")
-        if not model_name or not task_name:
+    calc_name = normalize_calculator_name(ts_params.get("calculator", ""))
+    ck = ts_params.get("calculator_kwargs", {}) or {}
+    if calc_name == "UMA":
+        if not ck.get("model_name") or not ck.get("task_name"):
             raise SCGOValidationError(
                 "UMA transition-state search requires calculator_kwargs with "
                 "'model_name' and 'task_name' (set via get_ts_search_params())."
             )
-        kwargs["torchsim_params"].update(
-            {
-                "model_kind": "fairchem",
-                "fairchem_model_name": str(model_name),
-                "fairchem_task_name": str(task_name),
-            }
-        )
-    elif str(ts_params.get("calculator", "")).strip().upper() == "UPET":
-        ck = ts_params.get("calculator_kwargs", {}) or {}
-        model_name = ck.get("model_name")
-        if not model_name and not ck.get("checkpoint_path"):
+        kwargs["torchsim_params"].update(build_torchsim_params(calc_name, ck))
+    elif calc_name == "UPET":
+        if not ck.get("model_name") and not ck.get("checkpoint_path"):
             raise SCGOValidationError(
                 "UPET transition-state search requires calculator_kwargs with "
                 "'model_name' or 'checkpoint_path' (set via get_ts_search_params())."
             )
-        kwargs["torchsim_params"].update(
-            {
-                "model_kind": "upet",
-                "upet_model_name": str(model_name) if model_name else None,
-                "upet_version": ck.get("version"),
-                "upet_checkpoint_path": ck.get("checkpoint_path"),
-                "upet_non_conservative": bool(ck.get("non_conservative", False)),
-            }
-        )
-    elif str(ts_params.get("calculator", "")).strip().upper() == "MACE":
-        ck = ts_params.get("calculator_kwargs", {}) or {}
-        kwargs["torchsim_params"]["dispersion_xc"] = dispersion_xc_for_mace_kwargs(ck)
+        kwargs["torchsim_params"].update(build_torchsim_params(calc_name, ck))
+    elif calc_name == "MACE":
+        kwargs["torchsim_params"]["dispersion_xc"] = build_torchsim_params(
+            calc_name, ck
+        )["dispersion_xc"]
     user_torchsim = ts_params.get("torchsim_params")
     if isinstance(user_torchsim, dict):
         kwargs["torchsim_params"].update(user_torchsim)

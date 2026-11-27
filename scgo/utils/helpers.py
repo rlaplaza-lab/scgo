@@ -27,6 +27,7 @@ from scipy.spatial import KDTree
 
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
+    DEFAULT_CROSS_WEIGHT,
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_FMAX_THRESHOLD,
     DEFAULT_IMAG_FREQ_THRESHOLD,
@@ -286,6 +287,17 @@ def copy_atoms(atoms: Atoms) -> Atoms:
     return out
 
 
+@contextlib.contextmanager
+def calculator_detached(atoms: Atoms):
+    """Temporarily clear ``atoms.calc`` (e.g. for pickle-safe DB setup)."""
+    calc = atoms.calc
+    atoms.calc = None
+    try:
+        yield atoms
+    finally:
+        atoms.calc = calc
+
+
 def _extxyz_info_value_serializable(value: object) -> bool:
     """True if ASE ``extxyz`` can JSON-encode ``value`` (after ndarray→list)."""
     candidate: object = value
@@ -344,7 +356,7 @@ def extract_energy_from_atoms(atoms: Atoms) -> float | None:
     try:
         return atoms.get_potential_energy()
     except (RuntimeError, AttributeError):
-        get_logger(__name__).debug(
+        logger.debug(
             "Could not extract energy from atoms",
             exc_info=True,
         )
@@ -644,7 +656,7 @@ def is_true_minimum(
         expected_zero_modes = 5 if is_linear else 6
 
     logger.debug(
-        "Check passed: Found 0 imaginary frequencies below -%.1f cm-1",
+        "Check passed: 0 imaginary frequencies more negative than %.1f cm-1",
         imag_freq_threshold,
     )
     logger.debug(
@@ -781,7 +793,7 @@ def filter_unique_minima(
     comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
     blocks: ComparatorBlocks | None = None,
     component_weights: dict[str, float] | None = None,
-    cross_weight: float = 1.0,
+    cross_weight: float = DEFAULT_CROSS_WEIGHT,
 ) -> list[tuple[float, Atoms]]:
     """Filters a list of (energy, Atoms) tuples to identify unique structures.
 

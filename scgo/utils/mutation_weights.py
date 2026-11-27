@@ -7,7 +7,9 @@ optimization stage (generation number).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, assert_never
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -27,6 +29,29 @@ def _renormalize_weights(weights: dict[str, float]) -> dict[str, float]:
             return {}
         return dict.fromkeys(non_negative, 1.0 / n)
     return {k: v / total for k, v in non_negative.items()}
+
+
+def _drop_overlap_relief_when_frozen(
+    weights: dict[str, float],
+    *,
+    freeze_adsorbate_internal_geometry: bool,
+    adsorbate_definition: AdsorbateDefinition | None,
+) -> dict[str, float]:
+    """Drop ``overlap_relief`` when the GA registry omits it under freeze.
+
+    Frozen tagged adsorbate searches skip that operator; leaving the key in the
+    weight table triggers a per-generation unmatched-key warning.
+    """
+    if (
+        not freeze_adsorbate_internal_geometry
+        or adsorbate_definition is None
+        or not adsorbate_definition.adsorbate_symbols
+        or "overlap_relief" not in weights
+    ):
+        return weights
+    trimmed = dict(weights)
+    trimmed.pop("overlap_relief")
+    return _renormalize_weights(trimmed)
 
 
 def _compute_stagnation_level(
@@ -212,6 +237,236 @@ def snapshot_operator_credit(
     }
 
 
+@dataclass(frozen=True)
+class _WeightProfile:
+    """Raw operator weights (``None`` → alloy base); floors/drop after normalize."""
+
+    weights: Mapping[str, float] | None
+    use_permutation: bool
+    floors: Mapping[str, float] = field(default_factory=dict)
+    drop: tuple[str, ...] = ()
+    carve_fragment_detach: bool = False
+
+
+WeightMode = Literal["adaptive", "static"]
+
+# Alloy-only structural bases (majority vs mixed); surface keys enter as floors.
+_ALLOY_STRUCTURAL_WEIGHTS: dict[str, dict[str, float]] = {
+    "majority": {
+        "rattle": 0.14,
+        "overlap_relief": 0.14,
+        "permutation": 0.18,
+        "shell_swap": 0.12,
+        "flattening": 0.11,
+        "rotational": 0.07,
+        "anisotropic_rattle": 0.11,
+        "breathing": 0.05,
+    },
+    "mixed": {
+        "rattle": 0.13,
+        "overlap_relief": 0.12,
+        "permutation": 0.18,
+        "shell_swap": 0.14,
+        "flattening": 0.10,
+        "rotational": 0.07,
+        "anisotropic_rattle": 0.10,
+        "breathing": 0.04,
+    },
+}
+
+_SURFACE_ALLOY_DROP = (
+    "flattening",
+    "rotational",
+    "mirror",
+    "anisotropic_rattle",
+    "breathing",
+    "shell_swap",
+)
+
+# Key: (system_type, mode, is_alloy). Adaptive and static tables differ on purpose.
+_WEIGHT_PROFILES: dict[tuple[str, WeightMode, bool], _WeightProfile] = {
+    ("gas_cluster", "adaptive", True): _WeightProfile(None, True),
+    ("gas_cluster", "adaptive", False): _WeightProfile(
+        {
+            "rattle": 0.24,
+            "overlap_relief": 0.18,
+            "flattening": 0.18,
+            "rotational": 0.14,
+            "anisotropic_rattle": 0.14,
+            "breathing": 0.05,
+        },
+        False,
+    ),
+    ("gas_cluster", "static", True): _WeightProfile(
+        {
+            "rattle": 0.20,
+            "overlap_relief": 0.17,
+            "permutation": 0.23,
+            "shell_swap": 0.17,
+            "flattening": 0.08,
+            "anisotropic_rattle": 0.10,
+            "breathing": 0.03,
+        },
+        True,
+    ),
+    ("gas_cluster", "static", False): _WeightProfile(
+        {
+            "rattle": 0.42,
+            "overlap_relief": 0.24,
+            "flattening": 0.10,
+            "anisotropic_rattle": 0.14,
+            "breathing": 0.07,
+        },
+        False,
+    ),
+    ("surface_cluster", "adaptive", True): _WeightProfile(
+        None,
+        True,
+        floors={
+            "in_plane_slide": 0.10,
+            "in_plane_rotate": 0.11,
+            "rotational": 0.10,
+            "mirror": 0.08,
+        },
+    ),
+    ("surface_cluster", "adaptive", False): _WeightProfile(
+        {
+            "rattle": 0.16,
+            "overlap_relief": 0.14,
+            "flattening": 0.12,
+            "rotational": 0.12,
+            "mirror": 0.08,
+            "anisotropic_rattle": 0.12,
+            "breathing": 0.05,
+            "in_plane_slide": 0.10,
+            "in_plane_rotate": 0.11,
+        },
+        False,
+    ),
+    ("surface_cluster", "static", True): _WeightProfile(
+        {
+            "rattle": 0.16,
+            "overlap_relief": 0.14,
+            "permutation": 0.18,
+            "shell_swap": 0.12,
+            "flattening": 0.08,
+            "anisotropic_rattle": 0.10,
+            "in_plane_slide": 0.10,
+            "in_plane_rotate": 0.08,
+        },
+        True,
+    ),
+    ("surface_cluster", "static", False): _WeightProfile(
+        {
+            "rattle": 0.30,
+            "overlap_relief": 0.20,
+            "flattening": 0.10,
+            "anisotropic_rattle": 0.12,
+            "breathing": 0.06,
+            "in_plane_slide": 0.12,
+            "in_plane_rotate": 0.10,
+        },
+        False,
+    ),
+    ("gas_cluster_adsorbate", "adaptive", False): _WeightProfile(
+        {
+            "rattle": 0.14,
+            "overlap_relief": 0.12,
+            "fragment_reposition": 0.25,
+            "flattening": 0.10,
+            "rotational": 0.08,
+            "mirror": 0.05,
+            "anisotropic_rattle": 0.12,
+            "breathing": 0.04,
+        },
+        False,
+    ),
+    ("gas_cluster_adsorbate", "static", False): _WeightProfile(
+        {
+            "rattle": 0.18,
+            "overlap_relief": 0.15,
+            "fragment_reposition": 0.28,
+            "flattening": 0.10,
+            "anisotropic_rattle": 0.14,
+            "breathing": 0.05,
+        },
+        False,
+    ),
+    ("surface_cluster_adsorbate", "adaptive", False): _WeightProfile(
+        {
+            "rattle": 0.12,
+            "overlap_relief": 0.10,
+            "fragment_reposition": 0.20,
+            "flattening": 0.08,
+            "rotational": 0.06,
+            "mirror": 0.05,
+            "anisotropic_rattle": 0.10,
+            "breathing": 0.04,
+            "in_plane_slide": 0.12,
+            "in_plane_rotate": 0.08,
+        },
+        False,
+        carve_fragment_detach=True,
+    ),
+    ("surface_cluster_adsorbate", "static", False): _WeightProfile(
+        {
+            "rattle": 0.14,
+            "overlap_relief": 0.12,
+            "fragment_reposition": 0.22,
+            "flattening": 0.08,
+            "anisotropic_rattle": 0.12,
+            "in_plane_slide": 0.14,
+            "in_plane_rotate": 0.10,
+        },
+        False,
+        carve_fragment_detach=True,
+    ),
+    ("surface", "adaptive", True): _WeightProfile(
+        None,
+        True,
+        floors={"in_plane_slide": 0.28, "rattle": 0.22, "overlap_relief": 0.20},
+        drop=_SURFACE_ALLOY_DROP,
+    ),
+    ("surface", "adaptive", False): _WeightProfile(
+        {"rattle": 0.35, "overlap_relief": 0.25, "in_plane_slide": 0.40},
+        False,
+    ),
+    ("surface", "static", True): _WeightProfile(
+        {
+            "rattle": 0.25,
+            "overlap_relief": 0.20,
+            "permutation": 0.15,
+            "in_plane_slide": 0.40,
+        },
+        True,
+    ),
+    ("surface", "static", False): _WeightProfile(
+        {"rattle": 0.35, "overlap_relief": 0.25, "in_plane_slide": 0.40},
+        False,
+    ),
+    ("surface_adsorbate", "adaptive", False): _WeightProfile(
+        {
+            "rattle": 0.12,
+            "overlap_relief": 0.12,
+            "fragment_reposition": 0.38,
+            "in_plane_slide": 0.28,
+            "in_plane_rotate": 0.10,
+        },
+        False,
+    ),
+    ("surface_adsorbate", "static", False): _WeightProfile(
+        {
+            "rattle": 0.12,
+            "overlap_relief": 0.10,
+            "fragment_reposition": 0.38,
+            "in_plane_slide": 0.28,
+            "in_plane_rotate": 0.12,
+        },
+        False,
+    ),
+}
+
+
 def _core_composition_for_weights(
     composition: list[str],
     system_type: SystemType,
@@ -226,64 +481,53 @@ def _core_composition_for_weights(
     return list(composition)
 
 
-def _alloy_weights_from_core(
-    core_composition: list[str],
-) -> tuple[dict[str, float], bool]:
-    """Return alloy-biased structural weights when the core is multi-element.
-
-    Only operators registered for every alloy-capable system type are listed;
-    surface-only keys (``in_plane_slide``) and surface-registered keys
-    (``mirror``) are applied as floors by the per-type branches in
-    :func:`calculate_system_type_weights`.
-    """
+def _alloy_structural_base(core_composition: list[str]) -> dict[str, float]:
+    """Raw alloy structural weights chosen by majority fraction of the core."""
     element_counts = get_composition_counts(core_composition)
     total_atoms = len(core_composition)
     sorted_counts = sorted(element_counts.values(), reverse=True)
     majority_fraction = sorted_counts[0] / max(total_atoms, 1)
-
-    if majority_fraction > 0.7:
-        weights = _renormalize_weights(
-            {
-                "rattle": 0.14,
-                "overlap_relief": 0.14,
-                "permutation": 0.18,
-                "shell_swap": 0.12,
-                "flattening": 0.11,
-                "rotational": 0.07,
-                "anisotropic_rattle": 0.11,
-                "breathing": 0.05,
-            }
-        )
-    else:
-        weights = _renormalize_weights(
-            {
-                "rattle": 0.13,
-                "overlap_relief": 0.12,
-                "permutation": 0.18,
-                "shell_swap": 0.14,
-                "flattening": 0.10,
-                "rotational": 0.07,
-                "anisotropic_rattle": 0.10,
-                "breathing": 0.04,
-            }
-        )
-    return weights, True
+    key = "majority" if majority_fraction > 0.7 else "mixed"
+    return _ALLOY_STRUCTURAL_WEIGHTS[key]
 
 
-def _pure_structural_weights(*, include_surface_slide: bool) -> dict[str, float]:
-    """Base structural weights for a single-element cluster or core."""
-    weights = {
-        "rattle": 0.24,
-        "overlap_relief": 0.18,
-        "flattening": 0.18,
-        "rotational": 0.14,
-        "anisotropic_rattle": 0.14,
-        "breathing": 0.05,
-    }
-    if include_surface_slide:
-        weights["in_plane_slide"] = 0.03
-        weights["in_plane_rotate"] = 0.03
-    return _renormalize_weights(weights)
+def _resolve_weight_profile(
+    system_type: SystemType,
+    mode: WeightMode,
+    composition: list[str],
+    adsorbate_definition: AdsorbateDefinition | None,
+    *,
+    allow_adsorbate_surface_detachment: bool,
+) -> tuple[dict[str, float], bool]:
+    """Look up and normalize the operator weights for one table row."""
+    from scgo.system_types import get_system_policy
+
+    policy = get_system_policy(system_type)
+    core_composition = _core_composition_for_weights(
+        composition, system_type, adsorbate_definition
+    )
+    n_core_elements = len(set(core_composition)) if core_composition else 1
+    alloy = n_core_elements > 1 and policy.allow_composition_permutations
+    if (system_type, mode, alloy) not in _WEIGHT_PROFILES:
+        alloy = False
+    profile = _WEIGHT_PROFILES[(system_type, mode, alloy)]
+
+    raw = (
+        dict(profile.weights)
+        if profile.weights is not None
+        else dict(_alloy_structural_base(core_composition))
+    )
+    if profile.carve_fragment_detach:
+        raw = _with_fragment_detach(raw, enabled=allow_adsorbate_surface_detachment)
+    weights = _renormalize_weights(raw)
+    if profile.floors or profile.drop:
+        weights = dict(weights)
+        for key, floor in profile.floors.items():
+            weights[key] = max(weights.get(key, 0.0), floor)
+        for key in profile.drop:
+            weights.pop(key, None)
+        weights = _renormalize_weights(weights)
+    return weights, profile.use_permutation
 
 
 def calculate_system_type_weights(
@@ -293,134 +537,14 @@ def calculate_system_type_weights(
     *,
     allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[dict[str, float], bool]:
-    """Calculate operator weights from system type and core composition."""
-    from scgo.system_types import get_system_policy
-
-    policy = get_system_policy(system_type)
-    core_composition = _core_composition_for_weights(
-        composition, system_type, adsorbate_definition
+    """Calculate adaptive operator weights from system type and core composition."""
+    return _resolve_weight_profile(
+        system_type,
+        "adaptive",
+        composition,
+        adsorbate_definition,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
-    n_core_elements = len(set(core_composition)) if core_composition else 1
-    use_permutation = n_core_elements > 1 and policy.allow_composition_permutations
-
-    if system_type == "gas_cluster":
-        if use_permutation:
-            return _alloy_weights_from_core(core_composition)
-        weights = _pure_structural_weights(include_surface_slide=False)
-        return weights, False
-
-    if system_type == "surface_cluster":
-        if use_permutation:
-            weights, _ = _alloy_weights_from_core(core_composition)
-            weights = dict(weights)
-            weights.update(
-                {
-                    "in_plane_slide": max(weights.get("in_plane_slide", 0.03), 0.10),
-                    "in_plane_rotate": 0.11,
-                    "rotational": max(weights.get("rotational", 0.07), 0.10),
-                    "mirror": max(weights.get("mirror", 0.05), 0.08),
-                }
-            )
-            return _renormalize_weights(weights), True
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.16,
-                    "overlap_relief": 0.14,
-                    "flattening": 0.12,
-                    "rotational": 0.12,
-                    "mirror": 0.08,
-                    "anisotropic_rattle": 0.12,
-                    "breathing": 0.05,
-                    "in_plane_slide": 0.10,
-                    "in_plane_rotate": 0.11,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "gas_cluster_adsorbate":
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.14,
-                    "overlap_relief": 0.12,
-                    "fragment_reposition": 0.25,
-                    "flattening": 0.10,
-                    "rotational": 0.08,
-                    "mirror": 0.05,
-                    "anisotropic_rattle": 0.12,
-                    "breathing": 0.04,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "surface_cluster_adsorbate":
-        return (
-            _renormalize_weights(
-                _with_fragment_detach(
-                    {
-                        "rattle": 0.12,
-                        "overlap_relief": 0.10,
-                        "fragment_reposition": 0.20,
-                        "flattening": 0.08,
-                        "rotational": 0.06,
-                        "mirror": 0.05,
-                        "anisotropic_rattle": 0.10,
-                        "breathing": 0.04,
-                        "in_plane_slide": 0.12,
-                        "in_plane_rotate": 0.08,
-                    },
-                    enabled=allow_adsorbate_surface_detachment,
-                )
-            ),
-            False,
-        )
-
-    if system_type == "surface":
-        if use_permutation:
-            weights, perm_flag = _alloy_weights_from_core(core_composition)
-            weights = dict(weights)
-            weights["in_plane_slide"] = max(weights.get("in_plane_slide", 0.08), 0.28)
-            weights["rattle"] = max(weights.get("rattle", 0.13), 0.22)
-            weights["overlap_relief"] = max(weights.get("overlap_relief", 0.12), 0.20)
-            for key in (
-                "flattening",
-                "rotational",
-                "mirror",
-                "anisotropic_rattle",
-                "breathing",
-                "shell_swap",
-            ):
-                weights.pop(key, None)
-            return _renormalize_weights(weights), perm_flag
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.35,
-                    "overlap_relief": 0.25,
-                    "in_plane_slide": 0.40,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "surface_adsorbate":
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.12,
-                    "overlap_relief": 0.12,
-                    "fragment_reposition": 0.38,
-                    "in_plane_slide": 0.28,
-                    "in_plane_rotate": 0.10,
-                }
-            ),
-            False,
-        )
-
-    assert_never(system_type)
 
 
 def _static_weights_for_system_type(
@@ -431,150 +555,13 @@ def _static_weights_for_system_type(
     allow_adsorbate_surface_detachment: bool = False,
 ) -> tuple[dict[str, float], bool]:
     """Non-adaptive operator weight tables keyed by system type."""
-    from scgo.system_types import get_system_policy
-
-    policy = get_system_policy(system_type)
-    core_composition = _core_composition_for_weights(
-        composition, system_type, adsorbate_definition
+    return _resolve_weight_profile(
+        system_type,
+        "static",
+        composition,
+        adsorbate_definition,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
     )
-    use_permutation = (
-        len(set(core_composition)) > 1 and policy.allow_composition_permutations
-    )
-
-    if system_type == "gas_cluster":
-        if use_permutation:
-            return (
-                _renormalize_weights(
-                    {
-                        "rattle": 0.20,
-                        "overlap_relief": 0.17,
-                        "permutation": 0.23,
-                        "shell_swap": 0.17,
-                        "flattening": 0.08,
-                        "anisotropic_rattle": 0.10,
-                        "breathing": 0.03,
-                    }
-                ),
-                True,
-            )
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.42,
-                    "overlap_relief": 0.24,
-                    "flattening": 0.10,
-                    "anisotropic_rattle": 0.14,
-                    "breathing": 0.07,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "surface_cluster":
-        if use_permutation:
-            return (
-                _renormalize_weights(
-                    {
-                        "rattle": 0.16,
-                        "overlap_relief": 0.14,
-                        "permutation": 0.18,
-                        "shell_swap": 0.12,
-                        "flattening": 0.08,
-                        "anisotropic_rattle": 0.10,
-                        "in_plane_slide": 0.10,
-                        "in_plane_rotate": 0.08,
-                    }
-                ),
-                True,
-            )
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.30,
-                    "overlap_relief": 0.20,
-                    "flattening": 0.10,
-                    "anisotropic_rattle": 0.12,
-                    "breathing": 0.06,
-                    "in_plane_slide": 0.12,
-                    "in_plane_rotate": 0.10,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "gas_cluster_adsorbate":
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.18,
-                    "overlap_relief": 0.15,
-                    "fragment_reposition": 0.28,
-                    "flattening": 0.10,
-                    "anisotropic_rattle": 0.14,
-                    "breathing": 0.05,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "surface_cluster_adsorbate":
-        return (
-            _renormalize_weights(
-                _with_fragment_detach(
-                    {
-                        "rattle": 0.14,
-                        "overlap_relief": 0.12,
-                        "fragment_reposition": 0.22,
-                        "flattening": 0.08,
-                        "anisotropic_rattle": 0.12,
-                        "in_plane_slide": 0.14,
-                        "in_plane_rotate": 0.10,
-                    },
-                    enabled=allow_adsorbate_surface_detachment,
-                )
-            ),
-            False,
-        )
-
-    if system_type == "surface":
-        if use_permutation:
-            return (
-                _renormalize_weights(
-                    {
-                        "rattle": 0.25,
-                        "overlap_relief": 0.20,
-                        "permutation": 0.15,
-                        "in_plane_slide": 0.40,
-                    }
-                ),
-                True,
-            )
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.35,
-                    "overlap_relief": 0.25,
-                    "in_plane_slide": 0.40,
-                }
-            ),
-            False,
-        )
-
-    if system_type == "surface_adsorbate":
-        return (
-            _renormalize_weights(
-                {
-                    "rattle": 0.12,
-                    "overlap_relief": 0.10,
-                    "fragment_reposition": 0.38,
-                    "in_plane_slide": 0.28,
-                    "in_plane_rotate": 0.12,
-                }
-            ),
-            False,
-        )
-
-    assert_never(system_type)
 
 
 def calculate_size_adjustment(n_atoms: int) -> dict[str, float]:
@@ -635,6 +622,7 @@ def get_adaptive_mutation_config(
     system_type: SystemType = "gas_cluster",
     adsorbate_definition: AdsorbateDefinition | None = None,
     allow_adsorbate_surface_detachment: bool = False,
+    freeze_adsorbate_internal_geometry: bool = False,
 ) -> dict:
     """Get complete adaptive mutation configuration."""
     if not use_adaptive:
@@ -643,6 +631,11 @@ def get_adaptive_mutation_config(
             composition,
             adsorbate_definition,
             allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        )
+        operator_weights = _drop_overlap_relief_when_frozen(
+            operator_weights,
+            freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+            adsorbate_definition=adsorbate_definition,
         )
         return {
             "operator_weights": operator_weights,
@@ -704,6 +697,11 @@ def get_adaptive_mutation_config(
         operator_weights,
         level=level,
         burst_multiplier=aggressive_burst_multiplier,
+    )
+    operator_weights = _drop_overlap_relief_when_frozen(
+        operator_weights,
+        freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
+        adsorbate_definition=adsorbate_definition,
     )
     if level > 0.0:
         burst_scale = 1.0 + level * max(0.0, aggressive_burst_multiplier - 1.0)

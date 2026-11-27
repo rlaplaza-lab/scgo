@@ -10,6 +10,7 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 from ase.optimize import LBFGS
 
+import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms import ga_go
 from scgo.algorithms.basinhopping_go import bh_go
 from scgo.exceptions import SCGOValidationError
@@ -155,48 +156,63 @@ def test_bh_no_movement(tmp_path, rng):
         )
 
 
+def _count_mutation_draws(monkeypatch) -> dict[str, int]:
+    """Count ``draw_successful_mutation`` calls. Adaptive mode would ignore the knob."""
+    calls = {"n": 0}
+    real = ga_mod.draw_successful_mutation
+
+    def _counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ga_mod, "draw_successful_mutation", _counting)
+    return calls
+
+
 @pytest.mark.slow
-def test_ga_no_mutations(tmp_path, rng):
+def test_ga_no_mutations(tmp_path, rng, monkeypatch):
     """Test Genetic Algorithm with mutation_probability = 0 (no mutations)."""
     comp = ["Pt", "Pt", "Pt"]
     calc = EMT()
+    draws = _count_mutation_draws(monkeypatch)
 
-    # With no mutations, only crossover should occur
     minima = ga_go(
         composition=comp,
         output_dir=str(tmp_path / "ga_no_mut"),
         calculator=calc,
         niter=2,
         population_size=4,
-        mutation_probability=0.0,  # No mutations
+        mutation_probability=0.0,
+        use_adaptive_mutations=False,
         niter_local_relaxation=2,
         rng=rng,
     )
 
-    assert isinstance(minima, list)
     assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
+    assert draws["n"] == 0
 
 
 @pytest.mark.slow
-def test_ga_always_mutate(tmp_path, rng):
+def test_ga_always_mutate(tmp_path, rng, monkeypatch):
     """Test Genetic Algorithm with mutation_probability = 1 (always mutate)."""
     comp = ["Pt", "Pt", "Pt"]
     calc = EMT()
+    draws = _count_mutation_draws(monkeypatch)
 
-    # With always mutate, every offspring should be mutated
     minima = ga_go(
         composition=comp,
         output_dir=str(tmp_path / "ga_always_mut"),
         calculator=calc,
         niter=2,
         population_size=4,
-        mutation_probability=1.0,  # Always mutate
+        mutation_probability=1.0,
+        use_adaptive_mutations=False,
         niter_local_relaxation=2,
         rng=rng,
     )
 
-    assert isinstance(minima, list)
     assert_minima_structurally_valid(minima, expected_n_atoms=len(comp))
+    assert draws["n"] >= 1
 
 
 @pytest.mark.slow

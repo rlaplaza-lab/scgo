@@ -119,6 +119,21 @@ def validate_integer(name: str, value: Any, strict: bool = True) -> None:
         )
 
 
+def validate_surface_normal_axis(axis: int) -> int:
+    """Require ``surface_normal_axis`` to be 0, 1, or 2."""
+    if axis not in (0, 1, 2):
+        raise SCGOValidationError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
+    return axis
+
+
+def as_int_like(label: str, value: Any) -> int:
+    """Coerce ``value`` to ``int`` or raise :class:`SCGOValidationError`."""
+    try:
+        return int(value)
+    except (TypeError, ValueError) as e:
+        raise SCGOValidationError(f"{label} must be int-like, got {value!r}") from e
+
+
 def validate_in_choices(
     name: str,
     value: Any,

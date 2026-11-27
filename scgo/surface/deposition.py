@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import TYPE_CHECKING
 
@@ -22,7 +23,7 @@ from scgo.cluster_adsorbate.hierarchical import (
     _stamp_site_metadata,
     build_hierarchical_core_fragment_cluster,
 )
-from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.cluster_adsorbate.placement import place_fragments_on_core
 from scgo.cluster_adsorbate.sites import (
     SiteType,
     SurfaceSiteCandidate,
@@ -46,13 +47,14 @@ from scgo.initialization.atomic_radii import (
     covalent_surface_layer_thickness,
     get_covalent_radius,
 )
-from scgo.initialization.geometry_helpers import _generate_rotation_matrix
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
 from scgo.metadata.atoms import get_tag
 from scgo.surface.validation import validate_supported_cluster_deposit
 from scgo.system_types import (
     AdsorbateDefinition,
     AdsorbateFragmentInput,
+    NormalizedConnectivityFactor,
+    StructureValidationPolicy,
     normalize_connectivity_factor,
     resolve_adsorbate_fragments,
     resolve_connectivity_factor,
@@ -66,10 +68,11 @@ from scgo.utils.combine_atoms import (
 from scgo.utils.combine_atoms import (
     slab_surface_extreme as _shared_slab_surface_extreme,
 )
+from scgo.utils.geometry_math import rotation_matrix_axis_angle
 from scgo.utils.logging import get_logger
 from scgo.utils.parallel_workers import resolve_n_jobs, resolve_n_jobs_for_tasks
 from scgo.utils.phase_logging import format_count_summary
-from scgo.utils.site_counts import increment_site_type_count
+from scgo.utils.site_counts import record_site_type
 
 if TYPE_CHECKING:
     from numpy.random import Generator
@@ -166,36 +169,35 @@ def _build_adsorbate_fragments_on_slab(
     anchor, bond_axis = resolve_fragment_anchor_and_bond_axis(adsorbate_definition)
     within_structure_site_counts: dict[str, int] = {}
 
+    def _slab_clash(current: Atoms) -> Atoms:
+        return slab if len(current) == 0 else slab + current
+
+    def _combine_mobile(current: Atoms, placed: Atoms) -> Atoms:
+        return combine_core_adsorbate(current, placed) if len(current) else placed
+
     for _ in range(max_placement_attempts):
         mobile = Atoms()
         mobile.set_cell(slab.get_cell())
         mobile.set_pbc(slab.get_pbc())
-        site_types: list[str] = []
-        all_ok = True
-        for frag_tmpl in fragments:
-            clash_target = slab if len(mobile) == 0 else slab + mobile
-            frag_metadata: dict[str, str] = {}
-            placed = place_fragment_on_cluster(
-                site_core,
-                frag_tmpl,
-                rng,
-                ca,
-                anchor_index=anchor,
-                bond_axis=bond_axis,
-                site_core=site_core,
-                clash_atoms=clash_target,
-                within_structure_site_counts=within_structure_site_counts,
-                batch_site_counts=batch_site_counts,
-                placement_metadata=frag_metadata,
-                site_candidates=precomputed_sites,
-                uses_surface=True,
-            )
-            if placed is None:
-                all_ok = False
-                break
-            site_types.append(frag_metadata.get("site_type", "directional_fallback"))
-            mobile = combine_core_adsorbate(mobile, placed) if len(mobile) else placed
-        if all_ok and len(mobile) > 0:
+        placed_mobile = place_fragments_on_core(
+            site_core,
+            fragments,
+            rng,
+            ca,
+            anchor_index=anchor,
+            bond_axis=bond_axis,
+            site_candidates=precomputed_sites,
+            clash_atoms_for=_slab_clash,
+            initial_mobile=mobile,
+            combine_mobile=_combine_mobile,
+            uses_surface=True,
+            within_structure_site_counts=within_structure_site_counts,
+            batch_site_counts=batch_site_counts,
+        )
+        if placed_mobile is None:
+            continue
+        mobile, site_types = placed_mobile
+        if len(mobile) > 0:
             combined = combine_slab_adsorbate(slab, mobile)
             _stamp_site_types_on_combined(combined, site_types)
             return combined
@@ -216,7 +218,7 @@ def _near_surface_rotation_matrix(rng: Generator, axis: int) -> np.ndarray:
     else:
         rot_axis = np.array([np.cos(tilt_azimuth), np.sin(tilt_azimuth), 0.0])
     rot_axis /= max(np.linalg.norm(rot_axis), 1e-12)
-    return _generate_rotation_matrix(rot_axis, tilt) @ _generate_rotation_matrix(
+    return rotation_matrix_axis_angle(rot_axis, tilt) @ rotation_matrix_axis_angle(
         normal, in_plane_angle
     )
 
@@ -241,10 +243,9 @@ def _in_plane_translation_near_slab_atom(
         u, v = rng.random(), rng.random()
         if axis == 0:
             return np.asarray(u * cell[1] + v * cell[2], dtype=float)
-        elif axis == 1:
+        if axis == 1:
             return np.asarray(u * cell[0] + v * cell[2], dtype=float)
-        else:
-            return np.asarray(u * cell[0] + v * cell[1], dtype=float)
+        return np.asarray(u * cell[0] + v * cell[1], dtype=float)
 
     atom_idx = rng.integers(0, n_slab)
     atom_pos = slab_positions[atom_idx]
@@ -256,16 +257,15 @@ def _in_plane_translation_near_slab_atom(
         dy = offset_scale * np.cos(angle)
         dz = offset_scale * np.sin(angle)
         return np.asarray([0, atom_pos[1] + dy, atom_pos[2] + dz], dtype=float)
-    elif axis == 1:
+    if axis == 1:
         angle = rng.uniform(0, 2 * np.pi)
         dx = offset_scale * np.cos(angle)
         dz = offset_scale * np.sin(angle)
         return np.asarray([atom_pos[0] + dx, 0, atom_pos[2] + dz], dtype=float)
-    else:
-        angle = rng.uniform(0, 2 * np.pi)
-        dx = offset_scale * np.cos(angle)
-        dy = offset_scale * np.sin(angle)
-        return np.asarray([atom_pos[0] + dx, atom_pos[1] + dy, 0], dtype=float)
+    angle = rng.uniform(0, 2 * np.pi)
+    dx = offset_scale * np.cos(angle)
+    dy = offset_scale * np.sin(angle)
+    return np.asarray([atom_pos[0] + dx, atom_pos[1] + dy, 0], dtype=float)
 
 
 def _in_plane_translation(
@@ -305,6 +305,69 @@ def combine_slab_adsorbate(slab: Atoms, adsorbate: Atoms) -> Atoms:
     return concatenate_inherit_cell_pbc(slab, adsorbate)
 
 
+@dataclass(frozen=True)
+class _SlabDepositionContext:
+    """Slab top-layer data reused across placement attempts (lazy height-bound cache)."""
+
+    connectivity_factor: NormalizedConnectivityFactor
+    top_idx: tuple[int, ...]
+    top_symbols: tuple[str, ...]
+    top_radii: np.ndarray
+    _height_bounds: dict[str, tuple[float, float]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+
+    def height_bounds(self, bottom_symbol: str) -> tuple[float, float]:
+        """Steric floor and bond-limit ceiling for ``bottom_symbol`` over the top layer."""
+        cached = self._height_bounds.get(bottom_symbol)
+        if cached is not None:
+            return cached
+        r_bottom = get_covalent_radius(bottom_symbol)
+        n_top = len(self.top_radii)
+        bond_limits = bond_thresholds_for_cross_pairs(
+            np.array([r_bottom], dtype=float),
+            [bottom_symbol],
+            np.zeros(n_top, dtype=int),
+            self.top_radii,
+            list(self.top_symbols),
+            np.arange(n_top, dtype=int),
+            self.connectivity_factor,
+        )
+        steric = (r_bottom + self.top_radii) * BLMIN_RATIO_DEFAULT
+        h_min = float(np.min(steric))
+        h_max = float(np.max(bond_limits)) if bond_limits.size else h_min
+        self._height_bounds[bottom_symbol] = (h_min, h_max)
+        return h_min, h_max
+
+
+def _build_slab_deposition_context(
+    slab: Atoms,
+    axis: int,
+    config: SurfaceSystemConfig,
+    *,
+    connectivity_factor: NormalizedConnectivityFactor | None = None,
+) -> _SlabDepositionContext:
+    """Top-layer symbols/radii for ``slab``; pass a resolved CA/surface factor when set."""
+    slab_symbols = slab.get_chemical_symbols()
+    top_idx: list[int] = []
+    if slab_symbols:
+        thickness = covalent_surface_layer_thickness(slab_symbols)
+        top_idx = top_layer_indices(slab.get_positions(), axis, thickness=thickness)
+    top_symbols = tuple(slab_symbols[i] for i in top_idx)
+    top_radii = np.array([get_covalent_radius(sym) for sym in top_symbols], dtype=float)
+    cf = (
+        connectivity_factor
+        if connectivity_factor is not None
+        else normalize_connectivity_factor(config.structure_connectivity_factor)
+    )
+    return _SlabDepositionContext(
+        connectivity_factor=cf,
+        top_idx=tuple(top_idx),
+        top_symbols=top_symbols,
+        top_radii=top_radii,
+    )
+
+
 def _place_cluster_above_slab(
     cluster_positions: np.ndarray,
     slab: Atoms,
@@ -315,6 +378,7 @@ def _place_cluster_above_slab(
     cluster_atomic_numbers: np.ndarray | None = None,
     *,
     prefer_surface_normal: bool = False,
+    slab_context: _SlabDepositionContext | None = None,
 ) -> np.ndarray:
     """Rotate/translate centered cluster positions into a deposited position.
 
@@ -331,10 +395,19 @@ def _place_cluster_above_slab(
             heights.
         prefer_surface_normal: Use a mostly in-plane rotation with a small tilt
             instead of a uniformly random rotation.
+        slab_context: Optional precomputed top-layer data; built when omitted.
 
     Returns:
         Rotated and translated cluster positions.
     """
+    if len(cluster_positions) == 0:
+        raise SCGOValidationError(
+            "Cannot estimate deposition height: cluster has no positions"
+        )
+    if cluster_atomic_numbers is None or len(cluster_atomic_numbers) == 0:
+        raise SCGOValidationError(
+            "Cannot estimate deposition height: cluster has no atomic numbers"
+        )
     rotation = (
         _near_surface_rotation_matrix(rng, axis)
         if prefer_surface_normal
@@ -376,15 +449,11 @@ def _place_cluster_above_slab(
             slab, axis, rng, cluster_radius
         )
 
-    cf = normalize_connectivity_factor(config.structure_connectivity_factor)
-    slab_symbols = slab.get_chemical_symbols()
-    if not slab_symbols:
+    if slab_context is None:
+        slab_context = _build_slab_deposition_context(slab, axis, config)
+    if not slab_context.top_symbols:
         raise SCGOValidationError(
             "Cannot estimate deposition height: slab has no atoms"
-        )
-    if cluster_atomic_numbers is None or len(cluster_atomic_numbers) == 0:
-        raise SCGOValidationError(
-            "Cannot estimate deposition height: cluster has no atomic numbers"
         )
     bottom_i = int(np.argmin(rotated_positions[:, axis]))
     z_bottom = int(cluster_atomic_numbers[bottom_i])
@@ -392,25 +461,7 @@ def _place_cluster_above_slab(
         raise SCGOValidationError(
             f"Cannot estimate deposition height: unknown atomic number {z_bottom}"
         )
-    bottom_symbol = chemical_symbols[z_bottom]
-    r_bottom = get_covalent_radius(bottom_symbol)
-    thickness = covalent_surface_layer_thickness(slab_symbols)
-    top_idx = top_layer_indices(slab.get_positions(), axis, thickness=thickness)
-    top_symbols = [slab_symbols[i] for i in top_idx]
-    top_radii = np.array([get_covalent_radius(s) for s in top_symbols], dtype=float)
-    n_top = len(top_radii)
-    bond_limits = bond_thresholds_for_cross_pairs(
-        np.array([r_bottom], dtype=float),
-        [bottom_symbol],
-        np.zeros(n_top, dtype=int),
-        top_radii,
-        top_symbols,
-        np.arange(n_top, dtype=int),
-        cf,
-    )
-    steric = (r_bottom + top_radii) * BLMIN_RATIO_DEFAULT
-    h_min = float(np.min(steric))
-    h_max = float(np.max(bond_limits)) if bond_limits.size else h_min
+    h_min, h_max = slab_context.height_bounds(chemical_symbols[z_bottom])
     if config.adsorption_height_min is not None:
         h_min = max(h_min, float(config.adsorption_height_min))
     if config.adsorption_height_max is not None:
@@ -462,8 +513,15 @@ def create_deposited_cluster(
         SCGOValidationError: If ``adsorbate_definition`` is given without
             ``adsorbate_fragment_template``.
     """
+    # Before defaults fill in: surface connectivity wins unless the caller passed CA.
+    ca_supplied = cluster_adsorbate_config is not None
     cluster_adsorbate_config = resolve_cluster_adsorbate_config(
         cluster_adsorbate_config
+    )
+    connectivity_factor = resolve_connectivity_factor(
+        None if ca_supplied else config.structure_connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config if ca_supplied else None,
+        surface_config=config,
     )
     axis = config.surface_normal_axis
     slab_top = slab_surface_extreme(slab, axis, upper=True)
@@ -475,6 +533,10 @@ def create_deposited_cluster(
         adsorbate_definition, AdsorbateDefinition
     ):
         adsorbate_definition = AdsorbateDefinition.from_dict(dict(adsorbate_definition))
+
+    slab_context = _build_slab_deposition_context(
+        slab, axis, config, connectivity_factor=connectivity_factor
+    )
 
     for _ in range(config.max_placement_attempts):
         if adsorbate_definition is None:
@@ -520,11 +582,6 @@ def create_deposited_cluster(
                 if atoms_too_close_two_sets(mobile, slab, blmin):
                     continue
                 n_slab = len(slab)
-                connectivity_factor = resolve_connectivity_factor(
-                    None,
-                    cluster_adsorbate_config=cluster_adsorbate_config,
-                    surface_config=config,
-                )
                 ok, err = validate_supported_cluster_deposit(
                     combined,
                     n_slab,
@@ -535,8 +592,10 @@ def create_deposited_cluster(
                     adsorbate_fragment_lengths=list(
                         adsorbate_definition.adsorbate_fragment_lengths
                     ),
-                    allow_cluster_fragmentation=True,
-                    allow_adsorbate_surface_detachment=True,
+                    validation=StructureValidationPolicy(
+                        allow_cluster_fragmentation=True,
+                        allow_adsorbate_surface_detachment=True,
+                    ),
                 )
                 if not ok:
                     logger.debug(
@@ -546,7 +605,7 @@ def create_deposited_cluster(
                     )
                     continue
                 return combined
-            else:
+            if len(core_symbols) > 0:
                 cluster_seed = build_hierarchical_core_fragment_cluster(
                     adsorbate_definition,
                     rng,
@@ -578,6 +637,7 @@ def create_deposited_cluster(
             config=config,
             cluster_atomic_numbers=atomic_numbers,
             prefer_surface_normal=prefer_surface,
+            slab_context=slab_context,
         )
 
         adsorbate = Atoms(
@@ -599,11 +659,6 @@ def create_deposited_cluster(
             combined, _site_types_from_structure(cluster_seed)
         )
         n_slab = len(slab)
-        connectivity_factor = resolve_connectivity_factor(
-            None,
-            cluster_adsorbate_config=cluster_adsorbate_config,
-            surface_config=config,
-        )
 
         ok, err = validate_supported_cluster_deposit(
             combined,
@@ -669,15 +724,6 @@ def _plan_deposition_batch(
         previous_search_glob=previous_search_glob,
         mode=config.init_mode,
     )
-
-
-def _record_batch_site_type(
-    structure: Atoms,
-    shared_site_counts: dict[str, int] | None,
-    site_counts_lock: Lock | None = None,
-) -> None:
-    site_type = get_tag(structure, "adsorbate_site_type")
-    increment_site_type_count(shared_site_counts, site_type, site_counts_lock)
 
 
 def create_deposited_cluster_batch(
@@ -766,7 +812,9 @@ def create_deposited_cluster_batch(
                 verbosity=verbosity,
             )
             if struct is not None:
-                _record_batch_site_type(struct, shared_site_counts)
+                record_site_type(
+                    shared_site_counts, get_tag(struct, "adsorbate_site_type")
+                )
                 out.append(struct)
         if len(out) < n_structures:
             raise SCGORuntimeError(
@@ -808,7 +856,11 @@ def create_deposited_cluster_batch(
                 verbosity=verbosity,
             )
             if structure is not None:
-                _record_batch_site_type(structure, shared_site_counts, site_counts_lock)
+                record_site_type(
+                    shared_site_counts,
+                    get_tag(structure, "adsorbate_site_type"),
+                    site_counts_lock,
+                )
                 return structure
         raise SCGORuntimeError(
             "Could not generate deposited structure in parallel worker; "

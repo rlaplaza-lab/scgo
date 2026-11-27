@@ -12,10 +12,7 @@ from scgo.initialization.atomic_radii import build_blmin, build_blmin_from_zs
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
 from scgo.system_types import AdsorbateDefinition
-
-
-def _oh_template() -> Atoms:
-    return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
+from tests.helpers import oh_template as _oh_template
 
 
 def _oh_adsorbate_definition(n_oh: int) -> AdsorbateDefinition:

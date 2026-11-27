@@ -258,6 +258,24 @@ def bond_threshold_matrix(
     return thresh
 
 
+def _apply_pair_factor_overrides_to_1d(
+    out: np.ndarray,
+    radii_a: np.ndarray,
+    radii_b: np.ndarray,
+    symbols_a: Sequence[str],
+    symbols_b: Sequence[str],
+    i_idx: np.ndarray,
+    j_idx: np.ndarray,
+    pair_map: Mapping[PairKey, float],
+) -> None:
+    """Override 1-D thresholds in-place for pairs listed in ``pair_map``."""
+    for k, (i, j) in enumerate(zip(i_idx.tolist(), j_idx.tolist(), strict=True)):
+        sym_i, sym_j = symbols_a[i], symbols_b[j]
+        pair: PairKey = (sym_i, sym_j) if sym_i <= sym_j else (sym_j, sym_i)
+        if pair in pair_map:
+            out[k] = (radii_a[i] + radii_b[j]) * float(pair_map[pair])
+
+
 def bond_thresholds_for_pairs(
     radii: np.ndarray,
     symbols: Sequence[str],
@@ -276,12 +294,9 @@ def bond_thresholds_for_pairs(
     scales = _element_scales_array(symbols, spec)
     out = radii[i_idx] * scales[i_idx] + radii[j_idx] * scales[j_idx]
     if kind in ("pair", "mixed") and spec.pair_factors:
-        pair_map = spec.pair_factors
-        for k, (i, j) in enumerate(zip(i_idx.tolist(), j_idx.tolist(), strict=True)):
-            sym_i, sym_j = symbols[i], symbols[j]
-            pair: PairKey = (sym_i, sym_j) if sym_i <= sym_j else (sym_j, sym_i)
-            if pair in pair_map:
-                out[k] = (radii[i] + radii[j]) * float(pair_map[pair])
+        _apply_pair_factor_overrides_to_1d(
+            out, radii, radii, symbols, symbols, i_idx, j_idx, spec.pair_factors
+        )
     return out
 
 
@@ -352,12 +367,16 @@ def bond_thresholds_for_cross_pairs(
     scales_b = _element_scales_array(symbols_b, spec)
     out = radii_a[i_idx] * scales_a[i_idx] + radii_b[j_idx] * scales_b[j_idx]
     if kind in ("pair", "mixed") and spec.pair_factors:
-        pair_map = spec.pair_factors
-        for k, (i, j) in enumerate(zip(i_idx.tolist(), j_idx.tolist(), strict=True)):
-            sym_i, sym_j = symbols_a[i], symbols_b[j]
-            pair: PairKey = (sym_i, sym_j) if sym_i <= sym_j else (sym_j, sym_i)
-            if pair in pair_map:
-                out[k] = (radii_a[i] + radii_b[j]) * float(pair_map[pair])
+        _apply_pair_factor_overrides_to_1d(
+            out,
+            radii_a,
+            radii_b,
+            symbols_a,
+            symbols_b,
+            i_idx,
+            j_idx,
+            spec.pair_factors,
+        )
     return out
 
 
@@ -384,7 +403,7 @@ def bond_thresholds_to_atom(
     Uses the pair formula (global, per-element, or per-pair), not the largest
     multiplier in the spec.
     """
-    n = int(len(neighbor_radii))
+    n = len(neighbor_radii)
     if n == 0:
         return np.empty(0, dtype=float)
     return bond_thresholds_for_cross_pairs(
@@ -398,11 +417,16 @@ def bond_thresholds_to_atom(
     )
 
 
-def max_connectivity_scale(spec: NormalizedConnectivityFactor) -> float:
-    """Largest multiplier in the spec (KDTree query radius / conservative bounds)."""
+def _require_global_factor(spec: NormalizedConnectivityFactor) -> float:
+    factor = spec.global_factor
+    if factor is None:
+        raise SCGOValidationError("Global connectivity spec is missing global_factor.")
+    return float(factor)
+
+
+def _scale_values(spec: NormalizedConnectivityFactor) -> list[float]:
     if spec.is_global():
-        assert spec.global_factor is not None
-        return float(spec.global_factor)
+        return [_require_global_factor(spec)]
     values: list[float] = []
     if spec.global_factor is not None:
         values.append(float(spec.global_factor))
@@ -412,23 +436,18 @@ def max_connectivity_scale(spec: NormalizedConnectivityFactor) -> float:
         values.append(float(CONNECTIVITY_FACTOR))
     if spec.pair_items and not spec.element_items:
         values.append(float(CONNECTIVITY_FACTOR))
+    return values
+
+
+def max_connectivity_scale(spec: NormalizedConnectivityFactor) -> float:
+    """Largest multiplier in the spec (KDTree query radius / conservative bounds)."""
+    values = _scale_values(spec)
     return max(values) if values else float(CONNECTIVITY_FACTOR)
 
 
 def min_connectivity_scale(spec: NormalizedConnectivityFactor) -> float:
     """Smallest multiplier in the spec (steric-floor comparisons)."""
-    if spec.is_global():
-        assert spec.global_factor is not None
-        return float(spec.global_factor)
-    values: list[float] = []
-    if spec.global_factor is not None:
-        values.append(float(spec.global_factor))
-    values.extend(float(v) for _, v in spec.element_items)
-    values.extend(float(v) for _, v in spec.pair_items)
-    if spec.element_items and spec.global_factor is None:
-        values.append(float(CONNECTIVITY_FACTOR))
-    if spec.pair_items and not spec.element_items:
-        values.append(float(CONNECTIVITY_FACTOR))
+    values = _scale_values(spec)
     return min(values) if values else float(CONNECTIVITY_FACTOR)
 
 
@@ -447,6 +466,5 @@ def format_connectivity_factor(spec: NormalizedConnectivityFactor) -> str:
 def connectivity_factor_cache_key(spec: NormalizedConnectivityFactor) -> tuple:
     """Hashable cache key for template / placement caches."""
     if spec.is_global():
-        assert spec.global_factor is not None
-        return ("global", float(spec.global_factor))
+        return ("global", _require_global_factor(spec))
     return ("dict", spec.element_items, spec.pair_items)

@@ -33,6 +33,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _preserves_mobile_connectivity,
     _reconnect_mobile_components,
 )
+from scgo.initialization.atomic_radii import build_blmin
 from scgo.metadata.atoms import set_tags
 
 PERMISSIVE_BLMIN = {(z1, z2): 0.5 for z1 in (1, 8, 78, 79) for z2 in (1, 8, 78, 79)}
@@ -386,11 +387,11 @@ def test_anisotropic_rattle_accepts_a_later_try(monkeypatch, pt3_atoms, rng):
 
 def test_permutation_accepts_success_on_final_pair(monkeypatch, au2pt2_atoms, rng):
     """Incremental application keeps trying candidate pairs after clashes."""
-    from scgo.ase_ga_patches.mutations import permutation as permutation_module
+    from scgo.ase_ga_patches.mutations import _common as mutation_common
 
     # Au2Pt2 yields four valid swap pairs; the first three clash and the
     # last checked pair succeeds, independent of the shuffle order.
-    monkeypatch.setattr(permutation_module, "atoms_too_close", _fail_until_call(4))
+    monkeypatch.setattr(mutation_common, "atoms_too_close", _fail_until_call(4))
     mut = PermutationMutation(
         n_top=4,
         probability=0.5,
@@ -405,9 +406,9 @@ def test_permutation_accepts_success_on_final_pair(monkeypatch, au2pt2_atoms, rn
 
 
 def test_permutation_returns_none_when_never_valid(monkeypatch, au2pt2_atoms, rng):
-    from scgo.ase_ga_patches.mutations import permutation as permutation_module
+    from scgo.ase_ga_patches.mutations import _common as mutation_common
 
-    monkeypatch.setattr(permutation_module, "atoms_too_close", lambda *a, **k: True)
+    monkeypatch.setattr(mutation_common, "atoms_too_close", lambda *a, **k: True)
     mut = PermutationMutation(
         n_top=4,
         probability=0.5,
@@ -484,6 +485,46 @@ def test_rotational_mutation_twists_untagged_gas_phase_cluster(rng):
     )
     mutated = mut.mutate(cluster.copy())
     assert mutated is not None
+    assert not np.allclose(
+        cluster.get_all_distances(mic=False),
+        mutated.get_all_distances(mic=False),
+    )
+
+
+def test_rotational_mutation_twist_ladder_recovers_packed_gas_cluster(rng):
+    """G6: with a realistic blmin, smaller twist rungs succeed after π clashes."""
+    # Near-tetrahedral Pt4: π-only twists fail connectivity under a covalent
+    # blmin; the descending ladder recovers at a smaller angle.
+    cluster = Atoms(
+        "Pt4",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.5, 0.0, 0.0],
+            [1.25, 2.165, 0.0],
+            [1.25, 0.722, 2.04],
+        ],
+    )
+    cluster.center(vacuum=8.0)
+    blmin = build_blmin(cluster.get_chemical_symbols(), ratio=0.8)
+    seed = int(rng.integers(0, 2**31 - 1))
+    mut_pi_only = RotationalMutation(
+        blmin,
+        n_top=len(cluster),
+        system_type="gas_cluster",
+        rng=np.random.default_rng(seed),
+        max_inner_attempts=1,
+    )
+    mut = RotationalMutation(
+        blmin,
+        n_top=len(cluster),
+        system_type="gas_cluster",
+        rng=np.random.default_rng(seed),
+        max_inner_attempts=24,
+    )
+    assert mut_pi_only.mutate(cluster.copy()) is None
+    mutated = mut.mutate(cluster.copy())
+    assert mutated is not None
+    assert mut.last_attempt_count > 1
     assert not np.allclose(
         cluster.get_all_distances(mic=False),
         mutated.get_all_distances(mic=False),
@@ -686,8 +727,9 @@ def test_anisotropic_rattle_accepts_after_one_reconnect(monkeypatch, rng):
         return real_reconnect(mobile, **kwargs)
 
     monkeypatch.setattr(
-        "scgo.ase_ga_patches.mutations.rattle._preserves_mobile_connectivity",
-        lambda *_args, **_kwargs: False,
+        "scgo.ase_ga_patches.mutations._common._preserves_mobile_connectivity",
+        lambda *args, **kwargs: reconnects["n"] > 0
+        and _preserves_mobile_connectivity(*args, **kwargs),
     )
     monkeypatch.setattr(
         "scgo.ase_ga_patches.mutations.rattle._reconnect_mobile_components",

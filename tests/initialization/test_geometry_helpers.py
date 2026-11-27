@@ -141,6 +141,24 @@ class TestAnalyzeDisconnection:
         assert isinstance(factor, float)
         assert isinstance(msg, str)
 
+    def test_mic_gap_uses_closest_image(self):
+        """The closest inter-component pair follows ``use_mic``, not bare Cartesian distance."""
+        atoms = Atoms(
+            "Pt4",
+            positions=[
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [12.0, 0.0, 0.0],
+                [14.0, 0.0, 0.0],
+            ],
+            cell=[20.0, 20.0, 20.0],
+            pbc=True,
+        )
+        _, cartesian = analyze_disconnection(atoms, use_mic=False)
+        _, mic = analyze_disconnection(atoms, use_mic=True)
+        assert "distance 10.000Å" in cartesian
+        assert "distance 6.000Å" in mic
+
     def test_suggested_factor_includes_buffer(self):
         """Test that suggested factor includes 5% buffer."""
         # Use a test connectivity factor to verify buffer calculation
@@ -634,7 +652,7 @@ class TestGeneratePositionsAllFacets:
             assert np.allclose(p, q)
 
 
-# Tests merged from test_disjointed_clusters_bug.py - simplified to avoid complex dependencies
+# Guards the disjointed-cluster regression (wrap with PBC off, connectivity).
 class TestDisjointedClustersBug:
     """Test suite to prevent regression of the disjointed clusters bug."""
 

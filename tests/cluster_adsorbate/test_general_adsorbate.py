@@ -20,6 +20,7 @@ from scgo.cluster_adsorbate import (
 from scgo.exceptions import SCGOValidationError
 from scgo.system_types import (
     AdsorbateDefinition,
+    StructureValidationPolicy,
     resolve_mobile_composition,
     validate_structure_for_system_type,
 )
@@ -149,14 +150,18 @@ def test_gas_adsorbate_subgraph_integrity_optional_flag() -> None:
             atoms,
             system_type="gas_cluster_adsorbate",
             adsorbate_definition=adsorbate_definition,
-            enforce_adsorbate_subgraph_integrity=True,
+            validation=StructureValidationPolicy(
+                enforce_adsorbate_subgraph_integrity=True
+            ),
         )
 
     validate_structure_for_system_type(
         atoms,
         system_type="gas_cluster_adsorbate",
         adsorbate_definition=adsorbate_definition,
-        enforce_adsorbate_subgraph_integrity=False,
+        validation=StructureValidationPolicy(
+            enforce_adsorbate_subgraph_integrity=False
+        ),
     )
 
 
@@ -184,7 +189,9 @@ def test_gas_adsorbate_subgraph_integrity_rejects_cross_fragment_bonding() -> No
             atoms,
             system_type="gas_cluster_adsorbate",
             adsorbate_definition=adsorbate_definition,
-            enforce_adsorbate_subgraph_integrity=True,
+            validation=StructureValidationPolicy(
+                enforce_adsorbate_subgraph_integrity=True
+            ),
         )
 
 
@@ -213,7 +220,9 @@ def test_gas_adsorbate_subgraph_integrity_allows_cross_fragment_bonding_when_dis
         atoms,
         system_type="gas_cluster_adsorbate",
         adsorbate_definition=adsorbate_definition,
-        enforce_adsorbate_subgraph_integrity=False,
+        validation=StructureValidationPolicy(
+            enforce_adsorbate_subgraph_integrity=False
+        ),
     )
 
 

@@ -5,11 +5,49 @@ from __future__ import annotations
 import numpy as np
 from scipy.cluster.hierarchy import fclusterdata
 
+from scgo.exceptions import SCGOValidationError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _LAYER_CLUSTER_THRESHOLD_ANG = 0.4
+
+
+def resolve_slab_mobile_or_fixed_indices(
+    positions: np.ndarray,
+    axis: int,
+    *,
+    n_relax_top_slab_layers: int | None = None,
+    n_fix_bottom_slab_layers: int | None = None,
+    threshold: float = _LAYER_CLUSTER_THRESHOLD_ANG,
+) -> tuple[set[int], set[int]]:
+    """Return ``(fixed_indices, mobile_indices)`` for a slab layer policy.
+
+    Prefer ``n_relax_top_slab_layers`` when set; otherwise fix the bottom
+    ``n_fix_bottom_slab_layers`` and treat the remainder as mobile.
+    """
+    n_slab = len(positions)
+    if n_relax_top_slab_layers is not None:
+        mobile = _layer_indices_by_clustering(
+            positions,
+            axis,
+            n_layers=int(n_relax_top_slab_layers),
+            from_top=True,
+            threshold=threshold,
+        )
+        return set(range(n_slab)) - mobile, set(mobile)
+    if n_fix_bottom_slab_layers is None:
+        raise SCGOValidationError(
+            "One of n_relax_top_slab_layers or n_fix_bottom_slab_layers must be set"
+        )
+    fixed = _layer_indices_by_clustering(
+        positions,
+        axis,
+        n_layers=int(n_fix_bottom_slab_layers),
+        from_top=False,
+        threshold=threshold,
+    )
+    return set(fixed), set(range(n_slab)) - fixed
 
 
 def _layer_indices_by_clustering(

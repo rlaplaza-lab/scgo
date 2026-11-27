@@ -18,7 +18,7 @@ from scgo.system_types.connectivity_factor import (
     normalize_connectivity_factor,
 )
 from scgo.utils.logging import get_logger
-from scgo.utils.validation import validate_positive
+from scgo.utils.validation import validate_positive, validate_surface_normal_axis
 
 logger = get_logger(__name__)
 
@@ -99,8 +99,7 @@ class SurfaceSystemConfig:
         object.__setattr__(self, "slab", self.slab.copy())
         object.__setattr__(self, "name", validate_surface_name(self.name))
         slab = self.slab
-        if self.surface_normal_axis not in (0, 1, 2):
-            raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
+        validate_surface_normal_axis(self.surface_normal_axis)
         if self.adsorption_height_min is not None:
             validate_positive(
                 "adsorption_height_min", self.adsorption_height_min, strict=True

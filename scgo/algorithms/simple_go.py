@@ -26,10 +26,12 @@ from scgo.system_types import (
     AdsorbateDefinition,
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    StructureValidationPolicy,
     SystemType,
     validate_minimum_structure,
 )
 from scgo.utils.helpers import (
+    calculator_detached,
     extract_minima_from_database,
     perform_local_relaxation,
 )
@@ -40,6 +42,8 @@ from scgo.utils.validation import (
     validate_calculator_attached,
     validate_positive,
 )
+
+logger = get_logger(__name__)
 
 # Atoms closer than this (Å) are effectively coincident: the local relaxation
 # would see non-finite forces, so a small rng-drawn displacement is applied.
@@ -139,8 +143,6 @@ def simple_go(
         SCGOValidationError: If atoms is not an ASE Atoms object, no calculator
             is attached, fmax is not positive, or the cluster is not 1-2 atoms.
     """
-    logger = get_logger(__name__)
-
     validate_atoms(atoms)
     calculator = validate_calculator_attached(atoms, "simple optimization")
     validate_positive("fmax", fmax, strict=True)
@@ -158,17 +160,15 @@ def simple_go(
     if trajectory is not None:
         relaxation_kwargs["trajectory"] = trajectory
     # Detach calculator temporarily for DB setup to avoid pickling issues
-    calc = atoms.calc
-    atoms.calc = None
-    da = setup_database(
-        output_dir,
-        "simple_go.db",
-        atoms,
-        initial_candidate=atoms,
-        remove_existing=clean,
-        run_id=run_id,
-    )
-    atoms.calc = calc
+    with calculator_detached(atoms):
+        da = setup_database(
+            output_dir,
+            "simple_go.db",
+            atoms,
+            initial_candidate=atoms,
+            remove_existing=clean,
+            run_id=run_id,
+        )
 
     log_info_v(
         logger,
@@ -229,11 +229,13 @@ def simple_go(
                 surface_config=surface_config,
                 n_slab=n_slab,
                 adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                cluster_adsorbate_config=cluster_adsorbate_config,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                validation=StructureValidationPolicy.from_search_flags(
+                    connectivity_factor=connectivity_factor,
+                    cluster_adsorbate_config=cluster_adsorbate_config,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                ),
             )
         except SCGOValidationError as exc:
             logger.warning("simple_go rejecting invalid relaxed structure (%s)", exc)

@@ -16,7 +16,7 @@ from scgo.constants import DEFAULT_ENERGY_TOLERANCE
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import set_tags
 from scgo.metadata.provenance import OUTPUT_JSON_SCHEMA_VERSION
-from scgo.system_types import AdsorbateDefinition
+from scgo.system_types import AdsorbateDefinition, StructureValidationPolicy
 from scgo.ts_search.transition_state_io import (
     load_minima_by_composition,
     save_transition_state_results,
@@ -860,7 +860,7 @@ def test_surface_ts_geometry_gate_uses_fixed_prefix_for_slab_search(monkeypatch)
         surface_config=cfg,
         system_type="surface_adsorbate",
         adsorbate_definition=adsorbate_definition,
-        n_slab_deposit=n_fixed,
+        validation=StructureValidationPolicy(n_slab_deposit=n_fixed),
     )
     assert captured["n_slab"] == n_fixed
     assert ts_result[0]["status"] == "success"
@@ -880,6 +880,6 @@ def test_surface_ts_geometry_gate_uses_fixed_prefix_for_slab_search(monkeypatch)
         surface_config=cfg,
         system_type="surface_adsorbate",
         adsorbate_definition=adsorbate_definition,
-        n_slab_deposit=None,
+        validation=StructureValidationPolicy(n_slab_deposit=None),
     )
     assert captured["n_slab"] == total

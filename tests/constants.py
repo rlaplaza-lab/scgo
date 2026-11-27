@@ -28,6 +28,7 @@ MIXED_COMPOSITIONS = {
 
 # Initialization modes
 INITIALIZATION_MODES = ["random_spherical", "seed+growth", "template", "smart"]
+INITIALIZATION_MODES_SMART_FIRST = ["smart", *INITIALIZATION_MODES[:2], "template"]
 
 # Batch testing configurations
 BATCH_TEST_SAMPLES = int(os.environ.get("SCGO_BATCH_TEST_SAMPLES", "25"))
@@ -80,3 +81,13 @@ PT4_EMT_BARRIER_EV = (0.5, 3.0)
 # (0.0, 10.0): the 10 eV ceiling admitted absurd barriers. GPU-only (skipped in
 # local CPU runs) -- requires Kaggle GPU CI re-verification.
 MLIP_BARRIER_EV = (0.0, 6.0)
+
+
+DEFAULT_TEST_SEED = 42
+TEST_VACUUM_GAS = 5.0
+TEST_VACUUM_SLAB = 6.0
+TEST_VACUUM_GA = 8.0
+TEST_CELL_SIZE = 10.0
+PT2_DIMER_POSITIONS = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
+PT3_TRIANGLE_POSITIONS = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.165, 0.0]]
+EMT_CALCULATOR_PARAMS = {"calculator": "EMT", "calculator_kwargs": {}}

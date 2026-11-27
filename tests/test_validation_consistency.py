@@ -15,6 +15,7 @@ from scgo.algorithms.ga_common import validate_structure_for_ga_storage
 from scgo.exceptions import SCGOValidationError
 from scgo.system_types import (
     AdsorbateDefinition,
+    StructureValidationPolicy,
     _validate_adsorbate_tag_partition,
     validate_minimum_structure,
     validate_structure_for_system_type,
@@ -520,6 +521,8 @@ def test_validate_minimum_structure_forwards_binding_penetration_tolerance(
     validate_minimum_structure(
         Atoms("Pt", positions=[[0.0, 0.0, 0.0]]),
         system_type="gas_cluster",
-        binding_penetration_tolerance_a=0.35,
+        validation=StructureValidationPolicy(binding_penetration_tolerance_a=0.35),
     )
-    assert captured.get("binding_penetration_tolerance_a") == pytest.approx(0.35)
+    forwarded = captured.get("validation")
+    assert isinstance(forwarded, StructureValidationPolicy)
+    assert forwarded.binding_penetration_tolerance_a == pytest.approx(0.35)

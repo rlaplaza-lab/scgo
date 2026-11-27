@@ -15,6 +15,7 @@ from scgo.cluster_adsorbate.placement import (
     place_fragment_on_cluster,
     radii_derived_height_bounds,
 )
+from tests.helpers import oh_template as _oh_template
 
 
 def _pt3_tetrahedron() -> Atoms:
@@ -27,10 +28,6 @@ def _pt3_tetrahedron() -> Atoms:
         ],
         pbc=False,
     )
-
-
-def _oh_template() -> Atoms:
-    return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
 
 
 def test_radii_derived_height_bounds_positive() -> None:

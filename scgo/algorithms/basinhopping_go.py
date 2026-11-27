@@ -22,6 +22,7 @@ from scgo.algorithms.ga_common import (
     maybe_apply_mobile_core_ads_tags,
     resolve_run_uniqueness_comparator,
     setup_diversity_scorer,
+    sort_minima_by_fitness,
 )
 from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
@@ -45,6 +46,7 @@ from scgo.system_types import (
     AdsorbateFragmentInput,
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    StructureValidationPolicy,
     SystemType,
     resolve_structure_mic,
     validate_minimum_structure,
@@ -52,13 +54,13 @@ from scgo.system_types import (
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
     calculate_fitness,
-    get_fitness_from_atoms,
     set_fitness_in_atoms,
 )
 from scgo.utils.geometric_prefilter import fails_fast_geometric_prefilter
 from scgo.utils.helpers import (
     _create_energy_bins,
     _find_unique_minima_with_binning,
+    calculator_detached,
     extract_minima_from_database,
     perform_local_relaxation,
 )
@@ -69,7 +71,9 @@ from scgo.utils.logging import (
     should_show_progress,
 )
 from scgo.utils.timing_report import (
+    accumulate_timing,
     build_timing_payload,
+    cpu_non_relax_seconds_from_timings,
     emit_timing_data,
     log_timing_summary,
 )
@@ -163,7 +167,7 @@ def _move_atoms(
         n_to_move = min(n_atoms, max(min_to_move, n_to_move_calculated))
         if move_strategy == "random":
             return list(rng.choice(pool, size=n_to_move, replace=False))
-        if move_strategy in ["highest_force", "lowest_force"]:
+        if move_strategy in ("highest_force", "lowest_force"):
             forces = atoms.get_forces()
             force_magnitudes = np.linalg.norm(forces[pool], axis=1)
             sorted_local = np.argsort(force_magnitudes)
@@ -408,6 +412,14 @@ def bh_go(
                 "Surface system has no movable atoms for basin hopping."
             )
 
+    validation = StructureValidationPolicy.from_search_flags(
+        connectivity_factor=connectivity_factor,
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        allow_cluster_fragmentation=allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        n_slab_deposit=n_slab_deposit,
+    )
     n_frozen_prefix = int(movable_indices[0]) if movable_indices else 0
     all_atom_types = sorted({int(z) for z in atoms.get_atomic_numbers()})
     blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
@@ -472,18 +484,16 @@ def bh_go(
     )
 
     # Detach calculator temporarily for DB setup to avoid pickling issues
-    calc = atoms.calc
-    atoms.calc = None
-    da = setup_database(
-        output_dir,
-        "bh_go.db",
-        atoms,
-        initial_candidate=atoms,
-        remove_existing=clean,
-        enable_expression_indexes=db_enable_expression_indexes,
-        run_id=run_id,
-    )
-    atoms.calc = calc
+    with calculator_detached(atoms):
+        da = setup_database(
+            output_dir,
+            "bh_go.db",
+            atoms,
+            initial_candidate=atoms,
+            remove_existing=clean,
+            enable_expression_indexes=db_enable_expression_indexes,
+            run_id=run_id,
+        )
 
     try:
         profile_t0 = perf_counter()
@@ -499,11 +509,12 @@ def bh_go(
             total = perf_counter() - profile_t0
             profile_timings["total_wall_s"] = total
             profile_timings["kind"] = "bh"
-            relax_sum = float(
+            profile_timings["local_relaxation_s"] = float(
                 profile_timings.get("initial_local_relaxation_s", 0.0)
             ) + float(profile_timings.get("offspring_local_relaxation_s", 0.0))
-            profile_timings["local_relaxation_s"] = relax_sum
-            profile_timings["cpu_non_relax_s"] = max(0.0, total - relax_sum)
+            profile_timings["cpu_non_relax_s"] = cpu_non_relax_seconds_from_timings(
+                profile_timings
+            )
             log_timing_summary(
                 logger, "basin_hopping", profile_timings, verbosity=verbosity
             )
@@ -562,11 +573,7 @@ def bh_go(
                 surface_config=surface_config,
                 n_slab=n_slab if surface_mode else None,
                 adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                n_slab_deposit=n_slab_deposit,
+                validation=validation,
             )
         except SCGOValidationError as exc:
             # Keep as walk start; exclude from returned minima via ga_eligible.
@@ -613,13 +620,11 @@ def bh_go(
             verbosity=verbosity,
         )
 
-        iteration_iterator = range(niter)
-        if verbosity >= 1:
-            iteration_iterator = tqdm(
-                iteration_iterator,
-                desc=f"  BH iterations for {len(atoms)} atoms",
-                disable=not should_show_progress(verbosity),
-            )
+        iteration_iterator = tqdm(
+            range(niter),
+            desc=f"  BH iterations for {len(atoms)} atoms",
+            disable=not should_show_progress(verbosity),
+        )
 
         def _structure_error(trial: Atoms) -> SCGOValidationError | None:
             try:
@@ -629,11 +634,7 @@ def bh_go(
                     surface_config=surface_config,
                     n_slab=n_slab if surface_mode else None,
                     adsorbate_definition=adsorbate_definition,
-                    connectivity_factor=connectivity_factor,
-                    allow_cluster_fragmentation=allow_cluster_fragmentation,
-                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                    n_slab_deposit=n_slab_deposit,
+                    validation=validation,
                 )
             except SCGOValidationError as exc:
                 return exc
@@ -700,9 +701,7 @@ def bh_go(
                 exception_types=HPC_DATABASE_EXCEPTIONS,
             )
             dt_ins = perf_counter() - t_ins0
-            profile_timings["offspring_unrelaxed_insert_s"] = (
-                profile_timings.get("offspring_unrelaxed_insert_s", 0.0) + dt_ins
-            )
+            accumulate_timing(profile_timings, "offspring_unrelaxed_insert_s", dt_ins)
 
             t_rel0 = perf_counter()
             e_trial = perform_local_relaxation(
@@ -716,18 +715,18 @@ def bh_go(
                 n_slab=n_slab,
             )
             dt_rel = perf_counter() - t_rel0
-            profile_timings["offspring_local_relaxation_s"] = (
-                profile_timings.get("offspring_local_relaxation_s", 0.0) + dt_rel
-            )
+            accumulate_timing(profile_timings, "offspring_local_relaxation_s", dt_rel)
             invalid = _structure_error(a_trial)
             if invalid is not None:
                 # A single invalid trial must not abort the whole run: count it as
                 # rejected and continue with the next move.
                 profile_counters["rejected_invalid"] += 1
-                logger.warning(
+                log_debug_v(
+                    logger,
                     "Iteration %d: rejecting invalid trial structure (%s)",
                     iteration,
                     invalid,
+                    verbosity=verbosity,
                 )
                 continue
             # Don't inherit ga_eligible=False from an invalid initial seed.
@@ -746,9 +745,7 @@ def bh_go(
                 exception_types=HPC_DATABASE_EXCEPTIONS,
             )
             dt_w = perf_counter() - t_w0
-            profile_timings["offspring_relaxed_write_s"] = (
-                profile_timings.get("offspring_relaxed_write_s", 0.0) + dt_w
-            )
+            accumulate_timing(profile_timings, "offspring_relaxed_write_s", dt_w)
 
             # Calculate fitness for trial structure
             fitness_trial = calculate_fitness(
@@ -868,17 +865,7 @@ def bh_go(
             sorted_minima, comparator, energy_tolerance, get_bin_index, energy_bins
         )
 
-        # Sort by fitness (highest first) for non-default strategies
-        if fitness_strategy != FitnessStrategy.LOW_ENERGY:
-            unique_minima.sort(
-                key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
-                reverse=True,  # Higher fitness first
-            )
-            logger.info(
-                "Sorted %d unique minima by %s fitness",
-                len(unique_minima),
-                fitness_strategy,
-            )
+        sort_minima_by_fitness(unique_minima, fitness_strategy, logger)
 
         _finish_bh_timing()
         return unique_minima

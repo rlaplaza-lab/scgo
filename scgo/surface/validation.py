@@ -33,13 +33,12 @@ from scgo.system_types.connectivity_factor import (
     format_connectivity_factor,
     normalize_connectivity_factor,
 )
+from scgo.system_types.structure_validation import StructureValidationPolicy
 from scgo.utils.combine_atoms import (
     slab_surface_extreme,
     top_layer_indices,
 )
 
-# Small slack below nominal slab top (numerical / structural roughness).
-_BINDING_PENETRATION_TOLERANCE_A = 0.1
 # When the template's mobile layers are not covalently bound to the frozen
 # prefix (layered crystals), candidates may expand that template gap by this
 # factor before the sheet counts as desorbed. Metallic slabs never take this
@@ -50,8 +49,17 @@ _STACKING_GAP_RUMPLE_FACTOR = 1.5
 def _symbols_tag_list(value: object) -> list[str]:
     """Normalize a chemical-symbols tag (JSON string or already-decoded list)."""
     if isinstance(value, str):
-        value = json.loads(value)
-    return [str(x) for x in value]  # type: ignore[arg-type]
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise SCGOValidationError(
+                f"Invalid chemical-symbols tag JSON: {value!r}"
+            ) from exc
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        raise SCGOValidationError(
+            f"Chemical-symbols tag must be a list or JSON list, got {type(value)!r}"
+        )
+    return [str(x) for x in value]
 
 
 def validate_surface_config_slab_prefix(
@@ -402,12 +410,9 @@ def validate_supported_cluster_deposit(
     min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
-    binding_penetration_tolerance_a: float = _BINDING_PENETRATION_TOLERANCE_A,
     n_core_mobile: int | None = None,
     adsorbate_fragment_lengths: list[int] | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
+    validation: StructureValidationPolicy | None = None,
     slab_stacking_cutoff_a: float | None = None,
 ) -> tuple[bool, str]:
     """Validate a combined slab + supported mobile cluster (full cluster, not the fragment only).
@@ -449,16 +454,13 @@ def validate_supported_cluster_deposit(
         use_mic: Pass through to distance and connectivity checks when True.
         min_distance_factor: Mobile cluster self clash scale (initialization default).
         connectivity_factor: Bonding connectivity scale (initialization default).
-        binding_penetration_tolerance_a: Allow mobile cluster atoms this far (Å) below
-            the nominal slab top along ``surface_normal_axis``.
         n_core_mobile: Atoms in the mobile slice belonging to the cluster core (prefix).
             When ``None``, all mobile atoms are treated as core (``surface_cluster``).
         adsorbate_fragment_lengths: Optional ordered lengths for adsorbate fragments
             within the mobile adsorbate suffix.
-        allow_cluster_fragmentation: Allow multiple disconnected core-bearing subgroups.
-        allow_adsorbate_surface_detachment: Allow adsorbate-only subgroups on the slab.
-        enforce_adsorbate_subgraph_integrity: Require each adsorbate fragment to
-            remain internally connected.
+        validation: Fragmentation, detachment, fragment-integrity, and penetration
+            flags. ``None`` uses the policy defaults. Penetration is how far (Å)
+            mobile atoms may sit below the nominal slab top.
         slab_stacking_cutoff_a: Optional nearest-neighbor cutoff (Å) that also
             counts as slab contact. Set from
             :func:`layer_stacking_cutoff_from_template` when the template
@@ -467,6 +469,11 @@ def validate_supported_cluster_deposit(
     Returns:
         ``(True, "")`` if valid, else ``(False, message)``.
     """
+    flags = validation if validation is not None else StructureValidationPolicy()
+    binding_penetration_tolerance_a = flags.binding_penetration_tolerance_a
+    allow_cluster_fragmentation = flags.allow_cluster_fragmentation
+    allow_adsorbate_surface_detachment = flags.allow_adsorbate_surface_detachment
+    enforce_adsorbate_subgraph_integrity = flags.enforce_adsorbate_subgraph_integrity
     n = len(combined)
     if n_slab < 0 or n_slab > n:
         return False, f"Invalid n_slab={n_slab} for len(combined)={n}"

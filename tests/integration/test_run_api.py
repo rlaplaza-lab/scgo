@@ -33,48 +33,27 @@ from scgo.runner_params import _prepare_run_go_campaign_context
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import get_system_policy
 from scgo.utils.helpers import get_composition_counts
+from tests.helpers import (
+    adsorbates_oh as _adsorbates_oh,
+)
+from tests.helpers import (
+    build_pt111_slab,
+    emt_ts_search_kwargs,
+)
 
 
 def _emt_ts_gasc() -> dict:
-    return {
-        **get_ts_search_params(
-            system_type="gas_cluster",
-            calculator="EMT",
-            calculator_kwargs={},
-        ),
-        "use_parallel_neb": False,
-        "use_torchsim": False,
-    }
+    return emt_ts_search_kwargs("gas_cluster")
 
 
 def _emt_ts_surf_ads(surface_config: SurfaceSystemConfig) -> dict:
-    return {
-        **get_ts_search_params(
-            system_type="surface_cluster_adsorbate",
-            surface_config=surface_config,
-            calculator="EMT",
-            calculator_kwargs={},
-        ),
-        "use_parallel_neb": False,
-        "use_torchsim": False,
-    }
-
-
-def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
-    out: list[Atoms] = []
-    for i in range(n):
-        shift = float(2.2 * i)
-        out.append(
-            Atoms(
-                symbols=["O", "H"],
-                positions=[[shift, 0.0, 0.0], [shift, 0.0, 0.96]],
-            )
-        )
-    return out
+    return emt_ts_search_kwargs(
+        "surface_cluster_adsorbate", surface_config=surface_config
+    )
 
 
 def _surface_cfg() -> SurfaceSystemConfig:
-    slab = fcc111("Pt", size=(2, 2, 1), vacuum=6.0, orthogonal=True)
+    slab = build_pt111_slab(size=(2, 2, 1))
     slab.pbc = [True, True, True]
     return SurfaceSystemConfig(slab=slab, fix_all_slab_atoms=True)
 
@@ -191,7 +170,7 @@ def test_run_trials_validations(rng):
     ):
         run_trials(["Pt"], "ga", {"system_type": "gas_cluster"}, "out", None)
     with pytest.raises(
-        SCGOValidationError, match="verbosity must be one of 0, 1, 2, or 3"
+        SCGOValidationError, match="Invalid verbosity level: 5. Must be 0, 1, 2, or 3"
     ):
         run_trials(
             ["Pt"], "ga", {"system_type": "gas_cluster"}, "out", rng, verbosity=5
@@ -890,7 +869,7 @@ def test_run_go_rejects_optimizer_slot_identity_keys(slot_key):
 
 
 def test_run_go_ts_rejects_ts_surface_config_for_gas_system():
-    with pytest.raises(SCGOValidationError, match="coherence error"):
+    with pytest.raises(SCGOValidationError, match="does not allow surface_config"):
         run_go_ts(
             "Pt2",
             go_params={"optimizer_params": {"ga": {}}},

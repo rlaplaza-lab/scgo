@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from scgo.utils.calculator_names import normalize_calculator_name
+
 _ROOT_SUFFIXES: tuple[str, ...] = ("_searches", "_ts_results")
 
 
@@ -25,7 +27,7 @@ def formula_ts_results_dir(root: str | Path, formula: str) -> Path:
 
 def calculator_slug_from_go_params(go_params: dict[str, Any] | None) -> str:
     """Return the lowercase calculator slug used in default campaign-root names."""
-    c = str((go_params or {}).get("calculator", "MACE")).strip().upper()
+    c = normalize_calculator_name((go_params or {}).get("calculator", "MACE"))
     return c.lower() or "calc"
 
 

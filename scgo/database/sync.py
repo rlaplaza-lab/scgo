@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from scgo.database.transactions import database_transaction
-from scgo.exceptions import SCGODatabaseError
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -122,8 +121,6 @@ def database_retry(
                 last_error,
             )
         return result
-
-    raise SCGODatabaseError(f"{operation_name} failed unexpectedly") from last_error
 
 
 def is_retryable_error(error: Exception) -> bool:

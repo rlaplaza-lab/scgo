@@ -46,7 +46,7 @@ def test_ts_defaults_match_system_policy_align_and_mic(system_type):
     """`TS_DEFAULTS_BY_SYSTEM_TYPE` must agree with `SystemPolicy` flags."""
     defaults = get_ts_defaults(system_type)
     policy = SYSTEM_TYPE_POLICIES[system_type]
-    assert defaults["neb_align_endpoints"] is (not policy.neb_disable_alignment)
+    assert defaults["neb_align_endpoints"] is True
     assert defaults["neb_interpolation_mic"] is policy.neb_force_mic
     assert defaults["neb_surface_cell_remap"] is policy.neb_surface_cell_remap
     assert (

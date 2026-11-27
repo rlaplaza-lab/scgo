@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.9.5
+
+### Changed
+
+- Missing MLIP / TorchSim extras and conflicting stacks raise
+  `SCGOConfigurationError` (install hint preserved). Identity geometry checks
+  use `rtol=0.0`. Deposition connectivity honors a caller-supplied cluster
+  adsorbate config; previous-run loading follows discovery's formula-or-atom
+  probe. Unused `neb_disable_alignment` and streaming TS filter knobs are gone.
+- Mutation operators share one `get_new_individual` and creator setup.
+  Descriptions stay `mutation: <name>` from the descriptor.
+  `CustomPermutationMutation` stays `mutation: permutation`.
+- UMA and UPET share the inner-calculator `calculate` path. Checkpoint
+  loading is unchanged.
+- Fragment detach and reposition share template lookup. Detach still allows
+  a disconnected mobile region.
+- Structural validation flags travel as one `StructureValidationPolicy`
+  inside GO and TS. `ga_go`, `bh_go`, `simple_go`, and
+  `run_transition_state_search` keep the same keyword arguments.
+- Low-effort UMA and UPET presets stamp seed, surface config, and the
+  reduced budget in one place. MACE TorchSim still leaves `params["seed"]`
+  unset when `seed` is omitted.
+- Verbosity logs, connectivity scale bounds, atomic JSON writes, and
+  TorchSim Hessian force reads each go through one helper.
+- TS preset overlays no longer repeat values already set by the parent dict.
+  Resolved defaults stay the same.
+- A global connectivity spec with no factor raises `SCGOValidationError`,
+  including under `python -O`. Merging TS calculator kwargs no longer uses
+  `assert`.
+- Comments and docstring paragraphs that restated the next sentence are
+  gone. The cut-and-splice citation stays.
+- UMA and UPET default checkpoints live in `DEFAULT_UMA_MODEL`,
+  `DEFAULT_UMA_TASK`, `DEFAULT_UPET_MODEL`, and `DEFAULT_UPET_VERSION`.
+  Presets, calculators, and the benchmark CLI read those names.
+- TS verbose logs follow the runner allowlists. Calculator kwargs and
+  TorchSim objects stay on their own lines.
+- Pairwise distances, axis-angle rotations, and unit vectors share one
+  helper. A near-zero vector is `[0, 0, 1]`. A rotation axis shorter than
+  `1e-10` stays the identity.
+- TorchSim model names are built once. Device, batch caps, and a live model
+  stay with the caller that already set them.
+- Cluster and slab fragment placement share one loop. Slab clash targets and
+  `uses_surface` stay with the caller.
+- Site-type tallies go through `record_site_type`.
+- Tag-targeted breathing, in-plane slide, and flattening unpack the mobile
+  region once. Clash checks that already meant self-clash or slab clash use
+  `_mobile_clashes`.
+- GO and TS campaign prep share the system-type and surface checks.
+  `bh_go` and `ga_go` signatures are unchanged.
+- `psutil` is no longer a dev dependency. Pytest collects with its default
+  directory exclusions. A check fails when `tests/` has bytecode whose
+  source file is gone.
+- GO+TS preparation validates the resolved surface, including a slab that
+  arrives only inside params. Single-run and campaign share that preamble.
+  TS search and the TS campaign share theirs. Optimizer-slot identity keys
+  are rejected in the existing resolve step.
+- `analyze_disconnection` uses the minimum image for the closest-pair gap
+  when `use_mic` is set.
+- Population insertion breaks raw-score ties with the same relax-id order
+  as init and update.
+- Adsorbate-only hierarchical batches record the last site type, so later
+  structures in the batch see it.
+- TorchSim treats `uma` as FairChem and `metatomic` as UPET in both param
+  building and model loading. Calculator names are normalized in one place.
+  MatPES defaults use `MATPES_R2SCAN_MODEL`.
+- A packed gas cluster still gets a rotational move. Untagged / whole-mobile
+  twist tries a fixed descending ladder ``[π, 2.0, 1.0, 0.5, 0.2]`` so smaller
+  angles recover when large ones clash; the cap shifts outward by the blmin
+  gap that rotation opens. Tagged-moiety rotations still span ``[min_angle, π]``.
+
 ## 0.9.4
 
 ### Changed
@@ -34,6 +104,11 @@
 
 ### Fixed
 
+- Cluster+adsorbate cut-and-splice no longer treats the whole metal core as one
+  rigid tag-0 block. Core atoms are cut individually (`split_core_tag`);
+  adsorbate fragments stay rigid. Monoatomic adsorbates (e.g. Ag₄+O) were
+  failing `minfrac` on every pairing attempt. Generation logs count unary
+  mutation-only successes separately from true crossover.
 - A TorchSim relaxation that hits Warp's CUDA pool (`Failed to allocate N
   bytes on device 'cuda:0'`) releases PyTorch's cache and the Warp pool, then
   retries the same batch. A batch that still does not fit is split in half.

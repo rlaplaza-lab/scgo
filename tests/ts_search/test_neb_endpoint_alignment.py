@@ -1,6 +1,7 @@
-"""Consolidated NEB endpoint / surface alignment tests (T2-15 fold).
+"""NEB endpoint alignment for surface and blockwise systems.
 
-Merged verbatim from ``test_surface_neb_alignment.py`` and ``test_neb_blockwise_alignment.py``; all tests and markers preserved.
+Covers lattice-compatible rotations, slab cell remap, and blockwise matching
+of slab, core, and adsorbate blocks between NEB endpoints.
 """
 
 from __future__ import annotations
@@ -30,12 +31,6 @@ from scgo.ts_search.transition_state import (
 )
 from scgo.ts_search.transition_state_io import adsorbate_pair_select_cap
 from scgo.utils.helpers import get_cluster_formula
-
-# ---------------------------------------------------------------------
-# from test_surface_neb_alignment.py
-# ---------------------------------------------------------------------
-
-"""Surface NEB endpoint alignment: lattice remap and compatible rotation."""
 
 
 def test_validate_lattice_compatible_rotation_rejects_out_of_plane():
@@ -797,13 +792,6 @@ def test_interpolate_path_fixed_slab_anchors_under_surface_align():
     assert float(np.max(np.linalg.norm(disp[fixed_idx], axis=1))) < 1e-2
 
 
-# ---------------------------------------------------------------------
-# from test_neb_blockwise_alignment.py
-# ---------------------------------------------------------------------
-
-"""NEB: blockwise endpoint matching (slab + core + adsorbate)."""
-
-
 def test_blockwise_reorders_adsorbate_block_to_reactant() -> None:
     pos = np.array(
         [
@@ -1164,13 +1152,11 @@ def test_copy_atoms_isolates_nested_info_from_metadata_writes() -> None:
     src = Atoms("H", positions=[[0.0, 0.0, 0.0]])
     src.info["key_value_pairs"] = {"raw_score": 1.0}
     clone = copy_atoms(src)
+    assert clone.info is not src.info
+    assert clone.info["key_value_pairs"] is not src.info["key_value_pairs"]
     set_tags(clone, raw_score=-9.0, potential_energy=9.0)
     assert extract_energy_from_atoms(src) == pytest.approx(-1.0)
     assert extract_energy_from_atoms(clone) == pytest.approx(9.0)
-    # ASE Atoms.copy() alone would have shared the nested dicts.
-    shallow = src.copy()
-    set_tags(shallow, raw_score=-3.0)
-    assert extract_energy_from_atoms(src) == pytest.approx(3.0)
 
 
 def test_prepare_neb_endpoints_slab_search_empty_core_uses_deposit_prefix() -> None:

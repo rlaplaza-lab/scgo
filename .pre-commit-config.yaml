@@ -5,3 +5,11 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: check-orphan-pyc
+        name: check orphan test bytecode
+        entry: python scripts/check_orphan_pyc.py
+        language: system
+        pass_filenames: false
+        always_run: true

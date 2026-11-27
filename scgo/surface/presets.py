@@ -17,7 +17,7 @@ from ase.build import graphene
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import CONNECTIVITY_FACTOR
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.layers import _layer_indices_by_clustering
+from scgo.surface.layers import resolve_slab_mobile_or_fixed_indices
 from scgo.surface.pbc import normalize_slab_pbc
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
@@ -98,6 +98,31 @@ def build_graphite_slab(
     normalize_slab_pbc(slab)
     slab.wrap()
     return slab
+
+
+def _default_surface_system_config(
+    slab: Atoms,
+    name: str,
+    *,
+    adsorption_height_min: float = 0.5,
+    adsorption_height_max: float,
+    structure_connectivity_factor: ConnectivityFactorInput
+    | NormalizedConnectivityFactor,
+    defect_bias_probability: float = 0.0,
+) -> SurfaceSystemConfig:
+    """Shared ``SurfaceSystemConfig`` defaults for graphite/graphene presets."""
+    return SurfaceSystemConfig(
+        slab=slab,
+        name=name,
+        adsorption_height_min=adsorption_height_min,
+        adsorption_height_max=adsorption_height_max,
+        fix_all_slab_atoms=False,
+        n_relax_top_slab_layers=1,
+        comparator_use_mic=True,
+        max_placement_attempts=1000,
+        structure_connectivity_factor=structure_connectivity_factor,
+        defect_bias_probability=defect_bias_probability,
+    )
 
 
 def _central_atom_index(atoms: Atoms, *, surface_normal_axis: int = 2) -> int:
@@ -223,15 +248,10 @@ def make_graphene_surface_config(
     else:
         slab = build_graphene_slab(nx=nx, ny=ny, a=a, cell_height=cell_height)
 
-    return SurfaceSystemConfig(
-        slab=slab,
-        name=name,
-        adsorption_height_min=0.5,
+    return _default_surface_system_config(
+        slab,
+        name,
         adsorption_height_max=1.5,
-        fix_all_slab_atoms=False,
-        n_relax_top_slab_layers=1,
-        comparator_use_mic=True,
-        max_placement_attempts=1000,
         structure_connectivity_factor=structure_connectivity_factor,
         defect_bias_probability=defect_bias_probability,
     )
@@ -239,11 +259,10 @@ def make_graphene_surface_config(
 
 def _top_layer_atom_indices(slab: Atoms, *, surface_normal_axis: int = 2) -> list[int]:
     """Indices of atoms in the uppermost distinct layer of ``slab``."""
-    mobile = _layer_indices_by_clustering(
+    _fixed, mobile = resolve_slab_mobile_or_fixed_indices(
         np.asarray(slab.get_positions()),
         surface_normal_axis,
-        n_layers=1,
-        from_top=True,
+        n_relax_top_slab_layers=1,
     )
     return sorted(mobile)
 
@@ -267,7 +286,8 @@ def build_defected_graphite_slab(
         )
     rng = np.random.default_rng(seed)
     remove = sorted(rng.choice(top_idx, size=n_vacancies, replace=False).tolist())
-    keep = [i for i in range(len(slab)) if i not in set(remove)]
+    remove_set = set(remove)
+    keep = [i for i in range(len(slab)) if i not in remove_set]
     vacancy_position = slab.get_positions()[remove[0]].copy()
     out = slab[keep]
     out.set_cell(slab.get_cell())
@@ -317,15 +337,10 @@ def make_graphite_surface_config(
     slab = build_graphite_slab(
         layers=slab_layers, vacuum=vacuum, repeat_xy=slab_repeat_xy
     )
-    return SurfaceSystemConfig(
-        slab=slab,
-        name="graphite",
-        adsorption_height_min=0.5,
+    return _default_surface_system_config(
+        slab,
+        "graphite",
         adsorption_height_max=1.0,
-        fix_all_slab_atoms=False,
-        n_relax_top_slab_layers=1,
-        comparator_use_mic=True,
-        max_placement_attempts=1000,
         structure_connectivity_factor=structure_connectivity_factor,
     )
 
@@ -352,15 +367,10 @@ def make_defected_graphite_surface_config(
         n_vacancies=n_vacancies,
         seed=seed,
     )
-    return SurfaceSystemConfig(
-        slab=slab,
-        name="defected_graphite",
-        adsorption_height_min=0.5,
+    return _default_surface_system_config(
+        slab,
+        "defected_graphite",
         adsorption_height_max=1.0,
-        fix_all_slab_atoms=False,
-        n_relax_top_slab_layers=1,
-        comparator_use_mic=True,
-        max_placement_attempts=1000,
         structure_connectivity_factor=structure_connectivity_factor,
         defect_bias_probability=defect_bias_probability,
     )
@@ -455,15 +465,10 @@ def make_n_doped_graphite_surface_config(
         n_dopants=n_dopants,
         seed=seed,
     )
-    return SurfaceSystemConfig(
-        slab=slab,
-        name="n_doped_graphite",
-        adsorption_height_min=0.5,
+    return _default_surface_system_config(
+        slab,
+        "n_doped_graphite",
         adsorption_height_max=1.5,
-        fix_all_slab_atoms=False,
-        n_relax_top_slab_layers=1,
-        comparator_use_mic=True,
-        max_placement_attempts=1000,
         structure_connectivity_factor=structure_connectivity_factor,
     )
 

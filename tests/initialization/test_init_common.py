@@ -68,6 +68,10 @@ from scgo.initialization.seed_combiners import (
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.db_stamp import stamp_db
 from scgo.utils.helpers import get_composition_counts
+from tests.constants import (
+    INITIALIZATION_MODES,
+    INITIALIZATION_MODES_SMART_FIRST,
+)
 from tests.helpers import (
     BATCH_TEST_SAMPLES,
     BATCH_TEST_SAMPLES_SLOW,
@@ -125,18 +129,14 @@ class TestBasicInitialization:
         # Verify all invariants using helper
         assert_cluster_valid(atoms, comp, min_distance_factor=0.5)
 
-    @pytest.mark.parametrize(
-        "mode", ["smart", "random_spherical", "seed+growth", "template"]
-    )
+    @pytest.mark.parametrize("mode", INITIALIZATION_MODES_SMART_FIRST)
     def test_empty_composition_all_modes(self, mode, rng):
         """Test that empty composition returns empty Atoms object for all modes."""
         result = create_initial_cluster([], mode=mode, rng=rng)
         assert isinstance(result, Atoms)
         assert len(result) == 0
 
-    @pytest.mark.parametrize(
-        "mode", ["smart", "random_spherical", "seed+growth", "template"]
-    )
+    @pytest.mark.parametrize("mode", INITIALIZATION_MODES_SMART_FIRST)
     def test_single_atom_all_modes(self, mode, rng):
         """Test that single atom composition works and satisfies invariants for all modes."""
         comp = ["Pt"]
@@ -256,7 +256,7 @@ class TestDegenerateGeometries:
         assert is_valid is False or "clash" in msg.lower()
 
 
-# Mode-switching basic invariants consolidated in tests/test_initialization_modes.py
+# Mode-switching basic invariants live in tests/initialization/test_initialization_modes.py.
 
 
 class TestReproducibility:
@@ -627,7 +627,6 @@ class TestDatabaseIntegration:
             # Add a Pt2 structure
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [0, 0, 2.5]])
             pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
-            pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt2,
                 relaxed=True,
@@ -637,7 +636,6 @@ class TestDatabaseIntegration:
 
             # Add a Pt3 structure
             pt3 = Atoms("Pt3", positions=[[0, 0, 0], [0, 0, 2.5], [0, 2.5, 0]])
-            pt3.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             pt3.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt3,
@@ -652,7 +650,6 @@ class TestDatabaseIntegration:
 
             # Add a PtAu structure
             ptau = Atoms("PtAu", positions=[[0, 0, 0], [0, 0, 2.6]])
-            ptau.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             ptau.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 ptau,
@@ -966,7 +963,6 @@ class TestLoadDbCandidates:
         with connect(str(db_path)) as db:
             a1 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
             a1.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
-            a1.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 a1,
                 relaxed=True,
@@ -1011,7 +1007,6 @@ class TestFindSmallerCandidates:
             pt2 = Atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
             # Mark this candidate as a final unique minimum so it is available
             # to seed+growth selection (seed strategy only uses final-tagged minima).
-            pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             pt2.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt2,
@@ -1060,7 +1055,6 @@ class TestFindSmallerCandidates:
             # Modify database: add a final-tagged candidate
             pt_new = Atoms("Pt2", positions=[[0, 0, 0], [2.6, 0, 0]])
             pt_new.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
-            pt_new.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db.write(
                 pt_new,
                 relaxed=True,
@@ -1097,9 +1091,6 @@ class TestFindSmallerCandidates:
             pt2_final.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = (
                 True
             )
-            pt2_final.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = (
-                True
-            )
             db.write(
                 pt2_final,
                 relaxed=True,
@@ -1120,7 +1111,6 @@ class TestFindSmallerCandidates:
         db3_path = _discovery_db_path(tmp_path, "Pt2", "test2b.db")
         with connect(str(db3_path)) as db3:
             rf = Atoms("Pt2", positions=[[0, 0, 0], [3.0, 0, 0]])
-            rf.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             rf.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             db3.write(
                 rf,
@@ -1394,9 +1384,7 @@ class TestConfigurationConstants:
 class TestLargeClusterConnectivityAllModes:
     """Streamlined connectivity tests for 50-60 atom clusters."""
 
-    @pytest.mark.parametrize(
-        "mode", ["random_spherical", "seed+growth", "smart", "template"]
-    )
+    @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
     @pytest.mark.parametrize("n_atoms", [50, 60])
     @pytest.mark.parametrize("seed", [0, 42])
     def test_connectivity_single_element(self, mode, n_atoms, seed):
@@ -1570,9 +1558,7 @@ def _assert_connectivity_with_diagnostics(
 class TestReproducibilityAllModes:
     """Smoke reproducibility across init modes (narrow seed matrix)."""
 
-    @pytest.mark.parametrize(
-        "mode", ["random_spherical", "seed+growth", "smart", "template"]
-    )
+    @pytest.mark.parametrize("mode", INITIALIZATION_MODES)
     @pytest.mark.reproducibility
     @pytest.mark.requires_cache_isolation
     @pytest.mark.parametrize("seed", [0, 42])

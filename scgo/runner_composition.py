@@ -129,16 +129,15 @@ def _as_composition(
 ) -> list[str]:
     if isinstance(composition, Atoms):
         return list(composition.get_chemical_symbols())
-    elif isinstance(composition, str):
+    if isinstance(composition, str):
         return parse_composition_arg(composition)
-    elif isinstance(composition, list):
+    if isinstance(composition, list):
         if not composition and not allow_empty:
             raise SCGOValidationError("composition list must not be empty")
         return [str(s) for s in composition]
-    else:
-        raise SCGOValidationError(
-            f"composition must be str, list[str], or Atoms, got {type(composition).__name__}"
-        )
+    raise SCGOValidationError(
+        f"composition must be str, list[str], or Atoms, got {type(composition).__name__}"
+    )
 
 
 def _as_composition_list(
@@ -150,16 +149,20 @@ def _as_composition_list(
     return out
 
 
+def _validate_size_scan_bounds(min_atoms: int, max_atoms: int) -> None:
+    if min_atoms < 1:
+        raise SCGOValidationError("min_atoms must be >= 1")
+    if max_atoms < min_atoms:
+        raise SCGOValidationError("max_atoms must be >= min_atoms")
+
+
 def build_one_element_compositions(
     element: str, min_atoms: int, max_atoms: int
 ) -> list[list[str]]:
     """Composition list for mono-element size scans (min_atoms..max_atoms)."""
     if not element or not isinstance(element, str):
         raise SCGOValidationError("element must be a non-empty string")
-    if min_atoms < 1:
-        raise SCGOValidationError("min_atoms must be >= 1")
-    if max_atoms < min_atoms:
-        raise SCGOValidationError("max_atoms must be >= min_atoms")
+    _validate_size_scan_bounds(min_atoms, max_atoms)
     return [[element] * n_atoms for n_atoms in range(min_atoms, max_atoms + 1)]
 
 
@@ -171,10 +174,7 @@ def build_two_element_compositions(
         raise SCGOValidationError("element1 must be a non-empty string")
     if not element2 or not isinstance(element2, str):
         raise SCGOValidationError("element2 must be a non-empty string")
-    if min_atoms < 1:
-        raise SCGOValidationError("min_atoms must be >= 1")
-    if max_atoms < min_atoms:
-        raise SCGOValidationError("max_atoms must be >= min_atoms")
+    _validate_size_scan_bounds(min_atoms, max_atoms)
     compositions: list[list[str]] = []
     for n_atoms in range(min_atoms, max_atoms + 1):
         for i in range(n_atoms + 1):

@@ -7,9 +7,6 @@ deposition / hierarchical import graph.
 
 from __future__ import annotations
 
-import importlib
-from typing import Any
-
 from scgo.surface.composition import full_adsorbate_slab_composition
 from scgo.surface.config import (
     SurfaceSystemConfig,
@@ -48,6 +45,7 @@ from scgo.surface.presets import (
     make_hopg_5x5_graphite_surface_config,
     make_n_doped_graphite_surface_config,
 )
+from scgo.utils.lazy_exports import lazy_submodule_dir, lazy_submodule_getattr
 
 __all__ = [
     "SurfaceSystemConfig",
@@ -136,16 +134,5 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> Any:
-    if name in _LAZY_ATTRS:
-        module_name, attr = _LAZY_ATTRS[name]
-        module = importlib.import_module(module_name)
-        value = getattr(module, attr)
-        globals()[name] = value
-        return value
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def __dir__() -> list[str]:
-    return sorted(__all__)
+__getattr__ = lazy_submodule_getattr(globals(), _LAZY_ATTRS, cache=True)
+__dir__ = lazy_submodule_dir(__all__)

@@ -5,11 +5,18 @@ import os
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.build import fcc111
 from ase.calculators.emt import EMT
 
 from scgo.surface.config import SurfaceSystemConfig
-from tests.helpers import create_test_atoms
+from tests.helpers import (
+    PT2_DIMER_POSITIONS,
+    PT3_TRIANGLE_POSITIONS,
+    TEST_VACUUM_GAS,
+    TEST_VACUUM_SLAB,
+    build_pt111_slab,
+    create_test_atoms,
+    gas_fixture_atoms,
+)
 
 
 def pytest_runtest_setup(item):
@@ -41,9 +48,7 @@ def default_rel_tol():
 @pytest.fixture
 def pt3_atoms():
     """Create a simple Pt3 cluster for testing."""
-    return create_test_atoms(
-        "Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]]
-    )
+    return create_test_atoms("Pt3", positions=PT3_TRIANGLE_POSITIONS)
 
 
 @pytest.fixture
@@ -72,15 +77,13 @@ def pt4_tetrahedron():
 @pytest.fixture
 def pt2_atoms():
     """Create a simple Pt2 dimer for testing."""
-    return create_test_atoms("Pt2", positions=[[0, 0, 0], [2.5, 0, 0]])
+    return create_test_atoms("Pt2", positions=PT2_DIMER_POSITIONS)
 
 
 @pytest.fixture
 def pt_slab_small():
     """Small Pt(111) slab for adsorbate-on-surface tests."""
-    slab = fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
-    slab.pbc = True
-    return slab
+    return build_pt111_slab(size=(2, 2, 2), vacuum=TEST_VACUUM_SLAB, pbc=True)
 
 
 @pytest.fixture
@@ -110,27 +113,9 @@ def minimal_ga_kwargs():
 
 
 @pytest.fixture
-def ts_minima_db(tmp_path):
-    """Temporary GA database with marked final minima for TS integration tests."""
-    from ase import Atoms
-
-    from tests.helpers import create_preparedb, mark_test_minima_as_final
-
-    db_path = tmp_path / "ts_minima.db"
-    db = create_preparedb(Atoms("Pt2"), db_path, population_size=10)
-    pt3 = Atoms("Pt3", positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.165, 0]])
-    db.add_unrelaxed_candidate(pt3, description="pt3")
-    mark_test_minima_as_final(db_path)
-    return str(db_path)
-
-
-@pytest.fixture
 def h2_reactant():
     """H2 molecule at equilibrium distance (~0.74 Å)."""
-    atoms = Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]])
-    atoms.center(vacuum=5.0)
-    atoms.calc = EMT()
-    return atoms
+    return gas_fixture_atoms("H2", [[0, 0, 0], [0.74, 0, 0]], vacuum=TEST_VACUUM_GAS)
 
 
 @pytest.fixture
@@ -336,3 +321,12 @@ def clear_initialization_caches(request: pytest.FixtureRequest):
     get_global_cache().clear_namespace(_TEMPLATE_ROTATIONS_CACHE_NS)
     get_global_cache().clear_namespace(_COMPOSITION_CACHE_NS)
     geometry_helpers.clear_convex_hull_cache()
+
+
+@pytest.fixture
+def patch_runner_emt_calculator(monkeypatch):
+    """Force runner calculator lookup to EMT for smoke tests."""
+    monkeypatch.setattr(
+        "scgo.utils.run_helpers.get_calculator_class",
+        lambda _name: EMT,
+    )

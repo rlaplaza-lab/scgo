@@ -18,12 +18,13 @@ from scgo.ase_ga_patches.mutations._common import _resolve_op_connectivity_facto
 from scgo.cluster_adsorbate.detach import FragmentDetachMutation
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.surface.validation import validate_supported_cluster_deposit
-from scgo.system_types import AdsorbateDefinition
+from scgo.system_types import AdsorbateDefinition, StructureValidationPolicy
 from scgo.utils.mutation_weights import (
     _apply_stagnation_boost,
     calculate_system_type_weights,
     get_adaptive_mutation_config,
 )
+from tests.helpers import oh_template as _oh_template
 
 
 def _ads() -> AdsorbateDefinition:
@@ -32,10 +33,6 @@ def _ads() -> AdsorbateDefinition:
         adsorbate_symbols=["O", "H"],
         adsorbate_fragment_lengths=[2],
     )
-
-
-def _oh_template() -> Atoms:
-    return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
 
 
 def _supported_oh(z_offset: float = 1.5) -> tuple[Atoms, int]:
@@ -98,7 +95,9 @@ def test_fragment_detach_moves_bound_fragment_onto_slab() -> None:
             use_mic=True,
             n_core_mobile=3,
             adsorbate_fragment_lengths=[2],
-            allow_adsorbate_surface_detachment=True,
+            validation=StructureValidationPolicy(
+                allow_adsorbate_surface_detachment=True
+            ),
         )
         assert ok, msg
         rejected, _reject_msg = validate_supported_cluster_deposit(
@@ -108,7 +107,9 @@ def test_fragment_detach_moves_bound_fragment_onto_slab() -> None:
             use_mic=True,
             n_core_mobile=3,
             adsorbate_fragment_lengths=[2],
-            allow_adsorbate_surface_detachment=False,
+            validation=StructureValidationPolicy(
+                allow_adsorbate_surface_detachment=False
+            ),
         )
         assert not rejected
         op.rng = default_rng(seed)

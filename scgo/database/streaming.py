@@ -123,8 +123,6 @@ def relaxed_rows_where_clause(
     *,
     require_final_minimum: bool = False,
     exclude_transition_states: bool = False,
-    require_transition_state: bool = False,
-    require_final_ts: bool = False,
 ) -> str:
     """Build SQL WHERE fragment for relaxed-row streaming filters."""
     col = SYSTEMS_JSON_COLUMN
@@ -133,10 +131,6 @@ def relaxed_rows_where_clause(
         clauses.append(f"json_extract({col}, '$.final_unique_minimum') = 1")
     if exclude_transition_states:
         clauses.append(f"COALESCE(json_extract({col}, '$.is_transition_state'), 0) = 0")
-    if require_transition_state:
-        clauses.append(f"json_extract({col}, '$.is_transition_state') = 1")
-    if require_final_ts:
-        clauses.append(f"json_extract({col}, '$.final_unique_ts') = 1")
     return " AND ".join(clauses)
 
 
@@ -147,8 +141,6 @@ def iter_relaxed_structures(
     *,
     require_final_minimum: bool = False,
     exclude_transition_states: bool = False,
-    require_transition_state: bool = False,
-    require_final_ts: bool = False,
 ):
     """Yield (energy, atoms_copy) for relaxed rows using chunked id queries."""
     if chunk_size is None or chunk_size <= 0:
@@ -157,8 +149,6 @@ def iter_relaxed_structures(
     where_sql = relaxed_rows_where_clause(
         require_final_minimum=require_final_minimum,
         exclude_transition_states=exclude_transition_states,
-        require_transition_state=require_transition_state,
-        require_final_ts=require_final_ts,
     )
 
     with da.c.managed_connection() as conn:
@@ -213,8 +203,6 @@ def iter_database_minima(
     *,
     require_final_minimum: bool = False,
     exclude_transition_states: bool = False,
-    require_transition_state: bool = False,
-    require_final_ts: bool = False,
 ) -> Generator[tuple[float, Atoms], None, None]:
     """Iterate over minima from database in memory-efficient chunks."""
     db_path = Path(db_path)
@@ -234,6 +222,4 @@ def iter_database_minima(
             chunk_size,
             require_final_minimum=require_final_minimum,
             exclude_transition_states=exclude_transition_states,
-            require_transition_state=require_transition_state,
-            require_final_ts=require_final_ts,
         )

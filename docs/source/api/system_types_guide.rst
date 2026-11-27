@@ -89,7 +89,7 @@ NEB path defaults come from each system type's
 - Surface types use minimum-image path interpolation
   (``neb_force_mic``).
 - Endpoint alignment stays on by default
-  (``neb_disable_alignment=False``).
+  (``neb_align_endpoints=True`` in TS presets).
 - Surface types enable lattice-image remapping before NEB
   (``neb_surface_cell_remap``).
 - Bare ``surface`` enables in-plane lattice rotation. ``surface_cluster``
@@ -108,8 +108,9 @@ NEB path defaults come from each system type's
 When a system has adsorbates, the GA partitions the mobile region with ASE tags
 (core = ``0``, each fragment = ``1..N``):
 
-- Crossover uses tag-rigid cut-and-splice. For ``*_cluster_adsorbate`` types the
-  core and each adsorbate fragment may inherit from either parent. For
+- Crossover uses cut-and-splice with ASE tags. For ``*_cluster_adsorbate`` types
+  the core (tag ``0``) is cut per atom while each adsorbate fragment (tags
+  ``1..N``) stays rigid and may inherit from either parent. For
   ``surface_adsorbate`` the mobile slab sheet (tag ``0``) stays on parent 0 while
   adsorbate fragments mix.
 - Mutations keep intra-fragment geometry unchanged.

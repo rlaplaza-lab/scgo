@@ -40,6 +40,7 @@ from scgo.ase_ga_patches._slab_clash import (
     mobile_too_close_no_copy,
 )
 from scgo.ase_ga_patches.cutandsplicepairing import CutAndSplicePairing
+from scgo.system_types import StructureValidationPolicy
 from scgo.utils.mutation_weights import get_adaptive_mutation_config
 
 # ---------------------------------------------------------------------------
@@ -517,10 +518,7 @@ def test_pairing_attempt_count_in_worker_result():
         slab_for_pairing=None,
         surface_normal_axis=2,
         adsorbate_definition=None,
-        connectivity_factor=None,
-        allow_cluster_fragmentation=False,
-        allow_adsorbate_surface_detachment=False,
-        enforce_adsorbate_subgraph_integrity=True,
+        validation=StructureValidationPolicy(),
         freeze_adsorbate_internal_geometry=False,
         adsorbate_fragment_templates=None,
         surface_config=None,
@@ -609,10 +607,7 @@ def test_unary_failure_falls_back_to_crossover(monkeypatch):
         slab_for_pairing=None,
         surface_normal_axis=2,
         adsorbate_definition=None,
-        connectivity_factor=None,
-        allow_cluster_fragmentation=False,
-        allow_adsorbate_surface_detachment=False,
-        enforce_adsorbate_subgraph_integrity=True,
+        validation=StructureValidationPolicy(),
         freeze_adsorbate_internal_geometry=False,
         adsorbate_fragment_templates=None,
         surface_config=None,

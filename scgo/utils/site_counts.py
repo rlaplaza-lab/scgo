@@ -5,7 +5,7 @@ from __future__ import annotations
 from threading import Lock
 
 
-def increment_site_type_count(
+def record_site_type(
     counts: dict[str, int] | None,
     site_type: object,
     lock: Lock | None = None,

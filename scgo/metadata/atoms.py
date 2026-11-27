@@ -78,7 +78,7 @@ def _decode_tag_value(value: Any) -> Any:
     if isinstance(value, str) and value.startswith(_JSON_PREFIX):
         try:
             return json.loads(value[len(_JSON_PREFIX) :])
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (json.JSONDecodeError, TypeError):
             return value
     return value
 

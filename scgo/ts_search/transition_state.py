@@ -6,7 +6,6 @@ import contextlib
 import json
 import os
 import sys
-import tempfile
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from time import perf_counter
@@ -26,9 +25,6 @@ from scipy.optimize import linear_sum_assignment
 from scipy.spatial.transform import Rotation, Slerp
 
 from scgo.ase_ga_patches._vector_utils import (
-    kabsch_rotation as _kabsch_rotation,
-)
-from scgo.ase_ga_patches._vector_utils import (
     kabsch_rotation_in_plane as _kabsch_rotation_in_plane,
 )
 from scgo.calculators import torchsim_helpers as _tsh
@@ -39,12 +35,14 @@ from scgo.constants import (
     DEFAULT_TS_PAIR_COR_MAX,
     NEB_RIGID_FRAGMENT_TOLERANCE_A,
 )
-from scgo.exceptions import SCGOFileError, SCGORuntimeError, SCGOValidationError
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius
+from scgo.initialization.geometry_helpers import union_find_components_from_edges
 from scgo.initialization.initialization_config import CLASH_HARD_CAP_FACTOR
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
 from scgo.system_types import ConnectivityFactorInput, SystemType, get_system_policy
+from scgo.ts_search.force_batch import forces_from_torchsim_batch
 from scgo.ts_search.neb_endpoints import apply_endpoint_constraints_to_band
 from scgo.ts_search.neb_surface import (
     HESSIAN_MAX_MOBILE,
@@ -66,12 +64,14 @@ from scgo.ts_search.neb_surface import (
     symmetry_anchor_center,
     unwrap_breaks_mic,
 )
+from scgo.utils.atomic_json import atomic_write_json
 from scgo.utils.comparators import (
     ComparatorBlocks,
     PureInteratomicDistanceComparator,
     get_shared_mobile_atom_indices,
 )
 from scgo.utils.cuda import is_cuda_oom_error
+from scgo.utils.geometry_math import kabsch_rotation as _kabsch_rotation
 from scgo.utils.helpers import (
     copy_atoms,
     extract_energy_from_atoms,
@@ -101,6 +101,8 @@ from scgo.utils.validation import validate_atoms, validate_calculator_attached
 
 if TYPE_CHECKING:
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
+
+logger = get_logger(__name__)
 
 # Pre-NEB IDPP and finalize share this cap for discontinuous / unphysical barriers.
 # It is a hard discontinuity guard for NEB profiles whose barrier is an artifact
@@ -443,7 +445,7 @@ def _match_atoms_by_fingerprint(
         # Cost = L2 distance between fingerprints
         cost = np.linalg.norm(fp1[:, None, :] - fp2[None, :, :], axis=2)
         r, c = linear_sum_assignment(cost)
-        for ri, ci in zip(r, c, strict=False):
+        for ri, ci in zip(r, c, strict=True):
             mapping[idx1[ri]] = idx2[ci]
 
     return mapping
@@ -1093,6 +1095,8 @@ def _align_product_surface_pbc(
     n_core_mobile: int | None = None,
     allow_symmetry_copies: bool = True,
     connectivity_factor: ConnectivityFactorInput | None = None,
+    react_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
+    prod_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
 ) -> tuple[np.ndarray, bool]:
     """Align product to reactant using lattice images and in-plane transforms.
 
@@ -1110,6 +1114,8 @@ def _align_product_surface_pbc(
 
     When ``n_core_mobile`` is set, lattice-image / rotation scoring uses the core
     block while transforms still apply to all mobile atoms.
+    Optional ``react_edges`` / ``prod_edges`` are precomputed MIC bonds (computed
+    when ``None``); pass ``prod_edges`` only if the product bond set is unchanged.
 
     Returns:
         ``(positions, used_symmetry_copy)`` where the flag is true only when the
@@ -1140,6 +1146,8 @@ def _align_product_surface_pbc(
         prod,
         mobile_mask=mobile_mask,
         connectivity_factor=connectivity_factor,
+        react_edges=react_edges,
+        prod_edges=prod_edges,
     )
 
     def _place(pos: np.ndarray) -> np.ndarray:
@@ -1212,6 +1220,7 @@ def _align_product_surface_pbc(
             n_slab=n_slab,
             connectivity_factor=connectivity_factor,
             max_lattice_shift=max_lattice_shift,
+            react_edges=react_edges,
         )
     return best_pos, best_used_symmetry
 
@@ -1227,6 +1236,8 @@ def _align_product_for_neb(
     n_core_mobile: int | None = None,
     allow_symmetry_copies: bool = True,
     connectivity_factor: ConnectivityFactorInput | None = None,
+    react_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
+    prod_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
 ) -> tuple[np.ndarray, bool]:
     """Single NEB endpoint rigid-alignment entry point (gas Kabsch or surface PBC).
 
@@ -1244,6 +1255,8 @@ def _align_product_for_neb(
             n_core_mobile=n_core_mobile,
             allow_symmetry_copies=allow_symmetry_copies,
             connectivity_factor=connectivity_factor,
+            react_edges=react_edges,
+            prod_edges=prod_edges,
         )
     return (
         _align_product_kabsch_to_reactant(
@@ -1839,20 +1852,7 @@ def _restore_agreed_fixbondlengths(
     reactant = reactant_atoms.get_positions()
     product = product_atoms.get_positions()
     skip = exclude_atoms or set()
-    parent: dict[int, int] = {}
-
-    def _find(x: int) -> int:
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra != rb:
-            parent[rb] = ra
-
+    edges: list[tuple[int, int]] = []
     for constraint in bond_constraints:
         for a, b in constraint.pairs:
             i, j = int(a), int(b)
@@ -1861,10 +1861,8 @@ def _restore_agreed_fixbondlengths(
             d_r = float(reactant_atoms.get_distance(i, j, mic=mic))
             d_p = float(product_atoms.get_distance(i, j, mic=mic))
             if abs(d_r - d_p) <= tol:
-                _union(i, j)
-    groups: dict[int, list[int]] = {}
-    for atom in parent:
-        groups.setdefault(_find(atom), []).append(atom)
+                edges.append((i, j))
+    groups = union_find_components_from_edges(edges)
     components = [sorted(members) for members in groups.values() if len(members) >= 2]
     if not components:
         return
@@ -1923,7 +1921,6 @@ def _warn_if_interpolated_bonds_stretch(
     ]
     if not bond_constraints:
         return
-    logger = get_logger(__name__)
     reactant = images[0]
     product = images[-1]
     for constraint in bond_constraints:
@@ -2550,10 +2547,41 @@ def make_ts_result(
     }
 
 
+def make_ts_result_from_config(
+    neb_cfg: NebRunConfig,
+    *,
+    pair_id: str,
+    use_torchsim: bool,
+    use_parallel_neb: bool = False,
+    reactant_energy: float | None = None,
+    product_energy: float | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """``make_ts_result`` filled from ``neb_cfg`` NEB fields."""
+    return make_ts_result(
+        pair_id=pair_id,
+        n_images=neb_cfg.neb_n_images,
+        spring_constant=neb_cfg.neb_spring_constant,
+        use_torchsim=use_torchsim,
+        fmax=neb_cfg.neb_fmax,
+        neb_steps=neb_cfg.neb_steps,
+        interpolation_method=neb_cfg.neb_interpolation_method,
+        climb=neb_cfg.neb_climb,
+        align_endpoints=neb_cfg.neb_align_endpoints,
+        perturb_sigma=neb_cfg.neb_perturb_sigma,
+        neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
+        neb_tangent_method=neb_cfg.neb_tangent_method,
+        use_parallel_neb=use_parallel_neb,
+        reactant_energy=reactant_energy,
+        product_energy=product_energy,
+        error=error,
+    )
+
+
 def minima_provenance_dict(minima: list, idx: int) -> dict[str, Any]:
     """Extract per-minimum GO provenance for JSON serialization."""
     if not minima or idx < 0 or idx >= len(minima):
-        get_logger(__name__).warning(
+        logger.warning(
             "Invalid minima index %s for %d minima; returning empty provenance",
             idx,
             len(minima) if minima else 0,
@@ -2714,7 +2742,7 @@ def _finalize_neb_result(
                 force_fn,
                 n_slab=n_slab,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — optional Hessian; debug-only
             if logger is not None:
                 logger.debug(
                     "Imaginary-mode count failed for pair %s: %s",
@@ -2787,8 +2815,6 @@ def find_transition_state(
     Returns:
         A summary dict with TS geometry, energies and convergence status.
     """
-    logger = get_logger(__name__)
-
     # Resolve effective parameters. A NebRunConfig (used by both runners)
     # wins for the geometry/validation knobs; torchsim_params and system_type
     # are only taken from it when the explicit arguments are None (preserves
@@ -3161,18 +3187,7 @@ def find_transition_state(
 
         def _force_fn(displaced: list[Atoms]) -> list[np.ndarray]:
             if use_torchsim:
-                batch = ts_relaxer.relax_batch(displaced, steps=0)
-                forces_out: list[np.ndarray] = []
-                for _energy, relaxed_atoms in batch:
-                    forces = relaxed_atoms.arrays.get("forces")
-                    if forces is None and relaxed_atoms.calc is not None:
-                        forces = relaxed_atoms.get_forces()
-                    if forces is None:
-                        raise SCGORuntimeError(
-                            "TorchSim relax_batch did not return forces for Hessian"
-                        )
-                    forces_out.append(np.asarray(forces, dtype=float))
-                return forces_out
+                return forces_from_torchsim_batch(ts_relaxer, displaced)
             out: list[np.ndarray] = []
             for img in displaced:
                 img.calc = calculator
@@ -3283,34 +3298,6 @@ _PROVENANCE_KEYS = (
 )
 
 
-def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
-    """Write JSON via a same-directory temp file then ``os.replace``.
-
-    Raises :class:`~scgo.exceptions.SCGOFileError` on I/O failure.
-    """
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".tmp_neb_",
-        suffix=".json",
-        dir=directory,
-    )
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(payload, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    except OSError as e:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise SCGOFileError(f"Failed to write JSON file {path}: {e}") from e
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
-
-
 def load_completed_neb_result(
     output_dir: str | os.PathLike[str],
     pair_id: str,
@@ -3409,8 +3396,6 @@ def save_neb_result(
 
     Metadata uses temp + ``os.replace``. Per-file paths log at verbosity >= 2.
     """
-    logger = get_logger(__name__)
-
     os.makedirs(output_dir, exist_ok=True)
 
     if result["status"] == "success" and result["transition_state"] is not None:
@@ -3481,7 +3466,7 @@ def save_neb_result(
         metadata["ts_image_index"] = result.get("ts_image_index")
 
     metadata_path = os.path.join(output_dir, f"neb_{pair_id}_metadata.json")
-    _atomic_write_json(metadata_path, metadata)
+    atomic_write_json(metadata_path, metadata, tmp_prefix=".tmp_neb_")
 
     log_debug_v(
         logger,
@@ -3489,3 +3474,44 @@ def save_neb_result(
         metadata_path,
         verbosity=verbosity,
     )
+
+
+def resume_completed_pair(
+    pair_dir: str | os.PathLike[str],
+    pair_id: str,
+    minima: list[tuple[float, Any]],
+    i: int,
+    j: int,
+    *,
+    system_type: SystemType,
+) -> dict[str, Any] | None:
+    """Load a completed pair result (or ``None``) and stamp ``system_type`` / traceability."""
+    resumed = load_completed_neb_result(pair_dir, pair_id)
+    if resumed is None:
+        return None
+    resumed["system_type"] = system_type
+    if "minima_indices" not in resumed:
+        attach_minima_traceability(resumed, minima, i, j)
+    return resumed
+
+
+def record_pair_result(
+    result: dict[str, Any],
+    minima: list[tuple[float, Any]],
+    i: int,
+    j: int,
+    *,
+    pair_dir: str | os.PathLike[str],
+    pair_id: str,
+    system_type: SystemType,
+    verbosity: int = 1,
+    save: bool = True,
+    save_fn: Callable[..., None] | None = None,
+) -> None:
+    """Stamp ``system_type`` + minima traceability; ``save_fn`` lets runners keep test patches."""
+    result["system_type"] = system_type
+    attach_minima_traceability(result, minima, i, j)
+    if save:
+        (save_fn or save_neb_result)(
+            result, str(pair_dir), pair_id, verbosity=verbosity
+        )

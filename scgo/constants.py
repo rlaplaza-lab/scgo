@@ -75,3 +75,15 @@ warns when interior images stretch frozen bonds.
 
 SURFACE_GA_MIN_LOCAL_RELAX_STEPS: int = 400
 """Minimum local-relaxation steps for GA with ``surface_config`` (slab adsorption)."""
+
+DEFAULT_UMA_MODEL: str = "uma-s-1p2p1"
+"""Default fairchem UMA checkpoint (``calculator_kwargs['model_name']``)."""
+
+DEFAULT_UMA_TASK: str = "oc25"
+"""Default UMA task. OC25 labels already include RPBE+D3."""
+
+DEFAULT_UPET_MODEL: str = "pet-mad-s"
+"""Default UPET model identifier (``calculator_kwargs['model_name']``)."""
+
+DEFAULT_UPET_VERSION: str = "1.5.0"
+"""Default UPET checkpoint version."""

@@ -21,10 +21,9 @@ __all__ = ["_finalize_mutant"]
 def _finalize_mutant(creator, parent, mutant, description):
     """Finalize a mutated ``Atoms`` object into a new individual.
 
-    Wraps the common ``initialize_individual``/``finalize_individual`` pattern
-    duplicated across every mutation's ``get_new_individual`` method. ``mutant``
-    is the result of the operator's ``mutate`` call; if it is ``None`` (mutation
-    failed), it is returned unchanged alongside ``description``.
+    ``MutationOperator.get_new_individual`` calls this after ``mutate``.
+    ``mutant`` is that result; if it is ``None`` (mutation failed), it is
+    returned unchanged alongside ``description``.
 
     A post-mutation atom-count + stoichiometry guard ensures no mutation silently
     drops, duplicates, or transmutes atoms. Identity geometry and a disconnected
@@ -53,7 +52,12 @@ def _finalize_mutant(creator, parent, mutant, description):
             f"{getattr(creator, 'descriptor', type(creator).__name__)} changed "
             f"stoichiometry: {dict(mutant_counts)} vs {dict(parent_counts)}."
         )
-    if np.allclose(mutant.get_positions(), parent.get_positions(), atol=_IDENTITY_ATOL):
+    if np.allclose(
+        mutant.get_positions(),
+        parent.get_positions(),
+        rtol=0.0,
+        atol=_IDENTITY_ATOL,
+    ):
         return None, description
 
     n_top = getattr(creator, "n_top", None)

@@ -8,7 +8,6 @@ re-exported here.
 
 from __future__ import annotations
 
-from scgo.ase_ga_patches.mutations._common import _ensure_rng
 from scgo.ase_ga_patches.mutations.breathing import BreathingMutation
 from scgo.ase_ga_patches.mutations.flattening import FlatteningMutation
 from scgo.ase_ga_patches.mutations.in_plane_rotate import InPlaneRotateMutation
@@ -39,5 +38,4 @@ __all__ = [
     "RattleMutation",
     "RotationalMutation",
     "ShellSwapMutation",
-    "_ensure_rng",
 ]

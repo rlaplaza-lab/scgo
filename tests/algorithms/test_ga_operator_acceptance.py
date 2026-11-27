@@ -35,11 +35,12 @@ from scgo.exceptions import SCGOValidationError
 from scgo.initialization import create_initial_cluster
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.deposition import create_deposited_cluster
-from scgo.system_types import validate_minimum_structure
+from scgo.system_types import StructureValidationPolicy, validate_minimum_structure
 from tests.algorithms.ga_acceptance_helpers import (
     _gas_pt3_oh_parent,
     _surface_pt3_oh_parent,
 )
+from tests.helpers import oh_template as _oh_template
 
 # The active mirror and bounded cut selection make crossover acceptance fast
 # enough that large legacy outer retry caps are unnecessary here.
@@ -640,10 +641,6 @@ def test_crossover_surface_pt20_then_rattle_mutate() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _oh_template() -> Atoms:
-    return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
-
-
 def _surface_config_from_slab(
     slab: Atoms, *, height_min: float, height_max: float
 ) -> SurfaceSystemConfig:
@@ -780,10 +777,12 @@ def _mutation_ten_of_ten(
                 surface_config=surface_config,
                 n_slab=n_slab,
                 adsorbate_definition=adsorbate_definition,
-                connectivity_factor=connectivity_factor,
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                validation=StructureValidationPolicy(
+                    connectivity_factor=connectivity_factor,
+                    allow_cluster_fragmentation=allow_cluster_fragmentation,
+                    allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+                    enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+                ),
             )
         except (ValueError, SCGOValidationError) as exc:
             failures.append(f"run {run}: {type(exc).__name__}: {exc}")

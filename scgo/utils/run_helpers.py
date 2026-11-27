@@ -31,17 +31,20 @@ from scgo.system_types import (
     get_system_policy,
     validate_system_type_settings,
 )
+from scgo.utils.calculator_names import normalize_calculator_name
 from scgo.utils.cuda import release_gpu_memory
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
     auto_niter,
     auto_niter_local_relaxation,
     deep_merge_dicts,
+    get_cluster_formula,
 )
 from scgo.utils.logging import get_logger
 from scgo.utils.optimizer_utils import get_optimizer_class
 from scgo.utils.parallel_workers import inherit_n_jobs
 from scgo.utils.search_budget import bh_auto_budget, ga_auto_budget
+from scgo.utils.ts_runner_kwargs import ts_config_log_keys
 
 logger = get_logger(__name__)
 
@@ -131,6 +134,37 @@ _VALID_ALGO_PARAMS: dict[str, frozenset[str]] = {
 _CALCULATORS: dict[str, Any] | None = None
 
 
+RUNNER_TS_STRIP_KEYS: frozenset[str] = frozenset(
+    {
+        "base_dir",
+        "seed",
+        "verbosity",
+        "system_type",
+        "cluster_adsorbate_config",
+    }
+)
+
+
+def strip_ts_runner_overrides(ts_kwargs: dict) -> tuple[dict, bool]:
+    """Drop keys owned by the GO+TS / campaign runner; return write_timing_json."""
+    local = dict(ts_kwargs)
+    for key in RUNNER_TS_STRIP_KEYS:
+        local.pop(key, None)
+    write_timing_json = bool(local.pop("write_timing_json", False))
+    return local, write_timing_json
+
+
+def resolve_run_formula(
+    composition,
+    *,
+    surface_config=None,
+) -> str:
+    """Formula string for logging/paths; surface name when composition is empty."""
+    if composition:
+        return get_cluster_formula(composition)
+    return getattr(surface_config, "name", None) or "surface"
+
+
 def _get_calculators() -> dict[str, Any]:
     """ASE calculator registry; MLIP entries are None if extras are not installed."""
     global _CALCULATORS
@@ -158,10 +192,6 @@ def _get_calculators() -> dict[str, Any]:
     return _CALCULATORS
 
 
-def _normalize_calculator_name(name: str) -> str:
-    return name.strip().upper()
-
-
 def _calculator_kwargs_for_change(
     calculator: str,
     user_kwargs: dict[str, Any] | None,
@@ -170,7 +200,7 @@ def _calculator_kwargs_for_change(
     merged = default_calculator_kwargs(calculator)
     if user_kwargs:
         merged.update(dict(user_kwargs))
-    if str(calculator).strip().upper() == "MACE":
+    if normalize_calculator_name(calculator) == "MACE":
         drop_mace_dispersion_unless_matpes(
             merged,
             str(merged.get("model_name", "")),
@@ -190,10 +220,10 @@ def initialize_params(params: dict[str, Any] | None) -> dict[str, Any]:
         return default_params
 
     # copy_base=False mutates default_params; capture calculator first.
-    default_calc = _normalize_calculator_name(str(default_params["calculator"]))
+    default_calc = normalize_calculator_name(str(default_params["calculator"]))
     merged = deep_merge_dicts(default_params, params, copy_base=False)
     if "calculator" in params:
-        user_calc = _normalize_calculator_name(str(params["calculator"]))
+        user_calc = normalize_calculator_name(str(params["calculator"]))
         if user_calc != default_calc:
             merged["calculator_kwargs"] = _calculator_kwargs_for_change(
                 str(params["calculator"]),
@@ -249,12 +279,11 @@ def initialize_ts_params(
         go_params is not None
         and ts_params is not None
         and "calculator" in ts_params
-        and _normalize_calculator_name(final_calc)
-        != _normalize_calculator_name(inherited_calc)
+        and normalize_calculator_name(final_calc)
+        != normalize_calculator_name(inherited_calc)
     )
 
-    if calc_changed:
-        assert ts_params is not None
+    if calc_changed and ts_params is not None:
         calc_kwargs: dict[str, Any] | None = _calculator_kwargs_for_change(
             final_calc,
             ts_params.get("calculator_kwargs"),
@@ -336,6 +365,7 @@ def get_calculator_class(calculator_name: str) -> type:
 
     Args:
         calculator_name: Name of the calculator (e.g., "MACE", "EMT").
+            Case and surrounding whitespace are normalized.
 
     Returns:
         Calculator class.
@@ -344,13 +374,14 @@ def get_calculator_class(calculator_name: str) -> type:
         SCGOValidationError: If calculator name is unknown or not available.
     """
     calculators = _get_calculators()
-    if calculator_name not in calculators:
+    normalized = normalize_calculator_name(calculator_name)
+    if normalized not in calculators:
         raise SCGOValidationError(
             f"Unknown calculator: {calculator_name}. "
             f"Available calculators: {list(calculators.keys())}",
         )
 
-    calculator_class = calculators[calculator_name]
+    calculator_class = calculators[normalized]
     if calculator_class is None:
         raise SCGOValidationError(
             f"Calculator {calculator_name} is not available. "
@@ -716,41 +747,7 @@ def log_ts_configuration(
         calc_params.get("calculator"),
         calc_params.get("calculator_kwargs", {}),
     )
-    for key in (
-        "max_pairs",
-        "energy_gap_threshold",
-        "similarity_tolerance",
-        "similarity_pair_cor_max",
-        "pair_core_rms_max",
-        "pair_score_gap_center",
-        "pair_score_gap_width",
-        "pair_score_cum_scale",
-        "pair_score_mismatch_scale",
-        "pair_score_core_rms_scale",
-        "pair_score_w_gap",
-        "pair_score_w_distinct",
-        "pair_score_w_mismatch",
-        "pair_score_w_core",
-        "connectivity_factor",
-        "dedupe_minima",
-        "minima_energy_tolerance",
-        "dedupe_ts",
-        "ts_energy_tolerance",
-        "use_torchsim",
-        "use_parallel_neb",
-        "parallel_neb_max_bands",
-        "parallel_neb_max_batch_atoms",
-        "neb_align_endpoints",
-        "neb_interpolation_mic",
-        "neb_n_images",
-        "neb_spring_constant",
-        "neb_fmax",
-        "neb_steps",
-        "neb_climb",
-        "neb_perturb_sigma",
-        "neb_interpolation_method",
-        "neb_tangent_method",
-    ):
+    for key in ts_config_log_keys():
         if key in coerced_kwargs and coerced_kwargs[key] is not None:
             logger.info("TS config: %s=%s", key, coerced_kwargs[key])
 
@@ -830,8 +827,6 @@ def log_configuration(
             logger.info("SCGO optimizer: %s=%0.6f eV", key, value)
         elif isinstance(value, float) and abs(value) < 0.001:
             logger.info("SCGO optimizer: %s=%0.6f", key, value)
-        elif isinstance(value, int | float):
-            logger.info("SCGO optimizer: %s=%s", key, value)
         else:
             logger.info("SCGO optimizer: %s=%s", key, value)
 

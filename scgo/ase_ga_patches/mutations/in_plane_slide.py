@@ -7,23 +7,21 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
 
 from scgo.ase_ga_patches.mutations._common import (
+    MutationOperator,
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
     _append_unique_unit_vector,
-    _ensure_rng,
-    _filter_unique_tags,
-    _mobile_clashes,
-    _preserves_mobile_connectivity,
-    _resolve_op_connectivity_factor,
+    _prepare_mobile_target,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["InPlaneSlideMutation"]
 
 
-class InPlaneSlideMutation(OffspringCreator):
+class InPlaneSlideMutation(MutationOperator):
+    descriptor = "InPlaneSlideMutation"
     """Translates adsorbate atoms parallel to the slab surface.
 
     Candidate shifts combine directions from slab repulsion, the in-plane
@@ -50,21 +48,19 @@ class InPlaneSlideMutation(OffspringCreator):
     def __init__(self, blmin, n_top, system_type: SystemType, surface_normal_axis=2,
                  max_displacement=2.0, min_displacement=1.0, target_tags=None,
                  rng=None, verbose=False, max_inner_attempts=1000):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
-        self.surface_normal_axis = surface_normal_axis
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.max_displacement = max_displacement
         self.min_displacement = min_displacement
-        self.target_tags = target_tags
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
         self.last_attempt_count = 0
-        self.test_dist_to_slab = True
-        self.descriptor = "InPlaneSlideMutation"
-        self.min_inputs = 1
 
     def _candidate_shift_vectors(self, slab, positions, in_plane):
         if self.max_displacement <= 1e-12:
@@ -150,56 +146,27 @@ class InPlaneSlideMutation(OffspringCreator):
 
         return candidate_shifts[:max_candidates]
 
-    def get_new_individual(self, parents):
-        f = parents[0]
-        indi = self.mutate(f)
-        return _finalize_mutant(self, f, indi, "mutation: in_plane_slide")
-
     def mutate(self, atoms):
-        N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[:len(atoms) - N]
-        top = atoms[len(atoms) - N:]
-        pos = top.get_positions()
-        num = top.get_atomic_numbers()
-        cell = top.get_cell()
-        pbc = top.get_pbc()
-        tags = top.get_tags()
-
-        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
-        if unique_tags is None:
+        prepared = _prepare_mobile_target(self, atoms)
+        if prepared is None:
             return None
-
-        # Filter positions to only include targeted tags
-        mask = np.isin(tags, unique_tags)
-        if not np.any(mask):
-            return None
+        slab, top, pos, num, cell, pbc, tags, mask = prepared
 
         # Determine in-plane axes (excluding surface normal)
         in_plane = [i for i in range(3) if i != self.surface_normal_axis]
 
         self.last_attempt_count = 0
-        use_mic = bool(self._policy.uses_surface)
         for shift in self._candidate_shift_vectors(slab, pos[mask], in_plane):
             self.last_attempt_count += 1
             new_pos = pos.copy()
             new_pos[mask] += shift
             cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc, tags=tags)
-            if _mobile_clashes(
-                cand,
-                blmin=self.blmin,
-                slab=slab,
-                test_dist_to_slab=self.test_dist_to_slab,
-                use_tags=False,
-            ):
+            accepted = _accept_connected_candidate(
+                top, cand, **_accept_connected_kwargs(self, slab)
+            )
+            if accepted is None:
                 continue
-            if not _preserves_mobile_connectivity(
-                top,
-                cand,
-                use_mic=use_mic,
-                connectivity_factor=_resolve_op_connectivity_factor(self),
-            ):
-                continue
-            return slab + cand
+            return slab + accepted
         return None
 
 # fmt: on

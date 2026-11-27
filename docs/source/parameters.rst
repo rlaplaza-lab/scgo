@@ -144,8 +144,12 @@ Runners call :func:`~scgo.runner_api.select_scgo_minima_algorithm` automatically
        ``dispersion_xc="r2scan"`` adds DFT-D3(BJ) on the MatPES r²SCAN MACE
        checkpoint, on both the ASE calculator and the TorchSim relaxer.
        ``dispersion_xc=None`` turns it off. Other MACE checkpoints reject
-       ``"r2scan"``. The UMA preset is ``uma-s-1p2p1`` with task ``oc25``
+       ``"r2scan"``. The UMA preset is
+       :data:`scgo.constants.DEFAULT_UMA_MODEL` with task
+       :data:`scgo.constants.DEFAULT_UMA_TASK`
        (RPBE+D3 is already in those labels; do not add another correction).
+       The UPET preset is :data:`scgo.constants.DEFAULT_UPET_MODEL` at
+       :data:`scgo.constants.DEFAULT_UPET_VERSION`.
        Unsupported ``device`` values raise ``SCGOValidationError``.
    * - ``seed``
      - ``None``

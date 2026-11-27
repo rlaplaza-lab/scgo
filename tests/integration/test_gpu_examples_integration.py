@@ -59,6 +59,7 @@ from scgo.system_types import (
     get_system_policy,
 )
 from tests.constants import MLIP_BARRIER_EV
+from tests.helpers import adsorbates_oh as _adsorbates_oh
 from tests.helpers import assert_e2e_go_ts_summary
 
 SEED = 42
@@ -69,19 +70,6 @@ CONNECTIVITY = 1.8
 # physically-plausible guard (rejects negative / absurd barriers), NOT an EMT
 # accuracy reference — the GPU matrix runs MACE + UPET, a different PES than EMT.
 BARRIER_RANGE_EV = MLIP_BARRIER_EV
-
-
-def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
-    out: list[Atoms] = []
-    for i in range(n):
-        shift = float(2.2 * i)
-        out.append(
-            Atoms(
-                symbols=["O", "H"],
-                positions=[[shift, 0.0, 0.0], [shift, 0.0, 0.96]],
-            )
-        )
-    return out
 
 
 @dataclass(frozen=True)

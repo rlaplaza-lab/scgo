@@ -701,7 +701,7 @@ def test_serial_neb_weights_springs_before_first_step(tmp_path):
             self.nsteps = 0
 
         def attach(self, fn, interval=1):
-            return None
+            del fn, interval
 
         def run(self, fmax=0.05, steps=1):
             energies = np.array(

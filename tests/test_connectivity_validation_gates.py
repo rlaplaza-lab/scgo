@@ -7,6 +7,8 @@ entry point, the gateway factor resolution, the MIC clash fix, the
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 from ase import Atoms
 from ase.build import fcc111
@@ -19,6 +21,7 @@ from scgo.surface import make_surface_config
 from scgo.surface.deposition import combine_slab_adsorbate, slab_surface_extreme
 from scgo.system_types import (
     AdsorbateDefinition,
+    StructureValidationPolicy,
     normalize_connectivity_factor,
     resolve_connectivity_factor,
     validate_connectivity_policy,
@@ -180,7 +183,9 @@ def test_gateway_honors_cluster_adsorbate_config() -> None:
     # High factor via ClusterAdsorbateConfig -> connected -> accept.
     cfg = ClusterAdsorbateConfig(structure_connectivity_factor=3.0)
     validate_structure_for_system_type(
-        atoms, system_type="gas_cluster", cluster_adsorbate_config=cfg
+        atoms,
+        system_type="gas_cluster",
+        validation=StructureValidationPolicy(cluster_adsorbate_config=cfg),
     )
 
 
@@ -375,7 +380,7 @@ def test_ts_gate_parity_honors_cluster_adsorbate_config() -> None:
         system_type="surface_adsorbate",
         surface_config=surf,
         adsorbate_definition=ads_def,
-        cluster_adsorbate_config=permissive,
+        validation=StructureValidationPolicy(cluster_adsorbate_config=permissive),
     )
 
     # TS gate, called WITHOUT an explicit connectivity_factor so the config is
@@ -393,7 +398,7 @@ def test_ts_gate_parity_honors_cluster_adsorbate_config() -> None:
         surface_config=surf,
         system_type="surface_adsorbate",
         adsorbate_definition=ads_def,
-        cluster_adsorbate_config=permissive,
+        validation=StructureValidationPolicy(cluster_adsorbate_config=permissive),
     )
     assert results[0]["status"] == "success"
 
@@ -428,7 +433,5 @@ def test_dead_duplicate_removed() -> None:
     from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 
     assert exported is validate_combined_cluster_structure
-    with pytest.raises(ImportError):
-        from scgo.surface.validation import (
-            _validate_mobile_connectivity_policy,  # noqa: F401
-        )
+    surface_validation = importlib.import_module("scgo.surface.validation")
+    assert not hasattr(surface_validation, "_validate_mobile_connectivity_policy")

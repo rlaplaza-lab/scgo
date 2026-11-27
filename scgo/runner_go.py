@@ -25,7 +25,7 @@ from scgo.minima_search import run_trials
 from scgo.param_presets import default_params_top_level_keys
 from scgo.runner_params import (
     _merge_adsorbate_context_into_params,
-    _reject_slot_identity_keys,
+    _resolve_go_params,
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
@@ -54,12 +54,12 @@ from scgo.utils.rng_helpers import ensure_rng
 from scgo.utils.run_helpers import (
     cleanup_torch_cuda,
     get_calculator_class,
-    initialize_params,
     log_configuration,
     prepare_algorithm_kwargs,
+    resolve_run_formula,
     validate_algorithm_params,
 )
-from scgo.utils.validation import validate_composition
+from scgo.utils.validation import as_int_like, validate_composition
 
 logger = get_logger(__name__)
 
@@ -82,10 +82,6 @@ _EXPECTED_TOP_LEVEL_KEYS: frozenset[str] = (
     default_params_top_level_keys() | _EXTRA_ACCEPTED_TOP_LEVEL_KEYS
 )
 
-# ``select_scgo_minima_algorithm`` lives in :mod:`scgo.system_types` (re-exported
-# here) so that :mod:`scgo.runner_params` can use it without importing this
-# module, avoiding a circular import between the two runner modules.
-
 
 def _validate_optimizer_rng(params: dict[str, Any]) -> None:
     for algo in ("bh", "ga"):
@@ -104,8 +100,7 @@ def _prepare_go_params(params: dict[str, Any] | None) -> dict[str, Any]:
     required keys missing downstream, otherwise callers see a bare ``KeyError``
     instead of a usable run or a :class:`SCGOValidationError`.
     """
-    params = initialize_params(params)
-    _reject_slot_identity_keys(params)
+    params = _resolve_go_params(params)
     _validate_optimizer_rng(params)
     return params
 
@@ -113,17 +108,12 @@ def _prepare_go_params(params: dict[str, Any] | None) -> dict[str, Any]:
 def _resolve_go_seed(seed: int | None, params: dict[str, Any]) -> int | None:
     """Prefer explicit ``seed`` arg; fall back to ``params['seed']``; coerce to int.
 
-    Kept local to avoid a circular import with :mod:`scgo.runner_params`
-    (which imports :func:`select_scgo_minima_algorithm` from this module).
     Public GO/TS entrypoints use :func:`scgo.runner_params.resolve_workflow_seed`.
     """
     raw = seed if seed is not None else params.get("seed")
     if raw is None:
         return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError) as e:
-        raise SCGOValidationError(f"seed must be int-like, got {raw!r}") from e
+    return as_int_like("seed", raw)
 
 
 def _run_go_trials(
@@ -166,11 +156,7 @@ def _run_go_trials(
         adsorbate_definition=ads_def,
     )
     n_atoms = len(search_comp)
-    cluster_formula = (
-        get_cluster_formula(composition)
-        if composition
-        else (getattr(surface_cfg, "name", None) or "surface")
-    )
+    cluster_formula = resolve_run_formula(composition, surface_config=surface_cfg)
     path_key = resolve_run_path_key(composition, system_type=system_type, params=params)
     main_output_dir = str(resolve_go_searches_dir(output_dir, path_key))
 
@@ -211,12 +197,11 @@ def _run_go_trials(
     # Validate that no unexpected top-level keys were provided. Keep in sync with
     # defaults; a few accepted inputs (surface/adsorbate config, validation n_jobs)
     # are valid top-level keys that are intentionally absent from defaults.
-    expected_top_level_keys = _EXPECTED_TOP_LEVEL_KEYS
-    unexpected_keys = set(params.keys()) - expected_top_level_keys
+    unexpected_keys = set(params.keys()) - _EXPECTED_TOP_LEVEL_KEYS
     if unexpected_keys:
         raise SCGOValidationError(
             f"Unexpected parameter keys: {sorted(unexpected_keys)}. "
-            f"Expected keys: {sorted(expected_top_level_keys)}"
+            f"Expected keys: {sorted(_EXPECTED_TOP_LEVEL_KEYS)}"
         )
 
     # Log the final configuration being used
@@ -360,12 +345,13 @@ def _run_go_campaign_compositions(
             # requested composition; this makes the function predictable for
             # downstream consumers and tests.
             all_results[path_key] = results
-            if not results and verbosity >= 1:
+            if not results:
                 log_warning_v(
                     logger,
                     "No minima found for %s (results empty)",
                     path_key,
                     verbosity=verbosity,
+                    min_verbosity=1,
                 )
             log_info_v(logger, "Finished processing %s", path_key, verbosity=verbosity)
             log_info_v(
@@ -384,25 +370,34 @@ def _run_go_campaign_compositions(
             SCGOFileError,
             SCGOValidationError,
         ) as e:
-            # Enhanced error logging for HPC debugging
-            error_details = [
-                f"Failed to process {path_key} ({formula_str}): {e}",
-                f"Working directory: {os.getcwd()}",
-            ]
             if trial_output_dir:
-                error_details.append(f"Output directory: {trial_output_dir}")
                 if os.path.exists(trial_output_dir):
                     try:
-                        files = os.listdir(trial_output_dir)
-                        error_details.append(f"Output dir contents: {files}")
+                        out_dir_detail = f"contents={os.listdir(trial_output_dir)!r}"
                     except OSError:
-                        error_details.append(
-                            "Output dir exists but cannot list contents"
-                        )
+                        out_dir_detail = "exists but cannot list contents"
                 else:
-                    error_details.append("Output directory does not exist")
-
-            logger.error(" | ".join(error_details), exc_info=(verbosity >= 2))
+                    out_dir_detail = "does not exist"
+                logger.error(
+                    "Failed to process %s (%s): %s | Working directory: %s | "
+                    "Output directory: %s (%s)",
+                    path_key,
+                    formula_str,
+                    e,
+                    os.getcwd(),
+                    trial_output_dir,
+                    out_dir_detail,
+                    exc_info=(verbosity >= 2),
+                )
+            else:
+                logger.error(
+                    "Failed to process %s (%s): %s | Working directory: %s",
+                    path_key,
+                    formula_str,
+                    e,
+                    os.getcwd(),
+                    exc_info=(verbosity >= 2),
+                )
             all_results[path_key] = []
             log_warning_v(
                 logger,

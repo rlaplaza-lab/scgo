@@ -49,17 +49,35 @@ def torch_load_weights_only_false() -> Iterator[None]:
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
-with torch_load_weights_only_false():
-    from mace.calculators import mace_mp
-
 from scgo.calculators.dispersion import (
     DISPERSION_UNSET,
+    MATPES_R2SCAN_MODEL,
     make_r2scan_d3_model,
     r2scan_d3_energy_forces,
     resolve_mace_dispersion_xc,
 )
+from scgo.calculators.inner_calculator import InnerDelegatingCalculator
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.exceptions import SCGOConfigurationError
 from scgo.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+_MISSING_MACE_MSG = (
+    "mace-torch is not installed. Install with: pip install 'scgo[mace]' "
+    "(do not combine with the [uma] or [upet] extras in the same environment)."
+)
+
+# Soft-import so ``import mace_helpers`` works without the [mace] extra
+# (``_get_calculators`` / TorchSim helpers). Raise in ``MACE.__init__`` instead.
+# e3nn still needs the torch.load patch for the duration of a successful import.
+mace_mp: Any | None
+try:
+    with torch_load_weights_only_false():
+        from mace.calculators import mace_mp as _mace_mp
+    mace_mp = _mace_mp
+except ImportError:
+    mace_mp = None
 
 
 class MaceUrls(StrEnum):
@@ -71,7 +89,7 @@ class MaceUrls(StrEnum):
     mace_matpes_0 = "https://github.com/ACEsuit/mace-foundations/releases/download/mace_matpes_0/MACE-matpes-r2scan-omat-ft.model"
 
 
-class MACE(Calculator):
+class MACE(InnerDelegatingCalculator):
     """A wrapper for MACE foundation-model calculators for global optimization.
 
     This class simplifies the initialization of a MACE calculator, handling
@@ -85,7 +103,7 @@ class MACE(Calculator):
 
     def __init__(
         self,
-        model_name: str = "mace_matpes_0",
+        model_name: str = MATPES_R2SCAN_MODEL,
         device: str | None = None,
         default_dtype: str = "float64",
         dispersion_xc: str | None = DISPERSION_UNSET,
@@ -112,6 +130,8 @@ class MACE(Calculator):
                 Calculator class.
         """
         ensure_mace_uma_not_both_installed()
+        if mace_mp is None:
+            raise SCGOConfigurationError(_MISSING_MACE_MSG)
         self.dispersion_xc = resolve_mace_dispersion_xc(model_name, dispersion_xc)
         selected_device = resolve_torch_device(
             device, allow_mps=True, backend_name="MACE"
@@ -131,7 +151,6 @@ class MACE(Calculator):
         # extraction) can honour an explicit device="cpu" instead of guessing.
         self.device = selected_device
 
-        logger = get_logger(__name__)
         logger.info(
             'Initializing MACE calculator ("%s" model) on device: "%s"',
             model_name,
@@ -140,50 +159,37 @@ class MACE(Calculator):
 
         # Patch torch.load only while loading the checkpoint (PyTorch >=2.6).
         with torch_load_weights_only_false():
-            self._mace_calc = mace_mp(
+            inner = mace_mp(
                 model=model_selector,
                 device=selected_device,
                 default_dtype=default_dtype,
             )
+        self._install_inner(inner)
+        # D3 only augments energy/forces; do not advertise inner-only properties.
+        self.implemented_properties = list(type(self).implemented_properties)
+
+    @property
+    def _mace_calc(self) -> Calculator:
+        return self._inner
+
+    @_mace_calc.setter
+    def _mace_calc(self, value: Calculator) -> None:
+        self._inner = value
 
     def calculate(
         self,
         atoms: Atoms | None = None,
         properties: list[str] | None = None,
         system_changes: list[str] = all_changes,
-    ):
-        """Performs the MACE calculation by delegating to the wrapped calculator.
-
-        This method is called by ASE algorithms. It sets up the calculation,
-        calls the underlying MACE calculator, and stores the results.
-
-        Args:
-            atoms: The Atoms object to perform the calculation on. If None, the
-                calculator's internal atoms object is used.
-            properties: A list of properties to calculate (e.g., ["energy", "forces"]).
-                If None, defaults to `self.implemented_properties`.
-            system_changes: A list of strings specifying what has changed since
-                the last calculation. See ASE documentation for details.
-        """
-        if properties is None:
-            properties = self.implemented_properties
-
-        # Call the base class's calculate method to handle setup
+    ) -> None:
+        """Run MACE via the inner calculator, then add r²SCAN D3 if enabled."""
         super().calculate(atoms, properties, system_changes)
-
-        # Delegate the actual computation to the wrapped MACE calculator instance
-        self._mace_calc.calculate(
-            atoms=self.atoms,
-            properties=properties,
-            system_changes=system_changes,
-        )
         atoms = self.atoms
         if self.dispersion_xc is None or atoms is None:
-            self.results = self._mace_calc.results
             return
 
         d3_energy, d3_forces = self._dispersion_energy_forces(atoms)
-        results = dict(self._mace_calc.results)
+        results = dict(self.results)
         if results.get("energy") is not None:
             results["energy"] = float(results["energy"]) + d3_energy
         if results.get("free_energy") is not None:

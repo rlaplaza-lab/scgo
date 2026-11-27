@@ -5,14 +5,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.random import Generator
 
-
-def random_unit_vector(rng: Generator) -> np.ndarray:
-    """Sample a uniform random unit vector in R^3."""
-    v = rng.standard_normal(3)
-    n = float(np.linalg.norm(v))
-    if n >= 1e-12:
-        return (v / n).astype(float)
-    return np.array([0.0, 0.0, 1.0], dtype=float)
+from scgo.utils.geometry_math import rotation_matrix_axis_angle
 
 
 def outermost_point_along_normal(
@@ -62,26 +55,6 @@ def rotation_matrix_a_to_b(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         ]
     )
     return np.eye(3) + vx + vx @ vx * ((1.0 - c) / (s * s))
-
-
-def rotation_matrix_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
-    """Rodrigues rotation about unit axis ``axis`` by ``angle`` radians."""
-    u = np.asarray(axis, dtype=float).reshape(3)
-    nu = np.linalg.norm(u)
-    if nu < 1e-14:
-        return np.eye(3)
-    u = u / nu
-    x, y, z = u
-    c = np.cos(angle)
-    s = np.sin(angle)
-    C = 1.0 - c
-    return np.array(
-        [
-            [c + x * x * C, x * y * C - z * s, x * z * C + y * s],
-            [y * x * C + z * s, c + y * y * C, y * z * C - x * s],
-            [z * x * C - y * s, z * y * C + x * s, c + z * z * C],
-        ]
-    )
 
 
 def random_rotation_matrix(rng: Generator) -> np.ndarray:

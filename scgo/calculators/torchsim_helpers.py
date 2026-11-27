@@ -19,6 +19,8 @@ import logging
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import numpy as np
@@ -33,10 +35,16 @@ except ImportError:
 
 from scgo.calculators.dispersion import (
     DISPERSION_UNSET,
+    MATPES_R2SCAN_MODEL,
     resolve_relaxer_dispersion_xc,
     wrap_model_with_r2scan_d3,
 )
 from scgo.calculators.torch_device import resolve_torch_device
+from scgo.calculators.torchsim_params import (
+    build_torchsim_params,
+    canonical_model_kind,
+)
+from scgo.constants import DEFAULT_UPET_VERSION
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -52,7 +60,6 @@ from scgo.utils.logging import (
 
 logger = get_logger(__name__)
 
-_DEFAULT_UPET_VERSION = "1.5.0"
 _MODEL_MEMORY_ESTIMATION = "Model Memory Estimation:"
 
 __all__ = [
@@ -116,20 +123,20 @@ def collect_ase_fixatoms_indices(atoms: Atoms) -> list[int]:
 # This monkey-patch applies to the TorchSim class object in the current process
 # only; subprocesses must call it independently if needed.
 _TORCHSIM_WORKAROUND_WARNED: set[str] = set()
+_TORCHSIM_WORKAROUND_CHECKED: set[str] = set()  # version check ran (warn or not)
 _TORCHSIM_KNOWN_BROKEN_MAX: tuple[int, int] = (0, 6)
 
 
+@functools.lru_cache(maxsize=1)
 def _torchsim_package_version() -> str | None:
-    """Return installed ``torch-sim-atomistic`` version string, or None."""
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as _pkg_version
-
+    """Installed ``torch-sim-atomistic`` version, or None (process-lifetime cache)."""
     try:
         return _pkg_version("torch-sim-atomistic")
     except (PackageNotFoundError, OSError):
         return None
 
 
+@functools.lru_cache(maxsize=4)
 def _torchsim_version_tuple(version: str | None) -> tuple[int, int] | None:
     """Parse major.minor from a package version string."""
     if version is None:
@@ -147,8 +154,9 @@ def _warn_if_torchsim_newer_than_known_broken(name: str) -> None:
     Patches are still applied: auto-skipping after 0.6 without a 0.7 re-test
     could regress GPU CI. Remove each workaround once upstream is verified fixed.
     """
-    if name in _TORCHSIM_WORKAROUND_WARNED:
+    if name in _TORCHSIM_WORKAROUND_CHECKED:
         return
+    _TORCHSIM_WORKAROUND_CHECKED.add(name)
     version = _torchsim_package_version()
     numeric = _torchsim_version_tuple(version)
     if numeric is None or numeric <= _TORCHSIM_KNOWN_BROKEN_MAX:
@@ -296,7 +304,7 @@ def _load_default_mace_model(
     *,
     device,
     dtype,
-    mace_model_name: str = "mace_matpes_0",
+    mace_model_name: str = MATPES_R2SCAN_MODEL,
     compute_forces: bool = True,
     compute_stress: bool = False,
 ):
@@ -437,6 +445,41 @@ def _prepare_atoms_for_metatomic_torchsim(atoms: Atoms) -> Atoms:
     return prepared
 
 
+def _finalize_torchsim_atoms(
+    out: Atoms,
+    reference: Atoms,
+    energy: float,
+    *,
+    forces: np.ndarray | None = None,
+    relaxation_steps: int | None = None,
+    reattach_metadata: bool = False,
+    restore_metatomic_cell: bool = False,
+) -> Atoms:
+    """Apply shared static/optimize result finalization to one Atoms object."""
+    if restore_metatomic_cell:
+        _restore_ase_cell_from_reference(out, reference)
+    if reattach_metadata:
+        _reattach_input_metadata(out, reference)
+    if forces is not None:
+        forces_arr = np.asarray(forces, dtype=np.float64)
+        if forces_arr.shape[0] != len(out):
+            raise SCGORuntimeError(
+                f"Forces shape mismatch: expected {len(out)} atoms, "
+                f"got {forces_arr.shape[0]}"
+            )
+        out.arrays["forces"] = forces_arr
+    elif "forces" in out.arrays or out.calc is not None:
+        ensure_float64_forces(out)
+    tag_kwargs: dict[str, Any] = {
+        "potential_energy": energy,
+        "raw_score": -energy,
+    }
+    if relaxation_steps is not None:
+        tag_kwargs["relaxation_steps"] = relaxation_steps
+    set_tags(out, **tag_kwargs)
+    return out
+
+
 def _restore_ase_cell_from_reference(relaxed: Atoms, reference: Atoms) -> None:
     """Restore SCGO storage cell/PBC after a metatomic TorchSim relaxation."""
     relaxed.cell = reference.cell.copy()
@@ -491,7 +534,7 @@ def _load_default_upet_model(
         atomistic = get_upet(
             model=model,
             size=size,
-            version=upet_version or _DEFAULT_UPET_VERSION,
+            version=upet_version or DEFAULT_UPET_VERSION,
         )
 
     return MetatomicModel(
@@ -541,16 +584,14 @@ def _load_upet_for_relaxer(relaxer: TorchSimBatchRelaxer) -> object:
 _MODEL_KIND_LOADERS: dict[str, Callable[[TorchSimBatchRelaxer], object]] = {
     "mace": _load_mace_for_relaxer,
     "fairchem": _load_fairchem_for_relaxer,
-    "uma": _load_fairchem_for_relaxer,
     "upet": _load_upet_for_relaxer,
-    "metatomic": _load_upet_for_relaxer,
 }
 
 
 def _resolve_default_model(relaxer: TorchSimBatchRelaxer) -> object:
     """Load a TorchSim model for ``relaxer.model_kind`` aliases."""
-    mk = str(relaxer.model_kind or "mace").strip().lower()
-    loader = _MODEL_KIND_LOADERS.get(mk)
+    mk = canonical_model_kind(str(relaxer.model_kind or "mace"))
+    loader = _MODEL_KIND_LOADERS.get(mk or "")
     if loader is None:
         raise SCGOValidationError(
             f"Unknown model_kind {relaxer.model_kind!r}; "
@@ -585,6 +626,30 @@ def _steps_taken_from_optimize_state(state: Any) -> int | None:
         if steps is not None:
             return steps
     return None
+
+
+def _relaxer_fields_from_live_calculator(
+    kind: str,
+    calculator: Any,
+    *,
+    model_name: str | None,
+    calc_kwargs: dict[str, Any],
+    shared_model: Any,
+    missing_name_msg: str,
+    warn_reload_msg: str,
+    allow_missing_name: bool = False,
+    clear_inner: bool = True,
+) -> dict[str, Any]:
+    """Shared UMA/UPET TorchSim field assembly from a live ASE calculator."""
+    if not model_name and not allow_missing_name:
+        raise SCGOValidationError(missing_name_msg)
+    if shared_model is None:
+        logger.warning(warn_reload_msg)
+    fields = build_torchsim_params(kind, calc_kwargs)
+    fields["model"] = shared_model
+    if clear_inner and shared_model is not None and hasattr(calculator, "_inner"):
+        calculator._inner = None
+    return fields
 
 
 def build_torchsim_relaxer(
@@ -633,26 +698,25 @@ def build_torchsim_relaxer(
         )
 
         model_name = infer_uma_model_name_from_calculator(calculator)
-        if not model_name:
-            raise SCGOValidationError(
-                "Cannot infer UMA model_name from calculator for TorchSim relaxer."
-            )
-        shared_model = try_extract_torchsim_model_from_uma_calculator(calculator)
-        if shared_model is None:
-            logger.warning(
-                "Could not extract live FairChem predictor from UMA "
-                "calculator; TorchSim will reload the checkpoint"
-            )
         base.update(
-            {
-                "model_kind": "fairchem",
-                "fairchem_model_name": str(model_name),
-                "fairchem_task_name": getattr(calculator, "task_name", None),
-                "model": shared_model,
-            }
+            _relaxer_fields_from_live_calculator(
+                "UMA",
+                calculator,
+                model_name=model_name,
+                calc_kwargs={
+                    "model_name": model_name,
+                    "task_name": getattr(calculator, "task_name", None),
+                },
+                shared_model=try_extract_torchsim_model_from_uma_calculator(calculator),
+                missing_name_msg=(
+                    "Cannot infer UMA model_name from calculator for TorchSim relaxer."
+                ),
+                warn_reload_msg=(
+                    "Could not extract live FairChem predictor from UMA "
+                    "calculator; TorchSim will reload the checkpoint"
+                ),
+            )
         )
-        if shared_model is not None and hasattr(calculator, "_inner"):
-            calculator._inner = None
     elif is_upet_like_calculator(calculator):
         from scgo.calculators.upet_helpers import (
             infer_upet_model_name_from_calculator,
@@ -660,28 +724,31 @@ def build_torchsim_relaxer(
         )
 
         model_name = infer_upet_model_name_from_calculator(calculator)
-        if not model_name and not getattr(calculator, "checkpoint_path", None):
-            raise SCGOValidationError(
-                "Cannot infer UPET model_name from calculator for TorchSim relaxer."
-            )
-        shared_model = try_extract_torchsim_model_from_upet_calculator(calculator)
-        if shared_model is None:
-            logger.warning(
-                "Could not extract live AtomisticModel from UPET "
-                "calculator; TorchSim will reload the checkpoint"
-            )
+        allow_missing = bool(getattr(calculator, "checkpoint_path", None))
         base.update(
-            {
-                "model_kind": "upet",
-                "upet_model_name": str(model_name) if model_name else None,
-                "upet_version": getattr(calculator, "version", None),
-                "upet_checkpoint_path": getattr(calculator, "checkpoint_path", None),
-                "upet_non_conservative": getattr(calculator, "non_conservative", False),
-                "model": shared_model,
-            }
+            _relaxer_fields_from_live_calculator(
+                "UPET",
+                calculator,
+                model_name=model_name,
+                calc_kwargs={
+                    "model_name": model_name,
+                    "version": getattr(calculator, "version", None),
+                    "checkpoint_path": getattr(calculator, "checkpoint_path", None),
+                    "non_conservative": getattr(calculator, "non_conservative", False),
+                },
+                shared_model=try_extract_torchsim_model_from_upet_calculator(
+                    calculator
+                ),
+                missing_name_msg=(
+                    "Cannot infer UPET model_name from calculator for TorchSim relaxer."
+                ),
+                warn_reload_msg=(
+                    "Could not extract live AtomisticModel from UPET "
+                    "calculator; TorchSim will reload the checkpoint"
+                ),
+                allow_missing_name=allow_missing,
+            )
         )
-        if shared_model is not None and hasattr(calculator, "_inner"):
-            calculator._inner = None
     else:
         from scgo.calculators.mace_helpers import (
             infer_mace_model_name_from_calculator,
@@ -694,13 +761,10 @@ def build_torchsim_relaxer(
                 "Cannot infer MACE model_name from calculator for TorchSim relaxer."
             )
         shared_model = try_extract_torchsim_model_from_mace_calculator(calculator)
-        base.update(
-            {
-                "mace_model_name": str(mace_model_name),
-                "model": shared_model,
-                "dispersion_xc": getattr(calculator, "dispersion_xc", None),
-            }
-        )
+        fields = build_torchsim_params("MACE", {"model_name": mace_model_name})
+        fields["model"] = shared_model
+        fields["dispersion_xc"] = getattr(calculator, "dispersion_xc", None)
+        base.update(fields)
 
     if torchsim_params:
         base.update(_filter_torchsim_params(torchsim_params))
@@ -819,11 +883,11 @@ class TorchSimBatchRelaxer:
     dtype: object | None = None
     model: object | None = None
     model_kind: str = "mace"  # "mace", "fairchem", or "upet"
-    mace_model_name: str = "mace_matpes_0"
+    mace_model_name: str = MATPES_R2SCAN_MODEL
     fairchem_model_name: str | None = None
     fairchem_task_name: str | None = None
     upet_model_name: str | None = None
-    upet_version: str | None = _DEFAULT_UPET_VERSION
+    upet_version: str | None = DEFAULT_UPET_VERSION
     upet_checkpoint_path: str | None = None
     upet_non_conservative: bool = False
     optimizer_name: str = "fire"
@@ -1090,26 +1154,19 @@ class TorchSimBatchRelaxer:
             # Isolate nested info so raw_score writes cannot corrupt caller atoms
             # (ASE Atoms.copy() shares key_value_pairs dicts).
             out = copy_atoms(atoms_seq[idx])
-            if self._uses_metatomic_model():
-                _restore_ase_cell_from_reference(out, reference_atoms[idx])
-
             forces_t = prop.get("forces")
-            if forces_t is not None:
-                forces = np.asarray(forces_t.detach().cpu().numpy(), dtype=np.float64)
-                if forces.shape[0] != len(out):
-                    raise SCGORuntimeError(
-                        f"Forces shape mismatch for structure {idx}: "
-                        f"expected {len(out)} atoms, got {forces.shape[0]}"
-                    )
-                out.arrays["forces"] = forces
-            elif "forces" in out.arrays or out.calc is not None:
-                ensure_float64_forces(out)
-
-            set_tags(
+            forces = (
+                np.asarray(forces_t.detach().cpu().numpy(), dtype=np.float64)
+                if forces_t is not None
+                else None
+            )
+            _finalize_torchsim_atoms(
                 out,
-                potential_energy=energy,
-                raw_score=-energy,
+                reference_atoms[idx],
+                energy,
+                forces=forces,
                 relaxation_steps=0,
+                restore_metatomic_cell=self._uses_metatomic_model(),
             )
             results.append((energy, out))
         return results
@@ -1322,31 +1379,22 @@ class TorchSimBatchRelaxer:
         for idx, (energy, relaxed) in enumerate(
             zip(energies, relaxed_atoms, strict=True)
         ):
-            if self._uses_metatomic_model():
-                _restore_ase_cell_from_reference(relaxed, reference_atoms[idx])
             # ``state.to_atoms()`` drops tags/constraints/info; restore them from
             # the input so optimize and static share one output contract.
-            _reattach_input_metadata(relaxed, reference_atoms[idx])
-            if forces_list is not None:
-                relaxed.arrays["forces"] = np.asarray(
-                    forces_list[idx], dtype=np.float64
-                )
-            elif "forces" in relaxed.arrays or relaxed.calc is not None:
-                ensure_float64_forces(relaxed)
-
-            set_tags(
+            _finalize_torchsim_atoms(
                 relaxed,
-                potential_energy=energy,
-                raw_score=-energy,
+                reference_atoms[idx],
+                energy,
+                forces=forces_list[idx] if forces_list is not None else None,
+                relaxation_steps=batch_steps,
+                reattach_metadata=True,
+                restore_metatomic_cell=self._uses_metatomic_model(),
             )
-            if batch_steps is not None:
-                set_tags(relaxed, relaxation_steps=batch_steps)
             results.append((energy, relaxed))
         return results
 
     def _uses_metatomic_model(self) -> bool:
-        mk = str(self.model_kind or "mace").strip().lower()
-        return mk in ("upet", "metatomic")
+        return canonical_model_kind(self.model_kind or "mace") == "upet"
 
     def _sync_device_dtype_from_model(self) -> None:
         """Align SimState device/dtype with the loaded TorchSim model.

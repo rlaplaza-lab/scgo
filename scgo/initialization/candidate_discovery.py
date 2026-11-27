@@ -238,27 +238,27 @@ def deduplicate_seed_candidates(
     elif energy_bin <= 0:
         energy_bin = 0.0
 
-    if energy_bin == 0.0:
+    def _dedup_signatures(
+        items: list[tuple[float, Atoms]],
+    ) -> list[tuple[float, Atoms]]:
         unique: dict[tuple[float, ...], tuple[float, Atoms]] = {}
-        for energy, atoms in entries:
+        for energy, atoms in items:
             signature = get_structure_signature(atoms, precision=precision)
             if signature not in unique:
                 unique[signature] = (energy, atoms)
         return list(unique.values())
 
+    if energy_bin == 0.0:
+        return _dedup_signatures(entries)
+
     binned: dict[int, list[tuple[float, Atoms]]] = {}
     for energy, atoms in entries:
-        energy_key = int(round(energy / energy_bin))
+        energy_key = round(energy / energy_bin)
         binned.setdefault(energy_key, []).append((energy, atoms))
 
     deduped: list[tuple[float, Atoms]] = []
     for bucket in binned.values():
-        unique_bucket: dict[tuple[float, ...], tuple[float, Atoms]] = {}
-        for energy, atoms in bucket:
-            signature = get_structure_signature(atoms, precision=precision)
-            if signature not in unique_bucket:
-                unique_bucket[signature] = (energy, atoms)
-        deduped.extend(unique_bucket.values())
+        deduped.extend(_dedup_signatures(bucket))
 
     return deduped
 

@@ -245,12 +245,22 @@ def test_format_offspring_outcome_line():
     assert "Offspring 3: validation failed" in line
     assert "not connected" in line
 
-    ok = format_offspring_outcome_line(
+    unary = format_offspring_outcome_line(
         1,
         failure_reason=None,
         desc="mutation: rattle",
         mutation_applied=True,
         validation_error=None,
     )
-    assert "crossover succeeded" in ok
-    assert "mutation rattle" in ok
+    assert "unary mutation rattle" in unary
+    assert "crossover succeeded" not in unary
+
+    paired = format_offspring_outcome_line(
+        2,
+        failure_reason=None,
+        desc="pairing: 1 2",
+        mutation_applied=False,
+        validation_error=None,
+    )
+    assert "crossover succeeded" in paired
+    assert "no mutation" in paired

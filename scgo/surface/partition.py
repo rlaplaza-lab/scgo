@@ -18,7 +18,7 @@ from ase import Atoms
 
 from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.layers import _layer_indices_by_clustering
+from scgo.surface.layers import resolve_slab_mobile_or_fixed_indices
 
 __all__ = [
     "SlabSearchPartition",
@@ -69,25 +69,12 @@ def resolve_slab_search_partition(
     positions = np.asarray(slab.get_positions())
     symbols = list(slab.get_chemical_symbols())
 
-    if config.n_relax_top_slab_layers is not None:
-        mobile = _layer_indices_by_clustering(
-            positions,
-            axis,
-            n_layers=int(config.n_relax_top_slab_layers),
-            from_top=True,
-        )
-    else:
-        if config.n_fix_bottom_slab_layers is None:
-            raise SCGOValidationError(
-                "One of n_relax_top_slab_layers or n_fix_bottom_slab_layers must be set"
-            )
-        fixed = _layer_indices_by_clustering(
-            positions,
-            axis,
-            n_layers=int(config.n_fix_bottom_slab_layers),
-            from_top=False,
-        )
-        mobile = set(range(n_slab)) - fixed
+    _fixed, mobile = resolve_slab_mobile_or_fixed_indices(
+        positions,
+        axis,
+        n_relax_top_slab_layers=config.n_relax_top_slab_layers,
+        n_fix_bottom_slab_layers=config.n_fix_bottom_slab_layers,
+    )
 
     if not mobile:
         raise SCGOValidationError(

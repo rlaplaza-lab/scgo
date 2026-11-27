@@ -7,6 +7,7 @@ import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.ase_ga_patches.population import FitnessStrategyPopulation, Population
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import set_tags
+from scgo.system_types.structure_validation import StructureValidationPolicy
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.diversity_scorer import DiversityScorer
 from tests.helpers import create_paired_rngs, create_preparedb
@@ -119,6 +120,24 @@ def test_strictly_better_duplicate_replaces_top_elite(rng):
     assert pop.pop[0].info["confid"] == "c4"
     assert "c3" not in [a.info["confid"] for a in pop.pop]
     assert len(pop.pop) == 3
+
+
+def test_add_candidate_evicts_worst_tie_by_relax_id(rng):
+    """Equal raw scores evict the higher relax_id, matching init/update ordering."""
+    pop = Population(
+        FakeDC([]),
+        population_size=2,
+        comparator=SymbolsComparator(),
+        rng=rng,
+    )
+    worse = _make_candidate(["Pt", "Pt"], raw_score=-5.0, confid="worse", relax_id=9)
+    better = _make_candidate(["Au", "Au"], raw_score=-5.0, confid="better", relax_id=1)
+    newcomer = _make_candidate(["Pd", "Pd"], raw_score=-5.0, confid="new", relax_id=3)
+    pop.__add_candidate__(worse)
+    pop.__add_candidate__(better)
+    pop.__add_candidate__(newcomer)
+
+    assert {a.info["confid"] for a in pop.pop} == {"better", "new"}
 
 
 def test_tied_duplicate_keeps_incumbent_elite(rng):
@@ -353,6 +372,7 @@ def test_relax_unrelaxed_candidates_ineligible_not_in_pop(tmp_path, rng):
         population=pop,
         composition=["Pt", "Pt", "Pt"],
         system_type="gas_cluster",
+        validation=StructureValidationPolicy(),
     )
 
     assert len(pop.pop) == 0

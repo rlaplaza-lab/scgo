@@ -46,14 +46,15 @@ from scgo.runner_composition import (
     parse_composition_arg,
 )
 from scgo.runner_go import select_scgo_minima_algorithm
-from scgo.runner_params import resolve_workflow_seed
 from scgo.runner_params import (
     _log_completion,
     _log_validation_error,
     _prepare_run_go_campaign_context,
     _prepare_run_go_context,
     format_completion_details,
+    resolve_workflow_seed,
 )
+from scgo.utils.logging import configure_logging
 from scgo.runner_ts import (
     log_go_ts_summary,
     run_go_ts,
@@ -63,9 +64,6 @@ from scgo.runner_ts import (
 )
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import AdsorbatesInput, SystemType
-from scgo.utils.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 def run_go(
@@ -86,6 +84,7 @@ def run_go(
     from scgo import configure
 
     configure()
+    configure_logging(verbosity)
     try:
         context = _prepare_run_go_context(
             composition,
@@ -100,31 +99,31 @@ def run_go(
             system_type=system_type,
             adsorbates=adsorbates,
         )
+        t0 = perf_counter()
+        minima = runner_go._run_go_trials(
+            context.composition,
+            context.system_type,
+            params=context.params,
+            seed=context.seed,
+            verbosity=context.verbosity,
+            run_id=context.run_id,
+            clean=context.clean,
+            output_dir=context.output_dir,
+            calculator_for_global_optimization=context.calculator_for_global_optimization,
+        )
+        if log_summary:
+            _log_completion(
+                "run_go",
+                elapsed_s=perf_counter() - t0,
+                details=format_completion_details(
+                    minima=len(minima),
+                    output_dir=context.output_summary_dir,
+                ),
+            )
+        return minima
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
-    t0 = perf_counter()
-    minima = runner_go._run_go_trials(
-        context.composition,
-        context.system_type,
-        params=context.params,
-        seed=context.seed,
-        verbosity=context.verbosity,
-        run_id=context.run_id,
-        clean=context.clean,
-        output_dir=context.output_dir,
-        calculator_for_global_optimization=context.calculator_for_global_optimization,
-    )
-    if log_summary:
-        _log_completion(
-            "run_go",
-            elapsed_s=perf_counter() - t0,
-            details=format_completion_details(
-                minima=len(minima),
-                output_dir=context.output_summary_dir,
-            ),
-        )
-    return minima
 
 
 def run_go_campaign(
@@ -161,6 +160,7 @@ def run_go_campaign(
     from scgo import configure
 
     configure()
+    configure_logging(verbosity)
     try:
         context = _prepare_run_go_campaign_context(
             compositions,
@@ -175,33 +175,33 @@ def run_go_campaign(
             system_type=system_type,
             adsorbates=adsorbates,
         )
+        t0 = perf_counter()
+        campaign = runner_go._run_go_campaign_compositions(
+            context.compositions,
+            context.system_type,
+            params=context.params,
+            seed=context.seed,
+            verbosity=context.verbosity,
+            run_id=context.run_id,
+            clean=context.clean,
+            output_dir=context.output_dir,
+            calculator_for_global_optimization=context.calculator_for_global_optimization,
+            composition_adsorbate=context.composition_adsorbate,
+        )
+        if log_summary:
+            _log_completion(
+                "run_go_campaign",
+                elapsed_s=perf_counter() - t0,
+                details=format_completion_details(
+                    compositions=len(campaign),
+                    minima=sum(len(v) for v in campaign.values()),
+                    output_dir=context.output_summary_dir,
+                ),
+            )
+        return campaign
     except SCGOValidationError as exc:
         _log_validation_error(exc)
         raise
-    t0 = perf_counter()
-    campaign = runner_go._run_go_campaign_compositions(
-        context.compositions,
-        context.system_type,
-        params=context.params,
-        seed=context.seed,
-        verbosity=context.verbosity,
-        run_id=context.run_id,
-        clean=context.clean,
-        output_dir=context.output_dir,
-        calculator_for_global_optimization=context.calculator_for_global_optimization,
-        composition_adsorbate=context.composition_adsorbate,
-    )
-    if log_summary:
-        _log_completion(
-            "run_go_campaign",
-            elapsed_s=perf_counter() - t0,
-            details=format_completion_details(
-                compositions=len(campaign),
-                minima=sum(len(v) for v in campaign.values()),
-                output_dir=context.output_summary_dir,
-            ),
-        )
-    return campaign
 
 
 __all__ = [

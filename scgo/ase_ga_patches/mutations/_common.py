@@ -9,6 +9,7 @@ import numpy as np
 
 from ase import Atoms
 from ase.geometry import find_mic
+from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches._vector_utils import (
@@ -25,12 +26,18 @@ from scgo.initialization.initialization_config import (
     CONNECTIVITY_FACTOR,
     MIN_DISTANCE_FACTOR_DEFAULT,
 )
+from scgo.initialization.steric_scoring import steric_deficit as _steric_deficit
+from scgo.initialization.steric_scoring import (
+    steric_deficit_two_sets as _steric_deficit_two_sets,
+)
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
     normalize_connectivity_factor,
     pair_bond_threshold,
 )
+from scgo.system_types.policy import SystemType, get_system_policy
+from scgo.utils.geometry_math import mic_displacement
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
 
 __all__ = [
@@ -45,6 +52,8 @@ __all__ = [
     "_fails_only_slab_clash",
     "_mobile_clashes",
     "_mobile_is_connected",
+    "_mutation_steric_score",
+    "MutationOperator",
     "_pin_subset_contact_atom",
     "_preserves_mobile_connectivity",
     "_reconnect_mobile_components",
@@ -55,6 +64,101 @@ __all__ = [
 
 
 _IDENTITY_ATOL = 1e-8
+
+
+def _mutation_description(descriptor: str) -> str:
+    """``RattleMutation`` -> ``mutation: rattle``."""
+    name = descriptor.removesuffix("Mutation")
+    parts: list[str] = []
+    for char in name:
+        if char.isupper() and parts:
+            parts.append("_")
+        parts.append(char.lower())
+    return "mutation: " + "".join(parts)
+
+
+class MutationOperator(OffspringCreator):
+    """Shared creator setup and ``get_new_individual`` for SCGO mutations.
+
+    Subclasses set ``descriptor`` to the class name. The GA description is
+    ``mutation:`` plus that name in snake_case with the ``Mutation`` suffix
+    removed. A subclass that does not override ``descriptor`` keeps its
+    parent's label (``CustomPermutationMutation`` stays ``permutation``).
+    """
+
+    descriptor: str
+
+    def _init_operator(
+        self,
+        verbose: bool,
+        rng,
+        system_type: SystemType,
+        *,
+        n_top,
+        blmin,
+        test_dist_to_slab: bool = True,
+        use_tags: bool = False,
+        target_tags=None,
+        surface_normal_axis: int | None = None,
+    ) -> None:
+        rng = _ensure_rng(rng)
+        OffspringCreator.__init__(self, verbose, rng=rng)
+        self.blmin = blmin
+        self.n_top = n_top
+        self.system_type = system_type
+        self._policy = get_system_policy(system_type)
+        self.test_dist_to_slab = test_dist_to_slab
+        self.use_tags = use_tags
+        self.target_tags = target_tags
+        if surface_normal_axis is not None:
+            self.surface_normal_axis = surface_normal_axis
+        self.descriptor = type(self).descriptor
+        self.min_inputs = 1
+
+    def get_new_individual(self, parents):
+        # _finalize imports helpers from this module, so the import stays local.
+        from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
+
+        parent = parents[0]
+        mutant = self.mutate(parent)
+        return _finalize_mutant(
+            self,
+            parent,
+            mutant,
+            _mutation_description(self.descriptor),
+        )
+
+
+def split_slab_and_mobile(
+    atoms: Atoms,
+    n_top: int | None,
+) -> tuple[Atoms, Atoms, int]:
+    """Split combined slab+mobile ``Atoms`` into fixed slab and mobile region."""
+    n_mobile = len(atoms) if n_top is None else n_top
+    split = len(atoms) - n_mobile
+    return atoms[:split], atoms[split:], n_mobile
+
+
+def swap_tag_group_centroids(
+    pos: np.ndarray,
+    tags: np.ndarray,
+    unique_tags: np.ndarray,
+    i: int,
+    j: int,
+) -> tuple:
+    """Exchange tag-group centroids in ``pos``.
+
+    Returns ``(ind1, ind2, shift1, shift2)`` so callers can revert on clash.
+    """
+    ind1 = np.where(tags == unique_tags[i])
+    ind2 = np.where(tags == unique_tags[j])
+    cop1 = np.mean(pos[ind1], axis=0)
+    cop2 = np.mean(pos[ind2], axis=0)
+    shift1 = cop2 - cop1
+    shift2 = cop1 - cop2
+    pos[ind1] += shift1
+    pos[ind2] += shift2
+    return ind1, ind2, shift1, shift2
 
 
 def _filter_unique_tags(
@@ -229,6 +333,30 @@ def _preserves_mobile_connectivity(
     )
 
 
+def _prepare_mobile_target(operator, atoms):
+    """Return slab, mobile arrays, and tag mask, or ``None`` if nothing matches."""
+    n_mobile = len(atoms) if operator.n_top is None else operator.n_top
+    slab = atoms[:len(atoms) - n_mobile]
+    top = atoms[len(atoms) - n_mobile:]
+    tags = top.get_tags()
+    unique_tags = _filter_unique_tags(np.unique(tags), operator.target_tags)
+    if unique_tags is None:
+        return None
+    mask = np.isin(tags, unique_tags)
+    if not np.any(mask):
+        return None
+    return (
+        slab,
+        top,
+        top.get_positions(),
+        top.get_atomic_numbers(),
+        top.get_cell(),
+        top.get_pbc(),
+        tags,
+        mask,
+    )
+
+
 def _mobile_clashes(
     mobile: Atoms,
     *,
@@ -272,15 +400,6 @@ def _closest_pair_gap(positions, group_a, group_b, atoms, use_mic):
         int(group_a[index_a]),
         int(group_b[index_b]),
     )
-
-
-def _short_delta(atoms, origin, target, use_mic):
-    """Vector from ``origin`` to ``target``, through the nearest image when periodic."""
-    delta = np.asarray(target, dtype=float) - np.asarray(origin, dtype=float)
-    if not use_mic:
-        return delta
-    mic, _dist = find_mic(delta.reshape(1, 3), atoms.cell, atoms.pbc)
-    return np.asarray(mic[0], dtype=float)
 
 
 def _clamp_repair_step(atoms, step, use_mic):
@@ -365,8 +484,12 @@ def _reconnect_mobile_components(
     needed = _clamp_repair_step(work, gap - BOND_REPAIR_INSET * threshold, use_mic)
     if needed <= 1e-8:
         return work
-    direction = _short_delta(
-        work, positions[small_idx], positions[large_idx], use_mic
+    direction = mic_displacement(
+        positions[small_idx],
+        positions[large_idx],
+        work.cell,
+        work.pbc,
+        use_mic=bool(use_mic),
     )
     norm = float(np.linalg.norm(direction))
     if norm <= 1e-8:
@@ -404,6 +527,27 @@ def _fails_only_slab_clash(
         and len(slab) > 0
         and atoms_too_close_two_sets(candidate_mobile, slab, blmin)
     )
+
+
+def _mutation_steric_score(
+    positions: np.ndarray,
+    numbers: np.ndarray,
+    slab: Atoms,
+    blmin: dict,
+) -> float:
+    """Self steric deficit plus optional slab–mobile deficit for ranking trials."""
+    score = float(_steric_deficit(positions, numbers, blmin))
+    if len(slab) > 0:
+        score += float(
+            _steric_deficit_two_sets(
+                positions,
+                numbers,
+                slab.get_positions(),
+                slab.numbers,
+                blmin,
+            )[0]
+        )
+    return score
 
 
 def _accept_connected_kwargs(operator, slab):

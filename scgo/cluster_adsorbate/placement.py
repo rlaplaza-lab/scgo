@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,7 +15,6 @@ from scgo.cluster_adsorbate.geometry import (
     outermost_point_along_normal,
     random_rotation_matrix,
     random_spin_about_normal,
-    random_unit_vector,
     rotation_matrix_a_to_b,
 )
 from scgo.cluster_adsorbate.sites import (
@@ -34,6 +34,7 @@ from scgo.system_types.connectivity_factor import (
     normalize_connectivity_factor,
     pair_bond_threshold,
 )
+from scgo.utils.geometry_math import random_unit_vector
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -138,6 +139,17 @@ def _build_fragment_positions(
     return pos
 
 
+def _known_site_index(
+    candidate: SurfaceSiteCandidate, site_pos: np.ndarray
+) -> int | None:
+    idx = candidate.site_index
+    if idx is None or not (0 <= idx < len(site_pos)):
+        return None
+    if not np.array_equal(site_pos[idx], candidate.anchor):
+        return None
+    return int(idx)
+
+
 def _generate_placement_trials(
     rng: Generator,
     site_candidates: dict[SiteType, list[SurfaceSiteCandidate]],
@@ -170,14 +182,20 @@ def _generate_placement_trials(
             n_dir = chosen.normal
             anchor_surf = chosen.anchor
             site_type = selected_type
+            known_site_index = _known_site_index(chosen, site_pos)
         else:
             selected_type = None
             site_type = "directional_fallback"
+            known_site_index = None
             n_dir = random_unit_vector(rng)
             anchor_surf = outermost_point_along_normal(
                 site_pos, relative_site_pos, n_dir
             )
-        site_index = int(np.argmin(np.linalg.norm(site_pos - anchor_surf, axis=1)))
+        site_index = (
+            known_site_index
+            if known_site_index is not None
+            else int(np.argmin(np.linalg.norm(site_pos - anchor_surf, axis=1)))
+        )
         floor, ceiling = radii_derived_height_bounds(
             fragment_template,
             site_atoms,
@@ -342,6 +360,9 @@ def place_fragment_on_cluster(
     else:
         blmin = {pair: dist * blmin_ratio for pair, dist in blmin_base.items()}
 
+    cell = core.get_cell()
+    pbc = core.get_pbc()
+
     for _attempt in range(config.max_placement_attempts):
         trials = _generate_placement_trials(
             rng,
@@ -358,8 +379,6 @@ def place_fragment_on_cluster(
             _RANKED_CANDIDATES_PER_ATTEMPT,
         )
 
-        cell = core.get_cell()
-        pbc = core.get_pbc()
         ranked: list[tuple[float, _PlacementTrial, np.ndarray]] = []
         for trial in trials:
             target = trial.anchor_surf + trial.height * trial.n_dir
@@ -429,3 +448,49 @@ def place_fragment_on_cluster(
         bond_axis,
     )
     return None
+
+
+def place_fragments_on_core(
+    site_core: Atoms,
+    fragments: Sequence[Atoms],
+    rng: Generator,
+    config: ClusterAdsorbateConfig,
+    *,
+    anchor_index: int,
+    bond_axis: tuple[int, int] | None,
+    site_candidates: dict[SiteType, list[SurfaceSiteCandidate]] | None,
+    clash_atoms_for: Callable[[Atoms], Atoms],
+    initial_mobile: Atoms,
+    combine_mobile: Callable[[Atoms, Atoms], Atoms],
+    uses_surface: bool = False,
+    within_structure_site_counts: dict[str, int] | None = None,
+    batch_site_counts: dict[str, int] | None = None,
+) -> tuple[Atoms, list[str]] | None:
+    """Place each fragment. ``None`` if one cannot be placed."""
+    mobile = initial_mobile
+    counts = (
+        within_structure_site_counts if within_structure_site_counts is not None else {}
+    )
+    site_types: list[str] = []
+    for frag_tmpl in fragments:
+        frag_metadata: dict[str, str] = {}
+        placed = place_fragment_on_cluster(
+            site_core,
+            frag_tmpl,
+            rng,
+            config,
+            anchor_index=anchor_index,
+            bond_axis=bond_axis,
+            within_structure_site_counts=counts,
+            batch_site_counts=batch_site_counts,
+            placement_metadata=frag_metadata,
+            site_core=site_core,
+            clash_atoms=clash_atoms_for(mobile),
+            site_candidates=site_candidates,
+            uses_surface=uses_surface,
+        )
+        if placed is None:
+            return None
+        site_types.append(frag_metadata.get("site_type", "directional_fallback"))
+        mobile = combine_mobile(mobile, placed)
+    return mobile, site_types

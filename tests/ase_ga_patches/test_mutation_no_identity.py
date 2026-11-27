@@ -11,7 +11,7 @@ from ase_ga.utilities import (
     get_all_atom_types,
 )
 
-import scgo.ase_ga_patches.mutations.mirror as mirror_mod
+import scgo.ase_ga_patches.mutations._common as mutation_common
 from scgo.ase_ga_patches.mutations._common import _pin_subset_contact_atom
 from scgo.ase_ga_patches.mutations.flattening import FlatteningMutation
 from scgo.ase_ga_patches.mutations.mirror import MirrorMutation
@@ -190,7 +190,12 @@ def test_mirror_rescue_reanchors_to_slab(monkeypatch, rng) -> None:
     }
 
     monkeypatch.setattr(
-        mirror_mod,
+        mutation_common,
+        "_mobile_clashes",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        mutation_common,
         "_preserves_mobile_connectivity",
         lambda *args, **kwargs: False,
     )
@@ -205,15 +210,9 @@ def test_mirror_rescue_reanchors_to_slab(monkeypatch, rng) -> None:
         return attempt["n"] > main_limit
 
     monkeypatch.setattr(
-        mirror_mod,
+        mutation_common,
         "_preserves_mobile_connectivity",
         _preserves_in_rescue,
-    )
-    monkeypatch.setattr(mirror_mod, "atoms_too_close", lambda *args, **kwargs: False)
-    monkeypatch.setattr(
-        mirror_mod,
-        "atoms_too_close_two_sets",
-        lambda *args, **kwargs: False,
     )
 
     out = MirrorMutation(**mut_kwargs).mutate(full.copy())

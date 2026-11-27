@@ -137,14 +137,15 @@ def relax_metal_cluster_with_adsorbate(
     if config.validate_combined_structure:
         ok1, err1 = _validate_combined(combined, config)
         if not ok1:
-            raise SCGORuntimeError(
+            raise SCGOValidationError(
                 "Combined structure failed validation after relax: " + err1
             )
 
     bond_lengths: dict[tuple[int, int], float] = {}
     for i, j in bond_pairs:
         gi, gj = n_core + i, n_core + j
-        bond_lengths[(i, j)] = float(combined.get_distance(gi, gj))
+        key = (min(i, j), max(i, j))
+        bond_lengths[key] = float(combined.get_distance(gi, gj))
 
     info: dict[str, Any] = {
         "initial_energy": e0,

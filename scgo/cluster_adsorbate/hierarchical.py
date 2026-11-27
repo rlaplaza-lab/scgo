@@ -13,7 +13,10 @@ from scgo.cluster_adsorbate.config import (
     resolve_cluster_adsorbate_config,
 )
 from scgo.cluster_adsorbate.helpers import resolve_fragment_anchor_and_bond_axis
-from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
+from scgo.cluster_adsorbate.placement import (
+    place_fragment_on_cluster,
+    place_fragments_on_core,
+)
 from scgo.cluster_adsorbate.sites import get_or_compute_surface_site_candidates
 from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization import (
@@ -34,7 +37,7 @@ from scgo.system_types import (
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import format_count_summary
 from scgo.utils.rng_helpers import create_child_rng
-from scgo.utils.site_counts import increment_site_type_count
+from scgo.utils.site_counts import record_site_type
 
 logger = get_logger(__name__)
 
@@ -54,7 +57,7 @@ def _place_fragments_on_core(
     rng: Generator,
     ca: ClusterAdsorbateConfig,
     anchor: int,
-    bond_axis: tuple[float, float, float] | None,
+    bond_axis: tuple[int, int] | None,
     batch_site_counts: dict[str, int] | None,
 ) -> tuple[Atoms, list[str]] | None:
     """Place every fragment onto a single core.
@@ -66,45 +69,24 @@ def _place_fragments_on_core(
         The combined structure and its per-fragment site types, or ``None`` if
         any fragment cannot be placed (the caller should retry on a fresh core).
     """
-    combined = core
-    precomputed_sites = get_or_compute_surface_site_candidates(core)
-    within_structure_site_counts: dict[str, int] = {}
-    site_types: list[str] = []
-    for frag_tmpl in fragments:
-        frag_metadata: dict[str, str] = {}
-        frag = place_fragment_on_cluster(
-            core,
-            frag_tmpl,
-            rng,
-            ca,
-            anchor_index=anchor,
-            bond_axis=bond_axis,
-            within_structure_site_counts=within_structure_site_counts,
-            batch_site_counts=batch_site_counts,
-            placement_metadata=frag_metadata,
-            site_core=core,
-            clash_atoms=combined,
-            site_candidates=precomputed_sites,
-        )
-        if frag is None:
-            return None
-        site_types.append(frag_metadata.get("site_type", "directional_fallback"))
-        combined = combine_core_adsorbate(combined, frag)
+    placed = place_fragments_on_core(
+        core,
+        fragments,
+        rng,
+        ca,
+        anchor_index=anchor,
+        bond_axis=bond_axis,
+        site_candidates=get_or_compute_surface_site_candidates(core),
+        clash_atoms_for=lambda mobile: mobile,
+        initial_mobile=core,
+        combine_mobile=combine_core_adsorbate,
+        batch_site_counts=batch_site_counts,
+    )
+    if placed is None:
+        return None
+    combined, site_types = placed
     _stamp_site_metadata(combined, site_types)
     return combined, site_types
-
-
-def _record_batch_site_type(
-    batch_site_counts: dict[str, int] | None, site_types: list[str]
-) -> None:
-    """Count one structure against its representative (last placed) site type.
-
-    Matches the surface deposition batch, which counts the single
-    ``adsorbate_site_type`` tag stamped on each accepted structure.
-    """
-    if batch_site_counts is None or not site_types:
-        return
-    increment_site_type_count(batch_site_counts, site_types[-1])
 
 
 def build_adsorbate_only_cluster(
@@ -170,6 +152,8 @@ def build_adsorbate_only_cluster(
             site_core = combined
         if all_ok:
             _stamp_site_metadata(combined, site_types)
+            if site_types:
+                record_site_type(batch_site_counts, site_types[-1])
             return combined
     logger.debug(
         "Reached max_placement_attempts=%s in build_adsorbate_only_cluster",
@@ -388,7 +372,8 @@ def build_hierarchical_core_fragment_cluster_batch(
         if placed is None:
             continue
         combined, site_types = placed
-        _record_batch_site_type(batch_site_counts, site_types)
+        if site_types:
+            record_site_type(batch_site_counts, site_types[-1])
         results.append(combined)
 
     if len(results) < n_structures:

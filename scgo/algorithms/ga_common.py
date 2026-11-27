@@ -7,7 +7,6 @@ search) to reduce duplication.
 
 from __future__ import annotations
 
-import logging
 import math
 import typing
 
@@ -73,6 +72,7 @@ from scgo.system_types import (
     AdsorbateFragmentInput,
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
+    StructureValidationPolicy,
     SystemType,
     get_system_policy,
     uses_surface,
@@ -103,7 +103,7 @@ from scgo.utils.rng_helpers import (
     ensure_rng_or_create,
     get_child_rng_or_none,
 )
-from scgo.utils.site_counts import increment_site_type_count
+from scgo.utils.site_counts import record_site_type
 from scgo.utils.validation import (
     validate_in_range,
     validate_integer,
@@ -348,14 +348,7 @@ def validate_structure_for_ga_storage(
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: (
-        ConnectivityFactorInput | NormalizedConnectivityFactor | None
-    ) = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
-    n_slab_deposit: int | None = None,
+    validation: StructureValidationPolicy | None = None,
 ) -> str | None:
     """Validate ``atoms`` in the GA database storage frame.
 
@@ -366,8 +359,8 @@ def validate_structure_for_ga_storage(
 
     ``n_slab`` is the full slab prefix used for canonicalization, symbol
     matching, and adsorbate tag partition. For slab-as-search-target systems
-    pass ``n_slab_deposit`` as the frozen prefix so deposit/connectivity sees
-    the search-mobile region (top layers + adsorbate).
+    set ``validation.n_slab_deposit`` to the frozen prefix so
+    deposit/connectivity sees the search-mobile region (top layers + adsorbate).
 
     All TorchSim GA code paths that assign ``ga_eligible`` after relaxation
     (or before initial unrelaxed insert) must use this helper so pre- and
@@ -385,12 +378,7 @@ def validate_structure_for_ga_storage(
             surface_config=surface_config,
             n_slab=n_slab if surface_mode else None,
             adsorbate_definition=adsorbate_definition,
-            connectivity_factor=connectivity_factor,
-            cluster_adsorbate_config=cluster_adsorbate_config,
-            allow_cluster_fragmentation=allow_cluster_fragmentation,
-            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-            n_slab_deposit=n_slab_deposit,
+            validation=validation,
         )
     except (ValueError, SCGOValidationError) as exc:
         return str(exc)
@@ -732,7 +720,7 @@ class ClusterStartGenerator(StartGenerator):
                         "increase max_hierarchical_attempts or relax ClusterAdsorbateConfig."
                     )
                 site_type = get_tag(atoms, "adsorbate_site_type")
-                increment_site_type_count(self._batch_site_type_counts, site_type)
+                record_site_type(self._batch_site_type_counts, site_type)
             else:
                 atoms = create_initial_cluster(
                     self.composition,
@@ -846,7 +834,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
                     "increase max_placement_attempts or height range."
                 )
             site_type = get_tag(atoms, "adsorbate_site_type")
-            increment_site_type_count(self._batch_site_type_counts, site_type)
+            record_site_type(self._batch_site_type_counts, site_type)
 
         if self.calculator is not None:
             atoms.calc = self.calculator
@@ -936,7 +924,8 @@ def create_ga_pairing(
         slab_atoms: If provided, real slab atoms for adsorbate GA (non-empty).
             If None, an empty slab with the template cell/pbc is used (gas-phase GA).
         composition, adsorbate_definition: If both set for a two-block ``*_adsorbate``
-            run, pairing uses ``use_tags`` (rigid core/fragment groups).
+            run, pairing uses ``use_tags``. Cluster adsorbate types also set
+            ``split_core_tag`` (per-atom core cuts; rigid adsorbate fragments).
         exploratory_crossover_probability: When > 0 and exploratory ``minfrac``
             differs from the primary, a dual wrapper uses this probability to
             pick the more asymmetric cut-and-splice variant.
@@ -1013,6 +1002,9 @@ def create_ga_pairing(
             else:
                 pairing_target_tags = None
 
+    # Cluster adsorbate: per-atom core cuts. surface_adsorbate keeps ads-only targets.
+    split_core_tag = use_partition_tags and pairing_target_tags is None
+
     def _cut_and_splice(
         minfrac: float,
         *,
@@ -1030,6 +1022,7 @@ def create_ga_pairing(
             target_tags=pairing_target_tags,
             prefer_unbalanced=prefer_unbalanced,
             surface_normal_axis=surface_normal_axis,
+            split_core_tag=split_core_tag,
         )
 
     expl_minfrac = (
@@ -1133,6 +1126,40 @@ def unmatched_operator_weight_keys(
         if spec is not None:
             covered.add(spec[0])
     return sorted(key for key in operator_weights if key not in covered)
+
+
+def _partitioned_mutation_kwargs_skeleton(
+    *,
+    blmin,
+    n_top: int,
+    system_type: SystemType,
+    rng,
+    surface_normal_axis: int,
+    **extra: typing.Any,
+) -> dict[str, typing.Any]:
+    """Shared constructor kwargs for surface-cluster partitioned mutations."""
+    kw: dict[str, typing.Any] = {
+        "blmin": blmin,
+        "n_top": n_top,
+        "system_type": system_type,
+        "rng": get_child_rng_or_none(rng),
+        "surface_normal_axis": surface_normal_axis,
+    }
+    kw.update(extra)
+    return kw
+
+
+def _apply_partition_variant_target_tags(
+    kw: dict[str, typing.Any],
+    variant: str,
+    *,
+    ads_tags: list[int],
+) -> dict[str, typing.Any]:
+    if variant == "core":
+        kw = {**kw, "target_tags": [0]}
+    elif variant == "ads":
+        kw = {**kw, "target_tags": ads_tags}
+    return kw
 
 
 def _append_partitioned_mutation(
@@ -1328,20 +1355,16 @@ def create_mutation_operators(
     if use_adaptive and include_cluster_shape_ops:
 
         def _flattening_kwargs(variant: str) -> dict[str, typing.Any]:
-            kw: dict[str, typing.Any] = {
-                "blmin": blmin,
-                "n_top": n_to_optimize,
-                "thickness_factor": flattening_thickness_factor,
-                "rng": get_child_rng_or_none(rng),
-                "max_inner_attempts": flattening_max_inner_attempts,
-                "system_type": system_type,
-                "surface_normal_axis": surface_normal_axis,
-            }
-            if variant == "core":
-                kw["target_tags"] = [0]
-            elif variant == "ads":
-                kw["target_tags"] = ads_tags
-            return kw
+            kw = _partitioned_mutation_kwargs_skeleton(
+                blmin=blmin,
+                n_top=n_to_optimize,
+                system_type=system_type,
+                rng=rng,
+                surface_normal_axis=surface_normal_axis,
+                thickness_factor=flattening_thickness_factor,
+                max_inner_attempts=flattening_max_inner_attempts,
+            )
+            return _apply_partition_variant_target_tags(kw, variant, ads_tags=ads_tags)
 
         _append_partitioned_mutation(
             operators,
@@ -1405,21 +1428,17 @@ def create_mutation_operators(
                 scale = core_move_scale
             else:
                 scale = shared_move_scale
-            kw: dict[str, typing.Any] = {
-                "blmin": blmin,
-                "n_top": n_to_optimize,
-                "scale_min": 1.0 - (1.0 - breathing_scale_min) * scale,
-                "scale_max": 1.0 + (breathing_scale_max - 1.0) * scale,
-                "system_type": system_type,
-                "rng": get_child_rng_or_none(rng),
-                "max_inner_attempts": breathing_max_inner_attempts,
-                "surface_normal_axis": surface_normal_axis,
-            }
-            if variant == "core":
-                kw["target_tags"] = [0]
-            elif variant == "ads":
-                kw["target_tags"] = ads_tags
-            return kw
+            kw = _partitioned_mutation_kwargs_skeleton(
+                blmin=blmin,
+                n_top=n_to_optimize,
+                system_type=system_type,
+                rng=rng,
+                surface_normal_axis=surface_normal_axis,
+                scale_min=1.0 - (1.0 - breathing_scale_min) * scale,
+                scale_max=1.0 + (breathing_scale_max - 1.0) * scale,
+                max_inner_attempts=breathing_max_inner_attempts,
+            )
+            return _apply_partition_variant_target_tags(kw, variant, ads_tags=ads_tags)
 
         _append_partitioned_mutation(
             operators,
@@ -1436,20 +1455,16 @@ def create_mutation_operators(
         slide_max_disp = max(in_plane_slide_max_displacement, default_max_displacement)
 
         def _slide_kwargs(variant: str) -> dict[str, typing.Any]:
-            kw: dict[str, typing.Any] = {
-                "blmin": blmin,
-                "n_top": n_to_optimize,
-                "surface_normal_axis": surface_normal_axis,
-                "system_type": system_type,
-                "rng": get_child_rng_or_none(rng),
-                "max_inner_attempts": in_plane_slide_max_inner_attempts,
-                "max_displacement": slide_max_disp,
-            }
-            if variant == "core":
-                kw["target_tags"] = [0]
-            elif variant == "ads":
-                kw["target_tags"] = ads_tags
-            return kw
+            kw = _partitioned_mutation_kwargs_skeleton(
+                blmin=blmin,
+                n_top=n_to_optimize,
+                system_type=system_type,
+                rng=rng,
+                surface_normal_axis=surface_normal_axis,
+                max_inner_attempts=in_plane_slide_max_inner_attempts,
+                max_displacement=slide_max_disp,
+            )
+            return _apply_partition_variant_target_tags(kw, variant, ads_tags=ads_tags)
 
         if use_partition_tags:
             operators.append(InPlaneSlideMutation(**_slide_kwargs("plain")))
@@ -1543,24 +1558,42 @@ def reseed_mutation_operator_rngs(
         op.rng = create_child_rng(rng)
 
 
-def update_mutation_weights(
+def apply_adaptive_operator_params(
     operators_list: list,
     name_map: dict[str, int],
     adaptive_config: dict,
-    rng: Generator,
-) -> OperationSelector:
-    """Update operator weights without recreating operators.
+) -> None:
+    """Mutate rattle/permutation operator params from ``adaptive_config``."""
+    if "rattle" in name_map:
+        rattle_op = operators_list[name_map["rattle"]]
+        rattle_op.rattle_strength = adaptive_config["rattle_strength"]
+        rattle_op.rattle_prop = adaptive_config["rattle_prop"]
 
-    Args:
-        operators_list: List of operator instances.
-        name_map: Mapping from operator names to list indices.
-        adaptive_config: Config dict with operator_weights.
-        rng: Explicit RNG for reproducible operator selection. Required so
-            serial and parallel offspring paths never fall back to global state.
+    if "anisotropic_rattle" in name_map:
+        anisotropic_op = operators_list[name_map["anisotropic_rattle"]]
+        if "anisotropic_in_plane_strength" in adaptive_config:
+            anisotropic_op.in_plane_strength = adaptive_config[
+                "anisotropic_in_plane_strength"
+            ]
+        if "anisotropic_normal_strength" in adaptive_config:
+            anisotropic_op.normal_strength = adaptive_config[
+                "anisotropic_normal_strength"
+            ]
+        if "anisotropic_rattle_prop" in adaptive_config:
+            anisotropic_op.rattle_prop = adaptive_config["anisotropic_rattle_prop"]
 
-    Returns:
-        Updated OperationSelector with new weights.
-    """
+    if "permutation" in name_map and "permutation_probability" in adaptive_config:
+        operators_list[name_map["permutation"]].probability = float(
+            adaptive_config["permutation_probability"]
+        )
+
+
+def compute_mutation_weights(
+    operators_list: list,
+    name_map: dict[str, int],
+    adaptive_config: dict,
+) -> list[float]:
+    """Normalized (and credit-scaled) selector weights for ``operators_list``."""
     operator_weights = adaptive_config["operator_weights"]
     unmatched = unmatched_operator_weight_keys(operator_weights, name_map)
     if unmatched:
@@ -1579,12 +1612,12 @@ def update_mutation_weights(
     s = float(sum(weights))
     if s > 0.0:
         weights = [w / s for w in weights]
-        weights = scale_weights_by_operator_credit(
+        return scale_weights_by_operator_credit(
             weights,
             [index_to_name.get(i) for i in range(len(operators_list))],
             adaptive_config.get("operator_credit"),
         )
-    elif weights:
+    if weights:
         # All-zero (or negative) weights make OperationSelector.__get_index__
         # return None -> ``oplist[None]`` TypeError. Fall back to uniform.
         logger.warning(
@@ -1592,33 +1625,30 @@ def update_mutation_weights(
             "selection over %d operators",
             len(weights),
         )
-        weights = [1.0 / len(weights)] * len(weights)
+        return [1.0 / len(weights)] * len(weights)
+    return weights
 
-    if "rattle" in name_map:
-        rattle_idx: int = name_map["rattle"]
-        rattle_op = operators_list[rattle_idx]
-        rattle_op.rattle_strength = adaptive_config["rattle_strength"]
-        rattle_op.rattle_prop = adaptive_config["rattle_prop"]
 
-    if "anisotropic_rattle" in name_map:
-        anisotropic_idx: int = name_map["anisotropic_rattle"]
-        anisotropic_op = operators_list[anisotropic_idx]
-        if "anisotropic_in_plane_strength" in adaptive_config:
-            anisotropic_op.in_plane_strength = adaptive_config[
-                "anisotropic_in_plane_strength"
-            ]
-        if "anisotropic_normal_strength" in adaptive_config:
-            anisotropic_op.normal_strength = adaptive_config[
-                "anisotropic_normal_strength"
-            ]
-        if "anisotropic_rattle_prop" in adaptive_config:
-            anisotropic_op.rattle_prop = adaptive_config["anisotropic_rattle_prop"]
+def update_mutation_weights(
+    operators_list: list,
+    name_map: dict[str, int],
+    adaptive_config: dict,
+    rng: Generator,
+) -> OperationSelector:
+    """Update operator weights without recreating operators.
 
-    if "permutation" in name_map and "permutation_probability" in adaptive_config:
-        operators_list[name_map["permutation"]].probability = float(
-            adaptive_config["permutation_probability"]
-        )
+    Args:
+        operators_list: List of operator instances.
+        name_map: Mapping from operator names to list indices.
+        adaptive_config: Config dict with operator_weights.
+        rng: Explicit RNG for reproducible operator selection. Required so
+            serial and parallel offspring paths never fall back to global state.
 
+    Returns:
+        Updated OperationSelector with new weights.
+    """
+    apply_adaptive_operator_params(operators_list, name_map, adaptive_config)
+    weights = compute_mutation_weights(operators_list, name_map, adaptive_config)
     return OperationSelector(weights, operators_list, rng=rng)
 
 
@@ -1823,16 +1853,14 @@ def setup_diversity_scorer(
             "diversity_reference_db is required when fitness_strategy='diversity'"
         )
 
-    if logger.isEnabledFor(logging.INFO):
-        logger.info("Loading reference structures from: %s", diversity_reference_db)
+    logger.info("Loading reference structures from: %s", diversity_reference_db)
     with SCGODatabaseManager(base_dir=base_dir, enable_caching=True) as db_manager:
         reference_structures: list[Atoms] = db_manager.load_reference_structures(
             db_glob_pattern=diversity_reference_db,
             composition=composition,
             max_structures=diversity_max_references,
         )
-    if logger.isEnabledFor(logging.INFO):
-        logger.info("Loaded %d reference structures", len(reference_structures))
+    logger.info("Loaded %d reference structures", len(reference_structures))
 
     if not reference_structures:
         raise SCGOValidationError(
@@ -1907,9 +1935,8 @@ def log_early_stopping_info(
 
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
-    if logger.isEnabledFor(logging.INFO):
-        logger.info("Starting GA evolution with %d generations", niter)
-        logger.info("Using fitness_strategy='%s'", fitness_strategy)
+    logger.info("Starting GA evolution with %d generations", niter)
+    logger.info("Using fitness_strategy='%s'", fitness_strategy)
     if early_stopping_niter > 0:
         stopping_metric: str = (
             "fitness" if fitness_strategy != FitnessStrategy.LOW_ENERGY else "energy"

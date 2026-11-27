@@ -40,6 +40,7 @@ from scipy.spatial.distance import cdist
 
 from scgo.database.cache import get_global_cache
 from scgo.exceptions import (
+    SCGORuntimeError,
     SCGOValidationError,
 )
 from scgo.system_types.connectivity_factor import (
@@ -50,6 +51,11 @@ from scgo.system_types.connectivity_factor import (
     connectivity_factor_cache_key,
     effective_clash_factor,
     normalize_connectivity_factor,
+)
+from scgo.utils.geometry_math import (
+    random_unit_vector,
+    rotate_positions_about_point,
+    rotation_matrix_axis_angle,
 )
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
@@ -63,7 +69,6 @@ from .geometry_helpers import (
     _compute_composition_delta,
     _cycle_composition_to_length,
     _generate_batch_positions_on_convex_hull,
-    _generate_rotation_matrix,
     _identify_safe_removal_candidates,
     _set_cubic_cell_and_center,
     _validate_cluster_defaults,
@@ -134,14 +139,14 @@ def _get_or_create_rotated_variants(
 
     rotation_candidates = []
     for _ in range(TEMPLATE_ROTATION_CANDIDATES):
-        axis = rotation_rng.standard_normal(3)
-        axis /= np.linalg.norm(axis)
+        axis = random_unit_vector(rotation_rng)
         angle = rotation_rng.uniform(0, 2 * np.pi)
-        R = _generate_rotation_matrix(axis, angle)
+        R = rotation_matrix_axis_angle(axis, angle)
 
         rotated = selected.copy()
-        positions = rotated.get_positions()
-        rotated.set_positions(center + (positions - center) @ R.T)
+        rotated.set_positions(
+            rotate_positions_about_point(rotated.get_positions(), center, R)
+        )
         rotation_candidates.append(rotated)
 
     # Store in cache for future use
@@ -458,7 +463,7 @@ def remove_atoms_from_vertices(
 
         if target_composition is not None:
             if final_counts is None:
-                raise TypeError(
+                raise SCGORuntimeError(
                     "final_counts must not be None when target_composition is set"
                 )
             current_counts: Counter[str] = get_composition_counts(symbols)
@@ -481,7 +486,7 @@ def remove_atoms_from_vertices(
         if target_composition is not None:
             remove_indices = []
             if remove_counts is None:
-                raise TypeError(
+                raise SCGORuntimeError(
                     "remove_counts must not be None when target_composition is set"
                 )
             for el, count in remove_counts.items():
@@ -719,7 +724,7 @@ def grow_template_via_facets(
                 len(to_add),
             )
             continue
-        elif placed_count == 0 and to_add:
+        if placed_count == 0 and to_add:
             logger.debug(
                 "grow_template_via_facets: failed to place any atoms after %s retries, candidates=%s, to_add=%s (discovery failure: candidate discarded; not a per-structure fallback)",
                 max_round_retries,
@@ -727,8 +732,6 @@ def grow_template_via_facets(
                 len(to_add),
             )
             return None
-
-        round_retry_count = 0
 
         is_valid, err = _validate_cluster_defaults(
             current,
@@ -1086,8 +1089,6 @@ def _set_template_info(atoms: Atoms, template_name: str) -> None:
         atoms: The Atoms object to set info on
         template_name: Name of template type (e.g., "icosahedron")
     """
-    if atoms.info is None:
-        atoms.info = {}
     atoms.info["template_type"] = template_name
 
 
@@ -1766,14 +1767,13 @@ def _validate_and_add_template(
         validated_atoms.info["scgo_validation_complete"] = True
         results.append(validated_atoms)
         return True
-    else:
-        logger_instance.debug(
-            "Template validation failed for %s %s: %s",
-            template_type,
-            template_description,
-            error_message or "unknown validation error",
-        )
-        return False
+    logger_instance.debug(
+        "Template validation failed for %s %s: %s",
+        template_type,
+        template_description,
+        error_message or "unknown validation error",
+    )
+    return False
 
 
 def generate_template_matches(

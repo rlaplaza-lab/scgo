@@ -12,9 +12,10 @@ from ase.optimize import FIRE
 
 from scgo.calculators import torchsim_helpers as _tsh
 from scgo.constants import DEFAULT_FMAX_THRESHOLD
-from scgo.exceptions import SCGORuntimeError, SCGOValidationError
+from scgo.exceptions import SCGOValidationError
+from scgo.ts_search.force_batch import forces_from_torchsim_batch
 from scgo.utils.cuda import is_cuda_oom_error
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_debug_v, log_info_v
 from scgo.utils.phase_logging import log_neb_search_summaries
 from scgo.utils.run_helpers import cleanup_torch_cuda
 from scgo.utils.ts_runner_kwargs import NebRunConfig
@@ -31,15 +32,15 @@ from .transition_state import (
     _finalize_neb_result,
     _image_has_cached_forces,
     _image_potential_energy,
-    attach_minima_traceability,
     attach_singlepoint_from_relax_output,
     evaluate_neb_image_energies,
     interpolate_path,
-    load_completed_neb_result,
-    make_ts_result,
+    make_ts_result_from_config,
     neb_max_atom_force,
     neb_stage2_step_budget,
     neb_uses_two_stage_climb,
+    record_pair_result,
+    resume_completed_pair,
     save_neb_result,
     validate_initial_neb_energy_profile,
     validate_initial_neb_path,
@@ -48,7 +49,16 @@ from .transition_state import (
 if TYPE_CHECKING:
     from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 
+_MISSING_PAIR_RESULT = "Parallel NEB produced a missing pair result"
+
 logger = get_logger(__name__)
+
+
+def normalize_parallel_neb_band_cap(parallel_neb_max_bands: int | None) -> int | None:
+    """Return a positive int band cap, or ``None`` when disabled."""
+    if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0:
+        return int(parallel_neb_max_bands)
+    return None
 
 
 def _neb_image_dedup_key(atoms: Atoms) -> tuple:
@@ -118,6 +128,26 @@ def _apply_band_cap(chunks: list[list[int]], band_cap: int | None) -> list[list[
     return capped
 
 
+def _oom_half_budget_sub_chunks(
+    chunk: list[int],
+    band_costs: list[int],
+    exc: BaseException,
+    *,
+    label: str,
+) -> list[list[int]]:
+    """Log CUDA OOM, free GPU memory, and re-bin ``chunk`` at half its atom cost."""
+    logger.warning(
+        "%s hit CUDA OOM for %d band(s) (%s); retrying once at half the chunk atom cost",
+        label,
+        len(chunk),
+        exc,
+    )
+    cleanup_torch_cuda(logger=logger)
+    chunk_atoms = sum(band_costs[i] for i in chunk)
+    retry_budget = max(1, chunk_atoms // 2)
+    return chunk_band_indices_by_atom_budget(chunk, band_costs, retry_budget)
+
+
 def _stage1_band_climb_eligible(summary: dict[str, Any]) -> bool:
     """True when stage-1 should climb: steps>0 and ``failed`` is explicitly False."""
     if int(summary.get("steps_taken") or 0) <= 0:
@@ -171,17 +201,8 @@ def _evaluate_bands_in_chunks(
         except (RuntimeError, MemoryError) as exc:
             if not is_cuda_oom_error(exc):
                 raise
-            logger.warning(
-                "Pre-screen energy eval hit CUDA OOM for %d band(s) (%s); "
-                "retrying once at half the chunk atom cost",
-                len(chunk),
-                exc,
-            )
-            cleanup_torch_cuda(logger=logger)
-            chunk_atoms = sum(band_costs[i] for i in chunk)
-            retry_budget = max(1, chunk_atoms // 2)
-            for sub_chunk in chunk_band_indices_by_atom_budget(
-                chunk, band_costs, retry_budget
+            for sub_chunk in _oom_half_budget_sub_chunks(
+                chunk, band_costs, exc, label="Pre-screen energy eval"
             ):
                 _run_chunk(sub_chunk)
 
@@ -598,19 +619,10 @@ def run_parallel_neb_search(
         prod_e: float,
         error: str | None = None,
     ) -> dict[str, Any]:
-        return make_ts_result(
+        return make_ts_result_from_config(
+            neb_cfg,
             pair_id=pair_id,
-            n_images=neb_cfg.neb_n_images,
-            spring_constant=neb_cfg.neb_spring_constant,
             use_torchsim=True,
-            fmax=neb_cfg.neb_fmax,
-            neb_steps=neb_cfg.neb_steps,
-            interpolation_method=neb_cfg.neb_interpolation_method,
-            climb=neb_cfg.neb_climb,
-            align_endpoints=neb_cfg.neb_align_endpoints,
-            perturb_sigma=neb_cfg.neb_perturb_sigma,
-            neb_interpolation_mic=neb_cfg.neb_interpolation_mic,
-            neb_tangent_method=neb_cfg.neb_tangent_method,
             use_parallel_neb=True,
             reactant_energy=react_e,
             product_energy=prod_e,
@@ -630,11 +642,17 @@ def run_parallel_neb_search(
             pair_id, react_e=react_e, prod_e=prod_e, error=error
         )
         skipped["status"] = "skipped"
-        skipped["system_type"] = system_type
-        attach_minima_traceability(skipped, minima, i, j)
-        pair_dir = run_dir / f"pair_{pair_id}"
-        pair_dir.mkdir(parents=True, exist_ok=True)
-        save_neb_result(skipped, str(pair_dir), pair_id, verbosity=verbosity)
+        record_pair_result(
+            skipped,
+            minima,
+            i,
+            j,
+            pair_dir=run_dir / f"pair_{pair_id}",
+            pair_id=pair_id,
+            system_type=system_type,
+            verbosity=verbosity,
+            save_fn=save_neb_result,
+        )
         pair_results[pair_ord] = skipped
 
     # Build NEB instances for every valid pair first; defer the per-band single-point
@@ -643,12 +661,16 @@ def run_parallel_neb_search(
     for pair_ord, (i, j) in enumerate(pairs):
         pair_id = f"{i}_{j}"
         pair_dir = run_dir / f"pair_{pair_id}"
-        resumed = load_completed_neb_result(pair_dir, pair_id)
+        resumed = resume_completed_pair(
+            pair_dir, pair_id, minima, i, j, system_type=system_type
+        )
         if resumed is not None:
-            logger.info("Skipping pair %s (resumed success)", pair_id)
-            resumed["system_type"] = system_type
-            if "minima_indices" not in resumed:
-                attach_minima_traceability(resumed, minima, i, j)
+            log_debug_v(
+                logger,
+                "Skipping pair %s (resumed success)",
+                pair_id,
+                verbosity=verbosity,
+            )
             pair_results[pair_ord] = resumed
             continue
 
@@ -723,12 +745,7 @@ def run_parallel_neb_search(
             else:
                 need_eval_indices.append(setup_i)
         if need_eval_indices:
-            prescreen_band_cap = (
-                int(parallel_neb_max_bands)
-                if parallel_neb_max_bands is not None
-                and int(parallel_neb_max_bands) > 0
-                else None
-            )
+            prescreen_band_cap = normalize_parallel_neb_band_cap(parallel_neb_max_bands)
             evaluated = _evaluate_bands_in_chunks(
                 [setup_pairs[i][6] for i in need_eval_indices],
                 relaxer,
@@ -811,7 +828,7 @@ def run_parallel_neb_search(
         summary = batch_results[neb_idx]
         result = pair_results[pair_ord]
         if result is None:
-            raise SCGOValidationError("Parallel NEB produced a missing pair result")
+            raise SCGOValidationError(_MISSING_PAIR_RESULT)
         result["neb_converged"] = bool(summary.get("converged", False))
         result["error"] = summary.get("error")
         result["final_fmax"] = summary.get("final_fmax")
@@ -844,18 +861,7 @@ def run_parallel_neb_search(
             try:
 
                 def _force_fn(displaced: list[Atoms]) -> list[np.ndarray]:
-                    batch = relaxer.relax_batch(displaced, steps=0)
-                    forces_out: list[np.ndarray] = []
-                    for _energy, relaxed_atoms in batch:
-                        forces = relaxed_atoms.arrays.get("forces")
-                        if forces is None and relaxed_atoms.calc is not None:
-                            forces = relaxed_atoms.get_forces()
-                        if forces is None:
-                            raise SCGORuntimeError(
-                                "TorchSim relax_batch did not return forces for Hessian"
-                            )
-                        forces_out.append(np.asarray(forces, dtype=float))
-                    return forces_out
+                    return forces_from_torchsim_batch(relaxer, displaced)
 
                 _finalize_neb_result(
                     result,
@@ -879,11 +885,18 @@ def run_parallel_neb_search(
                 result.get("pair_id"),
             )
 
-        attach_minima_traceability(result, minima, i, j)
         pair_id = str(result["pair_id"])
-        pair_dir = run_dir / f"pair_{pair_id}"
-        pair_dir.mkdir(parents=True, exist_ok=True)
-        save_neb_result(result, str(pair_dir), pair_id, verbosity=verbosity)
+        record_pair_result(
+            result,
+            minima,
+            i,
+            j,
+            pair_dir=run_dir / f"pair_{pair_id}",
+            pair_id=pair_id,
+            system_type=system_type,
+            verbosity=verbosity,
+            save_fn=save_neb_result,
+        )
 
     if neb_instances:
         t_batch0 = perf_counter()
@@ -896,27 +909,27 @@ def run_parallel_neb_search(
             }
             for _ in neb_instances
         ]
-        band_cap = (
-            int(parallel_neb_max_bands)
-            if parallel_neb_max_bands is not None and int(parallel_neb_max_bands) > 0
-            else None
-        )
+        band_cap = normalize_parallel_neb_band_cap(parallel_neb_max_bands)
         band_costs = [_band_atom_cost(neb) for neb in neb_instances]
         atom_budget = neb_cfg.parallel_neb_max_batch_atoms
         if band_cap is not None and band_cap < len(neb_instances):
-            logger.info(
+            log_info_v(
+                logger,
                 "Parallel NEB concurrency capped at %d band(s) "
                 "(%d total; explicit parallel_neb_max_bands override)",
                 band_cap,
                 len(neb_instances),
+                verbosity=verbosity,
             )
         if atom_budget is not None and int(atom_budget) > 0:
-            logger.info(
+            log_info_v(
+                logger,
                 "Parallel NEB chunking by atom budget: %d atoms/force-batch "
                 "(%d band(s), costs %s)",
                 int(atom_budget),
                 len(neb_instances),
                 band_costs,
+                verbosity=verbosity,
             )
 
         def _chunk_indices(
@@ -960,19 +973,11 @@ def run_parallel_neb_search(
             except (RuntimeError, MemoryError) as exc:
                 if not is_cuda_oom_error(exc):
                     raise
-                logger.warning(
-                    "Parallel NEB chunk of %d band(s) hit CUDA OOM (%s); "
-                    "retrying once at half the chunk atom cost",
-                    len(chunk),
-                    exc,
+                sub_chunks = _oom_half_budget_sub_chunks(
+                    chunk, band_costs, exc, label="Parallel NEB chunk"
                 )
-            cleanup_torch_cuda(logger=logger)
-            chunk_atoms = sum(band_costs[i] for i in chunk)
-            retry_budget = max(1, chunk_atoms // 2)
             summaries: dict[int, dict[str, Any]] = {}
-            for sub_chunk in chunk_band_indices_by_atom_budget(
-                chunk, band_costs, retry_budget
-            ):
+            for sub_chunk in sub_chunks:
                 try:
                     sub_results = _run_chunk(
                         sub_chunk,
@@ -1101,7 +1106,7 @@ def run_parallel_neb_search(
     for pair_ord, _i, _j in neb_meta:
         result = pair_results[pair_ord]
         if result is None:
-            raise SCGOValidationError("Parallel NEB produced a missing pair result")
+            raise SCGOValidationError(_MISSING_PAIR_RESULT)
         result["timings_s"] = {
             "kind": "neb",
             "total_wall_avg_s": wall_each,
@@ -1114,7 +1119,7 @@ def run_parallel_neb_search(
         "parallel_wall_s": wall_total,
     }
     if not all(r is not None for r in pair_results):
-        raise SCGOValidationError("Parallel NEB produced a missing pair result")
+        raise SCGOValidationError(_MISSING_PAIR_RESULT)
     results: list[dict[str, Any]] = [r for r in pair_results if r is not None]
     log_neb_search_summaries(logger, results, verbosity=verbosity, run_dir=str(run_dir))
     return results, meta

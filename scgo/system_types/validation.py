@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 from ase import Atoms
 
@@ -30,9 +28,8 @@ from scgo.system_types.policy import (
     resolve_connectivity_factor,
     resolve_structure_mic,
 )
-
-if TYPE_CHECKING:
-    from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
+from scgo.system_types.structure_validation import StructureValidationPolicy
+from scgo.utils.messages import validation_context_prefix
 
 
 def _not_connected_message(n_components: int) -> str:
@@ -255,15 +252,7 @@ def validate_structure_for_system_type(
     surface_config: SurfaceSystemConfig | None = None,
     n_slab: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: ConnectivityFactorInput
-    | NormalizedConnectivityFactor
-    | None = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
-    binding_penetration_tolerance_a: float = 0.1,
-    n_slab_deposit: int | None = None,
+    validation: StructureValidationPolicy | None = None,
 ) -> None:
     """Apply system-type-specific structural validation.
 
@@ -277,26 +266,11 @@ def validate_structure_for_system_type(
         surface_config: Surface configuration (for surface systems)
         n_slab: Number of slab atoms (for surface systems)
         adsorbate_definition: Adsorbate definition (for adsorbate systems)
-        connectivity_factor: Explicit connectivity factor (float or per-element/pair
-            dict), used verbatim when not None. Otherwise resolved from
-            ``cluster_adsorbate_config`` then ``surface_config`` then the module
-            default (precedence matches :func:`resolve_connectivity_factor`).
-        cluster_adsorbate_config: Per-config connectivity factor source. When
-            ``connectivity_factor`` is None, its ``structure_connectivity_factor``
-            is honored (overriding ``surface_config``).
-        allow_cluster_fragmentation: For surface systems, allow multiple disconnected
-            core-bearing mobile subgroups (each must touch the slab).
-        allow_adsorbate_surface_detachment: For surface systems, allow adsorbate-only
-            mobile subgroups on the slab without cluster contact (requires exactly
-            one core/mixed subgroup when fragmentation is disabled).
-        enforce_adsorbate_subgraph_integrity: When True, require each adsorbate
-            fragment to remain internally connected.
-        n_slab_deposit: Frozen-prefix length for slab-as-search-target deposit
-            and connectivity checks. Tag partition and mobile-symbol matching
-            still use ``n_slab`` (the full slab). When the search-mobile region
-            includes original top-layer atoms, slab contact follows the
-            template: covalent if the template layers covalently bind, otherwise
-            van der Waals stacking derived from the template interlayer.
+        validation: Connectivity factor, fragmentation flags, penetration
+            tolerance, and ``n_slab_deposit``. ``None`` uses the policy defaults.
+            ``n_slab_deposit`` is the frozen-prefix length for slab-as-search-target
+            deposit and connectivity checks. Tag partition and mobile-symbol
+            matching still use ``n_slab`` (the full slab).
     """
     # Lazy on purpose: surface.validation top-imports validate_connectivity_policy
     # from this package; hoisting both sides would recreate a two-module cycle.
@@ -308,6 +282,12 @@ def validate_structure_for_system_type(
         validate_supported_cluster_deposit,
         validate_surface_config_slab_prefix,
     )
+
+    flags = validation if validation is not None else StructureValidationPolicy()
+    connectivity_factor = flags.connectivity_factor
+    cluster_adsorbate_config = flags.cluster_adsorbate_config
+    enforce_adsorbate_subgraph_integrity = flags.enforce_adsorbate_subgraph_integrity
+    n_slab_deposit = flags.n_slab_deposit
 
     policy = get_system_policy(system_type)
     cf = resolve_connectivity_factor(
@@ -365,10 +345,7 @@ def validate_structure_for_system_type(
                     if adsorbate_definition is not None
                     else None
                 ),
-                allow_cluster_fragmentation=allow_cluster_fragmentation,
-                allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-                enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-                binding_penetration_tolerance_a=binding_penetration_tolerance_a,
+                validation=flags,
                 slab_stacking_cutoff_a=stacking_cutoff,
             )
             if not ok:
@@ -494,15 +471,7 @@ def validate_minimum_structure(
     surface_config: SurfaceSystemConfig | None = None,
     n_slab: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
-    connectivity_factor: ConnectivityFactorInput
-    | NormalizedConnectivityFactor
-    | None = None,
-    cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-    allow_cluster_fragmentation: bool = False,
-    allow_adsorbate_surface_detachment: bool = False,
-    enforce_adsorbate_subgraph_integrity: bool = True,
-    binding_penetration_tolerance_a: float = 0.1,
-    n_slab_deposit: int | None = None,
+    validation: StructureValidationPolicy | None = None,
 ) -> None:
     """Shared structural gate for every global-optimization minimum.
 
@@ -520,13 +489,7 @@ def validate_minimum_structure(
         surface_config=surface_config,
         n_slab=n_slab,
         adsorbate_definition=adsorbate_definition,
-        connectivity_factor=connectivity_factor,
-        cluster_adsorbate_config=cluster_adsorbate_config,
-        allow_cluster_fragmentation=allow_cluster_fragmentation,
-        allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
-        enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
-        binding_penetration_tolerance_a=binding_penetration_tolerance_a,
-        n_slab_deposit=n_slab_deposit,
+        validation=validation,
     )
 
     if (
@@ -550,7 +513,7 @@ def _validate_input_adsorbate_fragments_connected(
     | None = None,
 ) -> None:
     """Ensure each provided input adsorbate fragment is internally connected."""
-    prefix = f"{context}: " if context else ""
+    prefix = validation_context_prefix(context)
     factor = CONNECTIVITY_FACTOR if connectivity_factor is None else connectivity_factor
     for idx, frag in enumerate(adsorbates):
         if len(frag) <= 1:

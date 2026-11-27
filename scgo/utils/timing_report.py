@@ -24,6 +24,7 @@ from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.metadata.provenance import output_json_provenance
+from scgo.utils.atomic_json import atomic_write_json
 from scgo.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +45,11 @@ _DB_IO_SUM_KEYS: tuple[str, ...] = (
 )
 
 
+def accumulate_timing(timings: dict[str, float], key: str, delta: float) -> None:
+    """Add ``delta`` seconds to ``timings[key]`` (creating the key if needed)."""
+    timings[key] = float(timings.get(key, 0.0)) + float(delta)
+
+
 def ga_relax_seconds_from_timings(timings: dict[str, float]) -> float:
     """Total MLIP relax wall time for TorchSim GA (initial + offspring batches)."""
     if "local_relaxation_s" in timings and "relax_batch_s" not in timings:
@@ -53,28 +59,36 @@ def ga_relax_seconds_from_timings(timings: dict[str, float]) -> float:
     )
 
 
-# Discriminate the relax/NEB extractor by the payload's ``kind`` so each runner
-# reports its own wall-time semantics without guessing from magic keys.
+def neb_seconds_from_pair_timings(timings: dict[str, Any]) -> float:
+    """Return a pair's NEB wall time from serial or parallel timing keys.
+
+    Serial NEB records a true per-pair ``neb_optimization_s``. Parallel NEB
+    records ``neb_optimization_avg_s`` (chunk wall time divided across the
+    pairs in the chunk), so summing it across a chunk recovers the chunk time.
+    """
+    if "neb_optimization_s" in timings:
+        return float(timings.get("neb_optimization_s", 0.0))
+    return float(timings.get("neb_optimization_avg_s", 0.0))
+
+
+# Per-kind extractors. ``neb`` uses key presence (not ``or``) so a stored 0.0 is kept.
 _RELAX_SECONDS_EXTRACTORS: dict[str, Callable[[dict], float]] = {
     "ga": ga_relax_seconds_from_timings,
     "bh": ga_relax_seconds_from_timings,
-    "neb": lambda t: (
-        float(t.get("neb_optimization_s", 0.0))
-        or float(t.get("neb_optimization_avg_s", 0.0))
-    ),
+    "neb": neb_seconds_from_pair_timings,
     "go_ts": lambda t: (
         float(t.get("go_phase_s", 0.0)) + float(t.get("ts_neb_sum_s", 0.0))
     ),
 }
 
 
-def relax_seconds_from_timings(timings: dict[str, float]) -> float:
+def relax_seconds_from_timings(timings: dict[str, Any]) -> float:
     """Return total relax/NEB wall time, dispatched by the payload ``kind``.
 
     The discriminator is one of ``"ga"``, ``"bh"``, ``"neb"``, ``"go_ts"``.
     """
     kind = timings.get("kind")
-    if kind is None:
+    if not isinstance(kind, str):
         raise SCGOValidationError(
             "Timing payload is missing the required 'kind' discriminator "
             "(expected one of 'ga', 'bh', 'neb', 'go_ts')."
@@ -128,9 +142,7 @@ def write_timing_file(
 ) -> str:
     name = filename if filename is not None else TIMING_JSON_FILENAME
     path = os.path.join(output_dir, name)
-    os.makedirs(output_dir, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    atomic_write_json(path, payload)
     return path
 
 
@@ -205,18 +217,6 @@ def emit_timing_data(
             timing_output_dir if timing_output_dir is not None else output_dir,
             payload,
         )
-
-
-def neb_seconds_from_pair_timings(timings: dict[str, Any]) -> float:
-    """Return a pair's NEB wall time from serial or parallel timing keys.
-
-    Serial NEB records a true per-pair ``neb_optimization_s``. Parallel NEB
-    records ``neb_optimization_avg_s`` (chunk wall time divided across the
-    pairs in the chunk), so summing it across a chunk recovers the chunk time.
-    """
-    if "neb_optimization_s" in timings:
-        return float(timings.get("neb_optimization_s", 0.0))
-    return float(timings.get("neb_optimization_avg_s", 0.0))
 
 
 def sum_neb_seconds_from_ts_results(

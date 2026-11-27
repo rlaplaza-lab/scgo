@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import fcc111
-from ase.ga.utilities import get_all_atom_types
+from ase_ga.utilities import get_all_atom_types
 
 from scgo.algorithms.ga_common import (
     setup_diversity_scorer,
@@ -19,7 +19,11 @@ from scgo.surface.validation import (
     _STACKING_GAP_RUMPLE_FACTOR,
     layer_stacking_cutoff_from_template,
 )
-from scgo.system_types import AdsorbateDefinition, validate_structure_for_system_type
+from scgo.system_types import (
+    AdsorbateDefinition,
+    StructureValidationPolicy,
+    validate_structure_for_system_type,
+)
 from scgo.utils.logging import get_logger
 
 
@@ -38,7 +42,6 @@ def test_setup_diversity_scorer_uses_base_dir(tmp_path, rng, monkeypatch):
         a.info["key_value_pairs"] = {"raw_score": -30.0 - i}
         a.info["data"] = {"tag": f"test_{i}"}
         if i == 0:
-            a.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
             a.info.setdefault("key_value_pairs", {})["final_unique_minimum"] = True
         da.add_relaxed_step(a)
 
@@ -183,7 +186,7 @@ def test_ga_storage_slab_search_empty_core_uses_deposit_prefix() -> None:
         combined.copy(),
         surface_mode=True,
         n_slab=n_full,
-        n_slab_deposit=n_fixed,
+        validation=StructureValidationPolicy(n_slab_deposit=n_fixed),
         system_type="surface_adsorbate",
         surface_config=cfg,
         adsorbate_definition=ads,
@@ -224,7 +227,7 @@ def test_ga_storage_slab_search_accepts_graphite_vdw_stacking() -> None:
         combined.copy(),
         surface_mode=True,
         n_slab=n_full,
-        n_slab_deposit=n_fixed,
+        validation=StructureValidationPolicy(n_slab_deposit=n_fixed),
         system_type="surface_adsorbate",
         surface_config=cfg,
         adsorbate_definition=ads,
@@ -237,7 +240,7 @@ def test_ga_storage_slab_search_accepts_graphite_vdw_stacking() -> None:
         desorbed,
         surface_mode=True,
         n_slab=n_full,
-        n_slab_deposit=n_fixed,
+        validation=StructureValidationPolicy(n_slab_deposit=n_fixed),
         system_type="surface_adsorbate",
         surface_config=cfg,
         adsorbate_definition=ads,

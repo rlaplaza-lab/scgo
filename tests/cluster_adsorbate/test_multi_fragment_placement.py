@@ -8,7 +8,10 @@ from ase import Atoms
 from numpy.random import default_rng
 
 from scgo.cluster_adsorbate.feasibility import validate_adsorbate_placement_feasibility
-from scgo.cluster_adsorbate.hierarchical import build_hierarchical_core_fragment_cluster
+from scgo.cluster_adsorbate.hierarchical import (
+    build_hierarchical_core_fragment_cluster,
+    build_hierarchical_core_fragment_cluster_batch,
+)
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.exceptions import SCGOValidationError
 from scgo.metadata.atoms import get_tag
@@ -38,6 +41,29 @@ def test_resolve_rejects_combined_template_for_multiple_fragments() -> None:
     )
     with pytest.raises(SCGOValidationError, match="one combined adsorbate template"):
         resolve_adsorbate_fragments(combined, ads_def)
+
+
+def test_adsorbate_only_batch_records_site_type() -> None:
+    """Later adsorbate-only structures must see sites used earlier in the batch."""
+    ads_def = AdsorbateDefinition(
+        core_symbols=[],
+        adsorbate_symbols=["O", "H", "O", "H"],
+        adsorbate_fragment_lengths=[2, 2],
+    )
+    counts = {"vertex": 0, "edge": 0, "facet": 0, "directional_fallback": 0}
+    batch = build_hierarchical_core_fragment_cluster_batch(
+        ads_def,
+        default_rng(3),
+        "**/*.db",
+        [_oh_template(), _oh_template(2.2)],
+        None,
+        n_structures=2,
+        max_placement_attempts=200,
+        batch_site_counts=counts,
+        n_jobs=1,
+    )
+    assert len(batch) == 2
+    assert sum(counts.values()) == 2
 
 
 def test_gas_hierarchical_places_two_oh_separately() -> None:
@@ -76,10 +102,10 @@ def test_gas_hierarchical_places_two_oh_separately() -> None:
 
 def test_hierarchical_site_core_stays_metal_core(monkeypatch) -> None:
     """Later fragments must place on the original core, not the growing combined system."""
-    from scgo.cluster_adsorbate import hierarchical as hier
+    from scgo.cluster_adsorbate import placement as placement_mod
 
     site_core_lens: list[int] = []
-    real_place = hier.place_fragment_on_cluster
+    real_place = placement_mod.place_fragment_on_cluster
 
     def _tracking_place(*args, **kwargs):
         site_core = kwargs.get("site_core")
@@ -87,7 +113,7 @@ def test_hierarchical_site_core_stays_metal_core(monkeypatch) -> None:
         site_core_lens.append(len(site_core))
         return real_place(*args, **kwargs)
 
-    monkeypatch.setattr(hier, "place_fragment_on_cluster", _tracking_place)
+    monkeypatch.setattr(placement_mod, "place_fragment_on_cluster", _tracking_place)
 
     ads_def = AdsorbateDefinition(
         core_symbols=["Pt", "Pt", "Pt"],

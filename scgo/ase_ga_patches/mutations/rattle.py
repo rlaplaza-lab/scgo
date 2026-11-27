@@ -7,21 +7,19 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
 
 from scgo.ase_ga_patches.mutations._common import (
+    MutationOperator,
     _accept_connected_candidate,
     _accept_connected_kwargs,
     _disconnection_gap,
-    _ensure_rng,
     _filter_unique_tags,
     _mobile_clashes,
-    _preserves_mobile_connectivity,
-    _reconnect_mobile_components,
     _reanchor_mobile_to_slab,
+    _reconnect_mobile_components,
+    split_slab_and_mobile,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 # Eight full-strength tries, then eight half-strength single-group tries.
 _STRENGTH_SCALES = (1.0,) * 8 + (0.5,) * 8
@@ -78,6 +76,9 @@ def _consider_local_candidate(operator, parent, candidate, slab, best):
     attempt loop, so a disconnected sample does not pay for a pull.
     """
     kwargs = _accept_connected_kwargs(operator, slab)
+    accepted = _accept_connected_candidate(parent, candidate, **kwargs)
+    if accepted is not None:
+        return accepted, best
     if _mobile_clashes(
         candidate,
         blmin=kwargs["blmin"],
@@ -86,13 +87,6 @@ def _consider_local_candidate(operator, parent, candidate, slab, best):
         use_tags=kwargs["use_tags"],
     ):
         return None, best
-    if _preserves_mobile_connectivity(
-        parent,
-        candidate,
-        use_mic=kwargs["use_mic"],
-        connectivity_factor=kwargs["connectivity_factor"],
-    ):
-        return candidate, best
     gap = _disconnection_gap(
         candidate,
         use_mic=kwargs["use_mic"],
@@ -122,7 +116,8 @@ def _as_offspring(operator, slab, mobile):
     return mutant
 
 
-class RattleMutation(OffspringCreator):
+class RattleMutation(MutationOperator):
+    descriptor = "RattleMutation"
     """An implementation of the rattle mutation as described in:
 
     R.L. Johnston Dalton Transactions, Vol. 22,
@@ -159,7 +154,7 @@ class RattleMutation(OffspringCreator):
         Must be an instance of ``np.random.Generator`` or ``None``.
 
     verbose: bool
-        If True, print verbose output.
+        If True, forward verbose diagnostics to ASE (operator verbosity).
 
     """
 
@@ -167,38 +162,20 @@ class RattleMutation(OffspringCreator):
                  rattle_prop=0.4, test_dist_to_slab=True, use_tags=False,
                  target_tags=None, verbose=False, rng=None,
                  surface_normal_axis=2):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            use_tags=use_tags,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.rattle_strength = rattle_strength
         self.rattle_prop = rattle_prop
-        self.test_dist_to_slab = test_dist_to_slab
-        self.use_tags = use_tags
-        self.target_tags = target_tags
-        self.system_type = system_type
-        self.surface_normal_axis = surface_normal_axis
-        self._policy = get_system_policy(system_type)
-
-        self.descriptor = "RattleMutation"
-        self.min_inputs = 1
         self.last_attempt_count = 0
-
-    def get_new_individual(self, parents):
-        """Generates a new individual by applying the rattle mutation to a parent.
-
-        Args:
-            parents: A list containing the parent Atoms object.
-
-        Returns:
-            A tuple containing the new Atoms object and a description of the mutation.
-
-        """
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: rattle")
 
     def mutate(self, atoms):
         """Applies the rattle mutation to the given Atoms object.
@@ -210,9 +187,7 @@ class RattleMutation(OffspringCreator):
             A new Atoms object after applying the rattle mutation, or None if mutation fails.
 
         """
-        N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[:len(atoms) - N]
-        atoms = atoms[len(atoms) - N:]
+        slab, atoms, N = split_slab_and_mobile(atoms, self.n_top)
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()
@@ -279,9 +254,7 @@ class RattleMutation(OffspringCreator):
         min_displacement: float = _KICK_MIN_DISPLACEMENT,
     ):
         """Kick one to a few atoms or tag groups by a large Gaussian step."""
-        n_mobile = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[: len(atoms) - n_mobile]
-        mobile = atoms[len(atoms) - n_mobile :]
+        slab, mobile, n_mobile = split_slab_and_mobile(atoms, self.n_top)
         tags = mobile.get_tags() if self.use_tags else np.arange(n_mobile)
         unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
         if unique_tags is None:
@@ -330,7 +303,8 @@ class RattleMutation(OffspringCreator):
         return _as_offspring(self, slab, accepted)
 
 
-class AnisotropicRattleMutation(OffspringCreator):
+class AnisotropicRattleMutation(MutationOperator):
+    descriptor = "AnisotropicRattleMutation"
     """Rattle mutation with stronger in-plane and weaker normal displacement.
 
     A random plane is sampled every attempt. Selected atoms (or tag groups) are
@@ -353,35 +327,24 @@ class AnisotropicRattleMutation(OffspringCreator):
         verbose=False,
         surface_normal_axis=2,
     ):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            use_tags=use_tags,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.in_plane_strength = in_plane_strength
         self.normal_strength = normal_strength
         self.rattle_prop = rattle_prop
-        self.test_dist_to_slab = test_dist_to_slab
-        self.use_tags = use_tags
-        self.target_tags = target_tags
-        self.system_type = system_type
-        self.surface_normal_axis = surface_normal_axis
-        self._policy = get_system_policy(system_type)
-
-        self.descriptor = "AnisotropicRattleMutation"
-        self.min_inputs = 1
         self.last_attempt_count = 0
 
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: anisotropic_rattle")
-
     def mutate(self, atoms):
-        N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[: len(atoms) - N]
-        atoms = atoms[len(atoms) - N:]
+        slab, atoms, N = split_slab_and_mobile(atoms, self.n_top)
         tags = atoms.get_tags() if self.use_tags else np.arange(N)
         pos_ref = atoms.get_positions()
         num = atoms.get_atomic_numbers()

@@ -41,6 +41,7 @@ from scgo.system_types.policy import (
     uses_surface,
     validate_system_type_settings,
 )
+from scgo.system_types.structure_validation import StructureValidationPolicy
 from scgo.system_types.validation import (
     _validate_adsorbate_tag_partition,
     validate_connectivity_policy,
@@ -60,6 +61,7 @@ __all__ = [
     "OptimizerSlotParams",
     "SYSTEM_TYPE_POLICIES",
     "SystemPolicy",
+    "StructureValidationPolicy",
     "SystemType",
     "_validate_adsorbate_tag_partition",
     "as_adsorbate_definition",

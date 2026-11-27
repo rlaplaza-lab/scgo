@@ -24,6 +24,16 @@ from scgo.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _apply_pairing_history_penalty(fitness_values, pop, indices):
+    """Scale fitness by ``1/sqrt(1+n_paired) * 1/sqrt(1+looks_like)``."""
+    M = [float(pop[i].info.get("n_paired", 0)) for i in indices]
+    L = [float(pop[i].info.get("looks_like", 0)) for i in indices]
+    return [
+        fitness_values[j] * 1. / sqrt(1. + M[j]) * 1. / sqrt(1. + L[j])
+        for j in range(len(fitness_values))
+    ]
+
+
 def _raw_score(a):
     """Return GA raw_score from structure tags.
 
@@ -255,7 +265,7 @@ class Population:
                     a.info["looks_like"] = int(b.info.get("looks_like", 0)) + 1
                     del self.pop[i]
                     self.pop.append(a)
-                    self.pop.sort(key=_raw_score, reverse=True)
+                    self.pop.sort(key=_population_candidate_sort_key)
                 else:
                     # Incumbent keeps its seat; count this as another rediscovery.
                     b.info["looks_like"] = int(b.info.get("looks_like", 0)) + 1
@@ -263,14 +273,13 @@ class Population:
 
         # the new candidate needs to be added, so ensure we have room
         if len(self.pop) == self.population_size:
-            # Remove the worst candidate to make room (the population is
-            # kept sorted by raw_score, best first).
+            # Remove the worst candidate (best-first).
             del self.pop[-1]
 
         # add the new candidate
         a.info["looks_like"] = 0
         self.pop.append(a)
-        self.pop.sort(key=_raw_score, reverse=True)
+        self.pop.sort(key=_population_candidate_sort_key)
 
     def __get_fitness__(self, indecies, with_history=True):
         """Calculates the fitness using the formula from
@@ -294,10 +303,7 @@ class Population:
             f = [0.5 * (1. - tanh(2. * (scores[i] - max_s) / T - 1.))
                  for i in indecies]
         if with_history:
-            M = [float(self.pop[i].info.get("n_paired", 0)) for i in indecies]
-            L = [float(self.pop[i].info.get("looks_like", 0)) for i in indecies]
-            f = [f[i] * 1. / sqrt(1. + M[i]) * 1. / sqrt(1. + L[i])
-                 for i in range(len(f))]
+            f = _apply_pairing_history_penalty(f, self.pop, indecies)
         return f
 
     def get_two_candidates(self, with_history=True):
@@ -327,8 +333,6 @@ class Population:
         # are distinct by construction, so a confid collision is impossible.
         p = np.clip(np.asarray(fit, dtype=float), 0.0, None)
         p = p / p.sum()
-        c1 = self.pop[0]
-        c2 = self.pop[1]
         # Bounded retry: only the pairing history can reject a drawn pair.
         for _attempt in range(100):
             idx = self.rng.choice(len(self.pop), size=2, replace=False, p=p)
@@ -473,12 +477,9 @@ class FitnessStrategyPopulation(Population):
 
         # Apply history-based penalties if requested
         if with_history:
-            M = [float(self.pop[i].info.get("n_paired", 0)) for i in indecies]
-            L = [float(self.pop[i].info.get("looks_like", 0)) for i in indecies]
-            fitness_values = [
-                fitness_values[j] * 1. / sqrt(1. + M[j]) * 1. / sqrt(1. + L[j])
-                for j in range(len(fitness_values))
-            ]
+            fitness_values = _apply_pairing_history_penalty(
+                fitness_values, self.pop, indecies
+            )
 
         return fitness_values
 
@@ -498,7 +499,7 @@ class FitnessStrategyPopulation(Population):
                 and self.pop
             ):
                 # Add best new structure to references
-                best = min(self.pop, key=lambda x: -_raw_score(x))
+                best = max(self.pop, key=_raw_score)
                 self.diversity_scorer.add_reference(best)
 
 # fmt: on

@@ -7,24 +7,23 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import (
-    atoms_too_close,
-    atoms_too_close_two_sets,
-)
-
 from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
-from scgo.ase_ga_patches.mutations._common import _ensure_rng, _filter_unique_tags
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.system_types import SystemType, get_system_policy
+from scgo.ase_ga_patches.mutations._common import (
+    MutationOperator,
+    _filter_unique_tags,
+    _mobile_clashes,
+    swap_tag_group_centroids,
+)
+from scgo.system_types import SystemType
 
 __all__ = ["CustomPermutationMutation", "PermutationMutation"]
 
 
-class PermutationMutation(OffspringCreator):
+class PermutationMutation(MutationOperator):
+    descriptor = "PermutationMutation"
     """Mutation that permutes a percentage of the atom types in the cluster.
 
     Parameters
@@ -51,32 +50,23 @@ class PermutationMutation(OffspringCreator):
         Must be an instance of ``np.random.Generator`` or ``None``.
 
     verbose: bool
-        If True, print verbose output.
+        If True, forward verbose diagnostics to ASE (operator verbosity).
 
     """
 
     def __init__(self, n_top, system_type: SystemType, probability=0.33, test_dist_to_slab=True,
                  use_tags=False, target_tags=None, blmin=None, rng=None, verbose=False):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            use_tags=use_tags,
+            target_tags=target_tags,
+        )
         self.probability = probability
-        self.test_dist_to_slab = test_dist_to_slab
-        self.use_tags = use_tags
-        self.target_tags = target_tags
-        self.blmin = blmin
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
-
-        self.descriptor = "PermutationMutation"
-        self.min_inputs = 1
-
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: permutation")
 
     def mutate(self, atoms):
         """Does the actual mutation.
@@ -135,12 +125,7 @@ class PermutationMutation(OffspringCreator):
             )
             for pi_idx in np.atleast_1d(pair_indices):
                 i, j = valid_pairs[int(pi_idx)]
-                ind1 = np.where(tags == unique_tags[i])
-                ind2 = np.where(tags == unique_tags[j])
-                cop1 = np.mean(pos[ind1], axis=0)
-                cop2 = np.mean(pos[ind2], axis=0)
-                pos[ind1] += cop2 - cop1
-                pos[ind2] += cop1 - cop2
+                swap_tag_group_centroids(pos, tags, unique_tags, i, j)
         else:
             # Incremental application over a single shuffled pass of the
             # candidate pairs; clashing swaps are reverted and skipped.
@@ -150,21 +135,18 @@ class PermutationMutation(OffspringCreator):
                 if applied >= n_swaps:
                     break
                 i, j = valid_pairs[int(pi_idx)]
-                ind1 = np.where(tags == unique_tags[i])
-                ind2 = np.where(tags == unique_tags[j])
-                cop1 = np.mean(pos[ind1], axis=0)
-                cop2 = np.mean(pos[ind2], axis=0)
-                shift1 = cop2 - cop1
-                shift2 = cop1 - cop2
-                pos[ind1] += shift1
-                pos[ind2] += shift2
+                ind1, ind2, shift1, shift2 = swap_tag_group_centroids(
+                    pos, tags, unique_tags, i, j
+                )
 
                 top = Atoms(num, positions=pos, cell=cell, pbc=pbc, tags=tags)
-                too_close = atoms_too_close(
-                    top, self.blmin, use_tags=self.use_tags)
-                if not too_close and self.test_dist_to_slab:
-                    too_close = atoms_too_close_two_sets(top, slab, self.blmin)
-                if too_close:
+                if _mobile_clashes(
+                    top,
+                    blmin=self.blmin,
+                    slab=slab,
+                    test_dist_to_slab=self.test_dist_to_slab,
+                    use_tags=self.use_tags,
+                ):
                     pos[ind1] -= shift1
                     pos[ind2] -= shift2
                     continue
@@ -196,7 +178,6 @@ class CustomPermutationMutation(PermutationMutation):
         rng=None,
         verbose=False,
     ):
-        rng = _ensure_rng(rng)
         super().__init__(
             n_top,
             probability=probability,

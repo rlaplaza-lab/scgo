@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ase import Atoms
-from ase.calculators.calculator import Calculator, all_changes
+from ase.calculators.calculator import Calculator
 
+from scgo.calculators.inner_calculator import InnerDelegatingCalculator
 from scgo.calculators.torch_device import resolve_torch_device
-from scgo.exceptions import SCGONotImplementedError, SCGOValidationError
+from scgo.constants import DEFAULT_UMA_MODEL, DEFAULT_UMA_TASK
+from scgo.exceptions import SCGOConfigurationError, SCGOValidationError
 from scgo.utils.logging import get_logger
 from scgo.utils.mlip_extras import (
     ensure_mace_uma_not_both_installed,
@@ -30,7 +31,7 @@ _MISSING_FAIRCHEM_MSG = (
 )
 
 
-class UMA(Calculator):
+class UMA(InnerDelegatingCalculator):
     r"""ASE calculator wrapping FAIRChem UMA checkpoints (fairchem-core).
 
     Parameters mirror common SCGO ``calculator_kwargs`` patterns: ``model_name``
@@ -41,8 +42,8 @@ class UMA(Calculator):
 
     def __init__(
         self,
-        model_name: str = "uma-s-1p2p1",
-        task_name: str | None = "oc25",
+        model_name: str = DEFAULT_UMA_MODEL,
+        task_name: str | None = DEFAULT_UMA_TASK,
         device: str | None = None,
         **kwargs: Any,
     ) -> None:
@@ -50,7 +51,7 @@ class UMA(Calculator):
         try:
             from fairchem.core import FAIRChemCalculator
         except ImportError as e:
-            raise SCGONotImplementedError(_MISSING_FAIRCHEM_MSG) from e
+            raise SCGOConfigurationError(_MISSING_FAIRCHEM_MSG) from e
 
         dev = resolve_torch_device(device, allow_mps=False, backend_name="UMA")
         validate_uma_task(model_name, task_name)
@@ -66,28 +67,13 @@ class UMA(Calculator):
         # Store the resolved device so downstream helpers (e.g. TorchSim model
         # extraction) can honour an explicit device="cpu" instead of guessing.
         self.device = dev
-        self._inner = FAIRChemCalculator.from_model_checkpoint(
-            model_name,
-            task_name=task_name,
-            device=dev,
+        self._install_inner(
+            FAIRChemCalculator.from_model_checkpoint(
+                model_name,
+                task_name=task_name,
+                device=dev,
+            )
         )
-        self.implemented_properties = list(self._inner.implemented_properties)
-
-    def calculate(
-        self,
-        atoms: Atoms | None = None,
-        properties: list[str] | None = None,
-        system_changes: list[str] = all_changes,
-    ) -> None:
-        if properties is None:
-            properties = self.implemented_properties
-        super().calculate(atoms, properties, system_changes)
-        self._inner.calculate(
-            atoms=self.atoms,
-            properties=properties,
-            system_changes=system_changes,
-        )
-        self.results = self._inner.results
 
 
 def validate_uma_task(model_name: str, task_name: str | None) -> None:

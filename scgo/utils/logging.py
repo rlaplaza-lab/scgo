@@ -100,6 +100,15 @@ def resolve_log_format(format_string: str | None = None) -> str:
     return env
 
 
+def validate_verbosity(verbosity: object) -> int:
+    """Require ``verbosity`` to be an int in ``{0, 1, 2, 3}``."""
+    if not isinstance(verbosity, int) or verbosity not in VERBOSITY_LEVELS:
+        raise SCGOValidationError(
+            f"Invalid verbosity level: {verbosity!r}. Must be 0, 1, 2, or 3."
+        )
+    return verbosity
+
+
 def configure_logging(
     verbosity: int = 1,
     format_string: str | None = None,
@@ -125,10 +134,7 @@ def configure_logging(
     if hpc_mode is None:
         hpc_mode = os.environ.get("SCGO_LOCAL_DEV") != "1"
     apply_scgo_runtime_warning_filters()
-    if verbosity not in VERBOSITY_LEVELS:
-        raise SCGOValidationError(
-            f"Invalid verbosity level: {verbosity}. Must be 0, 1, 2, or 3."
-        )
+    verbosity = validate_verbosity(verbosity)
 
     level = VERBOSITY_LEVELS[verbosity]
     root_logger = logging.getLogger()
@@ -234,6 +240,18 @@ def should_show_progress(verbosity: int) -> bool:
 # - Use exc_info=(verbosity >= 2) for handled errors with conditional traceback
 
 
+def _log_v(
+    logger: logging.Logger,
+    level: str,
+    message: str,
+    *args: object,
+    verbosity: int,
+    min_verbosity: int,
+) -> None:
+    if verbosity >= min_verbosity:
+        getattr(logger, level)(message, *args)
+
+
 def log_debug_v(
     logger: logging.Logger,
     message: str,
@@ -241,19 +259,15 @@ def log_debug_v(
     verbosity: int = 1,
     min_verbosity: int = 2,
 ) -> None:
-    """Log debug message if verbosity >= min_verbosity (default 2).
-
-    Uses lazy %-style formatting. Message is only formatted if it will be logged.
-
-    Args:
-        logger: The logger instance.
-        message: Format string for the message.
-        *args: Arguments for the format string.
-        verbosity: Current verbosity level (0-3).
-        min_verbosity: Minimum verbosity to log (default 2 = DEBUG).
-    """
-    if verbosity >= min_verbosity:
-        logger.debug(message, *args)
+    """Log at debug when ``verbosity`` is at least ``min_verbosity`` (default 2)."""
+    _log_v(
+        logger,
+        "debug",
+        message,
+        *args,
+        verbosity=verbosity,
+        min_verbosity=min_verbosity,
+    )
 
 
 def log_info_v(
@@ -263,19 +277,15 @@ def log_info_v(
     verbosity: int = 1,
     min_verbosity: int = 1,
 ) -> None:
-    """Log info message if verbosity >= min_verbosity (default 1).
-
-    Uses lazy %-style formatting. Message is only formatted if it will be logged.
-
-    Args:
-        logger: The logger instance.
-        message: Format string for the message.
-        *args: Arguments for the format string.
-        verbosity: Current verbosity level (0-3).
-        min_verbosity: Minimum verbosity to log (default 1 = INFO).
-    """
-    if verbosity >= min_verbosity:
-        logger.info(message, *args)
+    """Log at info when ``verbosity`` is at least ``min_verbosity`` (default 1)."""
+    _log_v(
+        logger,
+        "info",
+        message,
+        *args,
+        verbosity=verbosity,
+        min_verbosity=min_verbosity,
+    )
 
 
 def log_warning_v(
@@ -285,19 +295,15 @@ def log_warning_v(
     verbosity: int = 1,
     min_verbosity: int = 0,
 ) -> None:
-    """Log warning message if verbosity >= min_verbosity (default 0).
-
-    Warnings are shown at quiet verbosity by default (``min_verbosity=0``).
-
-    Args:
-        logger: The logger instance.
-        message: Format string for the message.
-        *args: Arguments for the format string.
-        verbosity: Current verbosity level (0-3).
-        min_verbosity: Minimum verbosity to log (default 0).
-    """
-    if verbosity >= min_verbosity:
-        logger.warning(message, *args)
+    """Log at warning when ``verbosity`` is at least ``min_verbosity`` (default 0)."""
+    _log_v(
+        logger,
+        "warning",
+        message,
+        *args,
+        verbosity=verbosity,
+        min_verbosity=min_verbosity,
+    )
 
 
 class _MatchingStdoutFilter:

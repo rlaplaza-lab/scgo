@@ -7,43 +7,44 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import get_rotation_matrix
 
 from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
 from scgo.ase_ga_patches.mutations._common import (
+    _mutation_steric_score,
+    MutationOperator,
     _accept_connected_candidate,
     _accept_connected_kwargs,
+    _append_unique_unit_vector,
     _fails_only_slab_clash,
     _filter_unique_tags,
-    _append_unique_unit_vector,
-    _ensure_rng,
     _geometry_candidate_directions,
     _random_unit_vector,
     _reanchor_mobile_to_slab,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import steric_deficit as _steric_deficit
-from scgo.initialization.steric_scoring import (
-    steric_deficit_two_sets as _steric_deficit_two_sets,
-)
-from scgo.system_types import SystemType, get_system_policy
+from scgo.initialization.steric_scoring import _blmin_matrix
+from scgo.system_types import SystemType
+from scgo.utils.geometry_math import rotation_matrix_axis_angle
 
 __all__ = ["RotationalMutation"]
 
 
-class RotationalMutation(OffspringCreator):
+class RotationalMutation(MutationOperator):
+    descriptor = "RotationalMutation"
     """Mutates a candidate by rotating a random subset of the
     multi-atom moieties in the structure (atoms with
     the same tag are considered part of one such moiety).
 
     The moieties to rotate are drawn at random, while the rotation axes
     are derived from each moiety's geometry (topped up with random
-    directions) and the angles span [min_angle, pi]. The resulting
-    candidate rotations are ranked by steric deficit.
+    directions). Tagged-moiety rotations span [min_angle, pi] via
+    ``_candidate_angles`` and are ranked by steric deficit. When no
+    eligible multi-atom tags remain (untagged gas clusters, or a whole-
+    mobile group), ``_twist_mobile`` uses a fixed descending angle ladder
+    ``[pi, 2.0, 1.0, 0.5, 0.2]`` independent of ``min_angle``, then lifts
+    the cap along the twist axis by the blmin gap.
 
     Only performs whole-molecule rotations, no internal
     rotations.
@@ -73,8 +74,9 @@ class RotationalMutation(OffspringCreator):
         with matching tags are eligible for rotation.
 
     min_angle: float
-        Minimal angle (in radians) for each rotation;
-        should lie in the interval [0, pi].
+        Minimal angle (in radians) for tagged-moiety rotations;
+        should lie in the interval [0, pi]. Ignored by the untagged
+        whole-mobile twist ladder.
 
     test_dist_to_slab: boolean
         Whether also the distances to the slab
@@ -89,30 +91,22 @@ class RotationalMutation(OffspringCreator):
                  min_angle=1.57, test_dist_to_slab=True, target_tags=None,
                  use_tags=False, rng=None, verbose=False, max_inner_attempts=24,
                  surface_normal_axis=2):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            use_tags=use_tags,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.fraction = fraction
         self.tags = tags
         self.min_angle = min_angle
-        self.test_dist_to_slab = test_dist_to_slab
-        self.target_tags = target_tags
-        self.use_tags = use_tags
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
-        self.surface_normal_axis = surface_normal_axis
         self.last_attempt_count = 0
-        self.descriptor = "RotationalMutation"
-        self.min_inputs = 1
-
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: rotational")
 
     def _candidate_rotation_axes(self, positions):
         candidates = []
@@ -152,10 +146,7 @@ class RotationalMutation(OffspringCreator):
         mid_angle = 0.5 * (min_angle + np.pi)
         angles = [small, mid_small, min_angle, mid_angle, np.pi]
         max_angles = max(1, min(int(self.max_inner_attempts), 5))
-        angles = angles[:max_angles]
-        if len(angles) < max_angles:
-            angles.append(min_angle + (np.pi - min_angle) * self.rng.random())
-        return angles
+        return angles[:max_angles]
 
     def _rotation_configs(self, chosen_tags, indices, positions):
         axis_sets = {
@@ -194,14 +185,9 @@ class RotationalMutation(OffspringCreator):
         for tag, (axis, angle) in config.items():
             moiety = new_positions[indices[tag]]
             center = np.mean(moiety, axis=0)
-            rotation = get_rotation_matrix(axis, angle)
+            rotation = rotation_matrix_axis_angle(axis, angle)
             new_positions[indices[tag]] = np.dot(rotation, (moiety - center).T).T + center
         return new_positions
-
-    def _twist_angles(self):
-        angles = [np.pi, 2.0, 1.0, 0.5]
-        limit = max(1, min(len(angles), int(self.max_inner_attempts)))
-        return angles[:limit]
 
     def _place_trial(self, mobile, positions, slab):
         trial = mobile.copy()
@@ -224,6 +210,34 @@ class RotationalMutation(OffspringCreator):
         shifted = np.array(positions, dtype=float, copy=True)
         shifted[:, in_plane[0]] += offset
         return shifted
+
+    def _twist_angles(self):
+        """Descending twist magnitudes; smaller angles recover when large ones clash."""
+        angles = [np.pi, 2.0, 1.0, 0.5, 0.2]
+        limit = max(1, min(len(angles), int(self.max_inner_attempts)))
+        return angles[:limit]
+
+    def _twist_cap(self, positions, numbers, normal, cap, pivot, angle):
+        """Rotate the cap by ``angle`` and lift it clear of blmin along ``normal``."""
+        angle = float(angle)
+        axis = np.asarray(normal, dtype=float)
+        axis /= np.linalg.norm(axis)
+        cap = np.asarray(cap, dtype=int)
+        rotated = (positions[cap] - pivot) @ rotation_matrix_axis_angle(axis, angle).T + pivot
+        newpos = positions.copy()
+        newpos[cap] = rotated
+        stationary = np.setdiff1d(np.arange(len(positions)), cap, assume_unique=False)
+        if stationary.size == 0:
+            return newpos
+        diff = rotated[:, None, :] - positions[stationary][None, :, :]
+        axial = diff @ axis
+        plane = np.linalg.norm(diff - axial[..., None] * axis, axis=2)
+        height = (positions[cap][:, None, :] - positions[stationary][None, :, :]) @ axis
+        required = _blmin_matrix(numbers[cap], self.blmin, numbers[stationary])
+        missing = np.sqrt(np.maximum(required * required - plane * plane, 0.0))
+        need = np.where(plane < required, np.maximum(0.0, missing - height), 0.0)
+        newpos[cap] = rotated + float(need.max()) * axis
+        return newpos
 
     def _twist_mobile(self, slab, mobile):
         """Rotate a few outer atoms about the nearest core atom. Large angles first."""
@@ -254,13 +268,14 @@ class RotationalMutation(OffspringCreator):
             core = order[:-n_cap]
             delta = positions[core][:, None, :] - positions[cap][None, :, :]
             distances = np.linalg.norm(delta, axis=2)
-            core_index, _cap_index = np.unravel_index(int(np.argmin(distances)), distances.shape)
+            core_index, _cap_index = np.unravel_index(
+                int(np.argmin(distances)), distances.shape
+            )
             pivot = positions[int(core[int(core_index)])]
             for angle in angles:
-                newpos = positions.copy()
-                subset = newpos[cap]
-                rotation = get_rotation_matrix(normal, float(angle))
-                newpos[cap] = np.dot(rotation, (subset - pivot).T).T + pivot
+                newpos = self._twist_cap(
+                    positions, numbers, normal, cap, pivot, angle=angle
+                )
                 self.last_attempt_count += 1
                 trial = self._place_trial(mobile, newpos, slab)
                 accepted = _accept_connected_candidate(
@@ -270,18 +285,11 @@ class RotationalMutation(OffspringCreator):
                     return slab + accepted
                 if not self._policy.uses_surface:
                     continue
-                if not _fails_only_slab_clash(
-                    mobile, trial, **accept_kwargs
-                ):
+                if not _fails_only_slab_clash(mobile, trial, **accept_kwargs):
                     continue
-                score = _steric_deficit(trial.get_positions(), numbers, self.blmin)
-                score += _steric_deficit_two_sets(
-                    trial.get_positions(),
-                    numbers,
-                    slab.get_positions(),
-                    slab.numbers,
-                    self.blmin,
-                )[0]
+                score = _mutation_steric_score(
+                    trial.get_positions(), numbers, slab, self.blmin
+                )
                 if best_slab is None or score < best_slab[0]:
                     best_slab = (score, trial.get_positions().copy())
 
@@ -363,15 +371,7 @@ class RotationalMutation(OffspringCreator):
         ranked = []
         for config in configs:
             newpos = self._apply_rotation_config(pos, indices, config)
-            score = _steric_deficit(newpos, numbers, self.blmin)
-            if len(slab) > 0:
-                score += _steric_deficit_two_sets(
-                    newpos,
-                    numbers,
-                    slab.get_positions(),
-                    slab.numbers,
-                    self.blmin,
-                )[0]
+            score = _mutation_steric_score(newpos, numbers, slab, self.blmin)
             ranked.append((score, newpos))
 
         ranked.sort(key=lambda item: item[0])

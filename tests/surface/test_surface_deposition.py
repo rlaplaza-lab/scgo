@@ -5,14 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.build import fcc111
 from ase_ga.utilities import closest_distances_generator, get_all_atom_types
 from numpy.random import default_rng
 
 from scgo.algorithms.ga_common import create_ga_pairing
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius
-from scgo.initialization.geometry_helpers import _generate_rotation_matrix
 from scgo.initialization.initialization_config import (
     BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
@@ -30,11 +28,13 @@ from scgo.surface.deposition import (
 )
 from scgo.surface.objectives import adsorption_energy
 from scgo.system_types import AdsorbateDefinition
+from scgo.utils.geometry_math import rotation_matrix_axis_angle
+from tests.helpers import build_pt111_slab
 
 
 @pytest.fixture
 def pt_slab() -> Atoms:
-    return fcc111("Pt", size=(2, 2, 2), vacuum=6.0, orthogonal=True)
+    return build_pt111_slab()
 
 
 def _build_surface_template(slab: Atoms, composition: list[str]) -> Atoms:
@@ -138,9 +138,9 @@ def test_near_surface_rotation_uses_independent_tilt_azimuth() -> None:
 
     mat = _near_surface_rotation_matrix(_SeqRng([spin, tilt, tilt_az]), axis=2)
     normal = np.array([0.0, 0.0, 1.0])
-    tied = _generate_rotation_matrix(
+    tied = rotation_matrix_axis_angle(
         np.array([np.cos(spin), np.sin(spin), 0.0]), tilt
-    ) @ _generate_rotation_matrix(normal, spin)
+    ) @ rotation_matrix_axis_angle(normal, spin)
     assert not np.allclose(mat, tied)
 
 

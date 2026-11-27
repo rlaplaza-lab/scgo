@@ -6,6 +6,17 @@ import numpy as np
 from ase.geometry import get_distances
 from scipy.spatial.distance import cdist, pdist
 
+# (unique Z, id(blmin)) → (blmin, z_to_i, table); re-check ``is`` on hit.
+_STERIC_BLMIN_CACHE_MAX = 64
+_STERIC_BLMIN_CACHE: dict[
+    tuple[tuple[int, ...], int], tuple[dict, dict[int, int], np.ndarray]
+] = {}
+
+
+def clear_steric_blmin_cache() -> None:
+    """Drop cached dense blmin tables used by steric deficit scoring."""
+    _STERIC_BLMIN_CACHE.clear()
+
 
 def get_blmin_distance(
     blmin: dict, atomic_number_a: int, atomic_number_b: int
@@ -31,11 +42,19 @@ def _blmin_matrix(atomic_numbers, blmin: dict, other=None) -> np.ndarray:
         return np.zeros((a.size, b.size), dtype=float)
 
     unique = tuple(sorted({int(z) for z in a} | {int(z) for z in b}))
-    z_to_i = {z: i for i, z in enumerate(unique)}
-    table = np.empty((len(unique), len(unique)), dtype=float)
-    for i, zi in enumerate(unique):
-        for j, zj in enumerate(unique):
-            table[i, j] = float(get_blmin_distance(blmin, zi, zj))
+    cache_key = (unique, id(blmin))
+    cached = _STERIC_BLMIN_CACHE.get(cache_key)
+    if cached is not None and cached[0] is blmin:
+        _, z_to_i, table = cached
+    else:
+        z_to_i = {z: i for i, z in enumerate(unique)}
+        table = np.empty((len(unique), len(unique)), dtype=float)
+        for i, zi in enumerate(unique):
+            for j, zj in enumerate(unique):
+                table[i, j] = float(get_blmin_distance(blmin, zi, zj))
+        if len(_STERIC_BLMIN_CACHE) >= _STERIC_BLMIN_CACHE_MAX:
+            _STERIC_BLMIN_CACHE.pop(next(iter(_STERIC_BLMIN_CACHE)))
+        _STERIC_BLMIN_CACHE[cache_key] = (blmin, z_to_i, table)
     row_index = np.array([z_to_i[int(z)] for z in a], dtype=int)
     col_index = np.array([z_to_i[int(z)] for z in b], dtype=int)
     return table[row_index[:, None], col_index[None, :]]

@@ -11,6 +11,8 @@ from scipy.spatial import Delaunay, QhullError, Voronoi, cKDTree
 
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.geometry_helpers import resolve_cluster_extent
+from scgo.utils.geometry_math import normalize_or
+from scgo.utils.validation import validate_surface_normal_axis
 
 SiteType = Literal["vertex", "edge", "facet"]
 
@@ -20,6 +22,7 @@ class SurfaceSiteCandidate:
     site_type: SiteType
     anchor: np.ndarray
     normal: np.ndarray
+    site_index: int | None = None  # atom index when ``anchor`` is that atom's position
 
 
 # Call-stack / placement-session cache: identical site-core geometries reuse Qhull.
@@ -35,10 +38,7 @@ _SITE_CACHE_MAX = 64
 
 
 def _safe_normalize(v: np.ndarray) -> np.ndarray:
-    vn = float(np.linalg.norm(v))
-    if vn < 1e-12:
-        return np.array([0.0, 0.0, 1.0], dtype=float)
-    return v / vn
+    return normalize_or(v)
 
 
 def _empty_sites() -> dict[SiteType, list[SurfaceSiteCandidate]]:
@@ -61,6 +61,18 @@ def _planar_cache_key(
     return (pos_key, int(axis), cell_key, pbc)
 
 
+def _cached_sites(cache, key, factory):
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    result = factory()
+    if len(cache) >= _SITE_CACHE_MAX:
+        # Drop the oldest inserted entry (dicts preserve insertion order).
+        cache.pop(next(iter(cache)))
+    cache[key] = result
+    return result
+
+
 def clear_surface_site_cache() -> None:
     """Drop cached hull and planar-layer site candidates (e.g. between sessions)."""
     _SITE_CANDIDATE_CACHE.clear()
@@ -72,15 +84,9 @@ def get_or_compute_surface_site_candidates(
 ) -> dict[SiteType, list[SurfaceSiteCandidate]]:
     """Return surface sites for ``core``, caching by positions hash."""
     key = _site_core_positions_key(core)
-    cached = _SITE_CANDIDATE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    result = compute_surface_site_candidates(core)
-    if len(_SITE_CANDIDATE_CACHE) >= _SITE_CACHE_MAX:
-        # Drop the oldest inserted entry (dicts preserve insertion order).
-        _SITE_CANDIDATE_CACHE.pop(next(iter(_SITE_CANDIDATE_CACHE)))
-    _SITE_CANDIDATE_CACHE[key] = result
-    return result
+    return _cached_sites(
+        _SITE_CANDIDATE_CACHE, key, lambda: compute_surface_site_candidates(core)
+    )
 
 
 def compute_surface_site_candidates(
@@ -106,7 +112,12 @@ def compute_surface_site_candidates(
             outward = _safe_normalize(anchor - com)
             normal = -axis_u if float(np.dot(outward, axis_u)) < 0.0 else axis_u
             out["vertex"].append(
-                SurfaceSiteCandidate(site_type="vertex", anchor=anchor, normal=normal)
+                SurfaceSiteCandidate(
+                    site_type="vertex",
+                    anchor=anchor,
+                    normal=normal,
+                    site_index=int(vidx),
+                )
             )
         if len(extent.vertices) >= 2:
             i0, i1 = int(extent.vertices[0]), int(extent.vertices[1])
@@ -134,6 +145,7 @@ def compute_surface_site_candidates(
                     site_type="vertex",
                     anchor=anchor,
                     normal=_safe_normalize(anchor - com),
+                    site_index=int(vidx),
                 )
             )
         if len(verts) >= 2:
@@ -175,6 +187,7 @@ def compute_surface_site_candidates(
                 site_type="vertex",
                 anchor=anchor,
                 normal=_safe_normalize(anchor - com),
+                site_index=int(vidx),
             )
         )
 
@@ -233,9 +246,7 @@ def _planar_hollow_sites(
         A list of ``facet`` (hollow) ``SurfaceSiteCandidate`` entries, each with a
         ``+axis`` outward normal.
     """
-    axis = int(surface_normal_axis)
-    if axis not in (0, 1, 2):
-        raise SCGOValidationError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
+    axis = validate_surface_normal_axis(int(surface_normal_axis))
     out: list[SurfaceSiteCandidate] = []
     pos = np.asarray(layer.get_positions(), dtype=float)
     if len(pos) < 4:
@@ -340,9 +351,7 @@ def planar_layer_site_candidates(
     }
     if len(layer) == 0:
         return out
-    axis = int(surface_normal_axis)
-    if axis not in (0, 1, 2):
-        raise SCGOValidationError(f"surface_normal_axis must be 0, 1, or 2, got {axis}")
+    axis = validate_surface_normal_axis(int(surface_normal_axis))
     normal = np.zeros(3, dtype=float)
     normal[axis] = 1.0
     pos = np.asarray(layer.get_positions(), dtype=float)
@@ -392,17 +401,13 @@ def get_or_compute_planar_layer_site_candidates(
     PBC, with the same ``_SITE_CACHE_MAX`` eviction policy as the hull cache.
     """
     key = _planar_cache_key(layer, surface_normal_axis)
-    cached = _PLANAR_SITE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    result = planar_layer_site_candidates(
-        layer, surface_normal_axis=surface_normal_axis
+    return _cached_sites(
+        _PLANAR_SITE_CACHE,
+        key,
+        lambda: planar_layer_site_candidates(
+            layer, surface_normal_axis=surface_normal_axis
+        ),
     )
-    if len(_PLANAR_SITE_CACHE) >= _SITE_CACHE_MAX:
-        # Drop the oldest inserted entry (dicts preserve insertion order).
-        _PLANAR_SITE_CACHE.pop(next(iter(_PLANAR_SITE_CACHE)))
-    _PLANAR_SITE_CACHE[key] = result
-    return result
 
 
 def filter_sites_to_outward(

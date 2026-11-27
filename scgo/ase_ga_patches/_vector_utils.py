@@ -4,24 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from scgo.exceptions import SCGOValidationError
-
-
-def random_unit_vector(rng):
-    vector = rng.normal(0.0, 1.0, 3)
-    norm = np.linalg.norm(vector)
-    if norm <= 1e-12:
-        return np.array([1.0, 0.0, 0.0])
-    return vector / norm
-
-
-def kabsch_rotation(reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
-    """Rotation R such that ``moving @ R.T`` aligns with centered ``reference``."""
-    dim = int(reference.shape[1])
-    left, _, right = np.linalg.svd(reference.T @ moving)
-    signs = np.ones(dim, dtype=float)
-    signs[-1] = float(np.sign(np.linalg.det(left @ right)) or 1.0)
-    return left @ np.diag(signs) @ right
+from scgo.utils.geometry_math import kabsch_rotation as kabsch_rotation
+from scgo.utils.geometry_math import random_unit_vector as random_unit_vector
+from scgo.utils.validation import validate_surface_normal_axis
 
 
 def kabsch_rotation_in_plane(
@@ -30,8 +15,7 @@ def kabsch_rotation_in_plane(
     surface_normal_axis: int = 2,
 ) -> np.ndarray:
     """3x3 rotation that aligns ``moving`` to ``reference`` in the surface plane."""
-    if surface_normal_axis not in (0, 1, 2):
-        raise SCGOValidationError("surface_normal_axis must be 0, 1, or 2")
+    validate_surface_normal_axis(surface_normal_axis)
     plane_axes = [i for i in range(3) if i != surface_normal_axis]
     planar = kabsch_rotation(reference[:, plane_axes], moving[:, plane_axes])
     rotation = np.eye(3)

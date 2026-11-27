@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 from ase import Atoms
-from ase.geometry import find_mic
-from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close_two_sets
-from numpy.random import Generator
 from scipy.spatial import ConvexHull, QhullError
 
-from scgo.ase_ga_patches.mutations import _ensure_rng
 from scgo.ase_ga_patches.mutations._common import _resolve_op_connectivity_factor
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
+from scgo.cluster_adsorbate._fragment_mutation import _FragmentMutation
 from scgo.cluster_adsorbate.config import (
     ClusterAdsorbateConfig,
     resolve_cluster_adsorbate_config,
@@ -25,6 +23,7 @@ from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.cluster_adsorbate.sites import (
     SiteType,
     SurfaceSiteCandidate,
+    _empty_sites,
     count_site_candidates,
 )
 from scgo.cluster_adsorbate.validation import validate_adsorbate_fragment_integrity
@@ -36,37 +35,20 @@ from scgo.surface.deposition import (
     _slab_surface_layer,
 )
 from scgo.surface.validation import validate_supported_cluster_deposit
-from scgo.system_types import (
-    AdsorbateDefinition,
-    AdsorbateFragmentInput,
-    SystemType,
-    get_system_policy,
-    resolve_adsorbate_fragments,
-)
 from scgo.system_types.connectivity_factor import (
     ConnectivityFactorInput,
     NormalizedConnectivityFactor,
     normalize_connectivity_factor,
     pair_bond_threshold,
 )
+from scgo.system_types.structure_validation import StructureValidationPolicy
+from scgo.utils.geometry_math import mic_displacement
 
 # In-plane distance to the nearest core atom, in bond-threshold units.
 # The lower edge clears the fragment so it is no longer bonded to the core.
 _NEIGHBORHOOD_LENGTHS = 3.0
 _DETACH_CLEARANCE_A = 0.05
 _PLACEMENT_TRIES = 8
-
-
-def _blank_sites() -> dict[SiteType, list[SurfaceSiteCandidate]]:
-    return {"vertex": [], "edge": [], "facet": []}
-
-
-def _mic_delta(origin: np.ndarray, target: np.ndarray, atoms: Atoms) -> np.ndarray:
-    delta = np.asarray(target, dtype=float) - np.asarray(origin, dtype=float)
-    if not np.any(atoms.pbc):
-        return delta
-    mic, _dist = find_mic(delta.reshape(1, 3), atoms.cell, atoms.pbc)
-    return np.asarray(mic[0], dtype=float)
 
 
 def _in_plane_distance(delta: np.ndarray, axis: int) -> float:
@@ -87,9 +69,11 @@ def _max_pair_threshold(
 ) -> float:
     spec = normalize_connectivity_factor(connectivity_factor)
     longest = 0.0
-    for frag_symbol in set(fragment_symbols):
+    fragment_symbol_set = set(fragment_symbols)
+    core_symbol_set = set(core_symbols)
+    for frag_symbol in fragment_symbol_set:
         frag_radius = get_covalent_radius(frag_symbol)
-        for core_symbol in set(core_symbols):
+        for core_symbol in core_symbol_set:
             longest = max(
                 longest,
                 pair_bond_threshold(
@@ -142,7 +126,7 @@ def _filter_spillover_sites(
     connectivity_factor: ConnectivityFactorInput | NormalizedConnectivityFactor,
 ) -> dict[SiteType, list[SurfaceSiteCandidate]]:
     """Keep slab sites beside the cluster, not under it and not across the cell."""
-    kept = _blank_sites()
+    kept = _empty_sites()
     if len(core) == 0 or len(slab) == 0:
         return kept
     length = _max_pair_threshold(
@@ -167,7 +151,10 @@ def _filter_spillover_sites(
         for candidate in candidates:
             nearest = min(
                 _in_plane_distance(
-                    _mic_delta(core_position, candidate.anchor, slab), axis
+                    mic_displacement(
+                        core_position, candidate.anchor, slab.cell, slab.pbc
+                    ),
+                    axis,
                 )
                 for core_position in core_positions
             )
@@ -175,7 +162,8 @@ def _filter_spillover_sites(
                 continue
             if equations is not None:
                 site_xy = _drop_normal(
-                    com + _mic_delta(com, candidate.anchor, slab), axis
+                    com + mic_displacement(com, candidate.anchor, slab.cell, slab.pbc),
+                    axis,
                 )
                 if _inside_expanded_hull(site_xy, equations, core_radius):
                     continue
@@ -216,72 +204,27 @@ def _placement_config(
         if height_min is not None and height_max is not None:
             height_max = max(height_max, height_min)
         attempts = min(max(attempts * 3, 80), 400)
-    return ClusterAdsorbateConfig(
+    return replace(
+        base,
         max_placement_attempts=attempts,
         random_spin_about_normal=True,
         height_min=height_min,
         height_max=height_max,
         blmin_ratio=blmin_ratio,
         structure_min_distance_factor=min_distance,
-        validate_combined_structure=base.validate_combined_structure,
-        structure_connectivity_factor=base.structure_connectivity_factor,
-        structure_check_clashes=base.structure_check_clashes,
         structure_check_connectivity=False,
     )
 
 
-class FragmentDetachMutation(OffspringCreator):
+class FragmentDetachMutation(_FragmentMutation):
     """Move one intact, core-bound adsorbate onto a nearby slab site.
 
     The child is an adsorbate-only subgroup. ``allow_disconnected_mobile``
     keeps the shared finalizer from dropping that child.
     """
 
-    def __init__(
-        self,
-        blmin: dict,
-        n_top: int,
-        system_type: SystemType,
-        adsorbate_definition: AdsorbateDefinition,
-        fragment_templates: AdsorbateFragmentInput | None = None,
-        cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-        *,
-        rng: Generator | None = None,
-        verbose: bool = False,
-        surface_normal_axis: int = 2,
-    ) -> None:
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
-        self.adsorbate_definition = adsorbate_definition
-        self.fragment_templates = fragment_templates
-        self.cluster_adsorbate_config = cluster_adsorbate_config
-        self.surface_normal_axis = surface_normal_axis
-        self.descriptor = "FragmentDetachMutation"
-        self.min_inputs = 1
-        self.allow_disconnected_mobile = True
-
-    def get_new_individual(self, parents):
-        parent = parents[0]
-        mutant = self.mutate(parent)
-        return _finalize_mutant(self, parent, mutant, "mutation: fragment_detach")
-
-    def _fragment_template_for_tag(
-        self, mobile: Atoms, tag: int, frag_index: int
-    ) -> Atoms:
-        if self.fragment_templates is not None:
-            fragments = resolve_adsorbate_fragments(
-                self.fragment_templates,
-                self.adsorbate_definition,
-                context="FragmentDetachMutation",
-            )
-            if 0 <= frag_index < len(fragments):
-                return fragments[frag_index].copy()
-        mask = mobile.get_tags() == tag
-        return mobile[mask].copy()
+    descriptor = "FragmentDetachMutation"
+    allow_disconnected_mobile = True
 
     def _bonded_tags(
         self,
@@ -346,7 +289,9 @@ class FragmentDetachMutation(OffspringCreator):
             adsorbate_fragment_lengths=list(
                 self.adsorbate_definition.adsorbate_fragment_lengths
             ),
-            allow_adsorbate_surface_detachment=True,
+            validation=StructureValidationPolicy(
+                allow_adsorbate_surface_detachment=True
+            ),
         )
         return ok
 

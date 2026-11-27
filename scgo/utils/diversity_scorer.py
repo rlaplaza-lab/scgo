@@ -12,6 +12,7 @@ from ase import Atoms
 from scgo.exceptions import SCGOValidationError
 from scgo.utils.comparators import (
     PureInteratomicDistanceComparator,
+    _block_unit_weight,
     get_block_distance_units,
     get_sorted_dist_list,
     iter_ordered_units,
@@ -107,8 +108,7 @@ class DiversityScorer:
             )
             parts = [dist_dict[atomic_num] for atomic_num in sorted(dist_dict.keys())]
 
-        descriptor = np.concatenate(parts) if parts else np.array([])
-        return descriptor
+        return np.concatenate(parts) if parts else np.array([])
 
     def _slice_weight_vector(self, descriptor_length: int) -> np.ndarray:
         """Per-element weights aligned with one block-aware descriptor row.
@@ -139,20 +139,12 @@ class DiversityScorer:
         offset = 0
         for key, unit in iter_ordered_units(units):
             length = len(unit)
-            if key[0] == "intra":
-                role = comparator.blocks.blocks[key[1]].role
-                weights[offset : offset + length] = comparator._role_weight(role)
-            else:
-                role_i = comparator.blocks.blocks[key[1]].role
-                role_j = comparator.blocks.blocks[key[2]].role
-                weights[offset : offset + length] = (
-                    comparator.cross_weight
-                    * (
-                        comparator._role_weight(role_i)
-                        * comparator._role_weight(role_j)
-                    )
-                    ** 0.5
-                )
+            weights[offset : offset + length] = _block_unit_weight(
+                key,
+                comparator.blocks,
+                role_weight=comparator._role_weight,
+                cross_weight=comparator.cross_weight,
+            )
             offset += length
         if offset != descriptor_length:
             logger.warning(
@@ -220,9 +212,7 @@ class DiversityScorer:
             try:
                 cum_diff, max_diff = self.comparator.get_differences(atoms, ref)
             except (ValueError, RuntimeError, SCGOValidationError) as exc:
-                get_logger(__name__).debug(
-                    "Skipping comparator pair in diversity fallback: %s", exc
-                )
+                logger.debug("Skipping comparator pair in diversity fallback: %s", exc)
                 continue
             dissimilarity = cum_diff + 0.5 * max_diff
             if not np.isfinite(dissimilarity):

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import tempfile
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,12 +11,13 @@ from typing import Any
 
 import numpy as np
 
-from scgo.exceptions import SCGOFileError
 from scgo.metadata.provenance import output_json_provenance
+from scgo.utils.atomic_json import atomic_write_json
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import get_logger, log_info_v
 
-logger = get_logger(__name__)
+_LOGGER = get_logger(__name__)
+logger = _LOGGER
 
 
 class RunDirJSONEncoder(json.JSONEncoder):
@@ -92,9 +91,8 @@ def ensure_run_id(run_id: str | None, verbosity: int = 0, logger=None) -> str:
     """Ensure a run_id exists, generating one if needed and logging if appropriate."""
     if run_id is None:
         run_id = generate_run_id()
-        if logger is None:
-            logger = get_logger(__name__)
-        log_info_v(logger, "Generated run ID: %s", run_id, verbosity=verbosity)
+        active_logger = _LOGGER if logger is None else logger
+        log_info_v(active_logger, "Generated run ID: %s", run_id, verbosity=verbosity)
     return run_id
 
 
@@ -127,25 +125,12 @@ def save_run_dir_record(
     payload = {**output_json_provenance(), **record_obj.to_dict()}
 
     metadata_file = os.path.join(run_dir, "metadata.json")
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".tmp_run_",
-        suffix=".json",
-        dir=run_dir,
+    atomic_write_json(
+        metadata_file,
+        payload,
+        cls=RunDirJSONEncoder,
+        tmp_prefix=".tmp_run_",
     )
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(payload, f, indent=2, cls=RunDirJSONEncoder)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, metadata_file)
-    except OSError as e:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise SCGOFileError(f"Failed to write {metadata_file}: {e}") from e
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
 
 
 def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
@@ -199,9 +184,8 @@ def resolve_run_id_from_db_path(
 ) -> str | None:
     """Resolve GO run ID from a database path (``run_*`` segment when present).
 
-    Returns ``None`` (with a warning) when no ``run_*`` segment is found, so
-    callers can skip the database instead of poisoning provenance with the
-    filename basename.
+    Returns ``None`` when no ``run_*`` segment is found (do not use the basename).
+    Discovery emits the warning once via ``list_discovered_db_paths_with_run``.
     """
     db_path_str = os.path.abspath(str(db_path))
     if base_dir is not None:
@@ -228,10 +212,6 @@ def resolve_run_id_from_db_path(
     if parent_name.startswith("run_"):
         return parent_name
 
-    logger.warning(
-        "Could not resolve run_id from path %s; leaving run_id unset",
-        db_path,
-    )
     return None
 
 

@@ -19,11 +19,13 @@ from tests.constants import (
     EMT_PT2_BOND_TOL_ANG,
     PT4_EMT_BARRIER_EV,
 )
-from tests.helpers import assert_nn_distances_in_band, assert_ts_result_valid
-
-
-def _oh_template() -> Atoms:
-    return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
+from tests.helpers import (
+    assert_nn_distances_in_band,
+    assert_ts_result_valid,
+)
+from tests.helpers import (
+    oh_template as _oh_template,
+)
 
 
 def _pt3_triangle() -> Atoms:

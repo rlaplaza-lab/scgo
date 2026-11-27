@@ -16,7 +16,7 @@ Note:
 
 from __future__ import annotations
 
-from typing import Any
+from scgo.utils.lazy_exports import lazy_submodule_dir, lazy_submodule_getattr
 
 __all__ = [
     "MACE",
@@ -26,32 +26,16 @@ __all__ = [
     "TorchSimBatchRelaxer",
 ]
 
+_LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    "MACE": ("scgo.calculators.mace_helpers", "MACE"),
+    "MaceUrls": ("scgo.calculators.mace_helpers", "MaceUrls"),
+    "UMA": ("scgo.calculators.uma_helpers", "UMA"),
+    "UPET": ("scgo.calculators.upet_helpers", "UPET"),
+    "TorchSimBatchRelaxer": (
+        "scgo.calculators.torchsim_helpers",
+        "TorchSimBatchRelaxer",
+    ),
+}
 
-def __getattr__(name: str) -> Any:
-    if name == "MACE":
-        from .mace_helpers import MACE
-
-        return MACE
-    if name == "MaceUrls":
-        from .mace_helpers import MaceUrls
-
-        return MaceUrls
-    if name == "UMA":
-        from .uma_helpers import UMA
-
-        return UMA
-    if name == "UPET":
-        from .upet_helpers import UPET
-
-        return UPET
-    if name == "TorchSimBatchRelaxer":
-        from .torchsim_helpers import TorchSimBatchRelaxer
-
-        return TorchSimBatchRelaxer
-
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def __dir__() -> list[str]:
-    return sorted(__all__)
+__getattr__ = lazy_submodule_getattr(globals(), _LAZY_ATTRS, cache=False)
+__dir__ = lazy_submodule_dir(__all__)

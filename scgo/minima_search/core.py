@@ -5,7 +5,6 @@ Coordinates datetime-tagged runs, manages output, filters results, validates min
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import pickle
@@ -29,6 +28,7 @@ from scgo.cluster_adsorbate.hierarchical import (
     build_hierarchical_core_fragment_cluster,
 )
 from scgo.constants import (
+    DEFAULT_CROSS_WEIGHT,
     DEFAULT_ENERGY_TOLERANCE,
     DEFAULT_FMAX_THRESHOLD,
     DEFAULT_IMAG_FREQ_THRESHOLD,
@@ -59,6 +59,7 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.system_types import (
+    StructureValidationPolicy,
     as_adsorbate_definition,
     get_system_policy,
     resolve_mobile_composition,
@@ -69,6 +70,7 @@ from scgo.system_types import (
 )
 from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
 from scgo.ts_search.transition_state import _align_product_for_neb
+from scgo.utils.atomic_json import atomic_write_json
 from scgo.utils.comparators import ComparatorBlocks, uniqueness_settings_from_mapping
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
@@ -81,7 +83,7 @@ from scgo.utils.helpers import (
     is_true_minimum,
     prepare_atoms_for_xyz_export,
 )
-from scgo.utils.logging import get_logger, log_debug_v, log_info_v
+from scgo.utils.logging import get_logger, log_debug_v, log_info_v, validate_verbosity
 from scgo.utils.parallel_workers import resolve_n_jobs_for_tasks
 from scgo.utils.path_keys import resolve_run_path_key
 from scgo.utils.phase_logging import (
@@ -106,6 +108,16 @@ _SURFACE_SYSTEM_TYPES = frozenset(
 
 _VALIDATION_CALCULATOR: Calculator | None = None
 _MIN_PARALLEL_VALIDATION_CANDIDATES = 4
+_SYSTEM_TYPE_REQUIRED_MSG = (
+    "system_type must be set in global_optimizer_kwargs "
+    "(e.g. 'gas_cluster', 'surface_cluster')."
+)
+
+
+def _require_system_type_str(system_type: object) -> str:
+    if not isinstance(system_type, str):
+        raise SCGOValidationError(_SYSTEM_TYPE_REQUIRED_MSG)
+    return system_type
 
 
 def _init_validation_worker(calculator: Calculator) -> None:
@@ -146,7 +158,7 @@ def _validate_candidates_parallel(
 
     try:
         deepcopy(calculator)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — deepcopy probe → sequential fallback
         logger.warning(
             "Calculator is not deep-copyable (%s); "
             "falling back to sequential validation",
@@ -507,13 +519,8 @@ def _validate_common_run_inputs(
             allow_empty = False
     validate_composition(composition, allow_empty=allow_empty, allow_tuple=False)
 
-    if require_system_type and not isinstance(
-        global_optimizer_kwargs.get("system_type"), str
-    ):
-        raise SCGOValidationError(
-            "system_type must be set in global_optimizer_kwargs "
-            "(e.g. 'gas_cluster', 'surface_cluster')."
-        )
+    if require_system_type:
+        _require_system_type_str(global_optimizer_kwargs.get("system_type"))
 
     if not isinstance(output_dir, str) or not output_dir:
         raise SCGOValidationError("output_dir must be a non-empty string")
@@ -521,8 +528,7 @@ def _validate_common_run_inputs(
     if not isinstance(rng, np.random.Generator):
         raise SCGOValidationError("rng must be a numpy.random.Generator")
 
-    if not isinstance(verbosity, int) or verbosity not in (0, 1, 2, 3):
-        raise SCGOValidationError("verbosity must be one of 0, 1, 2, or 3")
+    validate_verbosity(verbosity)
 
 
 def _compact_structural_gate_reason(message: str) -> str:
@@ -553,6 +559,20 @@ def _gate_structurally_valid_candidates(
     """
     valid: list[tuple[float, Atoms]] = []
     dropped: list[tuple[float, str]] = []
+    validation = StructureValidationPolicy(
+        connectivity_factor=global_optimizer_kwargs.get("connectivity_factor"),
+        cluster_adsorbate_config=cluster_adsorbate_config,
+        allow_cluster_fragmentation=bool(
+            global_optimizer_kwargs.get("allow_cluster_fragmentation", False)
+        ),
+        allow_adsorbate_surface_detachment=bool(
+            global_optimizer_kwargs.get("allow_adsorbate_surface_detachment", False)
+        ),
+        enforce_adsorbate_subgraph_integrity=bool(
+            global_optimizer_kwargs.get("enforce_adsorbate_subgraph_integrity", True)
+        ),
+        n_slab_deposit=n_slab_deposit,
+    )
     for energy, atoms in candidates:
         resolved_n_slab = (
             n_slab if n_slab is not None else (get_tag(atoms, "n_slab_atoms") or 0)
@@ -566,18 +586,7 @@ def _gate_structurally_valid_candidates(
                 adsorbate_definition=global_optimizer_kwargs.get(
                     "adsorbate_definition"
                 ),
-                connectivity_factor=global_optimizer_kwargs.get("connectivity_factor"),
-                cluster_adsorbate_config=cluster_adsorbate_config,
-                allow_cluster_fragmentation=global_optimizer_kwargs.get(
-                    "allow_cluster_fragmentation", False
-                ),
-                allow_adsorbate_surface_detachment=global_optimizer_kwargs.get(
-                    "allow_adsorbate_surface_detachment", False
-                ),
-                enforce_adsorbate_subgraph_integrity=global_optimizer_kwargs.get(
-                    "enforce_adsorbate_subgraph_integrity", True
-                ),
-                n_slab_deposit=n_slab_deposit,
+                validation=validation,
             )
         except SCGOValidationError as exc:
             dropped.append((energy, str(exc)))
@@ -678,12 +687,7 @@ def scgo(
         optimizer_kwargs["fitness_strategy"] = resolve_fitness_strategy(
             optimizer_kwargs["fitness_strategy"], allow_none=False
         )
-    system_type = optimizer_kwargs.get("system_type")
-    if not isinstance(system_type, str):
-        raise SCGOValidationError(
-            "system_type must be set in global_optimizer_kwargs "
-            "(e.g. 'gas_cluster', 'surface_cluster')."
-        )
+    system_type = _require_system_type_str(optimizer_kwargs.get("system_type"))
     policy = get_system_policy(system_type)
     surface_cfg = optimizer_kwargs.get("surface_config")
     validate_system_type_settings(
@@ -896,10 +900,10 @@ def run_trials(
 
     # Cache cluster formula (used multiple times) and path key for filenames
     composition_str = get_cluster_formula(composition)
-    system_type_for_path = global_optimizer_kwargs.get("system_type")
+    system_type = _require_system_type_str(global_optimizer_kwargs.get("system_type"))
     path_key = resolve_run_path_key(
         composition,
-        system_type=system_type_for_path,
+        system_type=system_type,
         params=global_optimizer_kwargs,
     )
     # Slab-target runs have an empty composition (and thus empty chemical
@@ -944,17 +948,23 @@ def run_trials(
                 prefer_final_unique=True,
             )
             if previous_minima:
-                logger.info(
+                log_info_v(
+                    logger,
                     "Loaded %s minima from previous runs (excluding current run %s)",
                     len(previous_minima),
                     run_id,
+                    verbosity=verbosity,
                 )
 
-    all_raw_minima = []
     write_timing = _write_timing_json_enabled(global_optimizer_kwargs)
 
     run_rng = create_child_rng(rng)
-    logger.info("Running global optimization for run %s", run_id)
+    log_info_v(
+        logger,
+        "Running global optimization for run %s",
+        run_id,
+        verbosity=verbosity,
+    )
 
     all_raw_minima = scgo(
         composition=composition,
@@ -972,16 +982,23 @@ def run_trials(
     # Combine all results (previous + current) before deduplication
     if previous_minima:
         all_minima_for_filtering = previous_minima + all_raw_minima
-        logger.info(
+        log_info_v(
+            logger,
             "Combined %s previous + %s current minima",
             len(previous_minima),
             len(all_raw_minima),
+            verbosity=verbosity,
         )
     else:
         all_minima_for_filtering = all_raw_minima
 
     if not all_minima_for_filtering:
-        logger.info("No minima found")
+        log_info_v(
+            logger,
+            "No minima found",
+            verbosity=verbosity,
+            min_verbosity=1,
+        )
         _write_results_summary(
             output_dir=output_dir,
             final_minima=[],
@@ -991,18 +1008,19 @@ def run_trials(
         )
         return []
 
-    logger.info(
+    log_info_v(
+        logger,
         "Run complete. Found %s raw minima from current run",
         len(all_raw_minima),
+        verbosity=verbosity,
     )
-    logger.info("Filtering for unique structures across all runs")
+    log_info_v(
+        logger,
+        "Filtering for unique structures across all runs",
+        verbosity=verbosity,
+    )
     surface_cfg = global_optimizer_kwargs.get("surface_config")
-    system_type_for_mic = global_optimizer_kwargs.get("system_type")
-    if not isinstance(system_type_for_mic, str):
-        raise SCGOValidationError(
-            "system_type must be set in global_optimizer_kwargs for minima dedupe."
-        )
-    dedupe_mic = resolve_structure_mic(system_type_for_mic, surface_cfg)
+    dedupe_mic = resolve_structure_mic(system_type, surface_cfg)
     uniqueness = uniqueness_settings_from_mapping(global_optimizer_kwargs)
     energy_tol = global_optimizer_kwargs.get("energy_tolerance")
     if energy_tol is None:
@@ -1029,16 +1047,16 @@ def run_trials(
     # Adsorbate types without any split info stay on the legacy rule too.
     dedupe_blocks: ComparatorBlocks | None = None
     dedupe_weights: dict[str, float] | None = None
-    dedupe_cross_weight = 1.0
+    dedupe_cross_weight = DEFAULT_CROSS_WEIGHT
     dedupe_settings = uniqueness
     ads_def_for_dedupe = global_optimizer_kwargs.get("adsorbate_definition")
     ads_info_available = (
-        not get_system_policy(system_type_for_mic).has_adsorbate
+        not get_system_policy(system_type).has_adsorbate
         or ads_def_for_dedupe is not None
     )
     if comparator_n_top is None and ads_info_available:
         resolved_geo = resolve_uniqueness_geometry(
-            system_type=system_type_for_mic,
+            system_type=system_type,
             n_atoms=len(all_minima_for_filtering[0][1]),
             surface_config=surface_cfg,
             adsorbate_definition=ads_def_for_dedupe,
@@ -1067,7 +1085,7 @@ def run_trials(
     # passes connectivity / connected-components checks regardless of which
     # algorithm produced it (simple/BH/GA already gate internally; this is a
     # defense-in-depth backstop before the physical hessian/vibration gate).
-    gate_system_type = str(system_type_for_mic)
+    gate_system_type = str(system_type)
     gate_policy = get_system_policy(gate_system_type)
     gate_surface_config_raw = global_optimizer_kwargs.get("surface_config")
     gate_cluster_adsorbate_config_raw = global_optimizer_kwargs.get(
@@ -1163,12 +1181,15 @@ def run_trials(
             )
 
         if not parallel_ok:
+            n_rejected = 0
             for i, (energy, atoms) in enumerate(unique_candidates):
-                logger.info(
+                log_debug_v(
+                    logger,
                     "Validating candidate %s/%s (E=%.4f eV)...",
                     i + 1,
                     len(unique_candidates),
                     energy,
+                    verbosity=verbosity,
                 )
                 try:
                     is_valid = is_true_minimum(
@@ -1181,8 +1202,15 @@ def run_trials(
                     if is_valid:
                         validated_minima.append((energy, atoms))
                     else:
-                        logger.info("Candidate %s rejected", i + 1)
+                        n_rejected += 1
+                        log_debug_v(
+                            logger,
+                            "Candidate %s rejected",
+                            i + 1,
+                            verbosity=verbosity,
+                        )
                 except (SCGOValidationError, OSError, RuntimeError, ValueError) as e:
+                    n_rejected += 1
                     logger.warning(
                         "Validation failed for candidate %s (E=%.4f eV): %s",
                         i + 1,
@@ -1190,10 +1218,20 @@ def run_trials(
                         e,
                         exc_info=(verbosity >= 2),
                     )
+            log_info_v(
+                logger,
+                "Validation rollup: %d confirmed, %d rejected of %d candidates",
+                len(validated_minima),
+                n_rejected,
+                len(unique_candidates),
+                verbosity=verbosity,
+            )
 
         if not validated_minima:
-            logger.info(
-                "Validation finished. No candidates were confirmed as true minima"
+            log_info_v(
+                logger,
+                "Validation finished. No candidates were confirmed as true minima",
+                verbosity=verbosity,
             )
             _write_results_summary(
                 output_dir=output_dir,
@@ -1209,8 +1247,18 @@ def run_trials(
         final_minima = unique_candidates
 
     best_energy, _ = final_minima[0]
-    logger.info("Process complete. Found %s final unique minima", len(final_minima))
-    logger.info("Best potential energy: %.4f eV", best_energy)
+    log_info_v(
+        logger,
+        "Process complete. Found %s final unique minima",
+        len(final_minima),
+        verbosity=verbosity,
+    )
+    log_info_v(
+        logger,
+        "Best potential energy: %.4f eV",
+        best_energy,
+        verbosity=verbosity,
+    )
 
     final_xyz_dir = os.path.join(output_dir, "final_unique_minima")
     logger.info(
@@ -1229,10 +1277,6 @@ def run_trials(
     )
 
     align_kwargs_source = dict(global_optimizer_kwargs)
-    if not isinstance(align_kwargs_source.get("system_type"), str):
-        raise SCGOValidationError(
-            "system_type must be set in global_optimizer_kwargs for result alignment."
-        )
     surface_align_kwargs = _resolve_surface_alignment_kwargs(align_kwargs_source)
     reference_atoms: Atoms | None = None
     reference_n_slab = 0
@@ -1400,10 +1444,9 @@ def _write_results_summary(
 
     summary_file = os.path.join(output_dir, "results_summary.json")
     try:
-        with open(summary_file, "w") as f:
-            json.dump(summary, f, indent=2, cls=RunDirJSONEncoder)
+        atomic_write_json(summary_file, summary, cls=RunDirJSONEncoder)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Wrote results summary to %s", summary_file)
-    except (OSError, TypeError) as e:
+    except (OSError, SCGOFileError, TypeError) as e:
         logger.warning("Failed to write results summary: %s", e)
         raise

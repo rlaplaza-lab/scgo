@@ -16,6 +16,7 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 
 from scgo.exceptions import (
+    SCGORuntimeError,
     SCGOValidationError,
 )
 from scgo.system_types.connectivity_factor import (
@@ -28,6 +29,7 @@ from scgo.system_types.connectivity_factor import (
     min_connectivity_scale,
     normalize_connectivity_factor,
 )
+from scgo.utils.geometry_math import random_unit_vector
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 from scgo.utils.phase_logging import InitDiagnosticsCollector
@@ -69,6 +71,13 @@ from .initialization_config import (
 )
 
 logger = get_logger(__name__)
+
+
+def _connectivity_kdtree(positions: np.ndarray) -> KDTree | None:
+    """Build a KDTree when ``len(positions) >= KDTREE_THRESHOLD``."""
+    if len(positions) >= KDTREE_THRESHOLD:
+        return KDTree(positions)
+    return None
 
 
 def _record_placement_failure(error_msg: str) -> None:
@@ -142,13 +151,12 @@ def _growth_order_alternating(
     """
     element_groups = _group_atoms_by_element(atoms_to_add)
     max_len = max(len(group) for group in element_groups.values())
-    result = [
+    return [
         element_groups[element][i]
         for i in range(max_len)
         for element in element_groups
         if i < len(element_groups[element])
     ]
-    return result
 
 
 def _atomic_mass(symbol: str) -> float:
@@ -431,9 +439,7 @@ def _sample_connectivity_anchored_position(
     rng: np.random.Generator,
 ) -> np.ndarray:
     """Return a uniform random point on the sphere of radius ``bond_distance``."""
-    direction = rng.standard_normal(3)
-    direction /= np.linalg.norm(direction)
-    return anchor_pos + direction * bond_distance
+    return anchor_pos + random_unit_vector(rng) * bond_distance
 
 
 def _apply_growth_order_strategy(
@@ -800,8 +806,6 @@ def _add_atoms_to_cluster_iteratively(
 
     # Handle first atom placement (always at origin)
     if not new_atoms:
-        if not atoms_to_add:
-            return new_atoms
         first_symbol = atoms_to_add.pop(0)
         new_atoms.append(Atom(first_symbol, np.array([0.0, 0.0, 0.0])))
 
@@ -877,10 +881,8 @@ def _add_atoms_single_mode(
         )
         center = new_atoms.get_center_of_mass() if len(new_atoms) > 0 else None
 
-        use_kdtree = len(new_atoms) >= KDTREE_THRESHOLD
-        tree = None
-        if use_kdtree and len(new_atoms) > 0:
-            tree = KDTree(current_positions)
+        tree = _connectivity_kdtree(current_positions)
+        use_kdtree = tree is not None
 
         for attempt in range(max_attempts_per_atom):
             attempt_ratio = (attempt + 1) / max_attempts_per_atom
@@ -896,7 +898,7 @@ def _add_atoms_single_mode(
 
             if n_current > 0:
                 if center is None:
-                    raise TypeError("center must be computed when n_current > 0")
+                    raise SCGORuntimeError("center must be computed when n_current > 0")
 
                 # Special handling for 2-atom clusters: bond length must respect
                 # both the steric floor and connectivity_factor (not raw r_i+r_j).
@@ -1249,10 +1251,8 @@ def _add_atoms_batch_mode(
             eye = np.eye(len(atoms_to_place), dtype=bool)
             inter_clash_free = ~np.any((inter_d < inter_thresh) & ~eye, axis=1)
 
-        # Use KDTree for large clusters to optimize distance checks
-        use_kdtree = len(new_atoms) >= KDTREE_THRESHOLD
-        if use_kdtree and len(current_positions) > 0:
-            tree = KDTree(current_positions)
+        tree = _connectivity_kdtree(current_positions)
+        use_kdtree = tree is not None
 
         for i, (atom_symbol, candidate_pos) in enumerate(
             zip(atoms_to_place, candidates, strict=True)

@@ -2,38 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close_two_sets
-from numpy.random import Generator
 
-from scgo.ase_ga_patches.mutations import _ensure_rng
 from scgo.ase_ga_patches.mutations._common import (
     _preserves_mobile_connectivity,
     _resolve_op_connectivity_factor,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.cluster_adsorbate.config import (
-    ClusterAdsorbateConfig,
-    resolve_cluster_adsorbate_config,
-)
+from scgo.cluster_adsorbate._fragment_mutation import _FragmentMutation
+from scgo.cluster_adsorbate.config import resolve_cluster_adsorbate_config
 from scgo.cluster_adsorbate.helpers import (
     parse_positive_fragment_lengths,
     resolve_fragment_anchor_and_bond_axis,
 )
 from scgo.cluster_adsorbate.placement import place_fragment_on_cluster
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
-from scgo.system_types import (
-    AdsorbateDefinition,
-    AdsorbateFragmentInput,
-    SystemType,
-    get_system_policy,
-    resolve_adsorbate_fragments,
-)
 
 
-class FragmentRepositionMutation(OffspringCreator):
+class FragmentRepositionMutation(_FragmentMutation):
     """Rigidly re-place one adsorbate fragment on a new core surface site.
 
     Core atoms (tag 0) define the convex-hull site pool; other adsorbate
@@ -42,50 +31,7 @@ class FragmentRepositionMutation(OffspringCreator):
     the rigid body.
     """
 
-    def __init__(
-        self,
-        blmin: dict,
-        n_top: int,
-        system_type: SystemType,
-        adsorbate_definition: AdsorbateDefinition,
-        fragment_templates: AdsorbateFragmentInput | None = None,
-        cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
-        *,
-        rng: Generator | None = None,
-        verbose: bool = False,
-        surface_normal_axis: int = 2,
-    ) -> None:
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
-        self.adsorbate_definition = adsorbate_definition
-        self.fragment_templates = fragment_templates
-        self.cluster_adsorbate_config = cluster_adsorbate_config
-        self.surface_normal_axis = surface_normal_axis
-        self.descriptor = "FragmentRepositionMutation"
-        self.min_inputs = 1
-
-    def get_new_individual(self, parents):
-        parent = parents[0]
-        mutant = self.mutate(parent)
-        return _finalize_mutant(self, parent, mutant, "mutation: fragment_reposition")
-
-    def _fragment_template_for_tag(
-        self, mobile: Atoms, tag: int, frag_index: int
-    ) -> Atoms:
-        if self.fragment_templates is not None:
-            fragments = resolve_adsorbate_fragments(
-                self.fragment_templates,
-                self.adsorbate_definition,
-                context="FragmentRepositionMutation",
-            )
-            if 0 <= frag_index < len(fragments):
-                return fragments[frag_index].copy()
-        mask = mobile.get_tags() == tag
-        return mobile[mask].copy()
+    descriptor = "FragmentRepositionMutation"
 
     def mutate(self, atoms: Atoms) -> Atoms | None:
         n_top = int(self.n_top)
@@ -119,7 +65,8 @@ class FragmentRepositionMutation(OffspringCreator):
 
         fragment_tmpl = self._fragment_template_for_tag(mobile, target_tag, frag_index)
         use_mic = bool(self._policy.uses_surface)
-        relaxed = ClusterAdsorbateConfig(
+        relaxed = replace(
+            ca,
             max_placement_attempts=min(max(ca.max_placement_attempts * 3, 80), 400),
             random_spin_about_normal=True,
             height_min=None if ca.height_min is None else ca.height_min * 0.75,
@@ -128,10 +75,6 @@ class FragmentRepositionMutation(OffspringCreator):
             structure_min_distance_factor=max(
                 ca.structure_min_distance_factor, BLMIN_RATIO_DEFAULT
             ),
-            validate_combined_structure=ca.validate_combined_structure,
-            structure_connectivity_factor=ca.structure_connectivity_factor,
-            structure_check_clashes=ca.structure_check_clashes,
-            structure_check_connectivity=ca.structure_check_connectivity,
         )
         for cfg in (ca, relaxed):
             placed = place_fragment_on_cluster(

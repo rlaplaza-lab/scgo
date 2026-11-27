@@ -7,7 +7,7 @@ optimization, enabling optimization objectives beyond simple energy minimization
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from ase import Atoms
 
@@ -78,10 +78,10 @@ def calculate_fitness(
     if strategy == FitnessStrategy.LOW_ENERGY:
         return -energy
 
-    elif strategy == FitnessStrategy.HIGH_ENERGY:
+    if strategy == FitnessStrategy.HIGH_ENERGY:
         return energy
 
-    elif strategy == FitnessStrategy.DIVERSITY:
+    if strategy == FitnessStrategy.DIVERSITY:
         if diversity_scorer is None:
             raise SCGOValidationError(
                 "diversity fitness strategy requires a diversity_scorer"
@@ -89,8 +89,7 @@ def calculate_fitness(
 
         return float(diversity_scorer.score(atoms))
 
-    else:
-        raise SCGOValidationError(f"Unknown fitness strategy: {strategy}")
+    assert_never(strategy)
 
 
 def get_fitness_from_atoms(atoms: Atoms, default: float | None = None) -> float | None:

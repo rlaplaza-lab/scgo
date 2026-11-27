@@ -10,6 +10,7 @@ from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
     DualCutAndSplicePairing,
     _assert_offspring_integrity,
+    _max_feasible_both_parent_atoms,
     _pop_closest_to_plane,
 )
 from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
@@ -318,6 +319,7 @@ def test_cut_and_splice_all_moieties_can_mix_adsorbate_from_second_parent():
             blmin=blmin,
             minfrac=0.3,
             use_tags=True,
+            split_core_tag=True,
             target_tags=None,
             system_type="gas_cluster_adsorbate",
             rng=np.random.default_rng(seed),
@@ -358,6 +360,133 @@ def test_create_ga_pairing_cluster_adsorbate_mixes_all_moieties():
     )
     assert pairing.use_tags is True
     assert pairing.target_tags is None
+    assert pairing.split_core_tag is True
+
+
+def test_max_feasible_both_parent_atoms_for_rigid_groups():
+    assert _max_feasible_both_parent_atoms([]) == 0
+    assert _max_feasible_both_parent_atoms([4, 1]) == 1
+    assert _max_feasible_both_parent_atoms([1, 1, 1, 1, 1]) == 2
+    assert _max_feasible_both_parent_atoms([3, 2, 2]) == 3
+
+
+def _permissive_blmin(*zs: int) -> dict:
+    return {(z1, z2): 0.01 for z1 in zs for z2 in zs}
+
+
+def test_split_core_tag_enables_ag4_o_pairing(rng):
+    """Split core yields per-atom cut units and reliable Ag4+O pairing."""
+    p1 = Atoms(
+        symbols=["Ag", "Ag", "Ag", "Ag", "O"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.6, 0.0, 0.0],
+            [1.3, 2.25, 0.0],
+            [1.3, 0.75, 2.1],
+            [1.3, 0.75, 4.0],
+        ],
+        cell=[16.0, 16.0, 16.0],
+        pbc=False,
+    )
+    p2 = p1.copy()
+    p2.positions += [0.12, 0.08, -0.05]
+    p1.set_tags([0, 0, 0, 0, 1])
+    p2.set_tags([0, 0, 0, 0, 1])
+    blmin = _permissive_blmin(47, 8)
+    slab = Atoms(cell=p1.get_cell(), pbc=False)
+
+    rigid = CutAndSplicePairing(
+        slab=slab,
+        n_top=5,
+        blmin=blmin,
+        minfrac=0.4,
+        use_tags=True,
+        split_core_tag=False,
+        system_type="gas_cluster_adsorbate",
+        rng=rng,
+    )
+    assert len(rigid._group_centers_and_weights(p1)[0]) == 2
+
+    successes = 0
+    for seed in range(30):
+        pairing = CutAndSplicePairing(
+            slab=slab,
+            n_top=5,
+            blmin=blmin,
+            minfrac=0.4,
+            use_tags=True,
+            split_core_tag=True,
+            system_type="gas_cluster_adsorbate",
+            rng=np.random.default_rng(seed),
+        )
+        if seed == 0:
+            assert len(pairing._group_centers_and_weights(p1)[0]) == 5
+        child = pairing.cross(p1, p2)
+        if child is None:
+            continue
+        successes += 1
+        _assert_preserves_atom_identity(child, p1)
+    assert successes >= 15
+
+
+def test_two_oh_fragments_can_mix_across_parents():
+    """Two rigid OH moieties (tags 1 and 2) may come from different parents."""
+    p1 = Atoms(
+        symbols=["Ag", "Ag", "Ag", "Ag", "O", "H", "O", "H"],
+        positions=[
+            [0.0, 0.0, 0.0],
+            [2.6, 0.0, 0.0],
+            [1.3, 2.25, 0.0],
+            [1.3, 0.75, 2.1],
+            [1.3, 0.75, 4.0],
+            [1.3, 0.75, 4.96],
+            [4.0, 0.75, 2.0],
+            [4.0, 0.75, 2.96],
+        ],
+        cell=[18.0, 18.0, 18.0],
+        pbc=False,
+    )
+    p2 = Atoms(
+        symbols=["Ag", "Ag", "Ag", "Ag", "O", "H", "O", "H"],
+        positions=[
+            [0.1, 0.0, 0.0],
+            [2.55, 0.1, 0.0],
+            [1.2, 2.3, 0.1],
+            [1.4, 0.7, 2.2],
+            [1.5, 0.9, 4.2],
+            [2.9, 0.9, 4.2],
+            [4.2, 0.8, 2.1],
+            [5.6, 0.8, 2.1],
+        ],
+        cell=[18.0, 18.0, 18.0],
+        pbc=False,
+    )
+    p1.set_tags([0, 0, 0, 0, 1, 1, 2, 2])
+    p2.set_tags([0, 0, 0, 0, 1, 1, 2, 2])
+    p1_len = float(p1.get_distance(4, 5))
+    blmin = _permissive_blmin(47, 8, 1)
+    mixed = False
+    for seed in range(40):
+        pairing = CutAndSplicePairing(
+            slab=Atoms(cell=p1.get_cell(), pbc=False),
+            n_top=8,
+            blmin=blmin,
+            minfrac=0.25,
+            use_tags=True,
+            split_core_tag=True,
+            system_type="gas_cluster_adsorbate",
+            rng=np.random.default_rng(seed),
+        )
+        child = pairing.cross(p1, p2)
+        if child is None:
+            continue
+        _assert_preserves_atom_identity(child, p1)
+        oh1 = float(child.get_distance(4, 5))
+        oh2 = float(child.get_distance(6, 7))
+        if (abs(oh1 - p1_len) < 1e-6) != (abs(oh2 - p1_len) < 1e-6):
+            mixed = True
+            break
+    assert mixed
 
 
 class _StubCreator:

@@ -7,24 +7,22 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
-
+from scipy.spatial.distance import pdist
 from scgo.ase_ga_patches.mutations._common import (
-    _filter_unique_tags,
-    _ensure_rng,
-    _preserves_mobile_connectivity,
-    _resolve_op_connectivity_factor,
+    MutationOperator,
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
+    _prepare_mobile_target,
     _reanchor_mobile_to_slab,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.initialization.steric_scoring import _blmin_matrix
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["BreathingMutation"]
 
 
-class BreathingMutation(OffspringCreator):
+class BreathingMutation(MutationOperator):
+    descriptor = "BreathingMutation"
     """Uniformly scales all atom positions relative to the center of positions.
 
     Candidate scale factors are enumerated deterministically within
@@ -52,40 +50,34 @@ class BreathingMutation(OffspringCreator):
     def __init__(self, blmin, n_top, system_type: SystemType, scale_min=0.9, scale_max=1.1,
                  test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
                  max_inner_attempts=1000, surface_normal_axis=2, min_scale_delta=0.05):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.scale_min = scale_min
         self.scale_max = scale_max
-        self.test_dist_to_slab = test_dist_to_slab
-        self.target_tags = target_tags
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
         self.max_inner_attempts = max_inner_attempts
-        self.surface_normal_axis = surface_normal_axis
         self.min_scale_delta = float(min_scale_delta)
         self.last_attempt_count = 0
-        self.descriptor = "BreathingMutation"
-        self.min_inputs = 1
 
     def _minimum_feasible_scale(self, positions, atomic_numbers):
-        from scipy.spatial.distance import pdist
-
         n_atoms = len(positions)
         if n_atoms <= 1:
             return self.scale_min
 
-        # Compute pairwise distances
         distances = pdist(positions)
         if np.any(distances <= 1e-12):
             return np.inf
 
-        # Compute pairwise blmin requirements (condensed upper triangle)
         blmin_matrix = _blmin_matrix(atomic_numbers, self.blmin)
         required_condensed = blmin_matrix[np.triu_indices(n_atoms, k=1)]
 
-        # Calculate minimum required scale to avoid clashes
         lower_bound = np.max(required_condensed / distances)
         # pdist ratios can sit on the blmin threshold; atoms_too_close needs slack.
         return max(self.scale_min, lower_bound * (1.0 + 1e-6))
@@ -152,32 +144,13 @@ class BreathingMutation(OffspringCreator):
 
         return candidates[:max_candidates]
 
-    def get_new_individual(self, parents):
-        f = parents[0]
-        indi = self.mutate(f)
-        return _finalize_mutant(self, f, indi, "mutation: breathing")
-
     def mutate(self, atoms):
-        N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[:len(atoms) - N]
-        top = atoms[len(atoms) - N:]
-        pos = top.get_positions()
-        num = top.get_atomic_numbers()
-        cell = top.get_cell()
-        pbc = top.get_pbc()
-        tags = top.get_tags()
-
-        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
-        if unique_tags is None:
+        prepared = _prepare_mobile_target(self, atoms)
+        if prepared is None:
             return None
-
-        # Only the targeted tag groups are scaled; the rest stay put.
-        mask = np.isin(tags, unique_tags)
-        if not np.any(mask):
-            return None
+        slab, top, pos, num, cell, pbc, tags, mask = prepared
 
         cm = np.average(pos[mask], axis=0)
-        use_mic = bool(self._policy.uses_surface)
 
         self.last_attempt_count = 0
         for scale in self._candidate_scales(pos[mask], num[mask], slab):
@@ -191,24 +164,12 @@ class BreathingMutation(OffspringCreator):
             if self._policy.uses_surface:
                 cand = _reanchor_mobile_to_slab(
                     top, cand, slab, self.surface_normal_axis)
-            if atoms_too_close(cand, self.blmin):
+            accepted = _accept_connected_candidate(
+                top, cand, **_accept_connected_kwargs(self, slab)
+            )
+            if accepted is None:
                 continue
-            # Keep slab PBC (typically in-plane only) so lateral MIC clashes
-            # are rejected the same way as other surface mutations.
-            if (
-                self.test_dist_to_slab
-                and len(slab) > 0
-                and atoms_too_close_two_sets(slab, cand, self.blmin)
-            ):
-                continue
-            if not _preserves_mobile_connectivity(
-                top,
-                cand,
-                use_mic=use_mic,
-                connectivity_factor=_resolve_op_connectivity_factor(self),
-            ):
-                continue
-            return slab + cand
+            return slab + accepted
         return None
 
 # fmt: on

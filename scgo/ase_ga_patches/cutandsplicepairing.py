@@ -12,7 +12,6 @@ import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
 from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import get_rotation_matrix
 from scgo.ase_ga_patches._slab_clash import (
     SlabClashChecker,
     mobile_too_close_no_copy,
@@ -27,6 +26,7 @@ from scgo.ase_ga_patches._vector_utils import (
     random_unit_vector as _random_unit_vector,
 )
 from scgo.system_types import uses_surface
+from scgo.utils.geometry_math import rotation_matrix_axis_angle
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.rng_helpers import ensure_rng_or_create as _ensure_rng
 
@@ -60,11 +60,7 @@ def _plane_distance_magnitude(distance) -> float:
 
 def _rotation_matrix(axis, angle):
     """Right-handed rotation. Row vectors transform as ``p @ R.T``."""
-    axis = np.asarray(axis, dtype=float)
-    norm = float(np.linalg.norm(axis))
-    if norm <= 1e-12:
-        return np.eye(3)
-    return get_rotation_matrix(axis / norm, angle)
+    return rotation_matrix_axis_angle(axis, angle)
 
 
 def _principal_axes(positions):
@@ -98,6 +94,17 @@ def _pop_closest_to_plane(items):
         key=lambda i: (_plane_distance_magnitude(items[i].distance), i),
     )
     return items.pop(index)
+
+
+def _max_feasible_both_parent_atoms(group_sizes: list[int]) -> int:
+    """Best min(parent0, parent1) atom count over bipartitions of ``group_sizes``."""
+    if not group_sizes:
+        return 0
+    total = sum(group_sizes)
+    achievable = {0}
+    for size in group_sizes:
+        achievable |= {prev + size for prev in achievable}
+    return max(min(s, total - s) for s in achievable)
 
 
 class Positions:
@@ -141,7 +148,10 @@ class Positions:
 
     def to_use(self):
         """Tells whether this position is at the right side."""
-        return bool(self.distance > 0.0 and self.origin == 0 or self.distance < 0.0 and self.origin == 1)
+        return bool(
+            (self.distance > 0.0 and self.origin == 0)
+            or (self.distance < 0.0 and self.origin == 1)
+        )
 
 
 class CutAndSplicePairing(OffspringCreator):
@@ -170,8 +180,9 @@ class CutAndSplicePairing(OffspringCreator):
 
     The operator can furthermore preserve molecular identity
     if desired (see the *use_tags* kwarg). Atoms with the same
-    tag will then be considered as belonging to the same molecule,
-    and their internal geometry will not be changed by the operator.
+    tag are then one cut unit (internal geometry unchanged), unless
+    *split_core_tag* is set: core tag 0 is cut per atom while tags
+    ``>= 1`` stay rigid moieties.
 
     If use_tags is enabled, the operator will also conserve the
     number of molecules of each kind (in addition to conserving
@@ -233,6 +244,9 @@ class CutAndSplicePairing(OffspringCreator):
         Whether to use the atomic tags to preserve
         molecular identity.
 
+    split_core_tag: bool (default False)
+        Cut core tag 0 per atom; keep adsorbate tags (>=1) as rigid moieties.
+
     test_dist_to_slab: bool (default True)
         Whether to make sure that the distances between
         the atoms and the slab satisfy the blmin.
@@ -250,7 +264,8 @@ class CutAndSplicePairing(OffspringCreator):
                  fixed_cell_max_passes: int = 3,
                  variable_cell_max_passes: int = 3,
                  prefer_unbalanced: bool = False,
-                 surface_normal_axis: int = 2):
+                 surface_normal_axis: int = 2,
+                 split_core_tag: bool = False):
 
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
@@ -269,6 +284,7 @@ class CutAndSplicePairing(OffspringCreator):
         self.test_dist_to_slab = test_dist_to_slab
         self.use_tags = use_tags
         self.target_tags = target_tags
+        self.split_core_tag = split_core_tag
         self.last_attempt_count = 0
         self.last_cell_attempt_count = 0
         if len(self.slab) > 0 and not uses_surface(system_type):
@@ -306,6 +322,13 @@ class CutAndSplicePairing(OffspringCreator):
         else:
             self._slab_clash_checker = None
 
+    def _cut_unit_index_groups(self, tags, tag_value: int) -> list[np.ndarray]:
+        """Per-atom units for split core tag 0; otherwise one rigid group."""
+        indices = np.where(tags == tag_value)[0]
+        if self.split_core_tag and int(tag_value) == 0:
+            return [indices[i : i + 1] for i in range(len(indices))]
+        return [indices]
+
     def _group_centers_and_weights(self, atoms):
         tags = atoms.get_tags() if self.use_tags else np.arange(len(atoms))
         centers = []
@@ -313,9 +336,9 @@ class CutAndSplicePairing(OffspringCreator):
         for tag in np.unique(tags):
             if self.target_tags is not None and tag not in self.target_tags:
                 continue
-            indices = np.where(tags == tag)[0]
-            centers.append(np.mean(atoms.positions[indices], axis=0))
-            weights.append(len(indices))
+            for indices in self._cut_unit_index_groups(tags, int(tag)):
+                centers.append(np.mean(atoms.positions[indices], axis=0))
+                weights.append(len(indices))
         return np.asarray(centers, dtype=float), np.asarray(weights, dtype=int)
 
     def _candidate_cut_normals(self, a1, a2):
@@ -897,45 +920,50 @@ class CutAndSplicePairing(OffspringCreator):
 
         # Generate list of all atoms / atom groups:
         p1, p2, sym = [], [], []
+        mix_group_sizes: list[int] = []
         for tag_value in np.unique(tags):
             is_target_tag = self.target_tags is None or tag_value in self.target_tags
-            indices = np.where(tags == tag_value)[0]
-            s = "".join([symbols[j] for j in indices])
-            sym.append(s)
+            for indices in self._cut_unit_index_groups(tags, int(tag_value)):
+                s = "".join([symbols[j] for j in indices])
+                sym.append(s)
+                if is_target_tag:
+                    mix_group_sizes.append(len(indices))
 
-            for parent_idx, (a, p) in enumerate(zip([a1, a2], [p1, p2], strict=False)):
-                c = a.get_cell()
-                cop = np.mean(a.positions[indices], axis=0)
-                cut_p = np.dot(cutting_point, c)
-                if isinstance(cutting_normal, int):
-                    vecs = [c[j] for j in range(3) if j != cutting_normal]
-                    cut_n = np.cross(vecs[0], vecs[1])
-                else:
-                    cut_n = np.dot(cutting_normal, c)
-                d = np.dot(cop - cut_p, cut_n)
-                # Keep non-target tag groups fixed to parent 0 when tag-aware
-                # crossover is requested for only a subset (e.g., core-only).
-                # Without this, those groups disappear from ``sym`` and offspring
-                # generation can become impossible for odd-sized target subsets.
-                # ``d > 0`` makes ``to_use()`` True only for the parent-0 copy
-                # (``origin == 0``), so the parent-1 copy is deterministically
-                # discarded instead of being pruned at random.
-                if self.target_tags is not None and not is_target_tag:
-                    d = 1.0
-                spos = a.get_scaled_positions()[indices]
-                scop = np.mean(spos, axis=0)
-                p.append(
-                    Positions(
-                        spos,
-                        scop,
-                        s,
-                        d,
-                        parent_idx,
-                        tag=int(tag_value),
-                        n_atoms=len(indices),
-                        is_target_tag=is_target_tag,
+                for parent_idx, (a, p) in enumerate(
+                    zip([a1, a2], [p1, p2], strict=False)
+                ):
+                    c = a.get_cell()
+                    cop = np.mean(a.positions[indices], axis=0)
+                    cut_p = np.dot(cutting_point, c)
+                    if isinstance(cutting_normal, int):
+                        vecs = [c[j] for j in range(3) if j != cutting_normal]
+                        cut_n = np.cross(vecs[0], vecs[1])
+                    else:
+                        cut_n = np.dot(cutting_normal, c)
+                    d = np.dot(cop - cut_p, cut_n)
+                    # Keep non-target tag groups fixed to parent 0 when tag-aware
+                    # crossover is requested for only a subset (e.g., core-only).
+                    # Without this, those groups disappear from ``sym`` and offspring
+                    # generation can become impossible for odd-sized target subsets.
+                    # ``d > 0`` makes ``to_use()`` True only for the parent-0 copy
+                    # (``origin == 0``), so the parent-1 copy is deterministically
+                    # discarded instead of being pruned at random.
+                    if self.target_tags is not None and not is_target_tag:
+                        d = 1.0
+                    spos = a.get_scaled_positions()[indices]
+                    scop = np.mean(spos, axis=0)
+                    p.append(
+                        Positions(
+                            spos,
+                            scop,
+                            s,
+                            d,
+                            parent_idx,
+                            tag=int(tag_value),
+                            n_atoms=len(indices),
+                            is_target_tag=is_target_tag,
+                        )
                     )
-                )
 
         all_points = p1 + p2
         unique_sym = np.unique(sym)
@@ -982,12 +1010,9 @@ class CutAndSplicePairing(OffspringCreator):
         if n_tot != len(sym):
             raise SCGOValidationError("Internal pairing bookkeeping mismatch")
 
-        # Check if the generated structure contains enough atoms from both
-        # parents. For target-tag crossover, enforce this on the target subset
-        # only (e.g., core), not frozen non-target groups (e.g., adsorbate).
+        # Enough atoms from both parents (target subset only when target_tags set).
         count1, count2 = 0, 0
         N_total = len(a1)
-        target_group_count = 0
         if self.target_tags is None:
             N_mix = N_total
             for x in use_total.values():
@@ -999,7 +1024,6 @@ class CutAndSplicePairing(OffspringCreator):
                 for y in x:
                     if not y.is_target_tag:
                         continue
-                    target_group_count += 1
                     N_mix += y.n_atoms
                     if y.origin == 0:
                         count1 += y.n_atoms
@@ -1007,13 +1031,9 @@ class CutAndSplicePairing(OffspringCreator):
                         count2 += y.n_atoms
 
         nmin = 1 if self.minfrac is None else max(1, int(np.ceil(self.minfrac * N_mix)))
-        # Guard against impossible requirements for odd-sized crossover domains.
-        max_feasible = N_mix // 2
-        nmin = min(nmin, max_feasible)
-        # If the target crossover domain has only one group (e.g., all core atoms
-        # share one tag), both-parent contribution is impossible by construction.
-        if self.target_tags is not None and target_group_count <= 1:
-            nmin = 0
+        # Cap by what the cut-unit sizes can actually bipartition (covers odd N,
+        # single-group targets, and rigid tagged blocks like {4, 1}).
+        nmin = min(nmin, _max_feasible_both_parent_atoms(mix_group_sizes))
         if count1 < nmin or count2 < nmin:
             return None
 

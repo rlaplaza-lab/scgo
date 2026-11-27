@@ -408,7 +408,6 @@ class TestDatabaseManagerCaching:
         manager.close()
 
     @pytest.mark.requires_multicore
-    @pytest.mark.xdist_group
     def test_load_previous_run_results_parallel_integration(self, tmp_path, rng):
         """Ensure the parallel-capable loader returns the same minima set (integration).
 

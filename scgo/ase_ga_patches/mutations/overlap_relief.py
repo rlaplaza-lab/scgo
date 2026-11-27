@@ -8,19 +8,17 @@ from __future__ import annotations
 import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
-from ase_ga.offspring_creator import OffspringCreator
 from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
+    MutationOperator,
     _IDENTITY_ATOL,
-    _ensure_rng,
-    _preserves_mobile_connectivity,
-    _resolve_op_connectivity_factor,
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
     _random_unit_vector,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.initialization.steric_scoring import _blmin_matrix
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["OverlapReliefMutation"]
 
@@ -54,7 +52,8 @@ def _clash_unit_directions(vectors, distances, fallback):
     return directions
 
 
-class OverlapReliefMutation(OffspringCreator):
+class OverlapReliefMutation(MutationOperator):
+    descriptor = "OverlapReliefMutation"
     """Resolve steric clashes with bounded geometric sweeps.
 
     The operator accumulates pairwise displacements for atoms that violate
@@ -77,28 +76,19 @@ class OverlapReliefMutation(OffspringCreator):
         rng=None,
         verbose=False,
     ):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            use_tags=use_tags,
+        )
         self.n_sweeps = n_sweeps
         self.jitter = jitter
         self.n_jitter_tries = n_jitter_tries
         self.margin = margin
-        self.test_dist_to_slab = test_dist_to_slab
-        self.use_tags = use_tags
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
-
-        self.descriptor = "OverlapReliefMutation"
-        self.min_inputs = 1
-
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: overlap_relief")
 
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
@@ -199,12 +189,17 @@ class OverlapReliefMutation(OffspringCreator):
         original_positions = top.get_positions()
         repaired_positions = positions.copy()
         repair_changed = not np.allclose(
-            repaired_positions, original_positions, atol=_IDENTITY_ATOL
+            repaired_positions,
+            original_positions,
+            rtol=0.0,
+            atol=_IDENTITY_ATOL,
         )
         n_jitter_tries = max(0, int(self.n_jitter_tries)) if self.jitter > 0.0 else 0
 
         def _accept(trial_positions):
-            if np.allclose(trial_positions, original_positions, atol=_IDENTITY_ATOL):
+            if np.allclose(
+                trial_positions, original_positions, rtol=0.0, atol=_IDENTITY_ATOL
+            ):
                 return None
             candidate = Atoms(
                 numbers,
@@ -215,22 +210,12 @@ class OverlapReliefMutation(OffspringCreator):
             )
             if not self._policy.uses_surface:
                 candidate.center()
-            if atoms_too_close(candidate, self.blmin, use_tags=self.use_tags):
+            accept_kwargs = _accept_connected_kwargs(self, slab)
+            accept_kwargs["use_mic"] = use_mic
+            accepted = _accept_connected_candidate(top, candidate, **accept_kwargs)
+            if accepted is None:
                 return None
-            if (
-                self.test_dist_to_slab
-                and len(slab) > 0
-                and atoms_too_close_two_sets(slab, candidate, self.blmin)
-            ):
-                return None
-            if not _preserves_mobile_connectivity(
-                top,
-                candidate,
-                use_mic=use_mic,
-                connectivity_factor=_resolve_op_connectivity_factor(self),
-            ):
-                return None
-            return slab + candidate
+            return slab + accepted
 
         for _ in range(n_jitter_tries):
             trial_positions = repaired_positions.copy()

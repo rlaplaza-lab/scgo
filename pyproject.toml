@@ -66,7 +66,6 @@ dev = [
     "pytest-xdist>=3.0.0",
     "pytest-cov>=4.0.0",
     "pytest-timeout>=2.3.0",
-    "psutil>=7.0.0",
     "ruff==0.14.0",
     "pre-commit>=3.0.0",
 ]
@@ -113,10 +112,10 @@ ignore = [
     "C901",  # too complex
     "PERF401", # manual lists are fine
     "UP046",  # Keep current generic class style used across the codebase.
-    # Docstring *completeness* (per-function/class/method docstrings) is a
-    # larger, separate effort (see plan Open Question 3). We enforce the
-    # Google-style *structural* conventions (formatting, module docstrings,
-    # escape sequences) but not missing-docstring completeness here.
+    # Docstring completeness (a docstring on every public class, method, and
+    # function) is deferred. Structural Google-style rules stay on: formatting,
+    # module docstrings, and escape sequences. Missing-docstring rules below
+    # stay ignored until that pass.
     "D101",  # undocumented public class
     "D102",  # undocumented public method
     "D103",  # undocumented public function

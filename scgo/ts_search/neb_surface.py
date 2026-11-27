@@ -16,7 +16,7 @@ from ase import Atoms, units
 from ase.constraints import FixAtoms
 from ase.geometry import find_mic
 
-from scgo.exceptions import SCGOValidationError
+from scgo.exceptions import SCGORuntimeError, SCGOValidationError
 from scgo.initialization.geometry_helpers import (
     _bonded_pairs,
     _union_find_components,
@@ -186,6 +186,7 @@ def consistent_product_positions(
     n_slab: int = 0,
     connectivity_factor: ConnectivityFactorInput | None = None,
     max_lattice_shift: int = 1,
+    react_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
 ) -> np.ndarray:
     """Unwrap intact mobile fragments so IDPP does not split them across PBC.
 
@@ -211,7 +212,8 @@ def consistent_product_positions(
     fixed = _fixed_atom_indices(reactant)
     anchor = set(range(n_slab_i)) | fixed
     pin = fixed if fixed else set(range(n_slab_i))
-    react_edges = _bond_edge_set(reactant, connectivity_factor, use_mic=True)
+    if react_edges is None:
+        react_edges = _bond_edge_set(reactant, connectivity_factor, use_mic=True)
     prod_edges = _bond_edge_set(product, connectivity_factor, use_mic=True)
     intact = {
         e
@@ -293,22 +295,26 @@ def _mobile_intact_components(
     *,
     mobile_mask: np.ndarray,
     connectivity_factor: ConnectivityFactorInput | None = None,
+    react_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
+    prod_edges: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
 ) -> list[list[int]]:
     """Group mobile atoms by covalent bonds present under MIC at both endpoints.
 
     Multi-atom groups are the moieties that must share one lattice image.
     Every other mobile atom is returned as its own group so the caller can
-    minimum-image it independently.
+    minimum-image it independently. Optional edge sets must match the positions.
     """
     mobile_idx = [int(i) for i in np.flatnonzero(np.asarray(mobile_mask, dtype=bool))]
     if not mobile_idx:
         return []
     prod = np.asarray(product_positions, dtype=float)
-    product = reactant.copy()
-    product.set_positions(prod, apply_constraint=False)
     mobile_set = set(mobile_idx)
-    react_edges = _bond_edge_set(reactant, connectivity_factor, use_mic=True)
-    prod_edges = _bond_edge_set(product, connectivity_factor, use_mic=True)
+    if react_edges is None:
+        react_edges = _bond_edge_set(reactant, connectivity_factor, use_mic=True)
+    if prod_edges is None:
+        product = reactant.copy()
+        product.set_positions(prod, apply_constraint=False)
+        prod_edges = _bond_edge_set(product, connectivity_factor, use_mic=True)
     intact = {
         edge
         for edge in (react_edges & prod_edges)
@@ -596,7 +602,7 @@ def refresh_surface_neb_springs(neb: Any, *, k_min: float) -> None:
     for img in images:
         try:
             energy = float(img.get_potential_energy())
-        except Exception:
+        except Exception:  # noqa: BLE001 — fall back to stored tag energy
             stored = get_tag(img, "potential_energy", default=None)
             if stored is None:
                 return
@@ -643,9 +649,17 @@ def classify_band(
     if react_bonds == prod_bonds:
         return None, None
 
+    # Images repeated by identity (e.g. shared endpoints) reuse one bond set.
+    bonds_by_id: dict[int, frozenset[tuple[int, int]]] = {
+        id(images[0]): react_bonds,
+        id(images[-1]): prod_bonds,
+    }
     labels: list[str] = []
     for img in images:
-        b = bond_set(img, n_slab=n_slab, connectivity_factor=connectivity_factor)
+        b = bonds_by_id.get(id(img))
+        if b is None:
+            b = bond_set(img, n_slab=n_slab, connectivity_factor=connectivity_factor)
+            bonds_by_id[id(img)] = b
         if b == react_bonds:
             labels.append("reactant")
         elif b == prod_bonds:
@@ -743,7 +757,7 @@ def finite_difference_hessian(
     displaced = displaced_mobile_images(atoms, n_slab=n_slab_i, delta=delta)
     force_list = force_fn(displaced)
     if len(force_list) != len(displaced):
-        raise ValueError(
+        raise SCGORuntimeError(
             f"force_fn returned {len(force_list)} force arrays for "
             f"{len(displaced)} displaced images"
         )

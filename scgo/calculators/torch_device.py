@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import warnings
-
 try:
     import torch
 except ImportError:
-    torch = None  # TorchSim stack unavailable; module still importable.
+    torch = None  # PyTorch unavailable; module still importable.
 
-from scgo.exceptions import SCGOValidationError
-
-_warned_unsupported: set[str] = set()
+from scgo.exceptions import SCGOConfigurationError, SCGOValidationError
 
 
-def _normalize_device_str(device: str | torch.device) -> str:
-    """Normalize a device specifier to a lowercase string (e.g. ``cuda:0``)."""
+def _normalize_device_str(device: str | object) -> str:
     return str(device).strip().lower()
 
 
@@ -28,17 +23,22 @@ def _is_supported(device_str: str, *, allow_mps: bool) -> bool:
 
 
 def resolve_torch_device(
-    device: str | torch.device | None,
+    device: str | object | None,
     *,
     allow_mps: bool,
     backend_name: str,
 ) -> str:
-    """Resolve a Torch device string.
+    """Resolve a Torch device string (CUDA, optional MPS, else CPU).
 
-    Auto-select prefers CUDA, then MPS when ``allow_mps`` and available, else CPU.
-    Explicit unsupported devices warn once and raise :exc:`SCGOValidationError`
-    instead of silently coercing to CPU.
+    Explicit unsupported devices raise :exc:`SCGOValidationError`.
     """
+    if torch is None:
+        raise SCGOConfigurationError(
+            f"{backend_name}: PyTorch is not installed. "
+            "Install an MLIP extra (e.g. pip install 'scgo[mace]', "
+            "'scgo[uma]', or 'scgo[upet]')."
+        )
+
     if device is None:
         if torch.cuda.is_available():
             return "cuda"
@@ -50,15 +50,6 @@ def resolve_torch_device(
     if _is_supported(selected, allow_mps=allow_mps):
         return selected
 
-    key = f"{backend_name}:{selected}:mps={allow_mps}"
-    if key not in _warned_unsupported:
-        _warned_unsupported.add(key)
-        warnings.warn(
-            f"{backend_name}: device {selected!r} is not supported "
-            f"(allow_mps={allow_mps}).",
-            UserWarning,
-            stacklevel=2,
-        )
     raise SCGOValidationError(
         f"{backend_name}: unsupported device {selected!r} "
         f"(allow_mps={allow_mps}); use cuda, cpu"

@@ -25,6 +25,8 @@ from ase import Atoms
 from scgo.calculators.torchsim_helpers import TorchSimBatchRelaxer
 from scgo.exceptions import SCGORuntimeError
 
+TORCHSIM_BATCH_SIZE_MISMATCH = "TorchSim relaxer returned mismatched batch size"
+
 
 def resolve_pipeline_chunk(n_offspring: int, batch_size: int | None) -> int:
     """Wave size for double-buffering: ``batch_size`` if set, else ``n // 2``."""
@@ -96,20 +98,20 @@ class GpuRelaxWorker:
             job = self._jobs.get()
             if job is self._STOP:
                 break
-            if not isinstance(job, GpuRelaxJob):
-                raise SCGORuntimeError(
-                    f"GpuRelaxWorker got unexpected job type {type(job)!r}"
-                )
             t0 = perf_counter()
+            originals: list[Atoms] = []
             try:
-                relaxed = self._relaxer.relax_batch(job.prepared)
-                if len(relaxed) != len(job.originals):
+                if not isinstance(job, GpuRelaxJob):
                     raise SCGORuntimeError(
-                        "TorchSim relaxer returned mismatched batch size"
+                        f"GpuRelaxWorker got unexpected job type {type(job)!r}"
                     )
+                originals = job.originals
+                relaxed = self._relaxer.relax_batch(job.prepared)
+                if len(relaxed) != len(originals):
+                    raise SCGORuntimeError(TORCHSIM_BATCH_SIZE_MISMATCH)
                 self._results.put(
                     GpuRelaxResult(
-                        originals=job.originals,
+                        originals=originals,
                         relaxed_results=list(relaxed),
                         relax_s=perf_counter() - t0,
                     )
@@ -117,7 +119,7 @@ class GpuRelaxWorker:
             except Exception as exc:
                 self._results.put(
                     GpuRelaxResult(
-                        originals=job.originals,
+                        originals=originals,
                         relaxed_results=[],
                         error=exc,
                         relax_s=perf_counter() - t0,

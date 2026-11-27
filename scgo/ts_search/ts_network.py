@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import glob
-import json
 import os
 import sqlite3
 from typing import Any
@@ -17,6 +16,7 @@ from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
 from scgo.ts_search.transition_state import minima_provenance_dict
 from scgo.ts_search.ts_statistics import compute_ts_statistics
+from scgo.utils.atomic_json import atomic_write_json
 from scgo.utils.helpers import get_cluster_formula
 from scgo.utils.logging import get_logger
 from scgo.utils.path_keys import resolve_run_path_key
@@ -408,8 +408,7 @@ def save_ts_network_metadata(
 
     # Save network metadata
     network_path = os.path.join(output_dir, "ts_network_metadata.json")
-    with open(network_path, "w") as f:
-        json.dump(network, f, indent=2)
+    atomic_write_json(network_path, network)
 
     n_conn = len(network["ts_connections"])
     stats = network["statistics"]

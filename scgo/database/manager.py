@@ -13,6 +13,7 @@ from pathlib import Path
 from ase import Atoms
 
 from scgo.database.cache import get_global_cache
+from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.database.helpers import (
     load_previous_run_results,
     load_reference_structures,
@@ -76,8 +77,7 @@ class SCGODatabaseManager:
                 continue
             count += 1
             max_mtime_ns = max(max_mtime_ns, int(stat.st_mtime_ns))
-            if len(stable_paths) < 8:
-                stable_paths.append(str(path))
+            stable_paths.append(str(path))
         if count == 0:
             return (0, 0, ())
         return (count, max_mtime_ns, tuple(sorted(stable_paths)))
@@ -141,7 +141,7 @@ class SCGODatabaseManager:
             per manager while they live.
         """
         self._cache.clear_namespace(self._cache_namespace)
-        logger.info("Cleared database manager caches")
+        logger.debug("Cleared database manager caches")
 
     def load_previous_results(
         self,
@@ -176,9 +176,12 @@ class SCGODatabaseManager:
             db_filename,
             prefer_final_unique,
         )
-        db_paths = list(self.base_dir.glob("run_*/*.db"))
-        if db_filename:
-            db_paths = [p for p in db_paths if p.name == db_filename]
+        discovered = list_discovered_db_paths_with_run(
+            self.base_dir,
+            composition=composition,
+            db_filename=db_filename,
+        )
+        db_paths = [Path(p) for p, _ in discovered]
         fp = self._compute_files_fingerprint(db_paths)
 
         # Check cache
@@ -194,13 +197,14 @@ class SCGODatabaseManager:
             composition=composition,
             current_run_id=current_run_id,
             prefer_final_unique=prefer_final_unique,
+            discovered_entries=discovered,
         )
 
         # Cache results
         if self.enable_caching:
             self._store_cached(cache_key, minima, fp)
 
-        logger.info("Loaded %s minima from previous runs", len(minima))
+        logger.debug("Loaded %s minima from previous runs", len(minima))
         return minima
 
     def load_reference_structures(
@@ -255,6 +259,7 @@ class SCGODatabaseManager:
             composition=composition,
             max_structures=max_structures,
             base_dir=self.base_dir,
+            db_files=matched_paths,
         )
 
         # Cache results

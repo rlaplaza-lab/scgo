@@ -45,7 +45,7 @@ def clear_torch_force_no_weights_only_load_env() -> None:
 def _import_spec_available(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
-    except (ModuleNotFoundError, ValueError, ImportError):
+    except (ImportError, ValueError):
         return False
 
 

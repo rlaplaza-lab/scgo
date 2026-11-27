@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,7 +24,8 @@ import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
 from ase.geometry import get_distances
-from scipy.spatial.distance import cdist, pdist
+from scipy.spatial.distance import cdist as _cdist
+from scipy.spatial.distance import pdist as _pdist
 
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
@@ -220,6 +221,50 @@ def _cached_fingerprint(
     return payload
 
 
+def _memoized_fingerprint(
+    atoms: Atoms,
+    *,
+    slot: str,
+    mic: bool,
+    payload_key: str,
+    compute: Callable[[], dict],
+) -> dict:
+    """Return a cached fingerprint payload, computing and storing on miss."""
+    fp_store = _get_sorted_dist_cache_store(atoms)
+    content_key = _sorted_dist_content_key(atoms, mic=mic)
+    cached = _cached_fingerprint(
+        fp_store.get(slot),
+        content_key=content_key,
+        payload_key=payload_key,
+    )
+    if cached is not None:
+        return cached
+    payload = compute()
+    fp_store[slot] = {
+        "content_key": content_key,
+        payload_key: payload,
+    }
+    return payload
+
+
+def _block_unit_weight(
+    key: tuple,
+    blocks: ComparatorBlocks,
+    *,
+    role_weight: Callable[[str], float],
+    cross_weight: float,
+) -> float:
+    """Intra/cross unit weight used by block comparator and diversity scorer."""
+    if key[0] == "intra":
+        _, bi, _elem = key
+        return float(role_weight(blocks.blocks[bi].role))
+    _, bi, bj, _zi, _zj = key
+    return float(cross_weight) * math.sqrt(
+        float(role_weight(blocks.blocks[bi].role))
+        * float(role_weight(blocks.blocks[bj].role))
+    )
+
+
 _DISTANCE_SUM_EPS = 1e-10
 
 
@@ -291,9 +336,6 @@ def _compute_sorted_dist_list(
             cell=atoms.cell.array,
             pbc=atoms.pbc,
         )
-        # Mirror the upper-triangle behaviour: zero the lower triangle so
-        # triu_indices picks only unique pairs (same as get_all_distances path).
-        all_d = np.triu(all_d, k=1)
 
     for n in unique_types:
         i_un = np.flatnonzero(numbers == n)
@@ -301,17 +343,14 @@ def _compute_sorted_dist_list(
             continue
 
         if not use_mic_path:
-            d = pdist(positions_arr[i_un]).tolist()
+            pair_cor[n] = np.sort(_pdist(positions_arr[i_un]))
         else:
             if all_d is None:
-                raise TypeError(
+                raise SCGOValidationError(
                     "all_d distance matrix is required when use_mic_path=True"
                 )
             sub = all_d[np.ix_(i_un, i_un)]
-            d = sub[np.triu_indices(len(i_un), k=1)].tolist()
-
-        d.sort()
-        pair_cor[n] = np.array(d)
+            pair_cor[n] = np.sort(sub[np.triu_indices(len(i_un), k=1)])
     return pair_cor
 
 
@@ -358,27 +397,18 @@ def get_sorted_dist_list(
     cache_key = _sorted_dist_cache_slot(index_start=start, index_stop=stop, mic=mic_b)
 
     # Cache entries are keyed by slot so different windows don't collide.
-    fp_store = _get_sorted_dist_cache_store(atoms)
-    content_key = _sorted_dist_content_key(atoms, mic=mic_b)
-    cached_fp = _cached_fingerprint(
-        fp_store.get(cache_key),
-        content_key=content_key,
-        payload_key="pair_cor",
-    )
-    if cached_fp is not None:
-        return cached_fp
-
-    pair_cor = _compute_sorted_dist_list(
+    return _memoized_fingerprint(
         atoms,
+        slot=cache_key,
         mic=mic_b,
-        index_start=start,
-        index_stop=stop,
+        payload_key="pair_cor",
+        compute=lambda: _compute_sorted_dist_list(
+            atoms,
+            mic=mic_b,
+            index_start=start,
+            index_stop=stop,
+        ),
     )
-    fp_store[cache_key] = {
-        "content_key": content_key,
-        "pair_cor": pair_cor,
-    }
-    return pair_cor
 
 
 def _sorted_subset_distances(
@@ -394,15 +424,14 @@ def _sorted_subset_distances(
     if mic:
         if same_set:
             _, d = get_distances(pos_i, pos_i, cell=cell, pbc=pbc)
-            d = np.triu(d, k=1)
             flat = d[np.triu_indices(len(pos_i), k=1)]
         else:
             _, d = get_distances(pos_i, pos_j, cell=cell, pbc=pbc)
             flat = d.ravel()
     elif same_set:
-        flat = pdist(pos_i)
+        flat = _pdist(pos_i)
     else:
-        flat = cdist(pos_i, pos_j).ravel()
+        flat = _cdist(pos_i, pos_j).ravel()
     flat = np.asarray(flat, dtype=np.float64)
     return np.sort(flat)
 
@@ -481,21 +510,13 @@ def get_block_distance_units(
     """
     mic_b = bool(mic)
     slot = _block_units_cache_slot(blocks, mic_b)
-    fp_store = _get_sorted_dist_cache_store(atoms)
-    content_key = _sorted_dist_content_key(atoms, mic=mic_b)
-    cached_units = _cached_fingerprint(
-        fp_store.get(slot),
-        content_key=content_key,
+    return _memoized_fingerprint(
+        atoms,
+        slot=slot,
+        mic=mic_b,
         payload_key="units",
+        compute=lambda: _compute_block_distance_units(atoms, mic_b, blocks),
     )
-    if cached_units is not None:
-        return cached_units
-    units = _compute_block_distance_units(atoms, mic_b, blocks)
-    fp_store[slot] = {
-        "content_key": content_key,
-        "units": units,
-    }
-    return units
 
 
 def get_mobile_atom_indices(atoms: Atoms) -> np.ndarray:
@@ -636,7 +657,7 @@ class PureInteratomicDistanceComparator:
         mic: bool = False,
         blocks: ComparatorBlocks | None = None,
         component_weights: Mapping[str, float] | None = None,
-        cross_weight: float = 1.0,
+        cross_weight: float = DEFAULT_CROSS_WEIGHT,
         index_start: int | None = None,
         index_stop: int | None = None,
     ):
@@ -762,18 +783,19 @@ class PureInteratomicDistanceComparator:
                 raise SCGOValidationError(
                     "Mismatch in number of distances being compared."
                 )
+            weight = _block_unit_weight(
+                key,
+                self.blocks,
+                role_weight=self._role_weight,
+                cross_weight=self.cross_weight,
+            )
             if key[0] == "intra":
                 _, bi, elem = key
-                weight = self._role_weight(self.blocks.blocks[bi].role)
                 frac = float(np.sum(a1.numbers[idx_arrays[bi]] == elem)) / len(
                     idx_arrays[bi]
                 )
             else:
                 _, bi, bj, _zi, _zj = key
-                weight = self.cross_weight * math.sqrt(
-                    self._role_weight(self.blocks.blocks[bi].role)
-                    * self._role_weight(self.blocks.blocks[bj].role)
-                )
                 n_pairs_block = len(idx_arrays[bi]) * len(idx_arrays[bj])
                 frac = len(c1) / float(n_pairs_block)
 
@@ -866,7 +888,7 @@ class UniquenessSettings:
     comparator_tol: float = DEFAULT_COMPARATOR_TOL
     comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX
     component_weights: Mapping[str, float] | None = None
-    cross_weight: float = 1.0
+    cross_weight: float = DEFAULT_CROSS_WEIGHT
 
 
 def uniqueness_settings_from_mapping(

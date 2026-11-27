@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ase import Atoms
 
 from scgo.surface.constraints import attach_slab_constraints_from_surface_config
-from scgo.system_types import get_system_policy, validate_structure_for_system_type
+from scgo.system_types import (
+    StructureValidationPolicy,
+    get_system_policy,
+    validate_structure_for_system_type,
+)
 from scgo.utils.helpers import copy_atoms
 from scgo.utils.ts_runner_kwargs import NebRunConfig
 
@@ -54,20 +56,23 @@ def prepare_neb_endpoints(
             and int(neb_cfg.n_slab) < n_slab_full
         ):
             n_slab_deposit = int(neb_cfg.n_slab)
-    validate_kwargs: dict[str, Any] = {
-        "system_type": neb_cfg.system_type,
-        "surface_config": neb_cfg.surface_config,
-        "n_slab": n_slab_validate,
-        "n_slab_deposit": n_slab_deposit,
-        "adsorbate_definition": neb_cfg.adsorbate_definition,
-        "connectivity_factor": neb_cfg.connectivity_factor,
-        "cluster_adsorbate_config": neb_cfg.cluster_adsorbate_config,
-        "allow_cluster_fragmentation": neb_cfg.allow_cluster_fragmentation,
-        "allow_adsorbate_surface_detachment": neb_cfg.allow_adsorbate_surface_detachment,
-        "enforce_adsorbate_subgraph_integrity": neb_cfg.enforce_adsorbate_subgraph_integrity,
-    }
+    validation = StructureValidationPolicy(
+        connectivity_factor=neb_cfg.connectivity_factor,
+        cluster_adsorbate_config=neb_cfg.cluster_adsorbate_config,
+        allow_cluster_fragmentation=neb_cfg.allow_cluster_fragmentation,
+        allow_adsorbate_surface_detachment=neb_cfg.allow_adsorbate_surface_detachment,
+        enforce_adsorbate_subgraph_integrity=neb_cfg.enforce_adsorbate_subgraph_integrity,
+        n_slab_deposit=n_slab_deposit,
+    )
     for ep in (react, prod):
-        validate_structure_for_system_type(ep, **validate_kwargs)
+        validate_structure_for_system_type(
+            ep,
+            system_type=neb_cfg.system_type,
+            surface_config=neb_cfg.surface_config,
+            n_slab=n_slab_validate,
+            adsorbate_definition=neb_cfg.adsorbate_definition,
+            validation=validation,
+        )
     return react, prod
 
 

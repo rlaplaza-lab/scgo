@@ -40,7 +40,7 @@ def test_bh_run_completes_when_one_trial_is_invalid(
     # trial's post-relax check (call 3 = initial + pre + post).
     calls = _patch_validation_failure(monkeypatch, fail_on_call=3)
 
-    with caplog.at_level(logging.WARNING, logger="scgo.algorithms.basinhopping_go"):
+    with caplog.at_level(logging.DEBUG, logger="scgo.algorithms.basinhopping_go"):
         minima = bh_go(
             atoms=_pt3_with_calc()[0],
             output_dir=str(tmp_path / "bh_invalid"),
@@ -48,7 +48,7 @@ def test_bh_run_completes_when_one_trial_is_invalid(
             temperature=0.0,
             dr=0.3,
             niter_local_relaxation=3,
-            verbosity=0,
+            verbosity=2,
             rng=rng,
         )
 

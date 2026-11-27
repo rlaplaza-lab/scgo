@@ -7,30 +7,22 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import (
-    atoms_too_close,
-    atoms_too_close_two_sets,
-    get_rotation_matrix,
-)
+from ase_ga.utilities import get_rotation_matrix
 
 from scgo.ase_ga_patches.mutations._common import (
-    _ensure_rng,
-    _preserves_mobile_connectivity,
+    _mutation_steric_score,
+    MutationOperator,
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
     _reanchor_mobile_to_slab,
-    _resolve_op_connectivity_factor,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import steric_deficit as _steric_deficit
-from scgo.initialization.steric_scoring import (
-    steric_deficit_two_sets as _steric_deficit_two_sets,
-)
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["InPlaneRotateMutation"]
 
 
-class InPlaneRotateMutation(OffspringCreator):
+class InPlaneRotateMutation(MutationOperator):
+    descriptor = "InPlaneRotateMutation"
     """Rigidly rotate all mobile atoms about the surface normal through the CoM."""
 
     def __init__(
@@ -44,19 +36,17 @@ class InPlaneRotateMutation(OffspringCreator):
         verbose: bool = False,
         max_inner_attempts: int = 24,
     ):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
-        self.surface_normal_axis = surface_normal_axis
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.min_angle = min_angle
         self.max_inner_attempts = max_inner_attempts
         self.last_attempt_count = 0
-        self.test_dist_to_slab = True
-        self.descriptor = "InPlaneRotateMutation"
-        self.min_inputs = 1
 
     def _candidate_angles(self) -> list[float]:
         min_angle = self.min_angle
@@ -71,11 +61,6 @@ class InPlaneRotateMutation(OffspringCreator):
         max_angles = max(1, min(int(self.max_inner_attempts), len(angles)))
         return angles[:max_angles]
 
-    def get_new_individual(self, parents):
-        parent = parents[0]
-        mutant = self.mutate(parent)
-        return _finalize_mutant(self, parent, mutant, "mutation: in_plane_rotate")
-
     def mutate(self, atoms):
         n_top = int(self.n_top)
         slab = atoms[: len(atoms) - n_top]
@@ -88,21 +73,13 @@ class InPlaneRotateMutation(OffspringCreator):
         axis[self.surface_normal_axis] = 1.0
         in_plane = [i for i in range(3) if i != self.surface_normal_axis]
         rescue_offset = 0.5 * min(self.blmin.values())
-        use_mic = bool(self._policy.uses_surface)
+        accept_kwargs = _accept_connected_kwargs(self, slab)
 
         ranked: list[tuple[float, np.ndarray]] = []
         for angle in self._candidate_angles():
             rotation = get_rotation_matrix(axis, angle)
             newpos = np.dot(rotation, (pos - center).T).T + center
-            score = _steric_deficit(newpos, numbers, self.blmin)
-            if len(slab) > 0:
-                score += _steric_deficit_two_sets(
-                    newpos,
-                    numbers,
-                    slab.get_positions(),
-                    slab.numbers,
-                    self.blmin,
-                )[0]
+            score = _mutation_steric_score(newpos, numbers, slab, self.blmin)
             ranked.append((score, newpos))
         ranked.sort(key=lambda item: item[0])
 
@@ -124,18 +101,11 @@ class InPlaneRotateMutation(OffspringCreator):
                 ).get_positions()
             mutant.set_positions(newpos)
 
-            too_close = atoms_too_close(mutant, self.blmin, use_tags=False)
-            if not too_close and self.test_dist_to_slab and len(slab) > 0:
-                too_close = atoms_too_close_two_sets(slab, mutant, self.blmin)
-            if too_close:
-                continue
-            if _preserves_mobile_connectivity(
-                atoms[-n_top:],
-                mutant,
-                use_mic=use_mic,
-                connectivity_factor=_resolve_op_connectivity_factor(self),
-            ):
-                return slab + mutant
+            accepted = _accept_connected_candidate(
+                atoms[-n_top:], mutant, **accept_kwargs
+            )
+            if accepted is not None:
+                return slab + accepted
 
             if self._policy.uses_surface:
                 for dx in (0.0, rescue_offset, -rescue_offset):
@@ -146,23 +116,11 @@ class InPlaneRotateMutation(OffspringCreator):
                         rescue[:, in_plane[0]] += dx
                         rescue[:, in_plane[1]] += dy
                         mutant.set_positions(rescue)
-                        too_close = atoms_too_close(mutant, self.blmin, use_tags=False)
-                        if not too_close and self.test_dist_to_slab and len(slab) > 0:
-                            too_close = atoms_too_close_two_sets(
-                                slab, mutant, self.blmin
-                            )
-                        if (
-                            not too_close
-                            and _preserves_mobile_connectivity(
-                                atoms[-n_top:],
-                                mutant,
-                                use_mic=use_mic,
-                                connectivity_factor=_resolve_op_connectivity_factor(
-                                    self
-                                ),
-                            )
-                        ):
-                            return slab + mutant
+                        accepted = _accept_connected_candidate(
+                            atoms[-n_top:], mutant, **accept_kwargs
+                        )
+                        if accepted is not None:
+                            return slab + accepted
 
         return None
 

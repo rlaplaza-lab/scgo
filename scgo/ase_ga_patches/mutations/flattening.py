@@ -7,26 +7,25 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
 
 from scgo.ase_ga_patches.mutations._common import (
-    _accept_connected_candidate,
-    _filter_unique_tags,
+    MutationOperator,
     _IDENTITY_ATOL,
-    _ensure_rng,
+    _accept_connected_candidate,
     _geometry_candidate_directions,
     _pin_subset_contact_atom,
+    _prepare_mobile_target,
     _reanchor_mobile_to_slab,
     _resolve_op_connectivity_factor,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
 from scgo.initialization.steric_scoring import _blmin_matrix
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["FlatteningMutation"]
 
 
-class FlatteningMutation(OffspringCreator):
+class FlatteningMutation(MutationOperator):
+    descriptor = "FlatteningMutation"
     """A mutation that flattens the nanoparticle by projecting the coordinates
     onto a plane derived from the structure geometry (outward slab
     direction, principal axes, and random fill).
@@ -54,21 +53,19 @@ class FlatteningMutation(OffspringCreator):
     def __init__(self, blmin, n_top, system_type: SystemType, thickness_factor=0.5,
                  test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
                  max_inner_attempts=12, surface_normal_axis=2):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.thickness_factor = thickness_factor
-        self.test_dist_to_slab = test_dist_to_slab
-        self.target_tags = target_tags
         self.max_inner_attempts = max_inner_attempts
-        self.system_type = system_type
-        self.surface_normal_axis = surface_normal_axis
-        self._policy = get_system_policy(system_type)
         self.last_attempt_count = 0
-
-        self.descriptor = "FlatteningMutation"
-        self.min_inputs = 1
 
     def _candidate_normals(self, positions, center_of_mass, slab):
         max_candidates = max(1, min(int(self.max_inner_attempts), 6))
@@ -167,31 +164,12 @@ class FlatteningMutation(OffspringCreator):
         score = flatten_ratio + 0.15 * (rms_displacement / max(avg_blmin, 1e-12))
         return score, candidate_positions
 
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: flattening")
-
     def mutate(self, atoms):
-        N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[:len(atoms) - N]
-        top = atoms[len(atoms) - N:]
-
+        prepared = _prepare_mobile_target(self, atoms)
+        if prepared is None:
+            return None
+        slab, top, pos, atomic_numbers, _, _, _, mask = prepared
         mutant = top.copy()
-        pos = mutant.get_positions()
-        atomic_numbers = mutant.get_atomic_numbers()
-        tags = mutant.get_tags()
-
-        unique_tags = _filter_unique_tags(np.unique(tags), self.target_tags)
-        if unique_tags is None:
-            return None
-
-        # Only the targeted tag groups are flattened; the rest stay put.
-        mask = np.isin(tags, unique_tags)
-        if not np.any(mask):
-            return None
 
         target_pos = pos[mask]
         target_numbers = atomic_numbers[mask]

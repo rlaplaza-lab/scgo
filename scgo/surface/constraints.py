@@ -14,7 +14,7 @@ from scgo.exceptions import (
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.layers import (
     _LAYER_CLUSTER_THRESHOLD_ANG,
-    _layer_indices_by_clustering,
+    resolve_slab_mobile_or_fixed_indices,
 )
 from scgo.surface.validation import validate_surface_config_slab_prefix
 from scgo.utils.logging import get_logger
@@ -86,14 +86,13 @@ def attach_slab_constraints(
         return
 
     if n_relax_top_slab_layers is not None:
-        mobile = _layer_indices_by_clustering(
+        fixed, _mobile = resolve_slab_mobile_or_fixed_indices(
             np.asarray(slab_positions),
             surface_normal_axis,
-            n_layers=n_relax_top_slab_layers,
-            from_top=True,
+            n_relax_top_slab_layers=n_relax_top_slab_layers,
             threshold=layer_cluster_threshold_ang,
         )
-        fix_idx = sorted(set(range(n_slab)) - mobile)
+        fix_idx = sorted(fixed)
         _replace_slab_fixatoms(atoms, fix_idx or None)
         return
 
@@ -101,14 +100,13 @@ def attach_slab_constraints(
         _replace_slab_fixatoms(atoms, None)
         return
 
-    layer_idx = _layer_indices_by_clustering(
+    fixed, _mobile = resolve_slab_mobile_or_fixed_indices(
         np.asarray(slab_positions),
         surface_normal_axis,
-        n_layers=n_fix_bottom_slab_layers,
-        from_top=False,
+        n_fix_bottom_slab_layers=n_fix_bottom_slab_layers,
         threshold=layer_cluster_threshold_ang,
     )
-    _replace_slab_fixatoms(atoms, sorted(layer_idx))
+    _replace_slab_fixatoms(atoms, sorted(fixed))
 
 
 def attach_slab_constraints_from_surface_config(

@@ -9,9 +9,9 @@ from typing import Any
 from scgo.calculators.dispersion import (
     MATPES_R2SCAN_MODEL,
     R2SCAN_DISPERSION_XC,
-    dispersion_xc_for_mace_kwargs,
     drop_mace_dispersion_unless_matpes,
 )
+from scgo.calculators.torchsim_params import build_torchsim_params
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_CROSS_WEIGHT,
@@ -21,6 +21,10 @@ from scgo.constants import (
     DEFAULT_NEB_TANGENT_METHOD,
     DEFAULT_PAIR_COR_MAX,
     DEFAULT_TS_PAIR_COR_MAX,
+    DEFAULT_UMA_MODEL,
+    DEFAULT_UMA_TASK,
+    DEFAULT_UPET_MODEL,
+    DEFAULT_UPET_VERSION,
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import (
@@ -34,11 +38,12 @@ from scgo.system_types import (
     SystemType,
     get_system_policy,
 )
+from scgo.utils.calculator_names import normalize_calculator_name
 from scgo.utils.parallel_workers import DEFAULT_N_JOBS
 
 # Available MACE model names for use in calculator_kwargs["model_name"]
 AVAILABLE_MACE_MODELS = [
-    "mace_matpes_0",  # r2scan variant (default in MACE class)
+    MATPES_R2SCAN_MODEL,  # r2scan variant (default in MACE class)
     "mace_mp_small",  # Small MACE-MP
     "mace_mpa_medium",  # Medium MACE-MPA
     "mace_off_small",  # Small MACE-OFF
@@ -215,13 +220,10 @@ _SURFACE_CLUSTER_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_max_spurious_barrier": 12.0,
 }
 
-# Bare-slab vacancy hops use a wider endpoint mismatch (3.0 Å). The clash
-# scale matches the other presets.
+# Bare-slab vacancy hops use a wider endpoint mismatch (3.0 Å).
 _SURFACE_BARE_TS_NEB_DEFAULTS: dict[str, Any] = {
     **_SURFACE_TS_NEB_DEFAULTS,
     "max_endpoint_mismatch": 3.0,
-    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
-    "neb_max_spurious_barrier": 8.0,
 }
 
 # Adsorbate paths need climb, stiffer springs, a hard geometric pair gate (Å),
@@ -237,13 +239,8 @@ _GAS_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     "neb_climb": True,
     "torchsim_max_steps": 4000,
     "max_endpoint_mismatch": 1.25,  # Å; also enables pre-NEB path gates
-    # Prominence stays at the adsorbate value. The bare-gas base uses 0.10 eV.
-    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
+    # Bare-gas base uses 0.10 eV. Adsorbate paths keep the higher floor.
     "min_saddle_prominence": 0.40,
-    "neb_max_spurious_barrier": 8.0,
-    "binding_penetration_tolerance_a": 0.1,
-    "layer_cluster_threshold_ang": 0.4,
-    "neb_interpolation_bond_tolerance_a": 0.5,
 }
 
 _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
@@ -257,13 +254,6 @@ _SURFACE_ADSORBATE_TS_NEB_DEFAULTS: dict[str, Any] = {
     # Inherited surface defaults enable free in-plane Kabsch; that shifts
     # adsorbates off registry. Remap/MIC stay on via the surface base dict.
     "neb_surface_lattice_rotation": False,
-    # Prominence stays at the adsorbate value.
-    "neb_prescreen_clash_distance": CLASH_HARD_CAP_FACTOR,
-    "min_saddle_prominence": 0.40,
-    "neb_max_spurious_barrier": 8.0,
-    "binding_penetration_tolerance_a": 0.1,
-    "layer_cluster_threshold_ang": 0.4,
-    "neb_interpolation_bond_tolerance_a": 0.5,
 }
 
 # surface_adsorbate slab-search: runner infers top-layer as NEB core, so
@@ -385,16 +375,16 @@ def default_calculator_kwargs(calculator: str) -> dict[str, Any]:
 
     Unknown / non-ML calculators (e.g. EMT) get an empty dict.
     """
-    calc_u = str(calculator).strip().upper()
+    calc_u = normalize_calculator_name(calculator)
     if calc_u == "MACE":
         return {
             "model_name": MATPES_R2SCAN_MODEL,
             "dispersion_xc": R2SCAN_DISPERSION_XC,
         }
     if calc_u == "UMA":
-        return {"model_name": "uma-s-1p2p1", "task_name": "oc25"}
+        return {"model_name": DEFAULT_UMA_MODEL, "task_name": DEFAULT_UMA_TASK}
     if calc_u == "UPET":
-        return {"model_name": "pet-mad-s", "version": "1.5.0"}
+        return {"model_name": DEFAULT_UPET_MODEL, "version": DEFAULT_UPET_VERSION}
     return {}
 
 
@@ -585,39 +575,18 @@ def _attach_torchsim_relaxer(
         "autobatcher": autobatcher,
         "expected_max_atoms": expected_max_atoms,
     }
-    if relaxer_kind == "fairchem":
-        ga["relaxer"] = TorchSimBatchRelaxer(
-            model_kind="fairchem",
-            fairchem_model_name=calculator_kwargs["model_name"],
-            fairchem_task_name=calculator_kwargs.get("task_name"),
-            **common_kwargs,
-        )
-    elif relaxer_kind == "upet":
+    if relaxer_kind not in {"fairchem", "upet", "mace"}:
+        raise SCGOValidationError(f"Unknown relaxer_kind={relaxer_kind!r}")
+    identity = build_torchsim_params(relaxer_kind, calculator_kwargs)
+    if relaxer_kind == "upet":
         import torch
 
         on_cuda = torch.cuda.is_available()
-        ga["relaxer"] = TorchSimBatchRelaxer(
-            model_kind="upet",
-            upet_model_name=calculator_kwargs.get("model_name"),
-            upet_version=calculator_kwargs.get("version"),
-            upet_checkpoint_path=calculator_kwargs.get("checkpoint_path"),
-            upet_non_conservative=bool(
-                calculator_kwargs.get("non_conservative", False)
-            ),
-            device=torch.device("cuda") if on_cuda else torch.device("cpu"),
-            max_atoms_to_try=expected_max_atoms,
-            **common_kwargs,
-        )
+        identity["device"] = torch.device("cuda") if on_cuda else torch.device("cpu")
+        identity["max_atoms_to_try"] = expected_max_atoms
     elif relaxer_kind == "mace":
-        mace_model = calculator_kwargs.get("model_name", MATPES_R2SCAN_MODEL)
-        ga["relaxer"] = TorchSimBatchRelaxer(
-            mace_model_name=mace_model,
-            dispersion_xc=dispersion_xc_for_mace_kwargs(calculator_kwargs),
-            seed=seed,
-            **common_kwargs,
-        )
-    else:
-        raise SCGOValidationError(f"Unknown relaxer_kind={relaxer_kind!r}")
+        identity["seed"] = seed
+    ga["relaxer"] = TorchSimBatchRelaxer(**identity, **common_kwargs)
 
 
 def _build_ga_calculator_params(
@@ -689,8 +658,8 @@ def _build_ga_calculator_params(
 def get_uma_ga_benchmark_params(
     seed: int,
     *,
-    model_name: str = "uma-s-1p2p1",
-    uma_task: str = "oc25",
+    model_name: str = DEFAULT_UMA_MODEL,
+    uma_task: str = DEFAULT_UMA_TASK,
 ) -> GLOptimizerParams:
     """GA benchmark parameters matching ``_get_base_ga_benchmark_params`` but with UMA.
 
@@ -724,8 +693,11 @@ def get_default_uma_params() -> GLOptimizerParams:
     return _build_ga_calculator_params(
         "UMA",
         effort="default",
-        model_name="uma-s-1p2p1",
-        calculator_kwargs={"model_name": "uma-s-1p2p1", "task_name": "oc25"},
+        model_name=DEFAULT_UMA_MODEL,
+        calculator_kwargs={
+            "model_name": DEFAULT_UMA_MODEL,
+            "task_name": DEFAULT_UMA_TASK,
+        },
         relaxer_kind="fairchem",
     )
 
@@ -733,8 +705,8 @@ def get_default_uma_params() -> GLOptimizerParams:
 def get_upet_ga_benchmark_params(
     seed: int,
     *,
-    model_name: str = "pet-mad-s",
-    version: str = "1.5.0",
+    model_name: str = DEFAULT_UPET_MODEL,
+    version: str = DEFAULT_UPET_VERSION,
 ) -> GLOptimizerParams:
     """GA benchmark parameters using UPET with TorchSim (mirrors UMA benchmark preset).
 
@@ -756,14 +728,18 @@ def get_upet_ga_benchmark_params(
 def get_default_upet_params() -> GLOptimizerParams:
     """Default SCGO parameters using the UPET calculator (metatomic-torchsim).
 
-    Pass as-is to ``run_*`` or override keys. Default model is ``pet-mad-s`` v1.5.0.
+    Pass as-is to ``run_*`` or override keys. Default model is
+    ``DEFAULT_UPET_MODEL`` at ``DEFAULT_UPET_VERSION``.
     For benchmark-style fixed local steps, use :func:`get_upet_ga_benchmark_params`.
     """
     return _build_ga_calculator_params(
         "UPET",
         effort="default",
-        model_name="pet-mad-s",
-        calculator_kwargs={"model_name": "pet-mad-s", "version": "1.5.0"},
+        model_name=DEFAULT_UPET_MODEL,
+        calculator_kwargs={
+            "model_name": DEFAULT_UPET_MODEL,
+            "version": DEFAULT_UPET_VERSION,
+        },
         relaxer_kind="upet",
     )
 
@@ -835,9 +811,6 @@ def get_diversity_params(
         slot["diversity_reference_db"] = reference_db_glob
         slot["diversity_max_references"] = max_references
         slot["diversity_update_interval"] = update_interval
-
-    # Diversity strategy works better with larger populations
-    # Keep auto settings but note they will scale appropriately
 
     return params
 
@@ -949,6 +922,22 @@ def get_ts_search_params(
     return params
 
 
+def _finish_low_effort_mlip_ga_params(
+    params: GLOptimizerParams,
+    *,
+    seed: int | None,
+    system_type: SystemType,
+    surface_config: SurfaceSystemConfig | None,
+) -> GLOptimizerParams:
+    """Stamp an optional seed and surface config, then apply the low-effort budget."""
+    if seed is not None:
+        params["seed"] = int(seed)
+    _stamp_surface_config_on_params(
+        params, system_type=system_type, surface_config=surface_config
+    )
+    return _apply_low_effort_ga_budget(params)
+
+
 def _apply_low_effort_ga_budget(params: GLOptimizerParams) -> GLOptimizerParams:
     """Shrink GA search budget for demos/CI; leave calculator/relaxer untouched."""
     params["n_jobs"] = 1
@@ -1027,30 +1016,15 @@ def get_low_effort_upet_ga_params(
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None = None,
     seed: int | None = None,
-    model_name: str = "pet-mad-s",
-    version: str = "1.5.0",
+    model_name: str = DEFAULT_UPET_MODEL,
+    version: str = DEFAULT_UPET_VERSION,
 ) -> GLOptimizerParams:
     """Return reduced-budget GO params (~25%) for UPET demos and CI.
 
-    Mirrors :func:`get_low_effort_torchsim_ga_params` but on the UPET calculator.
-    The TorchSim relaxer is attached after ``model_name`` / ``version`` are set
-    so it matches the ASE calculator PES. Only the search budget shrinks:
-
-    - ``niter`` / ``population_size`` are scaled to ~25% of the production
-      benchmark reference in ``_get_base_ga_benchmark_params``
-      (``niter=10`` / ``population_size=50``).
-    - ``niter_local_relaxation`` drops to
-      ``_LOW_EFFORT_GA_NITER_LOCAL_RELAXATION``. Surface system types clamp it
-      back up to ``SURFACE_GA_MIN_LOCAL_RELAX_STEPS`` at run time, so supported
-      and slab searches keep production-strength local relaxation — the same
-      clamp :func:`get_low_effort_torchsim_ga_params` relies on.
-    - Population init runs sequentially, early stopping is disabled (so the run
-      length is deterministic), and timing JSON export is off.
-
-    Used by the Kaggle GPU example matrix
+    Same budget as :func:`get_low_effort_torchsim_ga_params`, on the UPET
+    calculator. Used by the Kaggle GPU example matrix
     (``tests/integration/test_gpu_examples_integration.py``) so UPET stays in
-    lockstep with the MACE low-effort path. Pass as-is to ``run_*`` or override
-    individual keys.
+    lockstep with the MACE low-effort path.
     """
     params = _build_ga_calculator_params(
         "UPET",
@@ -1060,12 +1034,12 @@ def get_low_effort_upet_ga_params(
         calculator_kwargs={"model_name": model_name, "version": version},
         relaxer_kind="upet",
     )
-    if seed is not None:
-        params["seed"] = int(seed)
-    _stamp_surface_config_on_params(
-        params, system_type=system_type, surface_config=surface_config
+    return _finish_low_effort_mlip_ga_params(
+        params,
+        seed=seed,
+        system_type=system_type,
+        surface_config=surface_config,
     )
-    return _apply_low_effort_ga_budget(params)
 
 
 def get_low_effort_uma_ga_params(
@@ -1073,22 +1047,14 @@ def get_low_effort_uma_ga_params(
     system_type: SystemType,
     surface_config: SurfaceSystemConfig | None = None,
     seed: int | None = None,
-    model_name: str = "uma-s-1p2p1",
-    uma_task: str = "oc25",
+    model_name: str = DEFAULT_UMA_MODEL,
+    uma_task: str = DEFAULT_UMA_TASK,
 ) -> GLOptimizerParams:
     """Return reduced-budget GO params (~25%) for UMA demos and CI.
 
-    Mirrors :func:`get_low_effort_upet_ga_params` but on the UMA calculator
-    (fairchem). The FairChem-backed TorchSim relaxer is attached after
-    ``model_name`` / ``uma_task`` are set so it matches the ASE calculator PES.
-    Only the search budget shrinks to the same ~25% GA reduction as the
-    other low-effort wrappers, with the surface local-relaxation clamp preserved
-    at run time and timing JSON export off.
-
-    Delivered for API / docs completeness, GitHub-Actions UMA smoke, and local
-    runs — UMA is intentionally omitted from the Kaggle GPU matrix (HuggingFace
-    auth for fairchem weights is unavailable there). Pass as-is to ``run_*`` or
-    override individual keys.
+    Same budget as :func:`get_low_effort_upet_ga_params`, on the UMA calculator.
+    Used by the GitHub-Actions UMA smoke. UMA is omitted from the Kaggle GPU
+    matrix because HuggingFace auth for fairchem weights is unavailable there.
     """
     params = _build_ga_calculator_params(
         "UMA",
@@ -1098,12 +1064,12 @@ def get_low_effort_uma_ga_params(
         calculator_kwargs={"model_name": model_name, "task_name": uma_task},
         relaxer_kind="fairchem",
     )
-    if seed is not None:
-        params["seed"] = int(seed)
-    _stamp_surface_config_on_params(
-        params, system_type=system_type, surface_config=surface_config
+    return _finish_low_effort_mlip_ga_params(
+        params,
+        seed=seed,
+        system_type=system_type,
+        surface_config=surface_config,
     )
-    return _apply_low_effort_ga_budget(params)
 
 
 def low_effort_neb_steps(system_type: SystemType) -> int:

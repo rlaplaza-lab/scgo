@@ -9,6 +9,7 @@ from ase import Atoms
 
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import get_covalent_radius, get_vdw_radius
+from scgo.utils.messages import validation_context_prefix
 
 
 def estimate_fragment_footprint_radius(fragment: Atoms) -> float:
@@ -41,7 +42,7 @@ def validate_adsorbate_placement_feasibility(
     This is a fast, geometry-agnostic heuristic used before global optimization.
     It does not replace runtime placement validation.
     """
-    prefix = f"{context}: " if context else ""
+    prefix = validation_context_prefix(context)
     lengths = [n for n in (int(x) for x in adsorbate_fragment_lengths) if n > 0]
     n_frags = len(lengths)
     if n_frags == 0:

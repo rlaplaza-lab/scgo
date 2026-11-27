@@ -125,6 +125,66 @@ def test_create_ga_pairing_use_tags_for_two_block() -> None:
     assert isinstance(p, CutAndSplicePairing)
     assert p.use_tags is True
     assert p.target_tags is None
+    assert p.split_core_tag is True
+
+
+@pytest.mark.parametrize(
+    ("system_type", "comp", "ads", "n_mobile", "expect_split", "expect_targets"),
+    [
+        (
+            "surface_cluster_adsorbate",
+            ["Ag", "Ag", "Ag", "Ag", "O"],
+            AdsorbateDefinition(
+                core_symbols=["Ag", "Ag", "Ag", "Ag"],
+                adsorbate_symbols=["O"],
+                adsorbate_fragment_lengths=[1],
+            ),
+            5,
+            True,
+            None,
+        ),
+        (
+            "surface_adsorbate",
+            ["O", "H"],
+            AdsorbateDefinition(
+                core_symbols=[],
+                adsorbate_symbols=["O", "H"],
+                adsorbate_fragment_lengths=[2],
+            ),
+            2,
+            False,
+            [1],
+        ),
+    ],
+)
+def test_create_ga_pairing_split_core_by_system_type(
+    system_type, comp, ads, n_mobile, expect_split, expect_targets
+) -> None:
+    slab = Atoms(
+        "C2",
+        positions=[[0.0, 0.0, 0.0], [1.4, 0.0, 0.0]],
+        cell=[20, 20, 20],
+        pbc=True,
+    )
+    mobile = Atoms(
+        symbols=comp,
+        positions=np.zeros((n_mobile, 3)),
+        cell=[20, 20, 20],
+        pbc=True,
+    )
+    p = create_ga_pairing(
+        slab + mobile,
+        n_mobile,
+        np.random.default_rng(0),
+        system_type=system_type,
+        slab_atoms=slab,
+        composition=comp,
+        adsorbate_definition=ads,
+        exploratory_crossover_probability=0.0,
+    )
+    assert isinstance(p, CutAndSplicePairing)
+    assert p.split_core_tag is expect_split
+    assert p.target_tags == expect_targets
 
 
 def test_create_mutation_operators_two_block_tags_omit_distort() -> None:

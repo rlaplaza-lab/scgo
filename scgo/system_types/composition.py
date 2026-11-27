@@ -12,6 +12,7 @@ from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types.policy import SystemType, get_system_policy
 from scgo.utils.composition import get_composition_counts
+from scgo.utils.messages import validation_context_prefix
 
 AdsorbatesInput = Atoms | list[Atoms]
 AdsorbateFragmentInput = Atoms | list[Atoms]
@@ -139,13 +140,14 @@ def _reject_adsorbate_inputs_for_non_adsorbate(
     adsorbate_definition: AdsorbateDefinition | None,
     context: str,
 ) -> None:
+    prefix = validation_context_prefix(context)
     if adsorbates is not None:
         raise SCGOValidationError(
-            f"{context} does not accept adsorbates for system_type={system_type!r}."
+            f"{prefix}does not accept adsorbates for system_type={system_type!r}."
         )
     if adsorbate_definition is not None:
         raise SCGOValidationError(
-            f"{context} does not accept adsorbate_definition for "
+            f"{prefix}does not accept adsorbate_definition for "
             f"system_type={system_type!r}."
         )
 
@@ -212,7 +214,7 @@ def resolve_mobile_composition(
     original (unmodified) definition is returned. Callers must use the returned
     definition rather than relying on in-place mutation.
     """
-    prefix = f"{context}: " if context else ""
+    prefix = validation_context_prefix(context)
     core_list = list(adsorbate_definition.core_symbols)
     ads_list = list(adsorbate_definition.adsorbate_symbols)
     expected = core_list + ads_list
@@ -316,7 +318,7 @@ def validate_composition_against_adsorbate(
     the same element counts in a different order, list only ``core_symbols``, or
     be a full mobile formula from which ``adsorbate_symbols`` are stripped.
     """
-    prefix = f"{context}: " if context else ""
+    prefix = validation_context_prefix(context)
     core_list = list(adsorbate_definition.core_symbols)
     ads_list = list(adsorbate_definition.adsorbate_symbols)
 
@@ -344,17 +346,18 @@ def validate_adsorbate_definition(
 ) -> None:
     """Validate explicit adsorbate role definition for high-level runners."""
     policy = get_system_policy(system_type)
+    prefix = validation_context_prefix(context)
     if not policy.has_adsorbate:
         if adsorbate_definition is not None:
             raise SCGOValidationError(
-                f"{context} received adsorbate_definition for non-adsorbate "
+                f"{prefix}received adsorbate_definition for non-adsorbate "
                 f"system_type={system_type!r}."
             )
         return
 
     if adsorbate_definition is None:
         raise SCGOValidationError(
-            f"{context} requires adsorbate_definition when system_type={system_type!r}."
+            f"{prefix}requires adsorbate_definition when system_type={system_type!r}."
         )
 
     core_list, _ads_list = validate_composition_against_adsorbate(
@@ -363,7 +366,7 @@ def validate_adsorbate_definition(
 
     if policy.slab_is_search_target and core_list:
         raise SCGOValidationError(
-            f"{context}: system_type={system_type!r} does not support metal cores "
+            f"{prefix}system_type={system_type!r} does not support metal cores "
             "(slab top layers are the search core). Pass adsorbates only."
         )
 
@@ -402,7 +405,7 @@ def resolve_adsorbate_fragments(
     """Normalize fragment templates and validate them against the adsorbate definition."""
     from scgo.cluster_adsorbate.helpers import parse_positive_fragment_lengths
 
-    prefix = f"{context}: " if context else ""
+    prefix = validation_context_prefix(context)
     if templates is None:
         raise SCGOValidationError(
             f"{prefix}adsorbate fragment template(s) are required."
@@ -465,7 +468,7 @@ def resolve_adsorbate_fragments(
 def normalize_adsorbates_input(
     adsorbates: AdsorbatesInput | None, *, context: str
 ) -> list[Atoms]:
-    prefix = f"{context}: " if context else ""
+    prefix = validation_context_prefix(context)
     if adsorbates is None:
         raise SCGOValidationError(
             f"{prefix}adsorbates is required for adsorbate system types."

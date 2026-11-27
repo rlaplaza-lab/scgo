@@ -70,6 +70,8 @@ nitpick_ignore = [
     ("py:func", "ase.Atoms.get_distance"),
     ("py:class", "scipy.spatial._qhull.ConvexHull"),
     ("py:class", "InFlightAutoBatcher"),
+    ("py:class", "scgo.calculators.inner_calculator.InnerDelegatingCalculator"),
+    ("py:class", "scgo.ase_ga_patches.mutations._common.MutationOperator"),
 ]
 
 nitpick_ignore_regex = [
@@ -157,6 +159,7 @@ todo_include_todos = False
 
 from docutils import nodes
 
+
 def doi_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     options = options or {}
     text = text.strip()
@@ -167,8 +170,13 @@ def doi_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     else:
         label, target = text, None
     if target:
-        return [nodes.reference(rawtext, label, refuri="https://doi.org/" + target, **options)], []
+        return [
+            nodes.reference(
+                rawtext, label, refuri="https://doi.org/" + target, **options
+            )
+        ], []
     return [nodes.Text(label)], []
+
 
 def setup(app):
     app.add_role("doi", doi_role)

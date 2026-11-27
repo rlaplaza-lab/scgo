@@ -72,6 +72,10 @@ jobs:
         run: |
           ruff format --check .
 
+      - name: Check for orphan test bytecode
+        run: |
+          python scripts/check_orphan_pyc.py
+
   matrix-prep:
     name: Select test matrix
     runs-on: ubuntu-latest

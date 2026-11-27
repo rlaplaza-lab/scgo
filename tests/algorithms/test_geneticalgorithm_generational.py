@@ -10,7 +10,12 @@ import scgo.algorithms.geneticalgorithm_go_torchsim as ga_mod
 from scgo.algorithms import ga_go
 from scgo.database import get_connection
 from scgo.metadata.atoms import get_tag
-from tests.helpers import MockRelaxer, assert_serial_parallel_offspring_equal
+from scgo.system_types.structure_validation import StructureValidationPolicy
+from tests.helpers import (
+    MockRelaxer,
+    assert_minima_structurally_valid,
+    assert_serial_parallel_offspring_equal,
+)
 
 
 def test_ga_go_generational_smoke(tmp_path, rng):
@@ -28,7 +33,7 @@ def test_ga_go_generational_smoke(tmp_path, rng):
         rng=rng,
     )
 
-    assert isinstance(minima, list)
+    assert_minima_structurally_valid(minima, expected_n_atoms=3)
 
 
 def test_ga_go_accepts_optimizer(tmp_path, rng):
@@ -210,6 +215,7 @@ def test_offspring_build_context_picklable(rng):
         OffspringBuildContext,
         _picklable_atoms_copy,
     )
+    from scgo.system_types import StructureValidationPolicy
     from scgo.utils.mutation_weights import get_adaptive_mutation_config
 
     composition = ["Pt", "Pt", "Pt"]
@@ -248,10 +254,7 @@ def test_offspring_build_context_picklable(rng):
         slab_for_pairing=None,
         surface_normal_axis=2,
         adsorbate_definition=None,
-        connectivity_factor=None,
-        allow_cluster_fragmentation=False,
-        allow_adsorbate_surface_detachment=False,
-        enforce_adsorbate_subgraph_integrity=True,
+        validation=StructureValidationPolicy(),
         freeze_adsorbate_internal_geometry=False,
         adsorbate_fragment_templates=None,
         surface_config=None,
@@ -416,6 +419,7 @@ def test_relax_unrelaxed_relaxes_when_available_below_max_batch(tmp_path):
         force=False,
         composition=["Pt", "Pt", "Pt"],
         system_type="gas_cluster",
+        validation=StructureValidationPolicy(),
     )
 
     # All 3 unrelaxed candidates must be relaxed despite available < max_batch.
@@ -484,6 +488,7 @@ def test_relax_unrelaxed_ineligible_count_stable_across_write_retry(
         max_batch=10,
         composition=["Pt", "Pt", "Pt"],
         system_type="gas_cluster",
+        validation=StructureValidationPolicy(),
     )
     assert eligible == 0
     assert ineligible == 2

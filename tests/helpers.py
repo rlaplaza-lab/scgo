@@ -8,12 +8,14 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
+from ase.build import fcc111
 from ase.calculators.emt import EMT
 
 import tests.constants as _tc
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.db_stamp import is_scgo_db
 from scgo.metadata.run_dir import get_run_directories, load_run_dir_record
+from scgo.param_presets import get_ts_search_params
 
 # Re-exported for `from tests.helpers import ...` (single source: _tc).
 REPRODUCIBILITY_RTOL = _tc.REPRODUCIBILITY_RTOL
@@ -38,6 +40,88 @@ EMT_H2_BARRIER_EV = _tc.EMT_H2_BARRIER_EV
 NN_DISTANCE_BAND = _tc.NN_DISTANCE_BAND
 TS_FMAX_CONVERGED = _tc.TS_FMAX_CONVERGED
 ADSORPTION_HEIGHT_TOLERANCE_ANG = _tc.ADSORPTION_HEIGHT_TOLERANCE_ANG
+DEFAULT_TEST_SEED = _tc.DEFAULT_TEST_SEED
+TEST_VACUUM_GAS = _tc.TEST_VACUUM_GAS
+TEST_VACUUM_SLAB = _tc.TEST_VACUUM_SLAB
+TEST_VACUUM_GA = _tc.TEST_VACUUM_GA
+TEST_CELL_SIZE = _tc.TEST_CELL_SIZE
+PT2_DIMER_POSITIONS = _tc.PT2_DIMER_POSITIONS
+PT3_TRIANGLE_POSITIONS = _tc.PT3_TRIANGLE_POSITIONS
+EMT_CALCULATOR_PARAMS = _tc.EMT_CALCULATOR_PARAMS
+
+
+def oh_template() -> Atoms:
+    return Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.96]], pbc=False)
+
+
+def build_pt111_slab(
+    size=(2, 2, 2),
+    vacuum: float | None = None,
+    *,
+    pbc: bool | tuple = True,
+    orthogonal: bool = True,
+):
+    """Build a Pt(111) fcc slab for tests."""
+    if vacuum is None:
+        vacuum = TEST_VACUUM_SLAB
+    slab = fcc111("Pt", size=size, vacuum=vacuum, orthogonal=orthogonal)
+    slab.pbc = pbc
+    return slab
+
+
+def gas_fixture_atoms(
+    symbols: str, positions, *, vacuum: float | None = None, attach_emt: bool = True
+):
+    """Centered gas-phase Atoms, optionally with EMT attached."""
+    if vacuum is None:
+        vacuum = TEST_VACUUM_GAS
+    atoms = Atoms(symbols, positions=positions)
+    atoms.center(vacuum=vacuum)
+    if attach_emt:
+        atoms.calc = EMT()
+    return atoms
+
+
+def emt_ts_search_kwargs(
+    system_type: str,
+    *,
+    surface_config=None,
+    parallel: bool = False,
+    torchsim: bool = False,
+) -> dict:
+    """Shared EMT TS kwargs used by runner/integration smoke tests."""
+    kwargs = {
+        **get_ts_search_params(
+            system_type=system_type,
+            surface_config=surface_config,
+            calculator="EMT",
+            calculator_kwargs={},
+        ),
+        "use_parallel_neb": parallel,
+        "use_torchsim": torchsim,
+    }
+    return kwargs
+
+
+def set_atoms_kvp(atoms: Atoms, **kwargs) -> Atoms:
+    """Set ``info["key_value_pairs"]`` entries on ``atoms`` (creates dicts)."""
+    atoms.info.setdefault("key_value_pairs", {})
+    atoms.info["key_value_pairs"].update(kwargs)
+    atoms.info.setdefault("data", {})
+    return atoms
+
+
+def adsorbates_oh(*, n: int = 1) -> list[Atoms]:
+    return [
+        Atoms(
+            "OH",
+            positions=[[2.2 * i, 0.0, 0.0], [2.2 * i, 0.0, 0.96]],
+            pbc=False,
+        )
+        for i in range(n)
+    ]
+
+
 PT_O_DISTANCE_ANG = _tc.PT_O_DISTANCE_ANG
 
 
@@ -719,13 +803,16 @@ def assert_supported_cluster_binding(
     and (when fragment lengths are given) adsorbate fragment integrity.
     """
     from scgo.surface.validation import validate_supported_cluster_deposit
+    from scgo.system_types import StructureValidationPolicy
 
     kwargs: dict[str, object] = {
         "n_core_mobile": n_core_mobile,
         "adsorbate_fragment_lengths": adsorbate_fragment_lengths,
-        "allow_cluster_fragmentation": allow_cluster_fragmentation,
-        "allow_adsorbate_surface_detachment": allow_adsorbate_surface_detachment,
-        "enforce_adsorbate_subgraph_integrity": enforce_adsorbate_subgraph_integrity,
+        "validation": StructureValidationPolicy(
+            allow_cluster_fragmentation=allow_cluster_fragmentation,
+            allow_adsorbate_surface_detachment=allow_adsorbate_surface_detachment,
+            enforce_adsorbate_subgraph_integrity=enforce_adsorbate_subgraph_integrity,
+        ),
     }
     if connectivity_factor is not None:
         kwargs["connectivity_factor"] = connectivity_factor
@@ -1256,7 +1343,7 @@ def _pt3_with_calc() -> tuple[Atoms, Any]:
     """Return a Pt3 cluster with an attached EMT calculator."""
     atoms = Atoms(
         "Pt3",
-        positions=[[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [1.25, 2.165, 0.0]],
+        positions=PT3_TRIANGLE_POSITIONS,
         cell=[20.0, 20.0, 20.0],
         pbc=False,
     )

@@ -8,19 +8,17 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 from ase import Atoms
-from ase.geometry import get_distances
 from scipy.spatial import (
     ConvexHull,
     KDTree,
     QhullError,
 )
-from scipy.spatial.distance import cdist
 
 from scgo.database.cache import get_global_cache
 from scgo.exceptions import (
@@ -39,10 +37,18 @@ from scgo.system_types.connectivity_factor import (
     normalize_connectivity_factor,
     pair_bond_threshold,
 )
+from scgo.utils.geometry_math import (
+    ROTATION_AXIS_TOLERANCE,
+    normalize_or,
+    rotation_matrix_axis_angle,
+)
+from scgo.utils.geometry_math import (
+    pairwise_distances as _pairwise_distances,
+)
 from scgo.utils.helpers import get_composition_counts
 from scgo.utils.logging import get_logger
 
-from .atomic_radii import get_covalent_radius
+from .atomic_radii import covalent_radii_array, get_covalent_radius
 from .initialization_config import (
     BLMIN_RATIO_DEFAULT,
     CONNECTIVITY_FACTOR,
@@ -51,7 +57,6 @@ from .initialization_config import (
     CONVEX_HULL_VOLUME_TOLERANCE,
     KDTREE_THRESHOLD,
     LINEAR_GEOMETRY_TOLERANCE,
-    ROTATION_AXIS_TOLERANCE,
     SMART_FILTERING_PERTURBATION_SCALE,
 )
 
@@ -59,7 +64,7 @@ ExtentKind = Literal["insufficient", "linear", "planar", "3d"]
 
 # Core utilities
 
-template_debug_logger = get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def format_composition_counts_short(
@@ -164,10 +169,7 @@ class ClusterExtent:
 
 
 def _unit_vector(v: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(v))
-    if norm < ROTATION_AXIS_TOLERANCE:
-        return np.array([1.0, 0.0, 0.0], dtype=float)
-    return np.asarray(v, dtype=float) / norm
+    return normalize_or(v, tol=ROTATION_AXIS_TOLERANCE)
 
 
 def _perpendicular_unit(axis: np.ndarray) -> np.ndarray:
@@ -310,7 +312,7 @@ def try_convex_hull(positions: np.ndarray) -> ConvexHull | None:
         return None
     extent = resolve_cluster_extent(positions)
     if extent.kind != "3d" or extent.hull is None:
-        template_debug_logger.debug(
+        logger.debug(
             "3D convex hull unavailable for %d points (%s)",
             len(positions),
             extent.kind,
@@ -455,22 +457,18 @@ def _compute_facet_properties(
     for simplex_indices in hull.simplices:
         facet_positions = positions[simplex_indices]
 
-        # Calculate facet area (assuming triangular facets for 3D convex hull)
         v1 = facet_positions[1] - facet_positions[0]
         v2 = facet_positions[2] - facet_positions[0]
         area = 0.5 * np.linalg.norm(np.cross(v1, v2))
 
-        # Calculate facet centroid
         centroid = np.mean(facet_positions, axis=0)
 
-        # Calculate distances from centroid to each vertex
         centroid_to_vertices = [
             np.linalg.norm(vertex_pos - centroid) for vertex_pos in facet_positions
         ]
         min_centroid_dist = min(centroid_to_vertices)
         max_centroid_dist = max(centroid_to_vertices)
 
-        # Calculate facet normal (outward pointing)
         normal = np.cross(v1, v2)
         normal /= np.linalg.norm(normal)
 
@@ -534,11 +532,7 @@ def _filter_safe_facets_for_placement(
 
     cf = normalize_connectivity_factor(connectivity_factor)
     cf_scale = max_connectivity_scale(cf)
-    clash_scale = (
-        effective_clash_factor(min_distance_factor)
-        if min_distance_factor is not None
-        else None
-    )
+    clash_scale = effective_clash_factor(min_distance_factor)
     safe_facet_indices = []
 
     for idx, prop in enumerate(facet_properties):
@@ -559,7 +553,7 @@ def _filter_safe_facets_for_placement(
         # Single vectorized pass over existing atoms for both the clash and
         # connectivity checks (replaces the previous two Python atom loops).
         dists = np.linalg.norm(positions - expected_pos, axis=1)
-        if clash_scale is not None and np.any(dists < radii * clash_scale):
+        if np.any(dists < radii * clash_scale):
             continue
         connected = bond_thresholds if bond_thresholds is not None else radii * cf_scale
         if max_connectivity_dist is not None and not np.any(dists <= connected):
@@ -825,10 +819,12 @@ def _generate_batch_positions_on_convex_hull(
                 min_dist_to_existing = float(
                     np.linalg.norm(positions - candidate_pos, axis=1).min()
                 )
-                template_debug_logger.debug(
-                    f"Candidate rejected: min_dist={min_dist_to_existing:.3f}, "
-                    f"min_centroid_dist={min_centroid_dist:.3f}, "
-                    f"max_conn={max_connectivity_dist:.3f}"
+                logger.debug(
+                    "Candidate rejected: min_dist=%.3f, "
+                    "min_centroid_dist=%.3f, max_conn=%.3f",
+                    min_dist_to_existing,
+                    min_centroid_dist,
+                    max_connectivity_dist,
                 )
             continue
 
@@ -864,9 +860,21 @@ def get_largest_facets(
 
     hull = extent.hull
 
-    # Compute facet properties using shared helper
-    facet_properties = _compute_facet_properties(hull, atoms)
-    facets = [(prop[0], prop[1], prop[2]) for prop in facet_properties]
+    # Facets share the hull cache namespace (keyed by positions + masses).
+    positions = np.ascontiguousarray(atoms.get_positions(), dtype=np.float64)
+    masses = np.ascontiguousarray(atoms.get_masses(), dtype=np.float64)
+    facet_key = (
+        "facets",
+        _get_positions_hash(positions),
+        positions.tobytes(),
+        masses.tobytes(),
+    )
+    facet_properties = get_global_cache().get_or_compute(
+        _CONVEX_HULL_CACHE_NS,
+        facet_key,
+        lambda: _compute_facet_properties(hull, atoms),
+    )
+    facets = [(prop[0].copy(), prop[1].copy(), prop[2]) for prop in facet_properties]
 
     # Sort by area and return the largest ones
     facets.sort(key=lambda x: x[2], reverse=True)
@@ -879,36 +887,6 @@ def _classify_seed_geometry(atoms: Atoms) -> str:
         return "single"
     kind = resolve_cluster_extent(atoms.get_positions()).kind
     return "single" if kind == "insufficient" else kind
-
-
-def _generate_rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
-    """Generate a 3D rotation matrix using Rodrigues' rotation formula.
-
-    Args:
-        axis: Rotation axis vector (will be normalized)
-        angle: Rotation angle in radians
-
-    Returns:
-        3x3 rotation matrix
-    """
-    axis = np.asarray(axis)
-    axis_norm = np.linalg.norm(axis)
-    if axis_norm < ROTATION_AXIS_TOLERANCE:
-        # Degenerate case: return identity matrix
-        return np.eye(3)
-    axis = axis / axis_norm
-
-    # Skew-symmetric matrix for cross product
-    K = np.array(
-        [
-            [0, -axis[2], axis[1]],
-            [axis[2], 0, -axis[0]],
-            [-axis[1], axis[0], 0],
-        ]
-    )
-    # Rodrigues' rotation formula
-    R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * np.dot(K, K)
-    return R
 
 
 def place_multi_atom_seed_on_facet(
@@ -952,7 +930,7 @@ def place_multi_atom_seed_on_facet(
         rotation_angle = np.arccos(cos_angle)
 
         # Apply rotation using Rodrigues' formula
-        R = _generate_rotation_matrix(rotation_axis, rotation_angle)
+        R = rotation_matrix_axis_angle(rotation_axis, rotation_angle)
 
         # Apply rotation around the center of mass
         center = placed_seed.get_center_of_mass()
@@ -983,32 +961,41 @@ def pairwise_distances(
     periodic boundary conditions. One ASE call replaces an ``O(n*m)`` loop over
     :meth:`ase.Atoms.get_distance`.
     """
-    if use_mic:
-        return get_distances(p1, p2, cell=atoms.cell, pbc=atoms.pbc)[1]
-    return cdist(p1, p2)
-
-
-def _covalent_radii_array(atoms: Atoms) -> np.ndarray:
-    """Covalent radii (Å) for every atom, in atom order."""
-    return np.array(
-        [get_covalent_radius(s) for s in atoms.get_chemical_symbols()], dtype=float
+    return _pairwise_distances(
+        p1,
+        p2,
+        cell=atoms.cell,
+        pbc=atoms.pbc,
+        use_mic=use_mic,
     )
 
 
 def _distance_matrix(atoms: Atoms, *, use_mic: bool) -> np.ndarray:
     """Full pairwise distance matrix (MIC when requested)."""
-    if use_mic:
-        return atoms.get_all_distances(mic=True)
-    return cdist(atoms.get_positions(), atoms.get_positions())
+    positions = atoms.get_positions()
+    return _pairwise_distances(
+        positions,
+        cell=atoms.cell,
+        pbc=atoms.pbc,
+        use_mic=use_mic,
+    )
 
 
-def _union_find_components(
-    n_atoms: int, i_idx: np.ndarray, j_idx: np.ndarray
+def union_find_components_from_edges(
+    edges: Iterable[tuple[int, int]],
+    *,
+    n_nodes: int | None = None,
 ) -> dict[int, list[int]]:
-    """Build connected components from bonded pair index arrays."""
-    parent = list(range(n_atoms))
+    """Connected components from undirected edges.
+
+    Dense mode (``n_nodes`` set): every index in ``0..n_nodes-1`` appears in some
+    component (singletons included). Sparse mode (``n_nodes is None``): only nodes
+    that appear in ``edges`` are returned.
+    """
+    parent: dict[int, int] = {}
 
     def find(x: int) -> int:
+        parent.setdefault(x, x)
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
@@ -1019,13 +1006,27 @@ def _union_find_components(
         if px != py:
             parent[px] = py
 
-    for i, j in zip(i_idx.tolist(), j_idx.tolist(), strict=True):
-        union(i, j)
+    for i, j in edges:
+        union(int(i), int(j))
+
+    if n_nodes is not None:
+        for i in range(n_nodes):
+            find(i)
 
     components: dict[int, list[int]] = {}
-    for i in range(n_atoms):
-        components.setdefault(find(i), []).append(i)
+    for node in parent:
+        components.setdefault(find(node), []).append(node)
     return components
+
+
+def _union_find_components(
+    n_atoms: int, i_idx: np.ndarray, j_idx: np.ndarray
+) -> dict[int, list[int]]:
+    """Build connected components from bonded pair index arrays (dense)."""
+    return union_find_components_from_edges(
+        zip(i_idx.tolist(), j_idx.tolist(), strict=True),
+        n_nodes=n_atoms,
+    )
 
 
 def _bonded_pairs(
@@ -1051,7 +1052,7 @@ def _bonded_pairs(
     """
     n_atoms = len(atoms)
     if radii is None:
-        radii = _covalent_radii_array(atoms)
+        radii = covalent_radii_array(atoms.get_chemical_symbols())
     symbols = atoms.get_chemical_symbols()
     cf = normalize_connectivity_factor(connectivity_factor)
     cf_max = max_connectivity_scale(cf)
@@ -1173,7 +1174,9 @@ def analyze_disconnection(
         for j in range(i + 1, len(component_list)):
             comp1 = np.asarray(component_list[i], dtype=int)
             comp2 = np.asarray(component_list[j], dtype=int)
-            inter = cdist(positions[comp1], positions[comp2])
+            inter = pairwise_distances(
+                positions[comp1], positions[comp2], atoms, use_mic=use_mic
+            )
             flat_idx = int(np.argmin(inter))
             local_i, local_j = np.unravel_index(flat_idx, inter.shape)
             distance = float(inter[local_i, local_j])
@@ -1377,7 +1380,7 @@ def get_structure_diagnostics(
         )
 
     symbols = atoms.get_chemical_symbols()
-    radii_arr = _covalent_radii_array(atoms)
+    radii_arr = covalent_radii_array(atoms.get_chemical_symbols())
     dist = _distance_matrix(atoms, use_mic=use_mic)
 
     clash_thresh = clash_threshold_matrix(radii_arr, min_distance_factor)

@@ -37,7 +37,7 @@ from scgo.constants import (
 )
 from scgo.exceptions import SCGOValidationError
 from scgo.surface.config import SurfaceSystemConfig
-from scgo.surface.layers import _layer_indices_by_clustering
+from scgo.surface.layers import resolve_slab_mobile_or_fixed_indices
 from scgo.surface.partition import prepare_slab_search_surface_config
 from scgo.system_types.composition import as_adsorbate_definition
 from scgo.system_types.policy import SystemType, get_system_policy
@@ -94,24 +94,19 @@ def _mobile_support_indices(config: SurfaceSystemConfig) -> tuple[int, ...]:
     positions = np.asarray(slab.get_positions())
     axis = int(config.surface_normal_axis)
 
-    if config.n_relax_top_slab_layers is not None:
-        mobile = _layer_indices_by_clustering(
-            positions,
-            axis,
-            n_layers=int(config.n_relax_top_slab_layers),
-            from_top=True,
-        )
-    elif config.n_fix_bottom_slab_layers is not None:
-        fixed = _layer_indices_by_clustering(
-            positions,
-            axis,
-            n_layers=int(config.n_fix_bottom_slab_layers),
-            from_top=False,
-        )
-        mobile = set(range(n_slab)) - fixed
-    else:
+    if (
+        config.n_relax_top_slab_layers is None
+        and config.n_fix_bottom_slab_layers is None
+    ):
         # fix_all_slab_atoms=False without a layer policy freezes nothing.
         mobile = set(range(n_slab))
+    else:
+        _fixed, mobile = resolve_slab_mobile_or_fixed_indices(
+            positions,
+            axis,
+            n_relax_top_slab_layers=config.n_relax_top_slab_layers,
+            n_fix_bottom_slab_layers=config.n_fix_bottom_slab_layers,
+        )
 
     return tuple(sorted(int(i) for i in mobile))
 

@@ -13,11 +13,15 @@ from scgo.system_types.connectivity_factor import (
     format_connectivity_factor,
     normalize_connectivity_factor,
 )
+from scgo.utils.geometry_math import (
+    random_unit_vector,
+    rotate_positions_about_point,
+    rotation_matrix_axis_angle,
+)
 from scgo.utils.logging import get_logger
 
 from .geometry_helpers import (
     _check_composition_feasibility,
-    _generate_rotation_matrix,
     _set_cubic_cell_and_center,
     compute_bond_distance_params,
     get_covalent_radius,
@@ -48,13 +52,12 @@ def _apply_random_rotation(atoms: Atoms, rng: np.random.Generator) -> Atoms:
     rotated_atoms = atoms.copy()
     rotated_atoms.center()
     center = rotated_atoms.get_center_of_mass()
-    axis = rng.standard_normal(3)
-    axis /= np.linalg.norm(axis)
+    axis = random_unit_vector(rng)
     angle = rng.uniform(0, 2 * np.pi)
-    R = _generate_rotation_matrix(axis, angle)
-    positions = rotated_atoms.get_positions()
-    rotated_positions = center + (positions - center) @ R.T
-    rotated_atoms.set_positions(rotated_positions)
+    R = rotation_matrix_axis_angle(axis, angle)
+    rotated_atoms.set_positions(
+        rotate_positions_about_point(rotated_atoms.get_positions(), center, R)
+    )
     return rotated_atoms
 
 
@@ -166,8 +169,7 @@ def combine_seeds(
         if not placement_success:
             candidate = base_seed_to_add.copy()
             center = combined_atoms.get_center_of_mass()
-            direction = rng.standard_normal(3)
-            direction /= np.linalg.norm(direction)
+            direction = random_unit_vector(rng)
             candidate.translate(
                 center + direction * bond_distance - candidate.get_center_of_mass()
             )

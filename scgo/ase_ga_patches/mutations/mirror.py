@@ -7,30 +7,25 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
-from ase_ga.utilities import atoms_too_close, atoms_too_close_two_sets
 
 from scgo.ase_ga_patches.mutations._common import (
+    _mutation_steric_score,
+    MutationOperator,
     _IDENTITY_ATOL,
+    _accept_connected_candidate,
+    _accept_connected_kwargs,
     _append_unique_unit_vector,
-    _ensure_rng,
     _geometry_candidate_directions,
-    _preserves_mobile_connectivity,
     _random_unit_vector,
     _reanchor_mobile_to_slab,
-    _resolve_op_connectivity_factor,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.initialization.steric_scoring import steric_deficit as _steric_deficit
-from scgo.initialization.steric_scoring import (
-    steric_deficit_two_sets as _steric_deficit_two_sets,
-)
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["MirrorMutation"]
 
 
-class MirrorMutation(OffspringCreator):
+class MirrorMutation(MutationOperator):
+    descriptor = "MirrorMutation"
     """Reflect the target mobile atoms across a ranked cutting plane.
 
     Candidate planes come from the structure geometry (outward slab
@@ -60,27 +55,18 @@ class MirrorMutation(OffspringCreator):
     def __init__(self, blmin, n_top, system_type: SystemType, reflect=True,
                  target_tags=None, rng=None, verbose=False, max_tries=12,
                  surface_normal_axis=2):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.blmin = blmin
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            target_tags=target_tags,
+            surface_normal_axis=surface_normal_axis,
+        )
         self.max_tries = max_tries
         self.reflect = reflect
-        self.target_tags = target_tags
-        self.system_type = system_type
-        self._policy = get_system_policy(system_type)
-        self.surface_normal_axis = surface_normal_axis
         self.last_attempt_count = 0
-
-        self.descriptor = "MirrorMutation"
-        self.min_inputs = 1
-
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: mirror")
 
     def _candidate_planes(self, positions, center_of_mass, slab):
         max_candidates = max(1, min(int(self.max_tries), 12))
@@ -191,15 +177,9 @@ class MirrorMutation(OffspringCreator):
                     mutant.set_cell(slab.get_cell())
                     mutant.set_pbc(slab.get_pbc())
                     mutant.set_tags(tags)
-                    score = _steric_deficit(mutant.get_positions(), num, self.blmin)
-                    if len(slab) > 0:
-                        score += _steric_deficit_two_sets(
-                            mutant.get_positions(),
-                            num,
-                            slab.get_positions(),
-                            slab.numbers,
-                            self.blmin,
-                        )[0]
+                    score = _mutation_steric_score(
+                        mutant.get_positions(), num, slab, self.blmin
+                    )
                     ranked_candidates.append((score, mutant))
 
         ranked_candidates.sort(key=lambda item: item[0])
@@ -207,28 +187,21 @@ class MirrorMutation(OffspringCreator):
         # candidates and skip them in the validity loop instead of truncating.
 
         self.last_attempt_count = 0
-        use_mic = bool(self._policy.uses_surface)
-        connectivity_factor = _resolve_op_connectivity_factor(self)
+        accept_kwargs = _accept_connected_kwargs(self, slab)
         for _score, mutant in ranked_candidates:
             self.last_attempt_count += 1
             if self._policy.uses_surface:
                 mutant = _reanchor_mobile_to_slab(
                     top, mutant, slab, self.surface_normal_axis
                 )
-            if np.allclose(mutant.get_positions(), pos, atol=_IDENTITY_ATOL):
-                continue
-            if atoms_too_close(mutant, self.blmin):
-                continue
-            if atoms_too_close_two_sets(slab, mutant, self.blmin):
-                continue
-            if not _preserves_mobile_connectivity(
-                top,
-                mutant,
-                use_mic=use_mic,
-                connectivity_factor=connectivity_factor,
+            if np.allclose(
+                mutant.get_positions(), pos, rtol=0.0, atol=_IDENTITY_ATOL
             ):
                 continue
-            return slab + mutant
+            accepted = _accept_connected_candidate(top, mutant, **accept_kwargs)
+            if accepted is None:
+                continue
+            return slab + accepted
 
         # Rescue: a compact/symmetric cluster can overlap after a center-plane
         # reflection. Slide the mirrored (negative-side) atoms along the plane
@@ -248,21 +221,13 @@ class MirrorMutation(OffspringCreator):
                             slab,
                             self.surface_normal_axis,
                         )
-                    if atoms_too_close(rescue, self.blmin):
-                        continue
-                    if len(slab) > 0 and atoms_too_close_two_sets(
-                        slab, rescue, self.blmin
-                    ):
-                        continue
-                    if not _preserves_mobile_connectivity(
-                        top,
-                        rescue,
-                        use_mic=use_mic,
-                        connectivity_factor=connectivity_factor,
-                    ):
+                    accepted = _accept_connected_candidate(
+                        top, rescue, **accept_kwargs
+                    )
+                    if accepted is None:
                         continue
                     self.last_attempt_count += 1
-                    return slab + rescue
+                    return slab + accepted
 
         return None
 

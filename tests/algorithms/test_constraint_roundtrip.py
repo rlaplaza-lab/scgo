@@ -21,6 +21,7 @@ from scgo.algorithms.geneticalgorithm_go_torchsim import (
 from scgo.database import close_data_connection, setup_database
 from scgo.metadata.atoms import get_tag
 from scgo.surface.config import SurfaceSystemConfig
+from scgo.system_types import StructureValidationPolicy
 from scgo.ts_search.transition_state import save_neb_result
 from scgo.ts_search.transition_state_io import (
     load_minima_by_composition,
@@ -62,10 +63,7 @@ def _write_context(combined: Atoms) -> GAWriteContext:
         system_type="surface",
         surface_mode=True,
         surface_config=_surface_config(combined),
-        connectivity_factor=None,
-        allow_cluster_fragmentation=False,
-        allow_adsorbate_surface_detachment=False,
-        enforce_adsorbate_subgraph_integrity=True,
+        validation=StructureValidationPolicy(),
         freeze_adsorbate_internal_geometry=False,
         adsorbate_fragment_templates=None,
     )

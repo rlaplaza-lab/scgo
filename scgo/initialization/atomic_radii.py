@@ -17,20 +17,17 @@ quantitative (bonding / clash) purposes — for that use
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
 import numpy as np
+from ase import Atoms
 from ase.data import atomic_numbers, chemical_symbols, covalent_radii, vdw_radii
 
 from scgo.exceptions import (
     SCGOValidationError,
 )
 from scgo.initialization.initialization_config import SURFACE_LAYER_THICKNESS_SCALE
-
-if TYPE_CHECKING:
-    from ase import Atoms
 
 # NOTE: Keep stdlib logging here to avoid early package-import cycles during
 # scgo bootstrap (initialization imports can execute before scgo.utils is ready).
@@ -214,6 +211,11 @@ def build_blmin(
     """Build an ASE-compatible blmin table for the given element symbols."""
     zs = [atomic_numbers[str(s)] for s in symbols]
     return build_blmin_from_zs(zs, ratio)
+
+
+def covalent_radii_array(symbols: Sequence[str]) -> np.ndarray:
+    """Covalent radii (Å) for every symbol, in the same order."""
+    return np.array([get_covalent_radius(s) for s in symbols], dtype=float)
 
 
 def cluster_passes_ga_blmin(

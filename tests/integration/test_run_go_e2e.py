@@ -21,6 +21,9 @@ from scgo.system_types import SystemType, get_system_policy
 from scgo.utils.helpers import get_cluster_formula
 from tests.constants import PT4_EMT_BARRIER_EV
 from tests.helpers import (
+    adsorbates_oh as _adsorbates_oh,
+)
+from tests.helpers import (
     assert_e2e_go_ts_summary,
     assert_e2e_minima_list,
     assert_supported_cluster_binding,
@@ -28,19 +31,6 @@ from tests.helpers import (
 
 SEED = 42
 CONNECTIVITY = 1.8
-
-
-def _adsorbates_oh(*, n: int = 1) -> list[Atoms]:
-    out: list[Atoms] = []
-    for i in range(n):
-        shift = float(2.2 * i)
-        out.append(
-            Atoms(
-                symbols=["O", "H"],
-                positions=[[shift, 0.0, 0.0], [shift, 0.0, 0.96]],
-            )
-        )
-    return out
 
 
 def _pt111_surface_config() -> SurfaceSystemConfig:

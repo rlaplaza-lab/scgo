@@ -65,11 +65,18 @@ See :doc:`/parameters` for the full GO, TS, surface, and adsorbate parameter tab
 Available Models
 ----------------
 
+Preset checkpoints live in ``scgo.constants``. Import those names instead of copying the strings.
+
+.. autodata:: scgo.constants.DEFAULT_UMA_MODEL
+.. autodata:: scgo.constants.DEFAULT_UMA_TASK
+.. autodata:: scgo.constants.DEFAULT_UPET_MODEL
+.. autodata:: scgo.constants.DEFAULT_UPET_VERSION
+
 **MACE models:** ``"mace_matpes_0"`` (default, r²SCAN + DFT-D3(BJ)), ``"mace_mp_small"``, ``"mace_mpa_medium"``, ``"mace_off_small"``. ``dispersion_xc="r2scan"`` is valid only for ``mace_matpes_0``. MACE-OFF already includes dispersion. Set ``dispersion_xc=None`` when switching off the MatPES checkpoint.
 
-**UMA models:** ``"uma-s-1p2p1"`` (preset, task ``oc25``, RPBE+D3 already in the labels), ``"uma-s-1p2"``, ``"uma-s-1p1"``, ``"uma-m-1p1"``, ``"uma-s-1p2p1-ft-d4rev"`` (task ``omol`` only; dispersion is inside the checkpoint), ``"uma-s-1p2p1-ft-r2scan"`` (task ``omat`` only). The r²SCAN fine-tune is non-magnetic, and SCGO does not attach DFT-D3 to it. Do not use it for cohesive energies or magnetic systems.
+**UMA models:** :data:`scgo.constants.DEFAULT_UMA_MODEL` (preset, task :data:`scgo.constants.DEFAULT_UMA_TASK`, RPBE+D3 already in the labels), ``"uma-s-1p2"``, ``"uma-s-1p1"``, ``"uma-m-1p1"``, ``"uma-s-1p2p1-ft-d4rev"`` (task ``omol`` only; dispersion is inside the checkpoint), ``"uma-s-1p2p1-ft-r2scan"`` (task ``omat`` only). The r²SCAN fine-tune is non-magnetic, and SCGO does not attach DFT-D3 to it. Do not use it for cohesive energies or magnetic systems.
 
-**UPET models:** ``"pet-mad-s"``, ``"pet-mad-xs"``, ``"pet-oam-xl"``, ``"pet-omat-s"``, ``"pet-spice-s"``
+**UPET models:** :data:`scgo.constants.DEFAULT_UPET_MODEL` (preset, version :data:`scgo.constants.DEFAULT_UPET_VERSION`), ``"pet-mad-xs"``, ``"pet-oam-xl"``, ``"pet-omat-s"``, ``"pet-spice-s"``
 
 Usage Examples
 --------------
@@ -165,6 +172,7 @@ per-calculator TS wrapper.
        get_low_effort_ts_search_params,
        make_hopg_5x5_graphite_surface_config,
    )
+   from scgo.constants import DEFAULT_UPET_MODEL, DEFAULT_UPET_VERSION
 
    surface_config = make_hopg_5x5_graphite_surface_config()
 
@@ -172,8 +180,8 @@ per-calculator TS wrapper.
        system_type="surface_cluster",
        surface_config=surface_config,
        seed=42,
-       model_name="pet-mad-s",
-       version="1.5.0",
+       model_name=DEFAULT_UPET_MODEL,
+       version=DEFAULT_UPET_VERSION,
    )
 
 See :doc:`/quickstart` for complete workflow examples and :doc:`/parameters` for the full parameter list.

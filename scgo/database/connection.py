@@ -320,7 +320,7 @@ def _ensure_sqlite_json1(
 ) -> None:
     """Ensure the SQLite JSON1 extension is available for this database file.
 
-    Raises RuntimeError with a helpful message if JSON functions (e.g. json_extract)
+    Raises SCGODatabaseError with a helpful message if JSON functions (e.g. json_extract)
     are not available on the underlying SQLite build.
     """
     try:

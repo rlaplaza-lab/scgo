@@ -7,28 +7,27 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase_ga.offspring_creator import OffspringCreator
 
 from scgo.ase_ga_patches._tag_gather import (
     gather_atoms_by_tag,
     periodic_sheet_tag_to_skip,
 )
 from scgo.ase_ga_patches.mutations._common import (
+    MutationOperator,
     _IDENTITY_ATOL,
     _accept_connected_candidate,
     _accept_connected_kwargs,
-    _ensure_rng,
     _filter_unique_tags,
     _preserves_mobile_connectivity,
     _resolve_op_connectivity_factor,
 )
-from scgo.ase_ga_patches.mutations._finalize import _finalize_mutant
-from scgo.system_types import SystemType, get_system_policy
+from scgo.system_types import SystemType
 
 __all__ = ["ShellSwapMutation"]
 
 
-class ShellSwapMutation(OffspringCreator):
+class ShellSwapMutation(MutationOperator):
+    descriptor = "ShellSwapMutation"
     """Swap atom groups between inner and outer radial shells.
 
     This targets alloy ordering directly by preferring swaps between groups with
@@ -50,29 +49,20 @@ class ShellSwapMutation(OffspringCreator):
         rng=None,
         verbose=False,
     ):
-        rng = _ensure_rng(rng)
-        OffspringCreator.__init__(self, verbose, rng=rng)
-        self.n_top = n_top
+        self._init_operator(
+            verbose,
+            rng,
+            system_type,
+            n_top=n_top,
+            blmin=blmin,
+            test_dist_to_slab=test_dist_to_slab,
+            use_tags=use_tags,
+            target_tags=target_tags,
+            surface_normal_axis=int(surface_normal_axis),
+        )
         self.inner_fraction = inner_fraction
         self.outer_fraction = outer_fraction
-        self.test_dist_to_slab = test_dist_to_slab
-        self.use_tags = use_tags
-        self.target_tags = target_tags
-        self.blmin = blmin
         self.max_pair_trials = max_pair_trials
-        self.system_type = system_type
-        self.surface_normal_axis = int(surface_normal_axis)
-        self._policy = get_system_policy(system_type)
-
-        self.descriptor = "ShellSwapMutation"
-        self.min_inputs = 1
-
-    def get_new_individual(self, parents):
-        f = parents[0]
-
-        indi = self.mutate(f)
-
-        return _finalize_mutant(self, f, indi, "mutation: shell_swap")
 
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top

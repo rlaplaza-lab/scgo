@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from ase.geometry import get_distances
-from scipy.spatial.distance import cdist
 
 from scgo.initialization.atomic_radii import get_covalent_radius_by_z
 from scgo.initialization.initialization_config import CLASH_HARD_CAP_FACTOR
+from scgo.initialization.steric_scoring import clear_steric_blmin_cache
+from scgo.utils.geometry_math import pairwise_distances
 
 # Severe-clash screen: ``(r_i + r_j) * CLASH_HARD_CAP_FACTOR``, independent of
 # the 0.7 blmin table the operators enforce afterward.
@@ -27,6 +27,7 @@ _TRIU_CACHE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 def clear_blmin_threshold_cache() -> None:
     """Drop cached Z-pair threshold tables (call once per GA generation)."""
     _BLMIN_THRESH_CACHE.clear()
+    clear_steric_blmin_cache()
 
 
 def _triu_cache(n: int) -> tuple[np.ndarray, np.ndarray]:
@@ -43,38 +44,18 @@ def _blmin_threshold_matrix(
     if cached is None:
         z_to_i = {z: i for i, z in enumerate(unique_z)}
         n_u = len(unique_z)
+        radii = {z: get_covalent_radius_by_z(z) for z in unique_z}
         thresh = np.zeros((n_u, n_u), dtype=float)
         for i, zi in enumerate(unique_z):
-            ri = get_covalent_radius_by_z(zi)
+            ri = radii[zi]
             for j, zj in enumerate(unique_z):
                 if (zi, zj) not in blmin and (zj, zi) not in blmin:
                     continue
-                rj = get_covalent_radius_by_z(zj)
-                thresh[i, j] = (ri + rj) * CLASH_HARD_CAP_FACTOR
+                thresh[i, j] = (ri + radii[zj]) * CLASH_HARD_CAP_FACTOR
         _BLMIN_THRESH_CACHE[cache_key] = (thresh, z_to_i)
     else:
         thresh, z_to_i = cached
     return thresh, z_to_i
-
-
-def _distance_matrix(
-    left: np.ndarray,
-    right: np.ndarray | None = None,
-    *,
-    cell=None,
-    pbc=None,
-    use_mic: bool = False,
-) -> np.ndarray:
-    """Pairwise distances; MIC when ``use_mic`` and any PBC flag is set."""
-    if use_mic and cell is not None and pbc is not None and bool(np.any(pbc)):
-        if right is None:
-            _, dist = get_distances(left, cell=cell, pbc=pbc)
-        else:
-            _, dist = get_distances(left, right, cell=cell, pbc=pbc)
-        return dist
-    if right is None:
-        return cdist(left, left)
-    return cdist(left, right)
 
 
 def fails_fast_geometric_prefilter(
@@ -113,7 +94,9 @@ def fails_fast_geometric_prefilter(
 
     # Mobile–mobile pairs (upper triangle, cached index pass).
     if n_mobile >= 2:
-        mm = _distance_matrix(mobile_pos, cell=cell, pbc=pbc, use_mic=use_mic)
+        mm = pairwise_distances(
+            mobile_pos, cell=cell, pbc=pbc, use_mic=use_mic, require_any_pbc=True
+        )
         pair_thresh = thresh[np.ix_(mobile_idx, mobile_idx)]
         iu, ju = _triu_cache(n_mobile)
         mm_u = mm[iu, ju]
@@ -125,7 +108,14 @@ def fails_fast_geometric_prefilter(
     if n_slab_i > 0:
         slab_pos = positions[:n_slab_i]
         slab_idx = z_index[:n_slab_i]
-        ms = _distance_matrix(mobile_pos, slab_pos, cell=cell, pbc=pbc, use_mic=use_mic)
+        ms = pairwise_distances(
+            mobile_pos,
+            slab_pos,
+            cell=cell,
+            pbc=pbc,
+            use_mic=use_mic,
+            require_any_pbc=True,
+        )
         pair_thresh = thresh[np.ix_(mobile_idx, slab_idx)]
         if np.any((pair_thresh > 0.0) & (ms < pair_thresh)):
             return True

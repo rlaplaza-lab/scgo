@@ -19,6 +19,12 @@ from ase import Atoms
 from ase.io import read
 from ase.units import Hartree
 
+from scgo.constants import (
+    DEFAULT_UMA_MODEL,
+    DEFAULT_UMA_TASK,
+    DEFAULT_UPET_MODEL,
+    DEFAULT_UPET_VERSION,
+)
 from scgo.param_presets import (
     get_torchsim_ga_params,
     get_uma_ga_benchmark_params,
@@ -123,19 +129,20 @@ def add_common_benchmark_cli(parser: argparse.ArgumentParser) -> None:
         "--model-name",
         default=None,
         help=(
-            "Override calculator model_name (default UMA: uma-s-1p2p1; "
-            "UPET: pet-mad-s; MACE: preset default)."
+            "Override calculator model_name "
+            f"(default UMA: {DEFAULT_UMA_MODEL}; "
+            f"UPET: {DEFAULT_UPET_MODEL}; MACE: preset default)."
         ),
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--uma-task",
-        default="oc25",
+        default=DEFAULT_UMA_TASK,
         help="UMA task (only used when --backend uma).",
     )
     parser.add_argument(
         "--upet-version",
-        default="1.5.0",
+        default=DEFAULT_UPET_VERSION,
         help="UPET model version (only used when --backend upet).",
     )
     parser.add_argument(
@@ -407,15 +414,15 @@ def get_benchmark_params(
     model_name: str | None = None,
     *,
     backend: str = "mace",
-    uma_task: str = "oc25",
-    upet_version: str = "1.5.0",
+    uma_task: str = DEFAULT_UMA_TASK,
+    upet_version: str = DEFAULT_UPET_VERSION,
 ) -> dict:
     """Build benchmark params for TorchSim GA + MACE, UMA, or UPET."""
     if backend == "uma":
-        mn = model_name or "uma-s-1p2p1"
+        mn = model_name or DEFAULT_UMA_MODEL
         return get_uma_ga_benchmark_params(seed, model_name=mn, uma_task=uma_task)
     if backend == "upet":
-        mn = model_name or "pet-mad-s"
+        mn = model_name or DEFAULT_UPET_MODEL
         return get_upet_ga_benchmark_params(seed, model_name=mn, version=upet_version)
     params = get_torchsim_ga_params(
         system_type="gas_cluster", seed=seed, model_name=model_name
@@ -656,8 +663,8 @@ def run_benchmark_suite(
     output_dir: str | Path | None = None,
     *,
     backend: str = "mace",
-    uma_task: str = "oc25",
-    upet_version: str = "1.5.0",
+    uma_task: str = DEFAULT_UMA_TASK,
+    upet_version: str = DEFAULT_UPET_VERSION,
     profile_detail: bool = True,
     profile_top_n: int = 8,
 ) -> list[BenchmarkResult]:

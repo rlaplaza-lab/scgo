@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import os
 from typing import Any
@@ -34,6 +33,7 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.ts_search.ts_statistics import compute_ts_statistics
+from scgo.utils.atomic_json import atomic_write_json
 from scgo.utils.comparators import ComparatorBlocks, PureInteratomicDistanceComparator
 from scgo.utils.helpers import (
     get_cluster_formula,
@@ -41,6 +41,10 @@ from scgo.utils.helpers import (
     validate_pair_id,
 )
 from scgo.utils.logging import get_logger
+from scgo.utils.messages import (
+    SKIPPING_DATABASE_NO_RUN_ID,
+    TS_NEED_AT_LEAST_TWO_MINIMA_TO_PAIR,
+)
 from scgo.utils.phase_logging import format_count_of
 
 from .transition_state import (
@@ -54,6 +58,11 @@ logger = get_logger(__name__)
 
 # Absolute ceiling for adsorbate pair oversample before IDPP re-rank.
 _ADSORBATE_PAIR_OVERSAMPLE_CAP = 50
+
+
+def _write_json_summary(path: str, payload: dict[str, Any]) -> None:
+    """Write ``payload`` as indented JSON."""
+    atomic_write_json(path, payload)
 
 
 def adsorbate_pair_select_cap(max_pairs: int) -> int:
@@ -127,10 +136,7 @@ def load_minima_by_composition(
 
     for db_file, run_id in db_files_with_run:
         if not run_id:
-            logger.warning(
-                "Skipping database %s: could not resolve run_id from path layout",
-                db_file,
-            )
+            logger.warning(SKIPPING_DATABASE_NO_RUN_ID, db_file)
             continue
         try:
             try:
@@ -390,7 +396,7 @@ def select_structure_pairs(
     mic = bool(use_mic)
 
     if len(minima) < 2:
-        logger.info("Only %d minima, need at least 2 to pair", len(minima))
+        logger.info(TS_NEED_AT_LEAST_TWO_MINIMA_TO_PAIR, len(minima))
         return []
 
     defaults = pair_selection_param_defaults(
@@ -521,6 +527,11 @@ def select_structure_pairs(
                     j,
                     type(e).__name__,
                     e,
+                )
+                logger.debug(
+                    "Similarity failure traceback for pair (%s, %s)",
+                    i,
+                    j,
                     exc_info=True,
                 )
                 continue
@@ -740,8 +751,7 @@ def save_transition_state_results(
     summary["statistics"] = compute_ts_statistics(ts_results)
 
     summary_path = os.path.join(output_dir, "results_summary.json")
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
+    _write_json_summary(summary_path, summary)
 
     logger.info(
         "TS summary %s: %s, %s",
@@ -873,14 +883,12 @@ def write_final_unique_ts(
     summary_list: list[dict[str, Any]] = []
 
     if not candidates:
-        # Write empty summary
         summary_path = os.path.join(final_dir, "final_unique_ts_summary.json")
         empty_data: dict[str, Any] = output_json_provenance(extra=run_context or {})
         empty_data.update({"formula": formula, "unique_ts": []})
         if minima_base_dir is not None:
             empty_data["minima_base_dir"] = minima_base_dir
-        with open(summary_path, "w") as f:
-            json.dump(empty_data, f, indent=2)
+        _write_json_summary(summary_path, empty_data)
         logger.info("No successful TSs to deduplicate for %s", formula)
         return []
 
@@ -982,8 +990,7 @@ def write_final_unique_ts(
     summary_data.update({"formula": formula, "unique_ts": serializable_summary})
     if minima_base_dir is not None:
         summary_data["minima_base_dir"] = minima_base_dir
-    with open(summary_path, "w") as f:
-        json.dump(summary_data, f, indent=2)
+    _write_json_summary(summary_path, summary_data)
     logger.info(
         "Unique TS: %d structures in %s, summary %s",
         len(summary_list),

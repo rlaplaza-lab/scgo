@@ -7,9 +7,6 @@ this package ``__init__``.
 
 from __future__ import annotations
 
-import importlib
-from typing import Any
-
 from scgo.cluster_adsorbate.combine import combine_core_adsorbate
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import (
@@ -22,6 +19,7 @@ from scgo.cluster_adsorbate.placement import (
 from scgo.cluster_adsorbate.relax import relax_metal_cluster_with_adsorbate
 from scgo.cluster_adsorbate.validation import validate_combined_cluster_structure
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
+from scgo.utils.lazy_exports import lazy_submodule_dir, lazy_submodule_getattr
 
 # Rigid helpers live in ``scgo.cluster_adsorbate.rigid`` (not re-exported here):
 # importing them eagerly would circular-import via ``system_types`` → ``surface``.
@@ -55,17 +53,5 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     ),
 }
 
-
-def __getattr__(name: str) -> Any:
-    if name in _LAZY_ATTRS:
-        module_name, attr = _LAZY_ATTRS[name]
-        module = importlib.import_module(module_name)
-        value = getattr(module, attr)
-        globals()[name] = value
-        return value
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def __dir__() -> list[str]:
-    return sorted(__all__)
+__getattr__ = lazy_submodule_getattr(globals(), _LAZY_ATTRS, cache=True)
+__dir__ = lazy_submodule_dir(__all__)
