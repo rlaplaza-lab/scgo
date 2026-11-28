@@ -6,6 +6,7 @@ from ase import Atoms
 from ase.calculators.emt import EMT
 
 from scgo.exceptions import SCGOValidationError
+from scgo.metadata.atoms import set_tags
 from scgo.utils.comparators import PureInteratomicDistanceComparator
 from scgo.utils.diversity_scorer import DiversityScorer
 from scgo.utils.fitness_strategies import (
@@ -147,11 +148,21 @@ def test_get_set_fitness_in_atoms():
     # Retrieve fitness
     assert get_fitness_from_atoms(atoms) == pytest.approx(42.5)
     assert atoms.info["fitness_strategy"] == "low_energy"
+    # Persisted as structure tags for ASE DB round-trips
+    assert atoms.info["key_value_pairs"]["fitness"] == pytest.approx(42.5)
+    assert atoms.info["key_value_pairs"]["fitness_strategy"] == "low_energy"
 
     # Test with different default
     atoms2 = Atoms("Pt2", positions=[[0, 0, 0], [1, 0, 0]])
     assert get_fitness_from_atoms(atoms2) is None
     assert get_fitness_from_atoms(atoms2, default=0.0) == pytest.approx(0.0, abs=1e-8)
+
+
+def test_get_fitness_from_tags_without_info():
+    """Fitness stored only in tags (DB reload) is still readable."""
+    atoms = Atoms("Pt2", positions=[[0, 0, 0], [1, 0, 0]])
+    set_tags(atoms, fitness=-1.25, fitness_strategy="low_energy")
+    assert get_fitness_from_atoms(atoms) == pytest.approx(-1.25)
 
 
 def test_fitness_calculation_with_enum():

@@ -8,3 +8,6 @@ from __future__ import annotations
 
 # Column on ``systems`` holding JSON (relaxed, raw_score, run_id, etc.)
 SYSTEMS_JSON_COLUMN: str = "key_value_pairs"
+
+# Default filesystem glob for locating ASE ``.db`` files under a search root.
+DEFAULT_DB_GLOB: str = "**/*.db"

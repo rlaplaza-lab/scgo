@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -1177,7 +1178,7 @@ def create_initial_cluster(
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     vacuum: float = VACUUM_DEFAULT,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     mode: str = "smart",
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,
@@ -1530,7 +1531,7 @@ def plan_batch_initialization(
     rng: np.random.Generator,
     *,
     vacuum: float = VACUUM_DEFAULT,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     mode: str = "smart",
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = BLMIN_RATIO_DEFAULT,
@@ -1635,7 +1636,7 @@ def create_initial_cluster_batch(
     placement_radius_scaling: float = PLACEMENT_RADIUS_SCALING_DEFAULT,
     min_distance_factor: float = BLMIN_RATIO_DEFAULT,
     vacuum: float = VACUUM_DEFAULT,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     mode: str = "smart",
     connectivity_factor: ConnectivityFactorInput
     | NormalizedConnectivityFactor = CONNECTIVITY_FACTOR,

@@ -6,14 +6,13 @@ caching and consistent error handling.
 
 from __future__ import annotations
 
-import glob
 import time
 from pathlib import Path
 
 from ase import Atoms
 
 from scgo.database.cache import get_global_cache
-from scgo.database.discovery import list_discovered_db_paths_with_run
+from scgo.database.discovery import discover_db_files, list_discovered_db_paths_with_run
 from scgo.database.helpers import (
     load_previous_run_results,
     load_reference_structures,
@@ -33,7 +32,7 @@ class SCGODatabaseManager:
     Example::
 
         >>> with SCGODatabaseManager(base_dir="output") as manager:
-        ...     refs = manager.load_reference_structures("**/*.db")
+        ...     refs = manager.load_reference_structures(DEFAULT_DB_GLOB)
     """
 
     def __init__(
@@ -236,7 +235,12 @@ class SCGODatabaseManager:
             max_structures,
         )
         full_pattern = str(self.base_dir / db_glob_pattern)
-        matched_paths = [Path(p) for p in glob.glob(full_pattern, recursive=True)]
+        matched_paths = discover_db_files(
+            self.base_dir,
+            pattern=db_glob_pattern,
+            merge_registry=False,
+            require_scgo=False,
+        )
         fp = self._compute_files_fingerprint(matched_paths)
 
         # Check cache
@@ -250,9 +254,9 @@ class SCGODatabaseManager:
 
         if composition:
             formula = get_cluster_formula(composition)
-            logger.info("Loading reference structures for %s", formula)
+            logger.debug("Loading reference structures for %s", formula)
         else:
-            logger.info("Loading reference structures (all compositions)")
+            logger.debug("Loading reference structures (all compositions)")
 
         structures = load_reference_structures(
             db_glob_pattern=full_pattern,
@@ -266,7 +270,7 @@ class SCGODatabaseManager:
         if self.enable_caching:
             self._store_cached(cache_key, structures, fp)
 
-        logger.info("Loaded %s reference structures", len(structures))
+        logger.debug("Loaded %s reference structures", len(structures))
         return structures
 
     def close(self):

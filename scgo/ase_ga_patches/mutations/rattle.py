@@ -1,7 +1,5 @@
 """Rattle-style mutations that perturb atomic positions locally."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -158,10 +156,20 @@ class RattleMutation(MutationOperator):
 
     """
 
-    def __init__(self, blmin, n_top, system_type: SystemType, rattle_strength=0.8,
-                 rattle_prop=0.4, test_dist_to_slab=True, use_tags=False,
-                 target_tags=None, verbose=False, rng=None,
-                 surface_normal_axis=2):
+    def __init__(
+        self,
+        blmin,
+        n_top,
+        system_type: SystemType,
+        rattle_strength=0.8,
+        rattle_prop=0.4,
+        test_dist_to_slab=True,
+        use_tags=False,
+        target_tags=None,
+        verbose=False,
+        rng=None,
+        surface_normal_axis=2,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -208,7 +216,7 @@ class RattleMutation(MutationOperator):
         break_rigid = not self._policy.uses_surface
         for scale in _STRENGTH_SCALES:
             strength = float(self.rattle_strength) * scale
-            st = 2. * strength
+            st = 2.0 * strength
             # Half strength moves one group. A partial rattle disconnects a loose cluster.
             single_group = scale < 1.0
             pos = pos_ref.copy()
@@ -232,7 +240,8 @@ class RattleMutation(MutationOperator):
             top = Atoms(num, positions=pos, cell=cell, pbc=pbc, tags=tags)
             if self._policy.uses_surface:
                 top = _reanchor_mobile_to_slab(
-                    atoms, top, slab, self.surface_normal_axis)
+                    atoms, top, slab, self.surface_normal_axis
+                )
             accepted, best = _consider_local_candidate(
                 self, parent_mobile, top, slab, best
             )
@@ -292,9 +301,7 @@ class RattleMutation(MutationOperator):
                 top = _reanchor_mobile_to_slab(
                     mobile, top, slab, self.surface_normal_axis
                 )
-            accepted, best = _consider_local_candidate(
-                self, mobile, top, slab, best
-            )
+            accepted, best = _consider_local_candidate(self, mobile, top, slab, best)
             if accepted is not None:
                 return _as_offspring(self, slab, accepted)
         accepted = _repair_best(self, mobile, slab, best)
@@ -419,7 +426,8 @@ class AnisotropicRattleMutation(MutationOperator):
             top = Atoms(num, positions=pos, cell=cell, pbc=pbc, tags=tags)
             if self._policy.uses_surface:
                 top = _reanchor_mobile_to_slab(
-                    atoms, top, slab, self.surface_normal_axis)
+                    atoms, top, slab, self.surface_normal_axis
+                )
             self.last_attempt_count += 1
             accepted, best = _consider_local_candidate(
                 self, parent_mobile, top, slab, best
@@ -431,5 +439,3 @@ class AnisotropicRattleMutation(MutationOperator):
         if accepted is None:
             return None
         return _as_offspring(self, slab, accepted)
-
-# fmt: on

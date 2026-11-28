@@ -1,7 +1,5 @@
 """Mutation that uniformly scales atom positions about the center of positions."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -47,9 +45,21 @@ class BreathingMutation(MutationOperator):
         Upper bound on the number of candidate scales per call (capped at 8).
     """
 
-    def __init__(self, blmin, n_top, system_type: SystemType, scale_min=0.9, scale_max=1.1,
-                 test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=1000, surface_normal_axis=2, min_scale_delta=0.05):
+    def __init__(
+        self,
+        blmin,
+        n_top,
+        system_type: SystemType,
+        scale_min=0.9,
+        scale_max=1.1,
+        test_dist_to_slab=True,
+        target_tags=None,
+        rng=None,
+        verbose=False,
+        max_inner_attempts=1000,
+        surface_normal_axis=2,
+        min_scale_delta=0.05,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -163,7 +173,8 @@ class BreathingMutation(MutationOperator):
             cand = Atoms(num, positions=new_pos, cell=cell, pbc=pbc, tags=tags)
             if self._policy.uses_surface:
                 cand = _reanchor_mobile_to_slab(
-                    top, cand, slab, self.surface_normal_axis)
+                    top, cand, slab, self.surface_normal_axis
+                )
             accepted = _accept_connected_candidate(
                 top, cand, **_accept_connected_kwargs(self, slab)
             )
@@ -171,5 +182,3 @@ class BreathingMutation(MutationOperator):
                 continue
             return slab + accepted
         return None
-
-# fmt: on

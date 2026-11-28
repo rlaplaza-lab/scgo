@@ -63,6 +63,7 @@ from scgo.algorithms.ga_cpu_gpu_pipeline import (
     resolve_pipeline_chunk,
     run_double_buffered_with_worker,
 )
+from scgo.algorithms.result_collection import collect_run_minima
 from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.ase_ga_patches.cutandsplicepairing import (
     CutAndSplicePairing,
@@ -89,13 +90,14 @@ from scgo.database import (
     database_retry,
     setup_database,
 )
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.database.sync import PRESET_HPC
 from scgo.exceptions import SCGOError, SCGORuntimeError, SCGOValidationError
 from scgo.initialization import compute_cell_side
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.geometry_helpers import reorder_cluster_to_composition
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
-from scgo.metadata.atoms import filter_by_tags, get_tag, get_tags, set_tags
+from scgo.metadata.atoms import get_tag, get_tags, set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.system_types import (
     AdsorbateDefinition,
@@ -113,13 +115,12 @@ from scgo.system_types import (
 from scgo.utils.comparators import EnergyAndStructureComparator
 from scgo.utils.fitness_strategies import (
     FitnessStrategy,
+    calculate_fitness,
+    set_fitness_in_atoms,
 )
 from scgo.utils.geometric_prefilter import (
     clear_blmin_threshold_cache,
     fails_fast_geometric_prefilter,
-)
-from scgo.utils.helpers import (
-    extract_minima_from_database,
 )
 from scgo.utils.logging import (
     drain_inductor_filelock_summary,
@@ -267,6 +268,7 @@ def _load_offspring_worker_state(ctx: OffspringBuildContext) -> None:
         composition=ctx.composition,
         adsorbate_definition=ctx.adsorbate_definition,
         surface_normal_axis=ctx.surface_normal_axis,
+        blmin=ctx.blmin,
     )
     _OFFSPRING_WORKER_STATE["operators_epoch"] = ctx.operators_epoch
     _OFFSPRING_WORKER_STATE["pairing"] = pairing
@@ -559,6 +561,8 @@ class GAWriteContext:
     validation: StructureValidationPolicy
     freeze_adsorbate_internal_geometry: bool = False
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None
+    fitness_strategy: str = "low_energy"
+    diversity_scorer: Any | None = None
 
 
 def _write_relaxed_candidate(
@@ -662,14 +666,16 @@ def _write_relaxed_candidate(
     elif run_id is not None:
         set_tags(original, run_id=run_id, **extra)
 
-    # Root-cause fix: the unrelaxed ``original`` carried no constraints, so the
-    # native DB round-trip otherwise discards the slab FixAtoms / adsorbate
-    # FixBondLengths that relaxation enforced. Persisting them here aligns the
-    # TorchSim GA path with the basinhopping path (which writes the constrained
-    # ``a_trial`` directly). The metadata tags above are a reorder-safe backstop
-    # consumed on load.
     if relaxed.constraints:
         original.set_constraint(copy.deepcopy(relaxed.constraints))
+
+    fitness = calculate_fitness(
+        energy=energy,
+        atoms=original,
+        strategy=ctx.fitness_strategy,
+        diversity_scorer=ctx.diversity_scorer,
+    )
+    set_fitness_in_atoms(original, fitness, ctx.fitness_strategy)
 
     original.calc = SinglePointCalculator(original, energy=energy)
     da.add_relaxed_step(original)
@@ -813,6 +819,8 @@ def _commit_relaxed_batch(
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
     operator_credit: dict[str, dict[str, int]] | None = None,
+    fitness_strategy: str = "low_energy",
+    diversity_scorer: Any | None = None,
 ) -> tuple[int, int, dict[str, int]]:
     """Write relaxed results to the DB and optionally update the population.
 
@@ -862,6 +870,8 @@ def _commit_relaxed_batch(
                         validation=validation,
                         freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                         adsorbate_fragment_templates=adsorbate_fragment_templates,
+                        fitness_strategy=fitness_strategy,
+                        diversity_scorer=diversity_scorer,
                     ),
                     generation=generation,
                     run_id=run_id,
@@ -938,6 +948,8 @@ def _relax_unrelaxed_candidates(
     freeze_adsorbate_internal_geometry: bool = False,
     adsorbate_fragment_templates: AdsorbateFragmentInput | None = None,
     operator_credit: dict[str, dict[str, int]] | None = None,
+    fitness_strategy: str = "low_energy",
+    diversity_scorer: Any | None = None,
 ) -> tuple[int, int, dict[str, int]]:
     """Relax unrelaxed candidates in batches and commit them to the database.
 
@@ -997,6 +1009,8 @@ def _relax_unrelaxed_candidates(
         freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
         adsorbate_fragment_templates=adsorbate_fragment_templates,
         operator_credit=operator_credit,
+        fitness_strategy=fitness_strategy,
+        diversity_scorer=diversity_scorer,
     )
 
 
@@ -1098,6 +1112,8 @@ def _record_offspring_worker_failure(
     state: _OffspringWaveState,
     exc: BaseException,
     worker_exceptions: list[BaseException],
+    *,
+    log_traceback: bool,
 ) -> None:
     err_name = type(exc).__name__
     state.worker_failure_types[err_name] = (
@@ -1106,10 +1122,17 @@ def _record_offspring_worker_failure(
     reason = f"worker_exception_{err_name}"
     state.retry_failure_reasons[reason] = state.retry_failure_reasons.get(reason, 0) + 1
     worker_exceptions.append(exc)
-    logger.exception(
-        "Offspring crossover/mutation worker failed (%s)",
-        err_name,
-    )
+    if log_traceback:
+        logger.exception(
+            "Offspring crossover/mutation worker failed (%s)",
+            err_name,
+        )
+    else:
+        logger.debug(
+            "Offspring crossover/mutation worker failed (%s): %s",
+            err_name,
+            exc,
+        )
 
 
 def _execute_offspring_jobs(
@@ -1135,8 +1158,14 @@ def _execute_offspring_jobs(
 
     def _handle_exc(exc: BaseException) -> None:
         nonlocal wave_failures
+        first = wave_failures == 0
         wave_failures += 1
-        _record_offspring_worker_failure(state, exc, worker_exceptions)
+        _record_offspring_worker_failure(
+            state,
+            exc,
+            worker_exceptions,
+            log_traceback=first,
+        )
 
     _worker_exc = (RuntimeError, ValueError, TypeError, SCGOError)
     if n_workers == 1:
@@ -1412,7 +1441,7 @@ def ga_go(
     n_jobs_population_init: int | None = None,
     n_jobs_offspring: int | None = None,
     vacuum: float = 10.0,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     use_adaptive_mutations: bool = True,
     stagnation_trigger: int = 4,
     stagnation_full_trigger: int = 8,
@@ -1789,6 +1818,7 @@ def ga_go(
         mic=comp_mic,
         uniqueness=geometry,
         blocks=uniqueness_blocks,
+        verbosity=verbosity,
     )
     comp = EnergyAndStructureComparator(energy_tolerance, structure_comparator)
 
@@ -1984,6 +2014,8 @@ def ga_go(
                             validation=validation,
                             freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
                             adsorbate_fragment_templates=adsorbate_fragment_template,
+                            fitness_strategy=fitness_strategy,
+                            diversity_scorer=diversity_scorer,
                         ),
                         generation=0,
                         run_id=run_id,
@@ -2058,8 +2090,9 @@ def ga_go(
 
         log_file = os.path.join(output_dir, "population.log")
 
-        with suppress(FileNotFoundError):
-            os.remove(log_file)
+        if clean:
+            with suppress(FileNotFoundError):
+                os.remove(log_file)
 
         # Select appropriate Population class based on fitness strategy
         PopulationClass, population_kwargs = select_population_class(
@@ -2067,6 +2100,7 @@ def ga_go(
             diversity_scorer=diversity_scorer,
             diversity_update_interval=diversity_update_interval,
             logger=logger,
+            verbosity=verbosity,
         )
 
         population = PopulationClass(
@@ -2253,6 +2287,8 @@ def ga_go(
                 ),
                 "adsorbate_fragment_templates": adsorbate_fragment_template,
                 "operator_credit": operator_credit,
+                "fitness_strategy": fitness_strategy,
+                "diversity_scorer": diversity_scorer,
             }
             eligible_count = 0
             ineligible_count = 0
@@ -2499,21 +2535,16 @@ def ga_go(
             freeze_adsorbate_internal_geometry=freeze_adsorbate_internal_geometry,
             adsorbate_fragment_templates=adsorbate_fragment_template,
             operator_credit=operator_credit,
+            fitness_strategy=fitness_strategy,
+            diversity_scorer=diversity_scorer,
         )
 
-        all_candidates = database_retry(
-            da.get_all_relaxed_candidates,
-            config=PRESET_HPC,
+        all_minima = collect_run_minima(
+            da,
+            run_id=run_id,
+            ga_eligible_default=False,
             operation_name="get_final_all_relaxed_candidates",
         )
-        if run_id is not None:
-            all_candidates = filter_by_tags(all_candidates, run_id=run_id)
-        all_candidates = [
-            cand
-            for cand in all_candidates
-            if bool(get_tag(cand, "ga_eligible", default=False))
-        ]
-        all_minima = extract_minima_from_database(all_candidates)
 
         log_info_v(
             logger,
@@ -2528,6 +2559,7 @@ def ga_go(
             all_minima=all_minima,
             fitness_strategy=fitness_strategy,
             logger=logger,
+            verbosity=verbosity,
         )
         profile_timings["total_wall_s"] = perf_counter() - profile_t0
         profile_timings["kind"] = "ga"

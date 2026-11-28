@@ -14,6 +14,7 @@ from ase import Atoms
 from scgo.exceptions import (
     SCGOValidationError,
 )
+from scgo.metadata.atoms import get_tag, set_tags
 from scgo.utils.validation import validate_in_choices
 
 if TYPE_CHECKING:
@@ -93,29 +94,19 @@ def calculate_fitness(
 
 
 def get_fitness_from_atoms(atoms: Atoms, default: float | None = None) -> float | None:
-    """Extract fitness value from Atoms object info dict.
-
-    Args:
-        atoms: Atoms object with fitness stored in info dict.
-        default: Default value if fitness not found (``None`` when unset).
-
-    Returns:
-        Fitness value or *default* if not found.
-    """
+    """Return fitness from ``atoms.info``, else the persisted ``fitness`` tag."""
     info = getattr(atoms, "info", {})
-    if "fitness" not in info:
-        return default
-    return float(info["fitness"])
+    if "fitness" in info:
+        return float(info["fitness"])
+    tagged = get_tag(atoms, "fitness", default=None)
+    if tagged is not None:
+        return float(tagged)
+    return default
 
 
 def set_fitness_in_atoms(atoms: Atoms, fitness: float, strategy: str) -> None:
-    """Store fitness value and strategy in Atoms object info dict.
-
-    Args:
-        atoms: Atoms object to modify.
-        fitness: Fitness value to store.
-        strategy: Fitness strategy name.
-    """
+    """Store fitness in ``atoms.info`` and structure tags (ASE DB round-trip)."""
     atoms.info = getattr(atoms, "info", {})
     atoms.info["fitness"] = fitness
     atoms.info["fitness_strategy"] = strategy
+    set_tags(atoms, fitness=fitness, fitness_strategy=strategy)

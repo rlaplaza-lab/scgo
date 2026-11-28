@@ -1,7 +1,5 @@
 """Mutations that permute atom types between groups."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -54,8 +52,18 @@ class PermutationMutation(MutationOperator):
 
     """
 
-    def __init__(self, n_top, system_type: SystemType, probability=0.33, test_dist_to_slab=True,
-                 use_tags=False, target_tags=None, blmin=None, rng=None, verbose=False):
+    def __init__(
+        self,
+        n_top,
+        system_type: SystemType,
+        probability=0.33,
+        test_dist_to_slab=True,
+        use_tags=False,
+        target_tags=None,
+        blmin=None,
+        rng=None,
+        verbose=False,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -77,8 +85,8 @@ class PermutationMutation(MutationOperator):
         only when no pair can be applied without a clash.
         """
         N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[:len(atoms) - N]
-        atoms = atoms[len(atoms) - N:]
+        slab = atoms[: len(atoms) - N]
+        atoms = atoms[len(atoms) - N :]
         if self.use_tags:
             gather_atoms_by_tag(
                 atoms,
@@ -96,7 +104,7 @@ class PermutationMutation(MutationOperator):
             return None
 
         n = len(unique_tags)
-        swaps = int(np.ceil(n * self.probability / 2.))
+        swaps = int(np.ceil(n * self.probability / 2.0))
 
         sym = []
         for tag in unique_tags:
@@ -109,8 +117,12 @@ class PermutationMutation(MutationOperator):
             return None
 
         # Pre-compute valid swap pairs: indices (i, j) where sym[i] != sym[j].
-        valid_pairs = [(i, j) for i in range(len(unique_tags)) for j in range(i + 1, len(unique_tags))
-                       if sym[i] != sym[j]]
+        valid_pairs = [
+            (i, j)
+            for i in range(len(unique_tags))
+            for j in range(i + 1, len(unique_tags))
+            if sym[i] != sym[j]
+        ]
 
         pos = pos_ref.copy()
 
@@ -188,5 +200,3 @@ class CustomPermutationMutation(PermutationMutation):
             rng=rng,
             verbose=verbose,
         )
-
-# fmt: on

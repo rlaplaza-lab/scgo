@@ -928,8 +928,14 @@ def _generate_custom_template(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError, SCGOValidationError):
-        # Expected during template discovery; logging here creates excessive noise.
+    except (ValueError, RuntimeError, SCGOValidationError) as e:
+        logger.debug(
+            "Template builder failed for %s (n_atoms=%s): %s: %s",
+            template_name,
+            n_atoms,
+            type(e).__name__,
+            e,
+        )
         return None
 
 
@@ -1077,8 +1083,13 @@ def _generate_ase_template_with_common_pattern(
             return None
         return adjusted
 
-    except (ValueError, RuntimeError, AttributeError, SCGOValidationError):
-        # Expected during template discovery; logging here creates excessive noise.
+    except (ValueError, RuntimeError, SCGOValidationError) as e:
+        logger.debug(
+            "Template atom adjustment failed for %s: %s: %s",
+            template_name,
+            type(e).__name__,
+            e,
+        )
         return None
 
 
@@ -1820,6 +1831,10 @@ def generate_template_matches(
 
     is_exact_match: bool = nearest_magic == n_atoms
 
+    exact_failures = 0
+    near_failures = 0
+    _template_errors = (ValueError, RuntimeError, SCGOValidationError)
+
     if include_exact and is_exact_match:
         valid_types = _find_valid_template_types(n_atoms, connectivity_factor)
         for template_type in valid_types:
@@ -1841,14 +1856,8 @@ def generate_template_matches(
                             connectivity_factor=connectivity_factor,
                             composition=list(composition),
                         )
-            except (
-                ValueError,
-                RuntimeError,
-                AttributeError,
-                TypeError,
-                KeyError,
-                SCGOValidationError,
-            ) as e:
+            except _template_errors as e:
+                exact_failures += 1
                 logger.debug(
                     "Template generation failed for %s (n_atoms=%s): %s: %s",
                     template_type,
@@ -1882,14 +1891,8 @@ def generate_template_matches(
                         connectivity_factor=connectivity_factor,
                         composition=list(composition),
                     )
-            except (
-                ValueError,
-                RuntimeError,
-                AttributeError,
-                TypeError,
-                KeyError,
-                SCGOValidationError,
-            ) as e:
+            except _template_errors as e:
+                near_failures += 1
                 logger.debug(
                     "Template adjustment failed for %s (base=%s, target=%s): %s: %s",
                     template_type,
@@ -1898,5 +1901,14 @@ def generate_template_matches(
                     type(e).__name__,
                     e,
                 )
+
+    if exact_failures or near_failures:
+        logger.debug(
+            "Template phase failures for n_atoms=%s: exact=%d near=%d (kept %d)",
+            n_atoms,
+            exact_failures,
+            near_failures,
+            len(results),
+        )
 
     return results

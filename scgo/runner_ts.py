@@ -239,7 +239,7 @@ def _run_go_ts_pipeline(
             ),
             filename=GO_TS_TIMING_JSON_FILENAME,
         )
-    logger.info(
+    logger.debug(
         "Completed GO->TS pipeline for %s: %s succeeded, wall_time=%.2f s",
         formula,
         format_count_of(ts_success, len(ts_results), after="NEBs"),
@@ -335,6 +335,7 @@ def run_go_ts_campaign(
     from scgo import configure
 
     configure()
+    configure_logging(verbosity)
     try:
         prepared = _prepare_go_ts_preamble(
             context="run_go_ts_campaign",

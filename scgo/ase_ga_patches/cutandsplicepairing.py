@@ -1,7 +1,5 @@
 """Implementation of the cut-and-splice paring operator."""
 
-# fmt: off
-
 from __future__ import annotations
 
 from scgo.exceptions import (
@@ -256,17 +254,29 @@ class CutAndSplicePairing(OffspringCreator):
 
     """
 
-    def __init__(self, slab, n_top, blmin, number_of_variable_cell_vectors=0,
-                 p1=1, p2=0.05, minfrac=None, cellbounds=None,
-                 test_dist_to_slab=True, use_tags=False, target_tags=None, rng=None,
-                 verbose=False, system_type="gas_cluster",
-                 max_pairing_attempts: int | None = None,
-                 fixed_cell_max_passes: int = 3,
-                 variable_cell_max_passes: int = 3,
-                 prefer_unbalanced: bool = False,
-                 surface_normal_axis: int = 2,
-                 split_core_tag: bool = False):
-
+    def __init__(
+        self,
+        slab,
+        n_top,
+        blmin,
+        number_of_variable_cell_vectors=0,
+        p1=1,
+        p2=0.05,
+        minfrac=None,
+        cellbounds=None,
+        test_dist_to_slab=True,
+        use_tags=False,
+        target_tags=None,
+        rng=None,
+        verbose=False,
+        system_type="gas_cluster",
+        max_pairing_attempts: int | None = None,
+        fixed_cell_max_passes: int = 3,
+        variable_cell_max_passes: int = 3,
+        prefer_unbalanced: bool = False,
+        surface_normal_axis: int = 2,
+        split_core_tag: bool = False,
+    ):
         rng = _ensure_rng(rng)
         OffspringCreator.__init__(self, verbose, rng=rng)
         self.slab = slab
@@ -388,7 +398,11 @@ class CutAndSplicePairing(OffspringCreator):
 
         count1 = int(np.sum(weights[distances_a1 > 0.0]))
         count2 = int(np.sum(weights[distances_a2 < 0.0]))
-        nmin = 1 if self.minfrac is None else max(1, int(np.ceil(self.minfrac * self.n_top)))
+        nmin = (
+            1
+            if self.minfrac is None
+            else max(1, int(np.ceil(self.minfrac * self.n_top)))
+        )
         target = 0.5 * self.n_top
         balance = abs(count1 - target) + abs(count2 - target)
         deficit = max(0, nmin - count1) + max(0, nmin - count2)
@@ -565,9 +579,7 @@ class CutAndSplicePairing(OffspringCreator):
                 np.dot(np.asarray(cut_point, dtype=float), cell_array)[0]
                 + offset * unit
             )
-            new_cut_point = np.linalg.solve(
-                cell_array.T, cut_point_cart
-            )[np.newaxis, :]
+            new_cut_point = np.linalg.solve(cell_array.T, cut_point_cart)[np.newaxis, :]
             new_score = self._estimate_cut_balance(
                 centers_a1,
                 centers_a2,
@@ -589,7 +601,9 @@ class CutAndSplicePairing(OffspringCreator):
         """
         reference_positions = np.asarray(reference.get_positions(), dtype=float)
         moving_positions = np.asarray(moving.get_positions(), dtype=float)
-        if len(reference_positions) < 2 or len(reference_positions) != len(moving_positions):
+        if len(reference_positions) < 2 or len(reference_positions) != len(
+            moving_positions
+        ):
             return
         reference_center = reference_positions.mean(axis=0)
         moving_center = moving_positions.mean(axis=0)
@@ -598,7 +612,9 @@ class CutAndSplicePairing(OffspringCreator):
         plane = None
         if uses_surface(self.system_type):
             plane = [i for i in range(3) if i != self.surface_normal_axis]
-        reference_frame = centered_reference if plane is None else centered_reference[:, plane]
+        reference_frame = (
+            centered_reference if plane is None else centered_reference[:, plane]
+        )
         moving_frame = centered_moving if plane is None else centered_moving[:, plane]
         reference_axes = _principal_axes(reference_frame)
         moving_axes = _principal_axes(moving_frame)
@@ -613,7 +629,9 @@ class CutAndSplicePairing(OffspringCreator):
                 rotation[np.ix_(plane, plane)] = minor
             aligned = centered_moving @ rotation.T
             residual = aligned if plane is None else aligned[:, plane]
-            target = centered_reference if plane is None else centered_reference[:, plane]
+            target = (
+                centered_reference if plane is None else centered_reference[:, plane]
+            )
             error = float(np.linalg.norm(residual - target))
             if best_error is None or error < best_error:
                 best_error = error
@@ -678,8 +696,7 @@ class CutAndSplicePairing(OffspringCreator):
         if indi is None:
             return indi, desc
         indi = self.initialize_individual(f, indi)
-        indi.info["data"]["parents"] = [f.info.get("confid"),
-                                        m.info.get("confid")]
+        indi.info["data"]["parents"] = [f.info.get("confid"), m.info.get("confid")]
 
         return self.finalize_individual(indi), desc
 
@@ -694,8 +711,8 @@ class CutAndSplicePairing(OffspringCreator):
         N = self.n_top
 
         # Only consider the atoms to optimize
-        a1 = a1[len(a1) - N: len(a1)]
-        a2 = a2[len(a2) - N: len(a2)]
+        a1 = a1[len(a1) - N : len(a1)]
+        a2 = a2[len(a2) - N : len(a2)]
 
         if not np.array_equal(a1.numbers, a2.numbers):
             err = "Trying to pair two structures with different stoichiometry"
@@ -875,8 +892,8 @@ class CutAndSplicePairing(OffspringCreator):
 
                 vol = abs(np.linalg.det(newcell))
                 scaling = v_ref / vol
-                scaling **= 1. / self.number_of_variable_cell_vectors
-                newcell[:self.number_of_variable_cell_vectors] *= scaling
+                scaling **= 1.0 / self.number_of_variable_cell_vectors
+                newcell[: self.number_of_variable_cell_vectors] *= scaling
 
                 found = True
                 if self.cellbounds is not None:
@@ -1053,8 +1070,7 @@ class CutAndSplicePairing(OffspringCreator):
 
         newpos = np.reshape(newpos, (N_total, 3))
         num = a1.get_atomic_numbers()
-        child = Atoms(numbers=num, positions=newpos, pbc=pbc, cell=cell,
-                      tags=tags)
+        child = Atoms(numbers=num, positions=newpos, pbc=pbc, cell=cell, tags=tags)
         if not uses_surface(self.system_type):
             child.center()
         return child
@@ -1117,6 +1133,3 @@ class DualCutAndSplicePairing:
     def update_scaling_volume(self, population, **kwargs):
         self.primary.update_scaling_volume(population, **kwargs)
         self.exploratory.update_scaling_volume(population, **kwargs)
-
-
-# fmt: on

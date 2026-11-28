@@ -1,7 +1,5 @@
 """Mutation that resolves steric clashes with bounded geometric sweeps."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -93,7 +91,7 @@ class OverlapReliefMutation(MutationOperator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        top = atoms[len(atoms) - N:]
+        top = atoms[len(atoms) - N :]
         positions = top.get_positions().copy()
         numbers = top.get_atomic_numbers()
         cell = top.get_cell()
@@ -107,15 +105,16 @@ class OverlapReliefMutation(MutationOperator):
             slab.get_atomic_numbers() if len(slab) > 0 else np.array([], dtype=int)
         )
         req_cross = _blmin_matrix(numbers, self.blmin, slab_numbers)
-        slab_positions = (
-            slab.get_positions() if len(slab) > 0 else np.zeros((0, 3))
-        )
+        slab_positions = slab.get_positions() if len(slab) > 0 else np.zeros((0, 3))
         slab_clash = (
             self.test_dist_to_slab
             and len(slab) > 0
             and atoms_too_close_two_sets(slab, top, self.blmin)
         )
-        if not atoms_too_close(top, self.blmin, use_tags=self.use_tags) and not slab_clash:
+        if (
+            not atoms_too_close(top, self.blmin, use_tags=self.use_tags)
+            and not slab_clash
+        ):
             return None
         use_mic = bool(self._policy.uses_surface) and bool(np.any(pbc))
 
@@ -150,9 +149,9 @@ class OverlapReliefMutation(MutationOperator):
                             clash_d,
                             lambda: _random_unit_vector(self.rng),
                         )
-                        shifts = (
-                            0.5 * (clash_req - clash_d + self.margin)
-                        )[:, None] * directions
+                        shifts = (0.5 * (clash_req - clash_d + self.margin))[
+                            :, None
+                        ] * directions
                         np.add.at(displacements, clash_i, -shifts)
                         np.add.at(displacements, clash_j, shifts)
 
@@ -252,5 +251,3 @@ class OverlapReliefMutation(MutationOperator):
             if accepted is not None:
                 return accepted
         return None
-
-# fmt: on

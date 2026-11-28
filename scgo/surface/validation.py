@@ -248,10 +248,7 @@ def _mobile_indices_touch_slab(
         else None
     )
 
-    # Use a cKDTree over the (restricted) top surface layer instead of the full
-    # O(M*N) pairwise-distance matrix. When MIC is requested we expand the slab
-    # layer by its periodic images so the nearest-neighbor query is exact (it
-    # reproduces the ASE minimum-image distance used by pairwise_distances).
+    # cKDTree over the top slab layer; expand by MIC images when needed.
     cell = np.asarray(combined.cell)
     pbc = np.asarray(combined.pbc)
     if use_mic and bool(pbc.any()):

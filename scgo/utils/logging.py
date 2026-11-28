@@ -52,14 +52,18 @@ class _InductorFileLockHandler(logging.Handler):
         if "torchinductor" not in message.lower():
             return
         match = _TORCHINDUCTOR_LOCK_PATH_RE.search(message)
-        with self.lock:
+        lock = self.lock
+        assert lock is not None
+        with lock:
             self._events += 1
             if match is not None:
                 self._paths.add(match.group(1))
 
     def drain(self) -> tuple[int, int]:
         """Return (event_count, unique_lock_files) and reset."""
-        with self.lock:
+        lock = self.lock
+        assert lock is not None
+        with lock:
             count, n_paths = self._events, len(self._paths)
             self._events = 0
             self._paths.clear()
@@ -67,6 +71,8 @@ class _InductorFileLockHandler(logging.Handler):
 
 
 _filelock_handler: _InductorFileLockHandler | None = None
+_OWNED_HANDLER_ATTR = "_scgo_owned_handler"
+_configure_state: tuple[int, str, bool] | None = None
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -131,28 +137,38 @@ def configure_logging(
         hpc_mode: If True, suppresses more third-party logs (default when None,
             unless ``SCGO_LOCAL_DEV=1``). If False, only WARNING+ for most libs.
     """
+    global _configure_state
     if hpc_mode is None:
         hpc_mode = os.environ.get("SCGO_LOCAL_DEV") != "1"
     apply_scgo_runtime_warning_filters()
     verbosity = validate_verbosity(verbosity)
+    resolved_format = resolve_log_format(format_string)
+    state = (verbosity, resolved_format, bool(hpc_mode))
 
     level = VERBOSITY_LEVELS[verbosity]
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
+    # Refresh owned console handler only; leave host/pytest handlers alone.
     for handler in root_logger.handlers[:]:
-        handler.close()
-        root_logger.removeHandler(handler)
+        if getattr(handler, _OWNED_HANDLER_ATTR, False):
+            handler.close()
+            root_logger.removeHandler(handler)
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
+    setattr(console_handler, _OWNED_HANDLER_ATTR, True)
 
-    formatter = logging.Formatter(resolve_log_format(format_string))
+    formatter = logging.Formatter(resolved_format)
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
+    skip_third_party = _configure_state == state
+    _configure_state = state
+
     _install_filelock_sink()
-    _suppress_third_party_loggers(level, hpc_mode=hpc_mode)
+    if not skip_third_party:
+        _suppress_third_party_loggers(level, hpc_mode=hpc_mode)
 
 
 def _install_filelock_sink() -> None:

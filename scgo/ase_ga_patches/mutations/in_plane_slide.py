@@ -1,7 +1,5 @@
 """Mutation that translates adsorbate atoms parallel to the slab surface."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -13,6 +11,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _accept_connected_candidate,
     _accept_connected_kwargs,
     _append_unique_unit_vector,
+    _pca_sorted_eigenvectors,
     _prepare_mobile_target,
 )
 from scgo.system_types import SystemType
@@ -45,9 +44,19 @@ class InPlaneSlideMutation(MutationOperator):
         Upper bound on the number of candidate shifts per call (capped at 12).
     """
 
-    def __init__(self, blmin, n_top, system_type: SystemType, surface_normal_axis=2,
-                 max_displacement=2.0, min_displacement=1.0, target_tags=None,
-                 rng=None, verbose=False, max_inner_attempts=1000):
+    def __init__(
+        self,
+        blmin,
+        n_top,
+        system_type: SystemType,
+        surface_normal_axis=2,
+        max_displacement=2.0,
+        min_displacement=1.0,
+        target_tags=None,
+        rng=None,
+        verbose=False,
+        max_inner_attempts=1000,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -76,7 +85,7 @@ class InPlaneSlideMutation(MutationOperator):
             slab_2d = slab.get_positions()[:, in_plane]
             delta = center_2d - slab_2d
             distance_sq = np.sum(delta * delta, axis=1)
-            nearest = np.argsort(distance_sq)[:min(8, len(distance_sq))]
+            nearest = np.argsort(distance_sq)[: min(8, len(distance_sq))]
             if len(nearest) > 0:
                 weights = 1.0 / np.maximum(distance_sq[nearest], 1e-3)
                 repulsion = np.sum(delta[nearest] * weights[:, np.newaxis], axis=0)
@@ -86,10 +95,8 @@ class InPlaneSlideMutation(MutationOperator):
 
         centered = positions_2d - center_2d
         if len(centered) > 1:
-            covariance = np.dot(centered.T, centered)
-            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-            for index in np.argsort(eigenvalues)[::-1]:
-                _append_unique_unit_vector(directions, eigenvectors[:, index])
+            for axis in _pca_sorted_eigenvectors(centered, descending=True):
+                _append_unique_unit_vector(directions, axis)
 
         _append_unique_unit_vector(directions, np.array([1.0, 0.0]))
         _append_unique_unit_vector(directions, np.array([0.0, 1.0]))
@@ -168,5 +175,3 @@ class InPlaneSlideMutation(MutationOperator):
                 continue
             return slab + accepted
         return None
-
-# fmt: on

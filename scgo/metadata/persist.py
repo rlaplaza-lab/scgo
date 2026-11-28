@@ -89,6 +89,9 @@ def mark_final_minima_in_db(
     details: dict[str, int] = {}
 
     updates_by_db: dict[str, list[dict[str, Any]]] = {}
+    db_files_by_run: dict[str | None, list[Path]] = {}
+    explicit_db_files = [Path(p) for p in db_paths] if db_paths else None
+
     for info in final_minima_info:
         atoms = info.get("atoms")
         rank = info.get("rank")
@@ -103,10 +106,12 @@ def mark_final_minima_in_db(
 
         run_id = get_tag(atoms, "run_id")
 
-        if db_paths:
-            db_files = [Path(p) for p in db_paths]
+        if explicit_db_files is not None:
+            db_files = explicit_db_files
         else:
-            db_files = discovery.find_databases(run_id=run_id)
+            if run_id not in db_files_by_run:
+                db_files_by_run[run_id] = discovery.find_databases(run_id=run_id)
+            db_files = db_files_by_run[run_id]
 
         if not db_files:
             logger.warning(

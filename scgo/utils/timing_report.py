@@ -148,11 +148,11 @@ def write_timing_file(
 
 def read_timing_file(path: str) -> dict[str, Any] | None:
     """Load a timing JSON file; return ``None`` if missing or unreadable."""
-    if not os.path.isfile(path):
-        return None
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
+    except FileNotFoundError:
+        return None
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to read timing file %s: %s", path, exc)
         return None

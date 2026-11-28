@@ -50,6 +50,7 @@ from scgo.cluster_adsorbate.reposition import FragmentRepositionMutation
 
 # Prefer tag reader for raw_score and other fields
 from scgo.database import SCGODatabaseManager
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -92,7 +93,7 @@ from scgo.utils.fitness_strategies import (
     get_fitness_from_atoms,
 )
 from scgo.utils.helpers import canonicalize_relaxed_for_storage
-from scgo.utils.logging import get_logger
+from scgo.utils.logging import get_logger, log_info_v
 from scgo.utils.mutation_weights import scale_weights_by_operator_credit
 from scgo.utils.parallel_workers import resolve_n_jobs, validate_n_jobs
 from scgo.utils.phase_logging import (
@@ -557,7 +558,7 @@ class ClusterStartGenerator(StartGenerator):
         calculator: Calculator | None = None,
         population_size: int | None = None,
         mode: str = "smart",
-        previous_search_glob: str = "**/*.db",
+        previous_search_glob: str = DEFAULT_DB_GLOB,
         n_jobs: int | None = None,
         *,
         system_type: SystemType = "gas_cluster",
@@ -578,7 +579,7 @@ class ClusterStartGenerator(StartGenerator):
                 the entire population up front. If None, generates on demand.
             mode: Initialization mode. Default "smart".
             previous_search_glob: Glob pattern used to find prior databases for
-                seed-based initialization. Defaults to ``"**/*.db"``.
+                seed-based initialization. Defaults to ``DEFAULT_DB_GLOB``.
             n_jobs: Number of parallel workers for batch initialization.
                 ``None`` uses the project default (single worker; opt in with
                 -1/-2 for parallelism). Special values: -1 (all CPUs),
@@ -752,7 +753,7 @@ class SurfaceClusterStartGenerator(StartGenerator):
         rng: np.random.Generator | None = None,
         calculator: Calculator | None = None,
         population_size: int | None = None,
-        previous_search_glob: str = "**/*.db",
+        previous_search_glob: str = DEFAULT_DB_GLOB,
         n_jobs: int | None = None,
         adsorbate_definition: AdsorbateDefinition | None = None,
         adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
@@ -911,6 +912,7 @@ def create_ga_pairing(
     exploratory_crossover_probability: float = 0.2,
     exploratory_minfrac: float | None = None,
     surface_normal_axis: int = 2,
+    blmin: dict | None = None,
 ) -> CutAndSplicePairing | DualCutAndSplicePairing:
     """Create a cut-and-splice pairing operator for GA evolution.
 
@@ -964,9 +966,10 @@ def create_ga_pairing(
     # ``ase_ga.utilities.get_all_atom_types`` expects atomic numbers for the
     # second argument, not template indices (large slab indices would crash
     # ``closest_distances_generator``).
-    top_z = list({int(atoms_template[i].number) for i in idx_top})
-    all_atom_types = get_all_atom_types(atoms_template, top_z)
-    blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
+    if blmin is None:
+        top_z = list({int(atoms_template[i].number) for i in idx_top})
+        all_atom_types = get_all_atom_types(atoms_template, top_z)
+        blmin = build_blmin_from_zs(all_atom_types, ratio=BLMIN_RATIO_DEFAULT)
 
     if uses_surface(system_type):
         slab = slab_atoms.copy()
@@ -1820,6 +1823,7 @@ def setup_diversity_scorer(
     mic: bool = False,
     uniqueness: UniquenessSettings | None = None,
     blocks: ComparatorBlocks | None = None,
+    verbosity: int = 1,
 ) -> DiversityScorer | None:
     """Setup DiversityScorer for diversity fitness strategy.
 
@@ -1853,14 +1857,24 @@ def setup_diversity_scorer(
             "diversity_reference_db is required when fitness_strategy='diversity'"
         )
 
-    logger.info("Loading reference structures from: %s", diversity_reference_db)
+    log_info_v(
+        logger,
+        "Loading reference structures from: %s",
+        diversity_reference_db,
+        verbosity=verbosity,
+    )
     with SCGODatabaseManager(base_dir=base_dir, enable_caching=True) as db_manager:
         reference_structures: list[Atoms] = db_manager.load_reference_structures(
             db_glob_pattern=diversity_reference_db,
             composition=composition,
             max_structures=diversity_max_references,
         )
-    logger.info("Loaded %d reference structures", len(reference_structures))
+    log_info_v(
+        logger,
+        "Loaded %d reference structures",
+        len(reference_structures),
+        verbosity=verbosity,
+    )
 
     if not reference_structures:
         raise SCGOValidationError(
@@ -1882,18 +1896,10 @@ def select_population_class(
     diversity_scorer: DiversityScorer | None,
     diversity_update_interval: int,
     logger,
+    *,
+    verbosity: int = 1,
 ) -> tuple[type, dict]:
-    """Select appropriate Population class based on fitness strategy.
-
-    Args:
-        fitness_strategy: Fitness strategy name.
-        diversity_scorer: DiversityScorer instance (if using diversity strategy).
-        diversity_update_interval: Number of generations between reference updates.
-        logger: Logger instance for logging messages.
-
-    Returns:
-        Tuple of (PopulationClass, population_kwargs).
-    """
+    """Select Population class and kwargs for the fitness strategy."""
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
@@ -1903,9 +1909,11 @@ def select_population_class(
             "diversity_scorer": diversity_scorer,
             "diversity_update_interval": diversity_update_interval,
         }
-        logger.info(
+        log_info_v(
+            logger,
             "Using FitnessStrategyPopulation with fitness_strategy='%s'",
             fitness_strategy,
+            verbosity=verbosity,
         )
     else:
         PopulationClass = Population
@@ -1921,30 +1929,28 @@ def log_early_stopping_info(
     niter: int,
     logger,
 ) -> None:
-    """Log early stopping configuration information.
-
-    Args:
-        verbosity: Verbosity level (0=quiet, 1=normal, 2=debug, 3=trace).
-        fitness_strategy: Fitness strategy name.
-        early_stopping_niter: Number of generations without improvement to trigger stopping.
-        niter: Total number of generations to run.
-        logger: Logger instance for logging messages.
-    """
-    if verbosity < 1:
-        return
-
+    """Log GA start / early-stopping configuration at the given verbosity."""
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
-    logger.info("Starting GA evolution with %d generations", niter)
-    logger.info("Using fitness_strategy='%s'", fitness_strategy)
+    log_info_v(
+        logger, "Starting GA evolution with %d generations", niter, verbosity=verbosity
+    )
+    log_info_v(
+        logger,
+        "Using fitness_strategy='%s'",
+        fitness_strategy,
+        verbosity=verbosity,
+    )
     if early_stopping_niter > 0:
         stopping_metric: str = (
             "fitness" if fitness_strategy != FitnessStrategy.LOW_ENERGY else "energy"
         )
-        logger.info(
+        log_info_v(
+            logger,
             "Early stopping enabled: will stop after %d generations with no %s improvement",
             early_stopping_niter,
             stopping_metric,
+            verbosity=verbosity,
         )
 
 
@@ -1952,17 +1958,10 @@ def sort_minima_by_fitness(
     all_minima: list[tuple[float, Atoms]],
     fitness_strategy: str | FitnessStrategy,
     logger,
+    *,
+    verbosity: int = 1,
 ) -> None:
-    """Sort minima by fitness for non-low_energy strategies.
-
-    Mutates input list in place. For low_energy, list remains sorted by energy
-    (lowest first). For other strategies, sorts by fitness (highest first).
-
-    Args:
-        all_minima: List of (energy, Atoms) tuples to sort.
-        fitness_strategy: Fitness strategy name.
-        logger: Logger instance.
-    """
+    """Sort *all_minima* by fitness in place (no-op for ``low_energy``)."""
     fitness_strategy = _as_fitness_strategy(fitness_strategy)
 
     if fitness_strategy != FitnessStrategy.LOW_ENERGY:
@@ -1970,8 +1969,10 @@ def sort_minima_by_fitness(
             key=lambda x: get_fitness_from_atoms(x[1], default=-float("inf")),
             reverse=True,  # Higher fitness first
         )
-        logger.info(
+        log_info_v(
+            logger,
             "Sorted %d minima by %s fitness",
             len(all_minima),
             fitness_strategy,
+            verbosity=verbosity,
         )

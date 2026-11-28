@@ -712,26 +712,28 @@ def _check_duplicate_in_energy_bins(
     return False
 
 
+def energy_bin_index(
+    energy: float,
+    bin_width: float,
+    *,
+    round_nearest: bool = False,
+) -> int:
+    """Map *energy* to a bin index (truncate, or round when ``round_nearest``)."""
+    if bin_width <= 0:
+        return 0
+    if round_nearest:
+        return int(round(energy / bin_width))
+    return int(energy / bin_width)
+
+
 def _create_energy_bins(
     energy_tolerance: float, first_minimum: tuple[float, Atoms]
 ) -> tuple[Callable[[float], int], dict[int, list[tuple[float, Atoms]]]]:
-    """Set up energy binning for duplicate detection.
-
-    Args:
-        energy_tolerance: Energy tolerance for duplicate detection.
-        first_minimum: First (energy, Atoms) tuple to initialize bins.
-
-    Returns:
-        Tuple of (get_bin_index function, initialized energy_bins dictionary).
-    """
-    # Optimize with energy binning: group structures by energy bins
-    # Structures in different bins can't be duplicates, reducing comparisons
-    # Use bin width slightly larger than tolerance to catch edge cases
+    """Set up energy binning for duplicate detection."""
     bin_width: float = energy_tolerance * 1.5
 
     def get_bin_index(energy: float) -> int:
-        """Get bin index for a given energy."""
-        return int(energy / bin_width)
+        return energy_bin_index(energy, bin_width)
 
     energy_bins: dict[int, list[tuple[float, Atoms]]] = {}
     first_energy, first_atoms = first_minimum
@@ -787,40 +789,20 @@ def filter_unique_minima(
     minima_list: list[tuple[float, Atoms]],
     energy_tolerance: float = DEFAULT_ENERGY_TOLERANCE,
     *,
-    n_top: int,
+    n_top: int | None = None,
     mic: bool = False,
     comparator_tol: float = DEFAULT_COMPARATOR_TOL,
     comparator_pair_cor_max: float = DEFAULT_PAIR_COR_MAX,
     blocks: ComparatorBlocks | None = None,
     component_weights: dict[str, float] | None = None,
     cross_weight: float = DEFAULT_CROSS_WEIGHT,
+    comparer: Any | None = None,
 ) -> list[tuple[float, Atoms]]:
-    """Filters a list of (energy, Atoms) tuples to identify unique structures.
+    """Return unique (energy, Atoms) pairs sorted by energy (lowest first).
 
-    Args:
-        minima_list: A list of (energy, Atoms) tuples, typically from one or
-                     more optimization runs.
-        energy_tolerance: The energy difference (in eV) below which two
-                          structures are considered potential duplicates (if their
-                          geometries also match). Defaults to `DEFAULT_ENERGY_TOLERANCE`.
-        n_top: Trailing atoms to compare (system-type search-mobile count).
-        mic: If True, use minimum-image convention for pairwise distances (slab PBC),
-             matching GA geometry comparators (``create_geometry_comparator``).
-        comparator_tol: Cumulative structural difference tolerance.
-        comparator_pair_cor_max: Maximum single-distance difference tolerance.
-        blocks: Optional role-block partition; when given it supersedes
-            ``n_top`` as the comparison window (indices are absolute).
-        component_weights: Per-role weights for block-aware comparison.
-        cross_weight: Weight of cross-block distance terms.
-
-    Returns:
-        A new list of (energy, Atoms) tuples containing only the unique
-        structures, sorted by energy from lowest to highest.
-
-    Note:
-        Returned ``Atoms`` objects that lack a ``raw_score`` structure tag are
-        annotated in-place with ``raw_score=-energy`` (ASE GA convention).
-        Discarded duplicates are left unchanged.
+    Pass *comparer* to reuse a prebuilt comparator; otherwise *n_top* is
+    required to construct one. Structures missing ``raw_score`` are tagged
+    in-place with ``raw_score=-energy``.
     """
     if not minima_list:
         return []
@@ -832,15 +814,18 @@ def filter_unique_minima(
     if not valid_minima:
         return []
 
-    comparer = PureInteratomicDistanceComparator(
-        n_top=n_top,
-        tol=comparator_tol,
-        pair_cor_max=comparator_pair_cor_max,
-        mic=mic,
-        blocks=blocks,
-        component_weights=component_weights,
-        cross_weight=cross_weight,
-    )
+    if comparer is None:
+        if n_top is None:
+            raise TypeError("n_top is required when comparer is not provided")
+        comparer = PureInteratomicDistanceComparator(
+            n_top=n_top,
+            tol=comparator_tol,
+            pair_cor_max=comparator_pair_cor_max,
+            mic=mic,
+            blocks=blocks,
+            component_weights=component_weights,
+            cross_weight=cross_weight,
+        )
 
     sorted_minima: list[tuple[float, Atoms]] = sorted(
         valid_minima,

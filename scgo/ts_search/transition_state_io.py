@@ -9,7 +9,6 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
-from ase.io import write as ase_write
 
 from scgo.algorithms.ga_common import (
     extract_constraint_index_lists,
@@ -33,7 +32,7 @@ from scgo.surface.validation import (
     validate_stored_slab_adsorbate_metadata,
 )
 from scgo.ts_search.ts_statistics import compute_ts_statistics
-from scgo.utils.atomic_json import atomic_write_json
+from scgo.utils.atomic_json import atomic_write_json, atomic_write_xyz
 from scgo.utils.comparators import ComparatorBlocks, PureInteratomicDistanceComparator
 from scgo.utils.helpers import (
     get_cluster_formula,
@@ -958,7 +957,7 @@ def write_final_unique_ts(
         else:
             filename = f"{formula}_ts_{rank:02d}_pair_{first_edge['pair_id']}.xyz"
         filepath = os.path.join(final_dir, filename)
-        ase_write(filepath, prepare_atoms_for_xyz_export(atoms_clean))
+        atomic_write_xyz(filepath, prepare_atoms_for_xyz_export(atoms_clean))
 
         item: dict[str, Any] = {
             "pair_id": pair_id,

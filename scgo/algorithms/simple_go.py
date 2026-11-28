@@ -15,6 +15,7 @@ from ase import Atoms
 from ase.optimize import LBFGS
 from ase.optimize.optimize import Optimizer
 
+from scgo.algorithms.result_collection import collect_run_minima
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.constants import DEFAULT_FMAX_THRESHOLD
 from scgo.database import HPC_DATABASE_EXCEPTIONS, close_data_connection, setup_database
@@ -32,7 +33,6 @@ from scgo.system_types import (
 )
 from scgo.utils.helpers import (
     calculator_detached,
-    extract_minima_from_database,
     perform_local_relaxation,
 )
 from scgo.utils.logging import get_logger, log_debug_v, log_info_v
@@ -212,12 +212,12 @@ def simple_go(
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
 
-        all_candidates = database_retry(
-            da.get_all_relaxed_candidates,
-            config=PRESET_HPC,
+        all_minima = collect_run_minima(
+            da,
+            run_id=run_id,
+            ga_eligible_default=True,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
-        all_minima = extract_minima_from_database(all_candidates)
 
         if not all_minima:
             return []

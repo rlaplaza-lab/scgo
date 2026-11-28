@@ -26,6 +26,7 @@ from scgo.constants import (
     DEFAULT_UPET_MODEL,
     DEFAULT_UPET_VERSION,
 )
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.initialization_config import (
     CLASH_HARD_CAP_FACTOR,
@@ -789,7 +790,7 @@ def get_torchsim_ga_params(
 
 
 def get_diversity_params(
-    reference_db_glob: str = "**/*.db",
+    reference_db_glob: str = DEFAULT_DB_GLOB,
     max_references: int = 100,
     update_interval: int = 5,
 ) -> GLOptimizerParams:

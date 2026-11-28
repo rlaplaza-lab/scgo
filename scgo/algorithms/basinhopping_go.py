@@ -24,6 +24,7 @@ from scgo.algorithms.ga_common import (
     setup_diversity_scorer,
     sort_minima_by_fitness,
 )
+from scgo.algorithms.result_collection import collect_run_minima
 from scgo.algorithms.run_context import validate_and_resolve_run_context
 from scgo.cluster_adsorbate.config import ClusterAdsorbateConfig
 from scgo.cluster_adsorbate.constraints import prepare_atoms_for_local_relax
@@ -38,7 +39,7 @@ from scgo.database.sync import PRESET_HPC, database_retry
 from scgo.exceptions import SCGOValidationError
 from scgo.initialization.atomic_radii import build_blmin_from_zs
 from scgo.initialization.initialization_config import BLMIN_RATIO_DEFAULT
-from scgo.metadata.atoms import get_tag, set_tags
+from scgo.metadata.atoms import set_tags
 from scgo.surface.config import SurfaceSystemConfig
 from scgo.surface.partition import resolve_slab_search_partition
 from scgo.system_types import (
@@ -58,10 +59,8 @@ from scgo.utils.fitness_strategies import (
 )
 from scgo.utils.geometric_prefilter import fails_fast_geometric_prefilter
 from scgo.utils.helpers import (
-    _create_energy_bins,
-    _find_unique_minima_with_binning,
     calculator_detached,
-    extract_minima_from_database,
+    filter_unique_minima,
     perform_local_relaxation,
 )
 from scgo.utils.logging import (
@@ -481,6 +480,7 @@ def bh_go(
         mic=comp_mic,
         uniqueness=geometry,
         blocks=uniqueness_blocks,
+        verbosity=verbosity,
     )
 
     # Detach calculator temporarily for DB setup to avoid pickling issues
@@ -593,15 +593,6 @@ def bh_go(
         if run_id is not None:
             set_tags(a_current, run_id=run_id)
 
-        t_db0 = perf_counter()
-        database_retry(
-            lambda: da.add_relaxed_step(a_current),
-            config=PRESET_HPC,
-            exception_types=HPC_DATABASE_EXCEPTIONS,
-        )
-        profile_timings["initial_relaxed_write_s"] = perf_counter() - t_db0
-
-        # Calculate and store initial fitness
         fitness_current = calculate_fitness(
             energy=e_current,
             atoms=a_current,
@@ -609,6 +600,14 @@ def bh_go(
             diversity_scorer=diversity_scorer,
         )
         set_fitness_in_atoms(a_current, fitness_current, fitness_strategy)
+
+        t_db0 = perf_counter()
+        database_retry(
+            lambda: da.add_relaxed_step(a_current),
+            config=PRESET_HPC,
+            exception_types=HPC_DATABASE_EXCEPTIONS,
+        )
+        profile_timings["initial_relaxed_write_s"] = perf_counter() - t_db0
 
         log_info_v(
             logger,
@@ -738,6 +737,14 @@ def bh_go(
             if run_id is not None:
                 set_tags(a_trial, run_id=run_id)
 
+            fitness_trial = calculate_fitness(
+                energy=e_trial,
+                atoms=a_trial,
+                strategy=fitness_strategy,
+                diversity_scorer=diversity_scorer,
+            )
+            set_fitness_in_atoms(a_trial, fitness_trial, fitness_strategy)
+
             t_w0 = perf_counter()
             database_retry(
                 lambda _t=a_trial: da.add_relaxed_step(_t),
@@ -746,15 +753,6 @@ def bh_go(
             )
             dt_w = perf_counter() - t_w0
             accumulate_timing(profile_timings, "offspring_relaxed_write_s", dt_w)
-
-            # Calculate fitness for trial structure
-            fitness_trial = calculate_fitness(
-                energy=e_trial,
-                atoms=a_trial,
-                strategy=fitness_strategy,
-                diversity_scorer=diversity_scorer,
-            )
-            set_fitness_in_atoms(a_trial, fitness_trial, fitness_strategy)
 
             # Fitness-based acceptance criterion
             accept = False
@@ -821,18 +819,13 @@ def bh_go(
                     }
                 )
 
-        all_candidates = database_retry(
-            da.get_all_relaxed_candidates,
-            config=PRESET_HPC,
+        # Drop ga_eligible=False seeds; untagged older rows stay eligible.
+        all_minima = collect_run_minima(
+            da,
+            run_id=run_id,
+            ga_eligible_default=True,
             exception_types=HPC_DATABASE_EXCEPTIONS,
         )
-        # Drop ga_eligible=False seeds; untagged older rows stay eligible.
-        all_candidates = [
-            cand
-            for cand in all_candidates
-            if bool(get_tag(cand, "ga_eligible", default=True))
-        ]
-        all_minima = extract_minima_from_database(all_candidates)
 
         if not all_minima:
             _finish_bh_timing()
@@ -842,30 +835,13 @@ def bh_go(
             _finish_bh_timing()
             return all_minima
 
-        # Filter out non-finite energies
-        valid_minima = [
-            (energy, atoms) for energy, atoms in all_minima if np.isfinite(energy)
-        ]
-
-        if not valid_minima:
-            _finish_bh_timing()
-            return []
-
-        # Reuse the comparator created before the run loop for deduplication
-        # Sort by energy for binning (lowest first)
-        sorted_minima = sorted(valid_minima, key=lambda x: x[0])
-
-        # Set up energy binning for optimized duplicate detection
-        get_bin_index, energy_bins = _create_energy_bins(
-            energy_tolerance, sorted_minima[0]
+        unique_minima = filter_unique_minima(
+            all_minima, energy_tolerance, comparer=comparator
         )
 
-        # Find unique minima using energy binning optimization
-        unique_minima = _find_unique_minima_with_binning(
-            sorted_minima, comparator, energy_tolerance, get_bin_index, energy_bins
+        sort_minima_by_fitness(
+            unique_minima, fitness_strategy, logger, verbosity=verbosity
         )
-
-        sort_minima_by_fitness(unique_minima, fitness_strategy, logger)
 
         _finish_bh_timing()
         return unique_minima

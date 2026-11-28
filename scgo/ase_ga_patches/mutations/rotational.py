@@ -1,7 +1,5 @@
 """Mutation that applies random rotations to multi-atom moieties."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -21,6 +19,7 @@ from scgo.ase_ga_patches.mutations._common import (
     _fails_only_slab_clash,
     _filter_unique_tags,
     _geometry_candidate_directions,
+    _pca_sorted_eigenvectors,
     _random_unit_vector,
     _reanchor_mobile_to_slab,
 )
@@ -87,10 +86,22 @@ class RotationalMutation(MutationOperator):
 
     """
 
-    def __init__(self, blmin, system_type: SystemType, n_top=None, fraction=0.33, tags=None,
-                 min_angle=1.57, test_dist_to_slab=True, target_tags=None,
-                 use_tags=False, rng=None, verbose=False, max_inner_attempts=24,
-                 surface_normal_axis=2):
+    def __init__(
+        self,
+        blmin,
+        system_type: SystemType,
+        n_top=None,
+        fraction=0.33,
+        tags=None,
+        min_angle=1.57,
+        test_dist_to_slab=True,
+        target_tags=None,
+        use_tags=False,
+        rng=None,
+        verbose=False,
+        max_inner_attempts=24,
+        surface_normal_axis=2,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -125,10 +136,8 @@ class RotationalMutation(MutationOperator):
         else:
             centered = positions - np.mean(positions, axis=0)
             if len(centered) > 1:
-                covariance = np.dot(centered.T, centered)
-                eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-                for index in np.argsort(eigenvalues):
-                    _append_unique_unit_vector(candidates, eigenvectors[:, index])
+                for axis in _pca_sorted_eigenvectors(centered):
+                    _append_unique_unit_vector(candidates, axis)
 
         attempts = 0
         while len(candidates) < 3 and attempts < 20:
@@ -186,7 +195,9 @@ class RotationalMutation(MutationOperator):
             moiety = new_positions[indices[tag]]
             center = np.mean(moiety, axis=0)
             rotation = rotation_matrix_axis_angle(axis, angle)
-            new_positions[indices[tag]] = np.dot(rotation, (moiety - center).T).T + center
+            new_positions[indices[tag]] = (
+                np.dot(rotation, (moiety - center).T).T + center
+            )
         return new_positions
 
     def _place_trial(self, mobile, positions, slab):
@@ -223,7 +234,9 @@ class RotationalMutation(MutationOperator):
         axis = np.asarray(normal, dtype=float)
         axis /= np.linalg.norm(axis)
         cap = np.asarray(cap, dtype=int)
-        rotated = (positions[cap] - pivot) @ rotation_matrix_axis_angle(axis, angle).T + pivot
+        rotated = (positions[cap] - pivot) @ rotation_matrix_axis_angle(
+            axis, angle
+        ).T + pivot
         newpos = positions.copy()
         newpos[cap] = rotated
         stationary = np.setdiff1d(np.arange(len(positions)), cap, assume_unique=False)
@@ -278,9 +291,7 @@ class RotationalMutation(MutationOperator):
                 )
                 self.last_attempt_count += 1
                 trial = self._place_trial(mobile, newpos, slab)
-                accepted = _accept_connected_candidate(
-                    mobile, trial, **accept_kwargs
-                )
+                accepted = _accept_connected_candidate(mobile, trial, **accept_kwargs)
                 if accepted is not None:
                     return slab + accepted
                 if not self._policy.uses_surface:
@@ -316,8 +327,8 @@ class RotationalMutation(MutationOperator):
     def mutate(self, atoms):
         """Does the actual mutation."""
         N = len(atoms) if self.n_top is None else self.n_top
-        slab = atoms[:len(atoms) - N]
-        atoms = atoms[len(atoms) - N:]
+        slab = atoms[: len(atoms) - N]
+        atoms = atoms[len(atoms) - N :]
 
         mutant = atoms.copy()
         gather_atoms_by_tag(
@@ -382,10 +393,16 @@ class RotationalMutation(MutationOperator):
             self.last_attempt_count += 1
             if self._policy.uses_surface:
                 newpos = _reanchor_mobile_to_slab(
-                    mutant, Atoms(numbers=numbers, positions=newpos,
-                                  cell=mutant.get_cell(), pbc=mutant.get_pbc(),
-                                  tags=mutant.get_tags()),
-                    slab, self.surface_normal_axis,
+                    mutant,
+                    Atoms(
+                        numbers=numbers,
+                        positions=newpos,
+                        cell=mutant.get_cell(),
+                        pbc=mutant.get_pbc(),
+                        tags=mutant.get_tags(),
+                    ),
+                    slab,
+                    self.surface_normal_axis,
                 ).get_positions()
             mutant.set_positions(newpos)
             if not self._policy.uses_surface:
@@ -411,5 +428,3 @@ class RotationalMutation(MutationOperator):
         if accepted is not None:
             return slab + accepted
         return None
-
-# fmt: on

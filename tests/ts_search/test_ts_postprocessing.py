@@ -371,8 +371,11 @@ def test_run_transition_state_search_skips_tagging_when_no_db(
         lambda *a, **k: None,
     )
 
-    # No DB files discovered under run_* -> basename_to_path empty
-    monkeypatch.setattr("glob.glob", lambda *a, **k: [])
+    # No DB files discovered under run_* -> empty discovery list
+    monkeypatch.setattr(
+        "scgo.ts_search.ts_network.list_discovered_db_paths_with_run",
+        lambda *a, **k: [],
+    )
 
     called = []
 
@@ -473,8 +476,10 @@ def test_run_transition_state_search_records_minima_provenance(monkeypatch, tmp_
     db_path = run_dir / "candidates.db"
     db_path.write_text("")
 
-    # Ensure glob discovers the DB file during tagging
-    monkeypatch.setattr("glob.glob", lambda *a, **k: [str(db_path)])
+    monkeypatch.setattr(
+        "scgo.ts_search.ts_network.list_discovered_db_paths_with_run",
+        lambda *a, **k: [(str(db_path), "run_0001")],
+    )
 
     called = []
 

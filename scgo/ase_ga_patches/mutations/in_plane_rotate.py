@@ -1,7 +1,5 @@
 """Mutation that rotates the whole mobile region about the surface normal."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -123,5 +121,3 @@ class InPlaneRotateMutation(MutationOperator):
                             return slab + accepted
 
         return None
-
-# fmt: on

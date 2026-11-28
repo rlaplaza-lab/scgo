@@ -12,6 +12,7 @@ import glob
 import os
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 from ase.data import chemical_symbols
@@ -35,6 +36,100 @@ def _filter_scgo_databases(db_files: list[Path]) -> list[Path]:
     return [p for p in db_files if is_scgo_db(p)]
 
 
+def _build_run_glob_pattern(
+    run_id: str | None,
+    db_filename: str,
+    *,
+    nested_under_run: bool,
+) -> str:
+    """Build a glob under ``run_*`` (or a specific run) for *db_filename*."""
+    nest = "**/" if nested_under_run else ""
+    if run_id:
+        return f"{run_id}/{nest}{db_filename}"
+    return f"run_*/{nest}{db_filename}"
+
+
+def discover_db_files(
+    base_dir: str | Path,
+    *,
+    pattern: str | None = None,
+    db_filename: str | None = None,
+    run_id: str | None = None,
+    composition: list[str] | None = None,
+    merge_registry: bool = True,
+    require_scgo: bool = True,
+    nested_under_run: bool = True,
+    path_filter: Callable[[Path], bool] | None = None,
+    composition_filter: Callable[[list[Path], list[str]], list[Path]] | None = None,
+) -> list[Path]:
+    """Discover database files under *base_dir*.
+
+    Prefer *pattern* when set; otherwise search ``run_*/`` (optionally nested)
+    for *db_filename*. Callers select filters via the keyword flags.
+    """
+    root = Path(base_dir)
+    by_resolved: dict[str, Path] = {}
+    filename = db_filename if db_filename is not None else "*.db"
+
+    if merge_registry and pattern is None and filename == "*.db":
+        registry = get_registry(root)
+        registry_files = registry.find_databases(
+            composition=composition,
+            run_id=run_id,
+        )
+        logger.debug("Registry found %d databases", len(registry_files))
+        filtered = (
+            _filter_scgo_databases(registry_files) if require_scgo else registry_files
+        )
+        if require_scgo and len(filtered) != len(registry_files):
+            logger.debug(
+                "Dropped %d non-SCGO paths from registry results",
+                len(registry_files) - len(filtered),
+            )
+        for path in filtered:
+            by_resolved[str(path.resolve())] = Path(path)
+
+    if pattern is not None:
+        glob_pattern = pattern
+    else:
+        glob_pattern = _build_run_glob_pattern(
+            run_id, filename, nested_under_run=nested_under_run
+        )
+
+    pattern_path = Path(glob_pattern)
+    if pattern_path.is_absolute():
+        full_pattern = str(pattern_path)
+    else:
+        full_pattern = str(root / glob_pattern)
+
+    glob_files = [Path(p) for p in glob.glob(full_pattern, recursive=True)]
+    logger.debug(
+        "Found %d databases matching pattern: %s", len(glob_files), glob_pattern
+    )
+
+    if path_filter is not None:
+        glob_files = [p for p in glob_files if path_filter(p)]
+
+    if composition is not None and composition_filter is not None:
+        glob_files = composition_filter(glob_files, composition)
+        logger.debug("After composition filter: %d databases remain", len(glob_files))
+
+    if require_scgo:
+        orig_count = len(glob_files)
+        glob_files = _filter_scgo_databases(glob_files)
+        if len(glob_files) != orig_count:
+            logger.debug(
+                "Filtered non-SCGO DBs: %d -> %d databases",
+                orig_count,
+                len(glob_files),
+            )
+
+    for path in glob_files:
+        by_resolved[str(path.resolve())] = path
+
+    return list(by_resolved.values())
+
+
 class DatabaseDiscovery:
     """Service for discovering and indexing database files."""
 
@@ -56,61 +151,19 @@ class DatabaseDiscovery:
     ) -> list[Path]:
         """Find databases matching criteria.
 
-        Registry hits are always merged with a ``run_*/`` filesystem scan so a
+        Registry hits are always merged with a ``run_*/**/`` filesystem scan so a
         DB on disk that is not yet registered is still found.
         """
-        by_resolved: dict[str, Path] = {}
-
-        if db_filename == "*.db":
-            registry_files = self._registry.find_databases(
-                composition=composition,
-                run_id=run_id,
-            )
-            logger.debug("Registry found %d databases", len(registry_files))
-            filtered = _filter_scgo_databases(registry_files)
-            if len(filtered) != len(registry_files):
-                logger.debug(
-                    "Dropped %d non-SCGO paths from registry results",
-                    len(registry_files) - len(filtered),
-                )
-            for path in filtered:
-                by_resolved[str(path.resolve())] = path
-
-        pattern = self._build_glob_pattern(run_id, db_filename)
-        full_pattern = str(self.base_dir / pattern)
-        glob_files = [Path(p) for p in glob.glob(full_pattern, recursive=True)]
-
-        logger.debug(
-            "Found %d databases matching pattern: %s", len(glob_files), pattern
+        return discover_db_files(
+            self.base_dir,
+            db_filename=db_filename,
+            run_id=run_id,
+            composition=composition,
+            merge_registry=True,
+            require_scgo=True,
+            nested_under_run=True,
+            composition_filter=self._filter_by_composition,
         )
-
-        if composition:
-            glob_files = self._filter_by_composition(glob_files, composition)
-            logger.debug(
-                "After composition filter: %d databases remain", len(glob_files)
-            )
-
-        orig_count = len(glob_files)
-        glob_files = _filter_scgo_databases(glob_files)
-        if len(glob_files) != orig_count:
-            logger.debug(
-                "Filtered non-SCGO DBs: %d -> %d databases", orig_count, len(glob_files)
-            )
-
-        for path in glob_files:
-            by_resolved[str(path.resolve())] = path
-
-        return list(by_resolved.values())
-
-    def _build_glob_pattern(
-        self,
-        run_id: str | None,
-        db_filename: str,
-    ) -> str:
-        """Build glob pattern for database search."""
-        if run_id:
-            return f"{run_id}/{db_filename}"
-        return f"run_*/{db_filename}"
 
     def _first_relaxed_probe(self, db) -> tuple[Counter[str] | None, object | None]:
         """``(counts, atoms)`` for the first relaxed row: prefer SQL ``species``, else ``get_atoms``.
@@ -146,7 +199,7 @@ class DatabaseDiscovery:
             TypeError,
             ValueError,
         ) as e:
-            logger.debug("Failed relaxed-candidate probe: %s", e)
+            logger.warning("Failed relaxed-candidate probe: %s", e)
             return None, None
 
     def _filter_by_composition(
@@ -194,7 +247,7 @@ class DatabaseDiscovery:
                 KeyError,
                 AttributeError,
             ) as e:
-                logger.debug("Error checking composition for %s: %s", db_path, e)
+                logger.warning("Error checking composition for %s: %s", db_path, e)
                 continue
 
         return filtered

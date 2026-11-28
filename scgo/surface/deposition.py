@@ -32,6 +32,7 @@ from scgo.cluster_adsorbate.sites import (
     get_or_compute_planar_layer_site_candidates,
     get_or_compute_surface_site_candidates,
 )
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.exceptions import (
     SCGORuntimeError,
     SCGOValidationError,
@@ -482,7 +483,7 @@ def create_deposited_cluster(
     blmin: dict,
     rng: Generator,
     config: SurfaceSystemConfig,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,
     cluster_adsorbate_config: ClusterAdsorbateConfig | None = None,
@@ -734,7 +735,7 @@ def create_deposited_cluster_batch(
     rng: Generator,
     config: SurfaceSystemConfig,
     *,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     n_jobs: int | None = None,
     adsorbate_definition: AdsorbateDefinition | None = None,
     adsorbate_fragment_template: AdsorbateFragmentInput | None = None,

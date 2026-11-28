@@ -2,8 +2,6 @@
 proposing structures to pair.
 """
 
-# fmt: off
-
 from __future__ import annotations
 
 from math import sqrt, tanh
@@ -29,7 +27,7 @@ def _apply_pairing_history_penalty(fitness_values, pop, indices):
     M = [float(pop[i].info.get("n_paired", 0)) for i in indices]
     L = [float(pop[i].info.get("looks_like", 0)) for i in indices]
     return [
-        fitness_values[j] * 1. / sqrt(1. + M[j]) * 1. / sqrt(1. + L[j])
+        fitness_values[j] * 1.0 / sqrt(1.0 + M[j]) * 1.0 / sqrt(1.0 + L[j])
         for j in range(len(fitness_values))
     ]
 
@@ -97,13 +95,21 @@ class Population:
 
     """
 
-    def __init__(self, data_connection, population_size,
-                 comparator=None, logfile=None, use_extinct=False,
-                 rng=None, run_id: str | None = None):
+    def __init__(
+        self,
+        data_connection,
+        population_size,
+        comparator=None,
+        logfile=None,
+        use_extinct=False,
+        rng=None,
+        run_id: str | None = None,
+    ):
         self.dc = data_connection
         self.population_size = population_size
         if comparator is None:
             from ase_ga.standard_comparators import AtomsComparator
+
             comparator = AtomsComparator()
         self.comparator = comparator
         self.logfile = logfile
@@ -247,13 +253,12 @@ class Population:
         # check if the structure is too low in raw score
         raw_score_a = _raw_score(a)
         raw_score_worst = _raw_score(self.pop[-1])
-        if raw_score_a < raw_score_worst \
-                and len(self.pop) == self.population_size:
+        if raw_score_a < raw_score_worst and len(self.pop) == self.population_size:
             return
 
         # check if the new candidate should
         # replace a similar structure in the population
-        for (i, b) in enumerate(self.pop):
+        for i, b in enumerate(self.pop):
             if self.comparator.looks_like(a, b):
                 # Replace a duplicate only when the newcomer is strictly better;
                 # elites are no exception, otherwise a better copy of the best
@@ -300,8 +305,10 @@ class Population:
             # All candidates have the same score; assign uniform fitness
             f = [1.0 for _ in indecies]
         else:
-            f = [0.5 * (1. - tanh(2. * (scores[i] - max_s) / T - 1.))
-                 for i in indecies]
+            f = [
+                0.5 * (1.0 - tanh(2.0 * (scores[i] - max_s) / T - 1.0))
+                for i in indecies
+            ]
         if with_history:
             f = _apply_pairing_history_penalty(f, self.pop, indecies)
         return f
@@ -357,8 +364,9 @@ class Population:
             # Always touch the logfile so it exists even if the population is empty.
             # If we have IDs, write a log entry; otherwise just create the file.
             try:
-                gen_nums = [get_tag(c, "generation", default=None)
-                            for c in self.all_cand]
+                gen_nums = [
+                    get_tag(c, "generation", default=None) for c in self.all_cand
+                ]
                 max_gen = max(gen_nums) if gen_nums else " "
             except (TypeError, ValueError):
                 logger.debug("Could not determine max generation for logfile entry")
@@ -488,10 +496,7 @@ class FitnessStrategyPopulation(Population):
         super().update(new_cand=new_cand)
 
         # Periodic reference update for diversity strategy
-        if (
-            self.fitness_strategy == FitnessStrategy.DIVERSITY
-            and self.diversity_scorer
-        ):
+        if self.fitness_strategy == FitnessStrategy.DIVERSITY and self.diversity_scorer:
             self._generation_count += 1
 
             if (
@@ -501,5 +506,3 @@ class FitnessStrategyPopulation(Population):
                 # Add best new structure to references
                 best = max(self.pop, key=_raw_score)
                 self.diversity_scorer.add_reference(best)
-
-# fmt: on

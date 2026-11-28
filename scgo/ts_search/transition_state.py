@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Sequence
-from copy import deepcopy
+from copy import copy, deepcopy
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +17,7 @@ from ase.calculators.calculator import Calculator
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.constraints import FixAtoms, FixBondLengths
 from ase.geometry import find_mic
-from ase.io import read, write
+from ase.io import read
 from ase.mep import NEB
 from ase.optimize import FIRE
 from ase.optimize.optimize import Optimizer
@@ -28,6 +28,7 @@ from scgo.ase_ga_patches._vector_utils import (
     kabsch_rotation_in_plane as _kabsch_rotation_in_plane,
 )
 from scgo.calculators import torchsim_helpers as _tsh
+from scgo.calculators.inner_calculator import InnerDelegatingCalculator
 from scgo.constants import (
     DEFAULT_COMPARATOR_TOL,
     DEFAULT_FMAX_THRESHOLD,
@@ -64,7 +65,7 @@ from scgo.ts_search.neb_surface import (
     symmetry_anchor_center,
     unwrap_breaks_mic,
 )
-from scgo.utils.atomic_json import atomic_write_json
+from scgo.utils.atomic_json import atomic_write_json, atomic_write_xyz
 from scgo.utils.comparators import (
     ComparatorBlocks,
     PureInteratomicDistanceComparator,
@@ -3059,14 +3060,15 @@ def find_transition_state(
         else:
             if calculator is None:
                 raise SCGOValidationError("Calculator required when use_torchsim=False")
-            # Each image should own its calculator (ASE NEB requires distinct
-            # calculators). When a calculator cannot be deep-copied we fall back
-            # to sharing the single instance and must tell ASE that is allowed;
-            # otherwise ``NEB.get_forces`` raises ``ValueError`` for shared calcs.
+            # ASE NEB needs distinct calculator objects; share MLIP innards via
+            # shallow copy when possible, else deepcopy, else one shared instance.
             shared_calc = False
             for img in images:
                 try:
-                    img.calc = deepcopy(calculator)
+                    if isinstance(calculator, InnerDelegatingCalculator):
+                        img.calc = copy(calculator)
+                    else:
+                        img.calc = deepcopy(calculator)
                 except (TypeError, AttributeError):
                     shared_calc = True
                     img.calc = calculator
@@ -3400,7 +3402,9 @@ def save_neb_result(
 
     if result["status"] == "success" and result["transition_state"] is not None:
         ts_path = os.path.join(output_dir, f"ts_{pair_id}.xyz")
-        write(ts_path, prepare_atoms_for_xyz_export(result["transition_state"]))
+        atomic_write_xyz(
+            ts_path, prepare_atoms_for_xyz_export(result["transition_state"])
+        )
         log_debug_v(
             logger,
             "Saved TS structure to %s",
@@ -3415,7 +3419,7 @@ def save_neb_result(
         atoms = result.get(key)
         if atoms is not None:
             ep_path = os.path.join(output_dir, f"{label}_{pair_id}.xyz")
-            write(ep_path, prepare_atoms_for_xyz_export(atoms))
+            atomic_write_xyz(ep_path, prepare_atoms_for_xyz_export(atoms))
             log_debug_v(
                 logger,
                 "Saved %s endpoint structure to %s",

@@ -50,20 +50,30 @@ class TestVerbosityLevels:
         with pytest.raises(SCGOValidationError, match="Invalid verbosity level"):
             configure_logging(4)
 
-    def test_configure_logging_removes_existing_handlers(self):
-        """Test that configure_logging removes existing handlers."""
-        # Get initial handler count (pytest may have added some)
+    def test_configure_logging_preserves_foreign_handlers(self):
+        """configure_logging removes only SCGO-owned handlers."""
         root_logger = logging.getLogger()
-        initial_count = len(root_logger.handlers)
-
-        # Add a handler first
-        handler = logging.StreamHandler()
-        root_logger.addHandler(handler)
-        assert len(root_logger.handlers) == initial_count + 1
-
-        # Configure logging should remove existing handlers and add exactly one new one
-        configure_logging(1)
-        assert len(root_logger.handlers) == 1  # Should have exactly one new handler
+        foreign = logging.StreamHandler()
+        root_logger.addHandler(foreign)
+        try:
+            configure_logging(1, hpc_mode=True)
+            assert foreign in root_logger.handlers
+            owned = [
+                h
+                for h in root_logger.handlers
+                if getattr(h, "_scgo_owned_handler", False)
+            ]
+            assert len(owned) == 1
+            configure_logging(1, hpc_mode=True)  # refreshes owned; keeps foreign
+            assert foreign in root_logger.handlers
+            owned_after = [
+                h
+                for h in root_logger.handlers
+                if getattr(h, "_scgo_owned_handler", False)
+            ]
+            assert len(owned_after) == 1
+        finally:
+            root_logger.removeHandler(foreign)
 
 
 class TestLoggerFactory:

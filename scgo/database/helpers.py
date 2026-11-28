@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import glob
 import heapq
 import os
 import sqlite3
@@ -25,6 +24,7 @@ from scgo.database.connection import (
 from scgo.database.constants import SYSTEMS_JSON_COLUMN
 from scgo.database.discovery import (
     clear_discovery_cache,
+    discover_db_files,
     list_discovered_db_paths_with_run,
 )
 from scgo.database.exceptions import DatabaseSetupError
@@ -283,7 +283,9 @@ def setup_database(
                 exception_types=(OSError,),
             )
         except OSError as e:
-            logger.warning("Failed to remove database %s: %s", db_file, e)
+            raise DatabaseSetupError(
+                f"Failed to remove database {db_file} with remove_existing=True: {e}"
+            ) from e
 
     all_atom_numbers = [int(num) for num in atoms_template.get_atomic_numbers()]
 
@@ -568,13 +570,18 @@ def load_reference_structures(
 ) -> list[Atoms]:
     """Load up to `max_structures` final minima from databases matching pattern."""
     if db_files is None:
-        pattern_path = Path(db_glob_pattern)
-        if pattern_path.is_absolute():
-            search_glob = str(pattern_path)
-        else:
-            root = Path(base_dir) if base_dir is not None else Path.cwd()
-            search_glob = str(root / db_glob_pattern)
-        db_files = [p for p in glob.glob(search_glob, recursive=True) if is_scgo_db(p)]
+        root = (
+            Path.cwd()
+            if Path(db_glob_pattern).is_absolute()
+            else (Path(base_dir) if base_dir is not None else Path.cwd())
+        )
+        discovered = discover_db_files(
+            root,
+            pattern=db_glob_pattern,
+            merge_registry=False,
+            require_scgo=True,
+        )
+        db_files = [str(p) for p in discovered]
     else:
         db_files = [str(p) for p in db_files if is_scgo_db(p)]
 
@@ -629,7 +636,7 @@ def load_reference_structures(
                     else:
                         heapq.heapreplace(heap, entry)
         except (sqlite3.DatabaseError, OSError, ValueError) as e:
-            logger.debug("Failed to extract minima from %s: %s", db_file, e)
+            logger.warning("Failed to extract minima from %s: %s", db_file, e)
             continue
 
     if not heap:
@@ -639,7 +646,7 @@ def load_reference_structures(
     sorted_structures = sorted(heap, key=lambda x: -x[0])
     reference_atoms = [atoms for _, _, atoms in sorted_structures]
 
-    logger.info(
+    logger.debug(
         "Loaded %s final reference structures for diversity calculation from %s databases",
         len(reference_atoms),
         len(db_files),

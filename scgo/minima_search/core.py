@@ -20,7 +20,6 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator
-from ase.io import write
 from ase_ga.utilities import get_all_atom_types
 
 from scgo.algorithms import bh_go, ga_go, simple_go
@@ -34,6 +33,7 @@ from scgo.constants import (
     DEFAULT_IMAG_FREQ_THRESHOLD,
 )
 from scgo.database import SCGODatabaseManager
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.exceptions import (
     SCGODatabaseError,
     SCGOFileError,
@@ -70,7 +70,7 @@ from scgo.system_types import (
 )
 from scgo.system_types.dedup_geometry import resolve_uniqueness_geometry
 from scgo.ts_search.transition_state import _align_product_for_neb
-from scgo.utils.atomic_json import atomic_write_json
+from scgo.utils.atomic_json import atomic_write_json, atomic_write_xyz
 from scgo.utils.comparators import ComparatorBlocks, uniqueness_settings_from_mapping
 from scgo.utils.fitness_strategies import resolve_fitness_strategy
 from scgo.utils.helpers import (
@@ -288,7 +288,7 @@ def _create_gas_cluster_adsorbate_initial_atoms(
     vacuum: float = 10.0,
     init_mode: str = "smart",
     max_hierarchical_attempts: int = 200,
-    previous_search_glob: str = "**/*.db",
+    previous_search_glob: str = DEFAULT_DB_GLOB,
     verbosity: int = 1,
 ) -> Atoms:
     """Build hierarchical gas-phase core+fragment seed for adsorbate runs."""
@@ -716,8 +716,10 @@ def scgo(
         and ads_def is not None
         and ads_def.n_core == 0
     ):
-        logger.info(
-            "Gas adsorbate run with empty core_symbols: skipping global optimization"
+        log_info_v(
+            logger,
+            "Gas adsorbate run with empty core_symbols: skipping global optimization",
+            verbosity=verbosity,
         )
         return []
 
@@ -782,7 +784,7 @@ def scgo(
             vac = float(optimizer_kwargs.get("vacuum", 10.0))
             mode = str(optimizer_kwargs.get("init_mode", "smart"))
             max_h = int(optimizer_kwargs.get("max_hierarchical_attempts", 200))
-            glb = str(optimizer_kwargs.get("previous_search_glob", "**/*.db"))
+            glb = str(optimizer_kwargs.get("previous_search_glob", DEFAULT_DB_GLOB))
             atoms = _create_gas_cluster_adsorbate_initial_atoms(
                 rng=rng,
                 adsorbate_definition=ads_def,
@@ -1079,7 +1081,12 @@ def run_trials(
         component_weights=dedupe_weights,
         cross_weight=dedupe_cross_weight,
     )
-    logger.info("Found %s unique candidates", len(unique_candidates))
+    log_info_v(
+        logger,
+        "Found %s unique candidates",
+        len(unique_candidates),
+        verbosity=verbosity,
+    )
 
     # Final structural gate on the dedup'd candidates so *every* final minimum
     # passes connectivity / connected-components checks regardless of which
@@ -1354,7 +1361,7 @@ def run_trials(
             else:
                 canonicalize_storage_frame(atoms_clean)
 
-        write(filepath, prepare_atoms_for_xyz_export(atoms_clean))
+        atomic_write_xyz(filepath, prepare_atoms_for_xyz_export(atoms_clean))
         written_xyz.add(Path(filepath))
 
         final_minima_info.append(

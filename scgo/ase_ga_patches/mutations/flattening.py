@@ -1,7 +1,5 @@
 """Mutation that flattens a nanoparticle by projecting onto a random plane."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -50,9 +48,19 @@ class FlatteningMutation(MutationOperator):
 
     """
 
-    def __init__(self, blmin, n_top, system_type: SystemType, thickness_factor=0.5,
-                 test_dist_to_slab=True, target_tags=None, rng=None, verbose=False,
-                 max_inner_attempts=12, surface_normal_axis=2):
+    def __init__(
+        self,
+        blmin,
+        n_top,
+        system_type: SystemType,
+        thickness_factor=0.5,
+        test_dist_to_slab=True,
+        target_tags=None,
+        rng=None,
+        verbose=False,
+        max_inner_attempts=12,
+        surface_normal_axis=2,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -116,8 +124,7 @@ class FlatteningMutation(MutationOperator):
         solved_offsets = ordered_targets
         for i in range(1, n_atoms):
             solved_offsets[i] = max(
-                solved_offsets[i],
-                np.max(solved_offsets[:i] + required_offsets[:i, i])
+                solved_offsets[i], np.max(solved_offsets[:i] + required_offsets[:i, i])
             )
 
         solved_offsets -= np.mean(solved_offsets)
@@ -143,7 +150,9 @@ class FlatteningMutation(MutationOperator):
             target_offsets = np.zeros(len(positions), dtype=float)
         else:
             compression = min(1.0, desired_thickness / current_span)
-            target_offsets = (original_offsets - np.mean(original_offsets)) * compression
+            target_offsets = (
+                original_offsets - np.mean(original_offsets)
+            ) * compression
 
         clearance_margin = max(1e-3, 1e-3 * avg_blmin)
         resolved_offsets = self._resolve_normal_offsets(
@@ -152,7 +161,9 @@ class FlatteningMutation(MutationOperator):
             atomic_numbers,
             clearance_margin,
         )
-        candidate_positions = projected_positions + resolved_offsets[:, np.newaxis] * normal
+        candidate_positions = (
+            projected_positions + resolved_offsets[:, np.newaxis] * normal
+        )
 
         original_span = max(current_span, 1e-12)
         flattened_span = float(np.ptp(resolved_offsets))
@@ -201,17 +212,22 @@ class FlatteningMutation(MutationOperator):
             if pin_subset:
                 new_positions = _pin_subset_contact_atom(pos, new_positions, mask)
             rms = (
-                np.linalg.norm(new_positions - pos)
-                / max(1, len(new_positions)) ** 0.5
+                np.linalg.norm(new_positions - pos) / max(1, len(new_positions)) ** 0.5
             )
             if rms <= _IDENTITY_ATOL:
                 continue
             if self._policy.uses_surface:
                 new_positions = _reanchor_mobile_to_slab(
-                    top, Atoms(numbers=atomic_numbers, positions=new_positions,
-                               cell=top.get_cell(),
-                               pbc=top.get_pbc(), tags=top.get_tags()),
-                    slab, self.surface_normal_axis,
+                    top,
+                    Atoms(
+                        numbers=atomic_numbers,
+                        positions=new_positions,
+                        cell=top.get_cell(),
+                        pbc=top.get_pbc(),
+                        tags=top.get_tags(),
+                    ),
+                    slab,
+                    self.surface_normal_axis,
                 ).get_positions()
             mutant.set_positions(new_positions)
             # Only center gas-phase clusters; surface adsorbates must keep
@@ -238,5 +254,3 @@ class FlatteningMutation(MutationOperator):
             return None
 
         return None
-
-# fmt: on

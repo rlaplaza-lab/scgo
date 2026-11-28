@@ -1,7 +1,5 @@
 """Shared finalization helper for mutation ``get_new_individual`` methods."""
 
-# fmt: off
-
 from __future__ import annotations
 
 import numpy as np
@@ -78,5 +76,3 @@ def _finalize_mutant(creator, parent, mutant, description):
     indi.info["data"]["parents"] = [parent.info.get("confid")]
 
     return creator.finalize_individual(indi), description
-
-# fmt: on

@@ -33,6 +33,7 @@ from scgo.database.discovery import (
     clear_discovery_cache,
     list_discovered_db_paths_with_run,
 )
+from scgo.database.exceptions import DatabaseSetupError
 from scgo.database.streaming import (
     iter_database_minima,
     iter_relaxed_structures,
@@ -971,6 +972,31 @@ class TestRobustness:
                 "reuse.db",
                 other,
                 remove_existing=False,
+            )
+
+    def test_setup_database_remove_existing_failure_raises(
+        self, tmp_path, pt2_atoms, monkeypatch
+    ):
+        """Failed clean delete must raise DatabaseSetupError, not reopen stale DB."""
+        da = setup_database(
+            tmp_path,
+            "locked.db",
+            pt2_atoms,
+            initial_candidate=pt2_atoms,
+            remove_existing=True,
+        )
+        close_data_connection(da)
+
+        def _boom(path):
+            raise OSError("simulated delete failure")
+
+        monkeypatch.setattr(os, "remove", _boom)
+        with pytest.raises(DatabaseSetupError, match="Failed to remove database"):
+            setup_database(
+                tmp_path,
+                "locked.db",
+                pt2_atoms,
+                remove_existing=True,
             )
 
 

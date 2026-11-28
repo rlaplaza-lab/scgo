@@ -1,7 +1,5 @@
 """Mutation that swaps atom groups between inner and outer radial shells."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -67,7 +65,7 @@ class ShellSwapMutation(MutationOperator):
     def mutate(self, atoms):
         N = len(atoms) if self.n_top is None else self.n_top
         slab = atoms[: len(atoms) - N]
-        top = atoms[len(atoms) - N:].copy()
+        top = atoms[len(atoms) - N :].copy()
         if self.use_tags:
             gather_atoms_by_tag(
                 top,
@@ -103,8 +101,12 @@ class ShellSwapMutation(MutationOperator):
             radial_center = np.mean(centers, axis=0)
             radial_distances = np.linalg.norm(centers - radial_center, axis=1)
         order = np.argsort(radial_distances)
-        inner_count = max(1, min(len(order) - 1, int(np.ceil(len(order) * self.inner_fraction))))
-        outer_count = max(1, min(len(order) - 1, int(np.ceil(len(order) * self.outer_fraction))))
+        inner_count = max(
+            1, min(len(order) - 1, int(np.ceil(len(order) * self.inner_fraction)))
+        )
+        outer_count = max(
+            1, min(len(order) - 1, int(np.ceil(len(order) * self.outer_fraction)))
+        )
         inner_groups = order[:inner_count]
         outer_groups = order[-outer_count:]
 
@@ -115,7 +117,9 @@ class ShellSwapMutation(MutationOperator):
                     continue
                 if group_symbols[inner_idx] == group_symbols[outer_idx]:
                     continue
-                radial_gap = abs(radial_distances[inner_idx] - radial_distances[outer_idx])
+                radial_gap = abs(
+                    radial_distances[inner_idx] - radial_distances[outer_idx]
+                )
                 candidate_pairs.append((radial_gap, inner_idx, outer_idx))
 
         if not candidate_pairs:
@@ -172,5 +176,3 @@ class ShellSwapMutation(MutationOperator):
             return slab + accepted
 
         return None
-
-# fmt: on

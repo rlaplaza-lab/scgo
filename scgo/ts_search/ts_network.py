@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import glob
 import os
 import sqlite3
 from typing import Any
@@ -11,6 +10,7 @@ from typing import Any
 from ase import Atoms
 
 from scgo.database import get_connection
+from scgo.database.discovery import list_discovered_db_paths_with_run
 from scgo.database.sync import PRESET_TS_NETWORK, database_retry
 from scgo.metadata.atoms import get_tag, set_tags
 from scgo.metadata.provenance import output_json_provenance
@@ -166,21 +166,17 @@ def tag_unique_ts_in_databases(
     minima: list,
     base_dir: str,
 ) -> int:
-    """Persist deduplicated TS entries into discovered ``run_*/*.db`` minima databases.
-
-    Iterates each unique TS edge, picks a candidate database that contains one
-    of the two endpoint minima (matched on ``source_db`` basename), augments
-    the TS Atoms with GO provenance, and calls :func:`add_ts_to_database`.
-
-    Returns the number of successful row insertions.
-    """
-    db_files = glob.glob(os.path.join(base_dir, "run_*", "**", "*.db"), recursive=True)
-    basename_to_path = {os.path.basename(p): p for p in db_files}
-    logger.debug(
-        "Tagging: discovered DB basenames for %s: %s",
-        base_dir,
-        list(basename_to_path.keys()),
-    )
+    """Persist unique TS edges into the DB that owns an endpoint minimum."""
+    discovered = list_discovered_db_paths_with_run(base_dir)
+    relpath_to_path: dict[str, str] = {}
+    basename_to_paths: dict[str, list[str]] = {}
+    for abs_path, _run in discovered:
+        try:
+            rel = os.path.relpath(abs_path, base_dir)
+        except ValueError:
+            rel = abs_path
+        relpath_to_path[rel] = abs_path
+        basename_to_paths.setdefault(os.path.basename(abs_path), []).append(abs_path)
 
     added = 0
     missing_db_pairs: list[str] = []
@@ -189,6 +185,29 @@ def tag_unique_ts_in_databases(
         if not (0 <= idx < len(minima)):
             return None
         return get_tag(minima[idx][1], key)
+
+    def _resolve_db_for_endpoints(i: int, j: int) -> str | None:
+        for idx in (i, j):
+            rel = _get_min_id(idx, "source_db_relpath")
+            if isinstance(rel, str) and rel in relpath_to_path:
+                return relpath_to_path[rel]
+        for idx in (i, j):
+            base = _get_min_id(idx, "source_db")
+            if not isinstance(base, str):
+                continue
+            paths = basename_to_paths.get(base) or []
+            if not paths:
+                continue
+            if len(paths) == 1:
+                return paths[0]
+            run = _get_min_id(idx, "run_id")
+            if isinstance(run, str):
+                needle = f"{os.sep}{run}{os.sep}"
+                for path in paths:
+                    if needle in path:
+                        return path
+            return paths[0]
+        return None
 
     for item in unique_ts:
         ts_energy = item.get("ts_energy")
@@ -221,9 +240,7 @@ def tag_unique_ts_in_databases(
 
             src_db_i = _get_min_id(i, "source_db")
             src_db_j = _get_min_id(j, "source_db")
-            db_candidate = basename_to_path.get(src_db_i) or basename_to_path.get(
-                src_db_j
-            )
+            db_candidate = _resolve_db_for_endpoints(i, j)
             if db_candidate is None:
                 missing_db_pairs.append(str(pair_id))
                 continue

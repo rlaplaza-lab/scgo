@@ -141,11 +141,8 @@ def load_run_dir_record(run_dir: str) -> RunDirRecord | None:
     :meth:`RunDirRecord.from_dict`.
     """
     metadata_file = os.path.join(run_dir, "metadata.json")
-    if not os.path.exists(metadata_file):
-        return None
-
     try:
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         return None

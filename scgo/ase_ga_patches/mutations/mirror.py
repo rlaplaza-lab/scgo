@@ -1,7 +1,5 @@
 """Mirror mutation that reflects the mobile region across a cutting plane."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -52,9 +50,18 @@ class MirrorMutation(MutationOperator):
 
     """
 
-    def __init__(self, blmin, n_top, system_type: SystemType, reflect=True,
-                 target_tags=None, rng=None, verbose=False, max_tries=12,
-                 surface_normal_axis=2):
+    def __init__(
+        self,
+        blmin,
+        n_top,
+        system_type: SystemType,
+        reflect=True,
+        target_tags=None,
+        rng=None,
+        verbose=False,
+        max_tries=12,
+        surface_normal_axis=2,
+    ):
         self._init_operator(
             verbose,
             rng,
@@ -91,7 +98,9 @@ class MirrorMutation(MutationOperator):
 
         return candidates[:max_candidates]
 
-    def _build_mirror_top(self, num, pos, center_of_mass, plane, reflect, plane_origin=None):
+    def _build_mirror_top(
+        self, num, pos, center_of_mass, plane, reflect, plane_origin=None
+    ):
         if plane_origin is None:
             plane_origin = center_of_mass
 
@@ -122,8 +131,8 @@ class MirrorMutation(MutationOperator):
 
     def mutate(self, atoms):
         """Do the mutation of the atoms input."""
-        slab = atoms[0:len(atoms) - self.n_top]
-        top = atoms[len(atoms) - self.n_top: len(atoms)]
+        slab = atoms[0 : len(atoms) - self.n_top]
+        top = atoms[len(atoms) - self.n_top : len(atoms)]
         num = top.numbers
         pos = top.get_positions().copy()
         tags = top.get_tags()
@@ -194,9 +203,7 @@ class MirrorMutation(MutationOperator):
                 mutant = _reanchor_mobile_to_slab(
                     top, mutant, slab, self.surface_normal_axis
                 )
-            if np.allclose(
-                mutant.get_positions(), pos, rtol=0.0, atol=_IDENTITY_ATOL
-            ):
+            if np.allclose(mutant.get_positions(), pos, rtol=0.0, atol=_IDENTITY_ATOL):
                 continue
             accepted = _accept_connected_candidate(top, mutant, **accept_kwargs)
             if accepted is None:
@@ -221,14 +228,10 @@ class MirrorMutation(MutationOperator):
                             slab,
                             self.surface_normal_axis,
                         )
-                    accepted = _accept_connected_candidate(
-                        top, rescue, **accept_kwargs
-                    )
+                    accepted = _accept_connected_candidate(top, rescue, **accept_kwargs)
                     if accepted is None:
                         continue
                     self.last_attempt_count += 1
                     return slab + accepted
 
         return None
-
-# fmt: on

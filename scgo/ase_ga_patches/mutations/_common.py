@@ -1,7 +1,5 @@
 """Shared helpers used by more than one mutation operator."""
 
-# fmt: off
-
 from __future__ import annotations
 
 
@@ -45,6 +43,7 @@ __all__ = [
     "_ensure_rng",
     "_filter_unique_tags",
     "_geometry_candidate_directions",
+    "_pca_sorted_eigenvectors",
     "_IDENTITY_ATOL",
     "_accept_connected_candidate",
     "_accept_connected_kwargs",
@@ -181,7 +180,19 @@ def _resolve_op_connectivity_factor(
     return getattr(creator, "connectivity_factor", CONNECTIVITY_FACTOR)
 
 
-def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_candidates):
+def _pca_sorted_eigenvectors(centered, *, descending: bool = False):
+    """Return PCA eigenvectors of *centered* coords, sorted by eigenvalue."""
+    covariance = np.dot(centered.T, centered)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    order = np.argsort(eigenvalues)
+    if descending:
+        order = order[::-1]
+    return [eigenvectors[:, index] for index in order]
+
+
+def _geometry_candidate_directions(
+    positions, center_of_mass, slab, rng, max_candidates
+):
     """Ranked unit directions from slab normal, PCA axes, and random fill."""
     centered = positions - center_of_mass
     candidates = []
@@ -192,10 +203,7 @@ def _geometry_candidate_directions(positions, center_of_mass, slab, rng, max_can
         _append_unique_unit_vector(candidates, outward)
 
     if len(centered) > 1:
-        covariance = np.dot(centered.T, centered)
-        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-        order = np.argsort(eigenvalues)
-        axes = [eigenvectors[:, index] for index in order]
+        axes = _pca_sorted_eigenvectors(centered)
 
         for axis in axes:
             oriented_axis = axis
@@ -336,8 +344,8 @@ def _preserves_mobile_connectivity(
 def _prepare_mobile_target(operator, atoms):
     """Return slab, mobile arrays, and tag mask, or ``None`` if nothing matches."""
     n_mobile = len(atoms) if operator.n_top is None else operator.n_top
-    slab = atoms[:len(atoms) - n_mobile]
-    top = atoms[len(atoms) - n_mobile:]
+    slab = atoms[: len(atoms) - n_mobile]
+    top = atoms[len(atoms) - n_mobile :]
     tags = top.get_tags()
     unique_tags = _filter_unique_tags(np.unique(tags), operator.target_tags)
     if unique_tags is None:
@@ -595,6 +603,3 @@ def _accept_connected_candidate(
     ):
         return candidate_mobile
     return None
-
-
-# fmt: on

@@ -14,8 +14,10 @@ from scgo.database.connection import (
     close_data_connection,
     get_connection,
 )
+from scgo.database.constants import DEFAULT_DB_GLOB
 from scgo.database.discovery import (
     clear_discovery_cache,
+    discover_db_files,
     list_discovered_db_paths_with_run,
 )
 from scgo.database.exceptions import DatabaseSetupError
@@ -35,6 +37,7 @@ from scgo.database.sync import (
 from scgo.database.transactions import database_transaction
 
 __all__ = [
+    "DEFAULT_DB_GLOB",
     "DatabaseSetupError",
     "get_global_cache",
     "close_data_connection",
@@ -43,6 +46,7 @@ __all__ = [
     "extract_minima_from_database_file",
     "load_previous_run_results",
     "load_reference_structures",
+    "discover_db_files",
     "list_discovered_db_paths_with_run",
     "clear_discovery_cache",
     "SCGODatabaseManager",

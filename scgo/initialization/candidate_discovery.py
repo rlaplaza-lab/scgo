@@ -6,7 +6,6 @@ based on composition subsets and structural validation.
 
 from __future__ import annotations
 
-import glob
 import os
 import re
 import sqlite3
@@ -18,11 +17,13 @@ from ase import Atoms
 from scipy.spatial.distance import pdist
 
 from scgo.database.cache import get_global_cache
+from scgo.database.discovery import discover_db_files
 from scgo.database.helpers import extract_minima_from_database_file
 from scgo.exceptions import SCGODatabaseError
 from scgo.metadata.atoms import get_tag as _get_db_tag
 from scgo.metadata.run_dir import resolve_run_id_from_db_path
 from scgo.utils.helpers import (
+    energy_bin_index,
     get_cluster_formula,
     get_composition_counts,
 )
@@ -253,7 +254,7 @@ def deduplicate_seed_candidates(
 
     binned: dict[int, list[tuple[float, Atoms]]] = {}
     for energy, atoms in entries:
-        energy_key = round(energy / energy_bin)
+        energy_key = energy_bin_index(energy, energy_bin, round_nearest=True)
         binned.setdefault(energy_key, []).append((energy, atoms))
 
     deduped: list[tuple[float, Atoms]] = []
@@ -343,7 +344,13 @@ def _discover_all_candidates(
         can mutate them safely.
     """
     cwd = os.getcwd()
-    matches = glob.glob(os.path.join(cwd, db_glob_pattern), recursive=True)
+    discovered = discover_db_files(
+        cwd,
+        pattern=db_glob_pattern,
+        merge_registry=False,
+        require_scgo=False,
+    )
+    matches = [str(p) for p in discovered]
     sub_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
     exact_by_formula: dict[str, list[tuple[float, Atoms]]] = {}
     target_counts = get_composition_counts(target_composition)
